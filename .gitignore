@@ -43,6 +43,7 @@ data/uploads/*
 # OS
 .DS_Store
 Thumbs.db
+nul
 
 # Flutter
 mobile/.dart_tool/

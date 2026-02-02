@@ -1,0 +1,135 @@
+/**
+ * Faculty Login Screen
+ *
+ * Login form for faculty using Email + Password
+ * Uses React Hook Form with Zod validation
+ * Integrates with authStore for authentication
+ */
+
+import React, { useState } from 'react';
+import { View, StyleSheet } from 'react-native';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import { Mail, Lock } from 'lucide-react-native';
+import { useAuth } from '../../hooks';
+import { theme, strings } from '../../constants';
+import { AuthLayout } from '../../components/layouts';
+import { Text, Button } from '../../components/ui';
+import { FormInput, FormPassword } from '../../components/forms';
+
+// Validation schema
+const facultyLoginSchema = z.object({
+  email: z.string().min(1, strings.errors.required).email(strings.errors.invalidEmail),
+  password: z.string().min(1, strings.errors.required),
+});
+
+type FacultyLoginData = z.infer<typeof facultyLoginSchema>;
+
+export const FacultyLoginScreen: React.FC = () => {
+  const { login, error: authError, clearError } = useAuth();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const { control, handleSubmit } = useForm<FacultyLoginData>({
+    resolver: zodResolver(facultyLoginSchema),
+    defaultValues: {
+      email: '',
+      password: '',
+    },
+  });
+
+  const onSubmit = async (data: FacultyLoginData) => {
+    try {
+      setIsSubmitting(true);
+      clearError();
+      await login({ email: data.email, password: data.password });
+      // Navigation handled by RootNavigator when auth state changes
+    } catch (err) {
+      console.error('Login error:', err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <AuthLayout
+      showBack
+      title={strings.auth.welcomeFaculty}
+      subtitle={strings.auth.signInToContinue}
+    >
+      <View style={styles.form}>
+        {/* Email Input */}
+        <FormInput
+          name="email"
+          control={control}
+          label={strings.form.email}
+          placeholder="your.email@example.com"
+          leftIcon={<Mail size={20} color={theme.colors.text.tertiary} />}
+          keyboardType="email-address"
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+
+        {/* Password Input */}
+        <FormPassword
+          name="password"
+          control={control}
+          label={strings.form.password}
+          placeholder={strings.form.password}
+          leftIcon={<Lock size={20} color={theme.colors.text.tertiary} />}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+
+        {/* Error Message */}
+        {authError && (
+          <View style={styles.errorContainer}>
+            <Text variant="bodySmall" color={theme.colors.status.error}>
+              {authError}
+            </Text>
+          </View>
+        )}
+
+        {/* Login Button */}
+        <Button
+          variant="primary"
+          size="lg"
+          fullWidth
+          onPress={handleSubmit(onSubmit)}
+          loading={isSubmitting}
+          style={styles.loginButton}
+        >
+          {strings.auth.signIn}
+        </Button>
+
+        {/* Faculty notice */}
+        <View style={styles.notice}>
+          <Text variant="bodySmall" color={theme.colors.text.secondary} align="center">
+            {strings.auth.facultyNotice}
+          </Text>
+        </View>
+      </View>
+    </AuthLayout>
+  );
+};
+
+const styles = StyleSheet.create({
+  form: {
+    flex: 1,
+  },
+  errorContainer: {
+    marginTop: theme.spacing[4],
+    padding: theme.spacing[4],
+    backgroundColor: theme.colors.status.errorLight,
+    borderRadius: theme.borderRadius.md,
+  },
+  loginButton: {
+    marginTop: theme.spacing[8],
+  },
+  notice: {
+    marginTop: theme.spacing[6],
+    paddingTop: theme.spacing[6],
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border,
+  },
+});

@@ -1,0 +1,66 @@
+/**
+ * WebSocket Types
+ *
+ * Type definitions for WebSocket events and messages.
+ */
+
+// WebSocket event types
+export enum WebSocketEventType {
+  CONNECTED = 'connected',
+  ATTENDANCE_UPDATE = 'attendance_update',
+  EARLY_LEAVE = 'early_leave',
+  SESSION_START = 'session_start',
+  SESSION_END = 'session_end',
+}
+
+// Base WebSocket message
+export interface WebSocketMessage<T = any> {
+  event: WebSocketEventType | string;
+  data: T;
+}
+
+// Connected event data
+export interface ConnectedEventData {
+  user_id: string;
+  timestamp: string;
+}
+
+// Attendance update event data
+export interface AttendanceUpdateEventData {
+  student_id: string;
+  schedule_id: string;
+  status: string;
+  check_in_time?: string;
+  timestamp: string;
+}
+
+// Early leave event data
+export interface EarlyLeaveEventData {
+  student_id: string;
+  student_name: string;
+  schedule_id: string;
+  detected_at: string;
+  consecutive_misses: number;
+  last_seen_at?: string;
+}
+
+// Session start event data
+export interface SessionStartEventData {
+  schedule_id: string;
+  start_time: string;
+  subject_code: string;
+  subject_name: string;
+}
+
+// Session end event data
+export interface SessionEndEventData {
+  schedule_id: string;
+  end_time: string;
+  summary: {
+    total_enrolled: number;
+    present: number;
+    late: number;
+    absent: number;
+    early_leave: number;
+  };
+}

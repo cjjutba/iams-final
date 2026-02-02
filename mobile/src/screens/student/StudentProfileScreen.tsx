@@ -1,0 +1,224 @@
+/**
+ * Student Profile Screen
+ *
+ * Shows student information and profile actions:
+ * - Avatar and basic info
+ * - Student details (course, year, section)
+ * - Action menu (Edit Profile, Re-register Face, Notifications, Settings)
+ * - Sign out
+ */
+
+import React from 'react';
+import { View, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import type { StackNavigationProp } from '@react-navigation/stack';
+import { ChevronRight, User, Camera, Bell, Settings as SettingsIcon, LogOut } from 'lucide-react-native';
+import { useAuth } from '../../hooks';
+import { theme, strings } from '../../constants';
+import type { StudentStackParamList } from '../../types';
+import { ScreenLayout, Header } from '../../components/layouts';
+import { Text, Avatar, Card, Divider, Button } from '../../components/ui';
+
+type StudentProfileNavigationProp = StackNavigationProp<StudentStackParamList, 'StudentTabs'>;
+
+export const StudentProfileScreen: React.FC = () => {
+  const navigation = useNavigation<StudentProfileNavigationProp>();
+  const { user, logout } = useAuth();
+
+  const handleEditProfile = () => {
+    navigation.navigate('EditProfile');
+  };
+
+  const handleReregisterFace = () => {
+    navigation.navigate('FaceRegister');
+  };
+
+  const handleNotifications = () => {
+    navigation.navigate('Notifications');
+  };
+
+  const handleSettings = () => {
+    navigation.navigate('Settings');
+  };
+
+  const handleSignOut = () => {
+    Alert.alert(
+      'Sign Out',
+      'Are you sure you want to sign out?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sign Out',
+          style: 'destructive',
+          onPress: async () => {
+            await logout();
+          },
+        },
+      ]
+    );
+  };
+
+  if (!user) return null;
+
+  return (
+    <ScreenLayout safeArea padded={false}>
+      <Header title={strings.student.profile} />
+
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        {/* Profile header */}
+        <View style={styles.profileHeader}>
+          <Avatar
+            firstName={user.first_name}
+            lastName={user.last_name}
+            size="xl"
+            style={styles.avatar}
+          />
+
+          <Text variant="h2" weight="bold" align="center" style={styles.name}>
+            {user.first_name} {user.last_name}
+          </Text>
+
+          {user.student_id && (
+            <Text variant="body" color={theme.colors.text.secondary} align="center">
+              {user.student_id}
+            </Text>
+          )}
+        </View>
+
+        {/* User info card */}
+        <Card style={styles.card}>
+          <InfoRow label="Email" value={user.email} />
+          {user.phone && <InfoRow label="Phone" value={user.phone} />}
+          <InfoRow label="Role" value={user.role.charAt(0).toUpperCase() + user.role.slice(1)} />
+        </Card>
+
+        <Divider spacing="lg" />
+
+        {/* Actions */}
+        <View style={styles.actionsContainer}>
+          <ActionItem
+            icon={<User size={20} color={theme.colors.text.secondary} />}
+            label={strings.student.editProfile}
+            onPress={handleEditProfile}
+          />
+
+          <ActionItem
+            icon={<Camera size={20} color={theme.colors.text.secondary} />}
+            label={strings.student.reregisterFace}
+            onPress={handleReregisterFace}
+          />
+
+          <ActionItem
+            icon={<Bell size={20} color={theme.colors.text.secondary} />}
+            label={strings.student.notifications}
+            onPress={handleNotifications}
+          />
+
+          <ActionItem
+            icon={<SettingsIcon size={20} color={theme.colors.text.secondary} />}
+            label={strings.student.settings}
+            onPress={handleSettings}
+          />
+        </View>
+
+        <Divider spacing="lg" />
+
+        {/* Sign out */}
+        <View style={styles.signOutContainer}>
+          <Button
+            variant="outline"
+            size="lg"
+            fullWidth
+            onPress={handleSignOut}
+            leftIcon={<LogOut size={20} color={theme.colors.status.error} />}
+          >
+            <Text variant="button" color={theme.colors.status.error}>
+              {strings.student.signOut}
+            </Text>
+          </Button>
+        </View>
+      </ScrollView>
+    </ScreenLayout>
+  );
+};
+
+// InfoRow component
+const InfoRow: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <View style={styles.infoRow}>
+    <Text variant="bodySmall" color={theme.colors.text.tertiary}>
+      {label}
+    </Text>
+    <Text variant="body" weight="medium">
+      {value}
+    </Text>
+  </View>
+);
+
+// ActionItem component
+const ActionItem: React.FC<{
+  icon: React.ReactNode;
+  label: string;
+  onPress: () => void;
+}> = ({ icon, label, onPress }) => (
+  <TouchableOpacity
+    style={styles.actionItem}
+    onPress={onPress}
+    activeOpacity={theme.interaction.activeOpacity}
+  >
+    <View style={styles.actionLeft}>
+      {icon}
+      <Text variant="body" style={styles.actionLabel}>
+        {label}
+      </Text>
+    </View>
+    <ChevronRight size={20} color={theme.colors.text.tertiary} />
+  </TouchableOpacity>
+);
+
+const styles = StyleSheet.create({
+  scrollContent: {
+    paddingHorizontal: theme.spacing[4],
+    paddingTop: theme.spacing[6],
+    paddingBottom: theme.spacing[8],
+  },
+  profileHeader: {
+    alignItems: 'center',
+    marginBottom: theme.spacing[8],
+  },
+  avatar: {
+    marginBottom: theme.spacing[4],
+  },
+  name: {
+    marginBottom: theme.spacing[2],
+  },
+  card: {
+    marginBottom: theme.spacing[6],
+  },
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: theme.spacing[3],
+  },
+  actionsContainer: {
+    marginBottom: theme.spacing[6],
+  },
+  actionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: theme.spacing[4],
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  actionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  actionLabel: {
+    marginLeft: theme.spacing[3],
+  },
+  signOutContainer: {
+    marginBottom: theme.spacing[6],
+  },
+});
