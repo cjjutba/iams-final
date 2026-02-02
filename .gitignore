@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.env.local
+.env.production
+*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Database
+*.db
+*.sqlite3
+
+# FAISS
+data/faiss/*.index
+
+# Logs
+*.log
+logs/
+
+# Uploads
+data/uploads/*
+!data/uploads/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Flutter
+mobile/.dart_tool/
+mobile/.packages
+mobile/.pub-cache/
+mobile/.pub/
+mobile/build/
+mobile/*.iml
+mobile/.metadata
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Backups
+*.bak
+backups/
+
+# Temporary
+tmp/
+temp/
+*.tmp
