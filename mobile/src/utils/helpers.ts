@@ -81,11 +81,19 @@ export const isTimeInRange = (time: string, startTime: string, endTime: string):
     const [startHours, startMinutes] = startTime.split(':').map(Number);
     const [endHours, endMinutes] = endTime.split(':').map(Number);
 
-    const timeMinutes = hours * 60 + minutes;
-    const startMinutes = startHours * 60 + startMinutes;
-    const endMinutes = endHours * 60 + endMinutes;
+    if (
+      [hours, minutes, startHours, startMinutes, endHours, endMinutes].some((value) =>
+        Number.isNaN(value)
+      )
+    ) {
+      return false;
+    }
 
-    return timeMinutes >= startMinutes && timeMinutes <= endMinutes;
+    const timeMinutes = hours * 60 + minutes;
+    const startTotalMinutes = startHours * 60 + startMinutes;
+    const endTotalMinutes = endHours * 60 + endMinutes;
+
+    return timeMinutes >= startTotalMinutes && timeMinutes <= endTotalMinutes;
   } catch (error) {
     return false;
   }

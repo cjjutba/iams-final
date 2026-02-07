@@ -15,7 +15,15 @@
       "Bash(npm run start:offline:*)",
       "Bash(netstat:*)",
       "Bash(findstr:*)",
-      "Bash(taskkill:*)"
+      "Bash(taskkill:*)",
+      "Bash(node:*)",
+      "Bash(npm:*)",
+      "Bash(pnpm --version:*)",
+      "Bash(pnpm import:*)",
+      "Bash(pnpm install:*)",
+      "Bash(pnpm view:*)",
+      "Bash(pnpm config:*)",
+      "Bash(pnpm config set:*)"
     ]
   }
 }

@@ -54,8 +54,8 @@ python run.py
 ### Mobile App
 ```bash
 cd mobile
-npm install
-npx react-native run-android   # or run-ios
+pnpm install
+pnpm android   # or pnpm ios
 ```
 
 ## Key Technical Details

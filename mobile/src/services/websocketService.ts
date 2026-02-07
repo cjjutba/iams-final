@@ -124,7 +124,7 @@ class WebSocketService {
    */
   onEarlyLeave(callback: MessageCallback): () => void {
     return this.on('early_leave', callback);
-  },
+  }
 
   /**
    * Register callback for session start
