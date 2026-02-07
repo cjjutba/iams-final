@@ -46,7 +46,7 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Center section */}
       <View style={styles.titleContainer}>
-        <Text variant="h3" weight="semibold" align="center" numberOfLines={1}>
+        <Text variant="h3" weight="600" align="center" numberOfLines={1}>
           {title}
         </Text>
       </View>

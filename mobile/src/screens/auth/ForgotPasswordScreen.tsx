@@ -38,7 +38,7 @@ export const ForgotPasswordScreen: React.FC = () => {
     try {
       setIsSubmitting(true);
       setError(null);
-      await authService.requestPasswordReset(data.email);
+      await authService.forgotPassword(data.email);
       setIsSubmitted(true);
     } catch (err: any) {
       setError(err.response?.data?.message || strings.errors.generic);

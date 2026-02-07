@@ -13,8 +13,9 @@
 - See [supabase-connection.md](supabase-connection.md) for detailed connection troubleshooting notes
 
 ## Schema State
-- **Migration head:** e49171084f7c (Initial schema - create 8 tables)
-- **Tables (8+1):** users, face_registrations, rooms, schedules, enrollments, attendance_records, presence_logs, early_leave_events, alembic_version
+- **Migration chain:** e49171084f7c (Initial 8 tables) -> 86d63351d3e9 (notifications table) [head]
+- **DB stamped at:** e49171084f7c (8 core tables exist in Supabase; notifications pending `upgrade head`)
+- **Tables (9+1):** users, face_registrations, rooms, schedules, enrollments, attendance_records, presence_logs, early_leave_events, notifications, alembic_version
 - **Enums:** userrole (STUDENT, FACULTY, ADMIN), attendancestatus (PRESENT, LATE, ABSENT, EARLY_LEAVE)
 - All tables use UUID primary keys (no default gen_random_uuid -- UUIDs must be generated app-side)
 - presence_logs uses BIGSERIAL for id (auto-incrementing, high-volume table)
@@ -25,6 +26,7 @@
 - schedules: composite (day_of_week, start_time), faculty_id, room_id, subject_code
 - attendance_records: unique constraint (student_id, schedule_id, date), date, schedule_id, student_id
 - enrollments: unique constraint (student_id, schedule_id)
+- notifications: user_id, type, created_at
 
 ## Foreign Key Relationships
 - face_registrations.user_id -> users.id
@@ -33,6 +35,14 @@
 - attendance_records.student_id -> users.id, attendance_records.schedule_id -> schedules.id
 - early_leave_events.attendance_id -> attendance_records.id
 - presence_logs.attendance_id -> attendance_records.id
+- notifications.user_id -> users.id
+
+## Alembic Notes
+- Autogenerate works from sandbox via pooler connection (IPv4)
+- Venv python (`backend\venv\Scripts\python.exe`) executes alembic successfully
+- env.py loads DATABASE_URL from app.config.settings (Pydantic Settings, .env file)
+- env.py must import ALL models for autogenerate to detect new/changed tables
+- sqlalchemy.url is NOT set in alembic.ini -- overridden in env.py via config.set_main_option()
 
 ## Environment Setup
 - Backend venv: `C:\.cjjutba\.thesis\iams\backend\venv`

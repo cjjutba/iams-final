@@ -28,7 +28,9 @@ from app.schemas.auth import (
     StudentInfo,
     VerifyStudentIDResponse,
     RegisterRequest,
-    RegisterResponse
+    RegisterResponse,
+    ForgotPasswordRequest,
+    ProfileUpdateRequest
 )
 
 from app.schemas.face import (
@@ -56,11 +58,18 @@ from app.schemas.attendance import (
     AttendanceRecordBase,
     ManualAttendanceRequest,
     AttendanceRecordResponse,
+    AttendanceUpdateRequest,
     PresenceLogResponse,
     EarlyLeaveResponse,
+    AlertResponse,
     AttendanceSummary,
     StudentAttendanceStatus,
     LiveAttendanceResponse
+)
+
+from app.schemas.notification import (
+    NotificationResponse,
+    NotificationCreate
 )
 
 __all__ = [
@@ -85,6 +94,8 @@ __all__ = [
     "VerifyStudentIDResponse",
     "RegisterRequest",
     "RegisterResponse",
+    "ForgotPasswordRequest",
+    "ProfileUpdateRequest",
     # Face
     "FaceData",
     "EdgeProcessRequest",
@@ -105,9 +116,14 @@ __all__ = [
     "AttendanceRecordBase",
     "ManualAttendanceRequest",
     "AttendanceRecordResponse",
+    "AttendanceUpdateRequest",
     "PresenceLogResponse",
     "EarlyLeaveResponse",
+    "AlertResponse",
     "AttendanceSummary",
     "StudentAttendanceStatus",
     "LiveAttendanceResponse",
+    # Notification
+    "NotificationResponse",
+    "NotificationCreate",
 ]

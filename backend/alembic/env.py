@@ -17,7 +17,7 @@ from app.database import Base
 # Import all models to ensure they're registered with Base.metadata
 from app.models import (
     User, FaceRegistration, Room, Schedule, Enrollment,
-    AttendanceRecord, PresenceLog, EarlyLeaveEvent
+    AttendanceRecord, PresenceLog, EarlyLeaveEvent, Notification
 )
 
 # this is the Alembic Config object, which provides

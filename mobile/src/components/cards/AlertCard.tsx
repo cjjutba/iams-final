@@ -24,14 +24,14 @@ export const AlertCard: React.FC<AlertCardProps> = ({ event, onPress }) => {
       <View style={styles.content}>
         {/* Warning icon */}
         <View style={styles.iconContainer}>
-          <AlertTriangle size={24} color={theme.colors.status.warning} />
+          <AlertTriangle size={24} color={theme.colors.warning} />
         </View>
 
         {/* Info */}
         <View style={styles.info}>
           {/* Student name */}
-          <Text variant="body" weight="semibold" numberOfLines={1} style={styles.name}>
-            {event.studentName}
+          <Text variant="body" weight="600" numberOfLines={1} style={styles.name}>
+            {event.student_name}
           </Text>
 
           {/* Alert message */}
@@ -41,15 +41,15 @@ export const AlertCard: React.FC<AlertCardProps> = ({ event, onPress }) => {
 
           {/* Time */}
           <Text variant="caption" color={theme.colors.text.tertiary}>
-            {formatTimeAgo(event.detectedAt)}
+            {formatTimeAgo(event.detected_at)}
           </Text>
         </View>
 
         {/* Consecutive misses indicator */}
-        {event.consecutiveMisses > 0 && (
+        {event.consecutive_misses > 0 && (
           <View style={styles.badge}>
-            <Text variant="caption" weight="semibold" color={theme.colors.status.warning}>
-              {event.consecutiveMisses} misses
+            <Text variant="caption" weight="600" color={theme.colors.warning}>
+              {event.consecutive_misses} misses
             </Text>
           </View>
         )}
@@ -70,7 +70,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: theme.colors.status.warningLight,
+    backgroundColor: theme.colors.warningLight,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: theme.spacing[3], // 12px
@@ -88,7 +88,7 @@ const styles = StyleSheet.create({
   badge: {
     paddingHorizontal: theme.spacing[2], // 8px
     paddingVertical: theme.spacing[1], // 4px
-    backgroundColor: theme.colors.status.warningLight,
+    backgroundColor: theme.colors.warningLight,
     borderRadius: theme.borderRadius.sm,
   },
 });

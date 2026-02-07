@@ -16,7 +16,9 @@ from app.schemas.auth import (
     VerifyStudentIDRequest,
     VerifyStudentIDResponse,
     RegisterRequest,
-    RegisterResponse
+    RegisterResponse,
+    ForgotPasswordRequest,
+    ProfileUpdateRequest
 )
 from app.schemas.user import UserResponse, PasswordChange
 from app.services.auth_service import AuthService
@@ -189,3 +191,50 @@ def logout(current_user: User = Depends(get_current_user)):
         "success": True,
         "message": "Logged out successfully"
     }
+
+
+@router.post("/forgot-password", status_code=status.HTTP_200_OK)
+def forgot_password(
+    request: ForgotPasswordRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    **Forgot Password**
+
+    Request a password reset link. An email will be sent if the account exists.
+
+    - **email**: Email address associated with the account
+
+    Note: Always returns success to prevent email enumeration attacks.
+    """
+    auth_service = AuthService(db)
+    result = auth_service.forgot_password(request.email)
+
+    return result
+
+
+@router.patch("/profile", response_model=UserResponse, status_code=status.HTTP_200_OK)
+def update_profile(
+    request: ProfileUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    **Update Profile**
+
+    Update the current user's profile information.
+
+    - **email**: New email address (optional)
+    - **phone**: New phone number (optional)
+
+    Only the fields provided will be updated.
+
+    Requires authentication.
+    """
+    auth_service = AuthService(db)
+    updated_user = auth_service.update_profile(
+        str(current_user.id),
+        request.model_dump(exclude_none=True)
+    )
+
+    return UserResponse.model_validate(updated_user)

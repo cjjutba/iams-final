@@ -1,23 +1,36 @@
 /**
  * Faculty Live Attendance Screen
  *
- * Real-time attendance monitoring with WebSocket updates
- * Shows all students with detection status
- * Includes search and manual entry
+ * Real-time attendance monitoring with WebSocket updates.
+ * Shows all students with detection status, search filtering,
+ * stats bar with correct counts, and handles WebSocket
+ * disconnect/reconnect gracefully.
  */
 
-import React, { useEffect, useState } from 'react';
-import { View, StyleSheet, FlatList, TextInput } from 'react-native';
+import React, { useEffect, useState, useCallback } from 'react';
+import {
+  View,
+  StyleSheet,
+  FlatList,
+  TextInput,
+  RefreshControl,
+  TouchableOpacity,
+  ActivityIndicator,
+} from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
-import { Search, Edit } from 'lucide-react-native';
+import { Search, Edit, RefreshCw, Wifi, WifiOff } from 'lucide-react-native';
 import { useAttendance, useWebSocket } from '../../hooks';
 import { theme, strings } from '../../constants';
-import type { FacultyStackParamList, WebSocketMessage } from '../../types';
+import { getErrorMessage } from '../../utils';
+import type {
+  FacultyStackParamList,
+  WebSocketMessage,
+  StudentAttendanceStatus,
+} from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
-import { Text, Card } from '../../components/ui';
-import { StudentCard } from '../../components/cards';
+import { Text, Card, Button } from '../../components/ui';
 
 type LiveAttendanceRouteProp = RouteProp<FacultyStackParamList, 'LiveAttendance'>;
 type LiveAttendanceNavigationProp = StackNavigationProp<FacultyStackParamList, 'LiveAttendance'>;
@@ -28,31 +41,46 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
 
   const { scheduleId } = route.params;
 
-  const { liveAttendance, fetchLiveAttendance, updateStudentStatus } = useAttendance();
+  const {
+    liveAttendance,
+    isLoading,
+    error,
+    fetchLiveAttendance,
+    updateStudentStatus,
+  } = useAttendance();
   const [searchQuery, setSearchQuery] = useState('');
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // WebSocket integration for real-time updates
-  useWebSocket({
+  const { isConnected } = useWebSocket({
     onAttendanceUpdate: (message: WebSocketMessage) => {
-      if (message.data.scheduleId === scheduleId) {
-        updateStudentStatus(message.data.studentId, message.data.status);
+      if (message.data?.schedule_id === scheduleId) {
+        updateStudentStatus(message.data.student_id, message.data);
       }
     },
     onEarlyLeave: (message: WebSocketMessage) => {
-      console.log('Early leave detected:', message);
+      if (message.data?.schedule_id === scheduleId) {
+        // Refresh live data to get updated status
+        fetchLiveAttendance(scheduleId);
+      }
     },
   });
 
   useEffect(() => {
     fetchLiveAttendance(scheduleId);
 
-    // Refresh every 30 seconds
+    // Refresh every 30 seconds as fallback
     const interval = setInterval(() => {
       fetchLiveAttendance(scheduleId);
     }, 30000);
 
     return () => clearInterval(interval);
   }, [scheduleId]);
+
+  const handleRefresh = useCallback(() => {
+    setIsRefreshing(true);
+    fetchLiveAttendance(scheduleId).finally(() => setIsRefreshing(false));
+  }, [scheduleId, fetchLiveAttendance]);
 
   const handleManualEntry = () => {
     navigation.navigate('ManualEntry', { scheduleId });
@@ -62,17 +90,158 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
     navigation.navigate('StudentDetail', { studentId, scheduleId });
   };
 
-  const filteredStudents = liveAttendance?.students.filter((student) =>
-    student.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    student.studentId.toLowerCase().includes(searchQuery.toLowerCase())
-  ) || [];
+  // Filter students by search
+  const students = liveAttendance?.students || [];
+  const filteredStudents = students.filter(
+    (student) =>
+      student.student_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      student.student_id.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
-  const stats = liveAttendance ? {
-    present: liveAttendance.students.filter((s) => s.status === 'present').length,
-    late: liveAttendance.students.filter((s) => s.status === 'late').length,
-    absent: liveAttendance.students.filter((s) => s.status === 'absent').length,
-    earlyLeave: liveAttendance.students.filter((s) => s.status === 'early_leave').length,
-  } : { present: 0, late: 0, absent: 0, earlyLeave: 0 };
+  // Compute stats from API response fields or calculate from students
+  const stats = liveAttendance
+    ? {
+        present: liveAttendance.present_count,
+        late: liveAttendance.late_count,
+        absent: liveAttendance.absent_count,
+        earlyLeave: liveAttendance.early_leave_count,
+      }
+    : { present: 0, late: 0, absent: 0, earlyLeave: 0 };
+
+  // ---------- error state ----------
+
+  if (error && !liveAttendance) {
+    return (
+      <ScreenLayout safeArea padded={false}>
+        <Header showBack title="Live Attendance" />
+        <View style={styles.errorContainer}>
+          <RefreshCw size={40} color={theme.colors.text.tertiary} style={styles.errorIcon} />
+          <Text variant="body" color={theme.colors.text.secondary} align="center">
+            {error}
+          </Text>
+          <Button
+            variant="secondary"
+            size="md"
+            onPress={() => fetchLiveAttendance(scheduleId)}
+            style={styles.retryButton}
+          >
+            {strings.common.retry}
+          </Button>
+        </View>
+      </ScreenLayout>
+    );
+  }
+
+  // ---------- loading state ----------
+
+  if (isLoading && !liveAttendance) {
+    return (
+      <ScreenLayout safeArea padded={false}>
+        <Header showBack title="Live Attendance" />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+          <Text
+            variant="bodySmall"
+            color={theme.colors.text.secondary}
+            align="center"
+            style={styles.loadingText}
+          >
+            Loading live attendance...
+          </Text>
+        </View>
+      </ScreenLayout>
+    );
+  }
+
+  // ---------- render student card inline ----------
+
+  const renderStudentItem = ({ item }: { item: StudentAttendanceStatus }) => {
+    const isCurrentlyDetected = item.currently_detected === true;
+    const firstName = item.student_name.split(' ')[0] || '';
+    const lastName = item.student_name.split(' ').slice(1).join(' ') || '';
+
+    return (
+      <Card
+        onPress={() => handleStudentPress(item.student_id)}
+        style={styles.studentCard}
+      >
+        <View style={styles.studentContent}>
+          {/* Avatar with initials */}
+          <View style={styles.studentAvatar}>
+            <Text variant="bodySmall" weight="600" color={theme.colors.text.primary}>
+              {firstName.charAt(0).toUpperCase()}
+              {lastName.charAt(0).toUpperCase()}
+            </Text>
+          </View>
+
+          {/* Info */}
+          <View style={styles.studentInfo}>
+            <View style={styles.nameRow}>
+              <Text variant="body" weight="600" numberOfLines={1} style={styles.studentName}>
+                {item.student_name}
+              </Text>
+              {isCurrentlyDetected && <View style={styles.detectionDot} />}
+            </View>
+
+            <Text variant="bodySmall" color={theme.colors.text.secondary}>
+              {item.student_id}
+            </Text>
+
+            {item.presence_score !== undefined && (
+              <Text variant="caption" color={theme.colors.text.tertiary}>
+                Presence: {item.presence_score.toFixed(0)}%
+              </Text>
+            )}
+          </View>
+
+          {/* Status */}
+          <View
+            style={[
+              styles.statusBadge,
+              {
+                backgroundColor:
+                  item.status === 'present'
+                    ? theme.colors.status.present.bg
+                    : item.status === 'late'
+                    ? theme.colors.status.late.bg
+                    : item.status === 'absent'
+                    ? theme.colors.status.absent.bg
+                    : theme.colors.status.early_leave.bg,
+              },
+            ]}
+          >
+            <Text
+              variant="caption"
+              weight="600"
+              color={
+                item.status === 'present'
+                  ? theme.colors.status.present.fg
+                  : item.status === 'late'
+                  ? theme.colors.status.late.fg
+                  : item.status === 'absent'
+                  ? theme.colors.status.absent.fg
+                  : theme.colors.status.early_leave.fg
+              }
+            >
+              {item.status === 'early_leave'
+                ? 'Left'
+                : item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+            </Text>
+          </View>
+        </View>
+      </Card>
+    );
+  };
+
+  // ---------- empty state ----------
+
+  const renderEmpty = () => (
+    <View style={styles.emptyContainer}>
+      <Text variant="body" color={theme.colors.text.secondary} align="center">
+        {searchQuery ? 'No students match your search' : strings.empty.noStudents}
+      </Text>
+    </View>
+  );
 
   return (
     <ScreenLayout safeArea padded={false}>
@@ -80,21 +249,59 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
         showBack
         title="Live Attendance"
         rightAction={
-          <Edit
-            size={24}
-            color={theme.colors.primary}
+          <TouchableOpacity
             onPress={handleManualEntry}
-          />
+            activeOpacity={theme.interaction.activeOpacity}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Edit size={24} color={theme.colors.primary} />
+          </TouchableOpacity>
         }
       />
 
       <View style={styles.container}>
+        {/* Connection status indicator */}
+        <View style={styles.connectionBar}>
+          {isConnected ? (
+            <Wifi size={14} color={theme.colors.status.present.fg} />
+          ) : (
+            <WifiOff size={14} color={theme.colors.status.absent.fg} />
+          )}
+          <Text
+            variant="caption"
+            color={
+              isConnected
+                ? theme.colors.status.present.fg
+                : theme.colors.status.absent.fg
+            }
+            style={styles.connectionText}
+          >
+            {isConnected ? 'Live' : 'Reconnecting...'}
+          </Text>
+        </View>
+
         {/* Stats row */}
         <View style={styles.statsRow}>
-          <StatCard label="Present" value={stats.present} color={theme.colors.status.success} />
-          <StatCard label="Late" value={stats.late} color={theme.colors.status.warning} />
-          <StatCard label="Absent" value={stats.absent} color={theme.colors.status.error} />
-          <StatCard label="Left" value={stats.earlyLeave} color={theme.colors.status.warning} />
+          <StatCard
+            label="Present"
+            value={stats.present}
+            color={theme.colors.status.present.fg}
+          />
+          <StatCard
+            label="Late"
+            value={stats.late}
+            color={theme.colors.status.late.fg}
+          />
+          <StatCard
+            label="Absent"
+            value={stats.absent}
+            color={theme.colors.status.absent.fg}
+          />
+          <StatCard
+            label="Left"
+            value={stats.earlyLeave}
+            color={theme.colors.status.early_leave.fg}
+          />
         </View>
 
         {/* Search */}
@@ -112,12 +319,22 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
         {/* Students list */}
         <FlatList
           data={filteredStudents}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <StudentCard student={item} onPress={() => handleStudentPress(item.studentId)} />
-          )}
-          contentContainerStyle={styles.listContent}
+          keyExtractor={(item) => item.student_id}
+          renderItem={renderStudentItem}
+          ListEmptyComponent={renderEmpty}
+          contentContainerStyle={[
+            styles.listContent,
+            filteredStudents.length === 0 && styles.listContentEmpty,
+          ]}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={handleRefresh}
+              colors={[theme.colors.primary]}
+              tintColor={theme.colors.primary}
+            />
+          }
         />
       </View>
     </ScreenLayout>
@@ -125,9 +342,13 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
 };
 
 // StatCard component
-const StatCard: React.FC<{ label: string; value: number; color: string }> = ({ label, value, color }) => (
+const StatCard: React.FC<{ label: string; value: number; color: string }> = ({
+  label,
+  value,
+  color,
+}) => (
   <Card variant="outlined" style={styles.statCard}>
-    <Text variant="h2" weight="bold" style={[styles.statValue, { color }]}>
+    <Text variant="h2" weight="700" style={[styles.statValue, { color }]}>
       {value}
     </Text>
     <Text variant="caption" color={theme.colors.text.tertiary}>
@@ -139,6 +360,16 @@ const StatCard: React.FC<{ label: string; value: number; color: string }> = ({ l
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  connectionBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: theme.spacing[1],
+    backgroundColor: theme.colors.secondary,
+  },
+  connectionText: {
+    marginLeft: theme.spacing[1],
   },
   statsRow: {
     flexDirection: 'row',
@@ -158,7 +389,7 @@ const styles = StyleSheet.create({
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: theme.colors.backgroundSecondary,
+    backgroundColor: theme.colors.inputBackground,
     marginHorizontal: theme.spacing[4],
     marginBottom: theme.spacing[4],
     paddingHorizontal: theme.spacing[4],
@@ -178,5 +409,74 @@ const styles = StyleSheet.create({
   listContent: {
     paddingHorizontal: theme.spacing[4],
     paddingBottom: theme.spacing[6],
+  },
+  listContentEmpty: {
+    flexGrow: 1,
+  },
+  studentCard: {
+    marginBottom: theme.spacing[2],
+  },
+  studentContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  studentAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: theme.colors.secondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: theme.spacing[3],
+  },
+  studentInfo: {
+    flex: 1,
+    marginRight: theme.spacing[3],
+  },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: theme.spacing[1],
+  },
+  studentName: {
+    flex: 1,
+  },
+  detectionDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: theme.colors.status.present.fg,
+    marginLeft: theme.spacing[2],
+  },
+  statusBadge: {
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    borderRadius: theme.borderRadius.full,
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: theme.spacing[12],
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: theme.spacing[3],
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: theme.spacing[6],
+  },
+  errorIcon: {
+    marginBottom: theme.spacing[4],
+  },
+  retryButton: {
+    marginTop: theme.spacing[4],
   },
 });

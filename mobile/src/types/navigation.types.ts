@@ -28,6 +28,25 @@ export interface RegistrationFlowData {
   };
 }
 
+// Student info returned from Step 1 verification
+export interface StudentInfo {
+  studentId: string;
+  first_name: string;
+  last_name: string;
+  course: string;
+  year: string;
+  section: string;
+  email?: string;
+  valid?: boolean;
+}
+
+// Account info collected in Step 2
+export interface AccountInfo {
+  email: string;
+  phone: string;
+  password: string;
+}
+
 // Auth Stack (Onboarding, Login, Registration)
 export type AuthStackParamList = {
   Splash: undefined;
@@ -38,13 +57,16 @@ export type AuthStackParamList = {
   ForgotPassword: undefined;
   RegisterStep1: undefined;
   RegisterStep2: {
-    registrationData: RegistrationFlowData;
+    studentInfo: StudentInfo;
   };
   RegisterStep3: {
-    registrationData: RegistrationFlowData;
+    studentInfo: StudentInfo;
+    accountInfo: AccountInfo;
   };
   RegisterReview: {
-    registrationData: RegistrationFlowData;
+    studentInfo: StudentInfo;
+    accountInfo: AccountInfo;
+    faceImages: string[];
   };
 };
 

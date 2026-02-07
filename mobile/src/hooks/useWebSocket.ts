@@ -2,10 +2,15 @@
  * useWebSocket Hook
  *
  * Manages WebSocket connection lifecycle and event handling.
- * Automatically connects/disconnects based on component mount/unmount.
+ * Automatically connects/disconnects based on authentication state.
+ *
+ * Key design decisions:
+ * - Uses refs for callbacks to avoid re-running the effect on every render
+ * - Provides reactive connection state via websocketService.onStateChange
+ * - Cleans up event subscriptions on unmount without destroying the service
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useAuth } from './useAuth';
 import { websocketService } from '../services';
 import type { WebSocketMessage } from '../types';
@@ -28,77 +33,107 @@ export const useWebSocket = ({
   autoConnect = true,
 }: UseWebSocketOptions = {}) => {
   const { user, isAuthenticated } = useAuth();
-  const unsubscribersRef = useRef<(() => void)[]>([]);
+  const [connectionState, setConnectionState] = useState<string>(
+    websocketService.connectionState
+  );
+
+  // Use refs for callbacks to avoid re-running the effect when callbacks change.
+  // This prevents the connect/disconnect cycle that would occur if callbacks
+  // were in the dependency array (since inline functions get new references each render).
+  const onAttendanceUpdateRef = useRef(onAttendanceUpdate);
+  const onEarlyLeaveRef = useRef(onEarlyLeave);
+  const onSessionStartRef = useRef(onSessionStart);
+  const onSessionEndRef = useRef(onSessionEnd);
+  const onConnectedRef = useRef(onConnected);
+
+  // Keep refs up-to-date with latest callback values
+  useEffect(() => {
+    onAttendanceUpdateRef.current = onAttendanceUpdate;
+  }, [onAttendanceUpdate]);
 
   useEffect(() => {
-    // Only connect if authenticated and autoConnect is true
+    onEarlyLeaveRef.current = onEarlyLeave;
+  }, [onEarlyLeave]);
+
+  useEffect(() => {
+    onSessionStartRef.current = onSessionStart;
+  }, [onSessionStart]);
+
+  useEffect(() => {
+    onSessionEndRef.current = onSessionEnd;
+  }, [onSessionEnd]);
+
+  useEffect(() => {
+    onConnectedRef.current = onConnected;
+  }, [onConnected]);
+
+  // Main effect: connect, subscribe to events, and clean up
+  useEffect(() => {
     if (!isAuthenticated || !user || !autoConnect) {
       return;
     }
 
-    // Connect to WebSocket
-    websocketService.connect(user.id);
-
-    // Register event handlers
     const unsubscribers: (() => void)[] = [];
 
-    // Connected event
-    if (onConnected) {
-      const unsub = websocketService.on('connected', () => {
-        onConnected();
-      });
-      unsubscribers.push(unsub);
-    }
+    // Subscribe to connection state changes for reactive UI updates
+    const unsubState = websocketService.onStateChange((state) => {
+      setConnectionState(state);
+    });
+    unsubscribers.push(unsubState);
 
-    // Attendance update event
-    if (onAttendanceUpdate) {
-      const unsub = websocketService.onAttendanceUpdate(onAttendanceUpdate);
-      unsubscribers.push(unsub);
-    }
+    // Register event handlers using stable wrapper functions
+    // that delegate to the latest callback ref
+    const unsubConnected = websocketService.on('connected', () => {
+      onConnectedRef.current?.();
+    });
+    unsubscribers.push(unsubConnected);
 
-    // Early leave event
-    if (onEarlyLeave) {
-      const unsub = websocketService.onEarlyLeave(onEarlyLeave);
-      unsubscribers.push(unsub);
-    }
+    const unsubAttendance = websocketService.onAttendanceUpdate((msg) => {
+      onAttendanceUpdateRef.current?.(msg);
+    });
+    unsubscribers.push(unsubAttendance);
 
-    // Session start event
-    if (onSessionStart) {
-      const unsub = websocketService.onSessionStart(onSessionStart);
-      unsubscribers.push(unsub);
-    }
+    const unsubEarlyLeave = websocketService.onEarlyLeave((msg) => {
+      onEarlyLeaveRef.current?.(msg);
+    });
+    unsubscribers.push(unsubEarlyLeave);
 
-    // Session end event
-    if (onSessionEnd) {
-      const unsub = websocketService.onSessionEnd(onSessionEnd);
-      unsubscribers.push(unsub);
-    }
+    const unsubSessionStart = websocketService.onSessionStart((msg) => {
+      onSessionStartRef.current?.(msg);
+    });
+    unsubscribers.push(unsubSessionStart);
 
-    unsubscribersRef.current = unsubscribers;
+    const unsubSessionEnd = websocketService.onSessionEnd((msg) => {
+      onSessionEndRef.current?.(msg);
+    });
+    unsubscribers.push(unsubSessionEnd);
 
-    // Cleanup on unmount
+    // Connect to WebSocket server
+    websocketService.connect(user.id);
+
+    // Cleanup on unmount or when dependencies change
     return () => {
-      // Unsubscribe from all events
-      unsubscribersRef.current.forEach((unsub) => unsub());
-      unsubscribersRef.current = [];
-
-      // Disconnect WebSocket
+      unsubscribers.forEach((unsub) => unsub());
       websocketService.disconnect();
     };
-  }, [
-    isAuthenticated,
-    user?.id,
-    autoConnect,
-    onAttendanceUpdate,
-    onEarlyLeave,
-    onSessionStart,
-    onSessionEnd,
-    onConnected,
-  ]);
+  }, [isAuthenticated, user?.id, autoConnect]);
+
+  // Stable reference for manual connect
+  const connect = useCallback(() => {
+    if (user) {
+      websocketService.connect(user.id);
+    }
+  }, [user?.id]);
+
+  // Stable reference for manual disconnect
+  const disconnect = useCallback(() => {
+    websocketService.disconnect();
+  }, []);
 
   return {
-    isConnected: websocketService.isConnected(),
-    connect: () => user && websocketService.connect(user.id),
-    disconnect: () => websocketService.disconnect(),
+    isConnected: connectionState === 'CONNECTED',
+    connectionState,
+    connect,
+    disconnect,
   };
 };

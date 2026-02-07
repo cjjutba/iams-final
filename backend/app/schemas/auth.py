@@ -67,3 +67,14 @@ class RegisterResponse(BaseModel):
     message: str
     user: UserResponse
     tokens: TokenResponse
+
+
+class ForgotPasswordRequest(BaseModel):
+    """Forgot password request"""
+    email: EmailStr
+
+
+class ProfileUpdateRequest(BaseModel):
+    """Profile update request (limited fields for self-service)"""
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None

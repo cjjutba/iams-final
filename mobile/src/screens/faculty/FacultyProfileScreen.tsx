@@ -66,14 +66,15 @@ export const FacultyProfileScreen: React.FC = () => {
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Profile header */}
         <View style={styles.profileHeader}>
-          <Avatar
-            firstName={user.first_name}
-            lastName={user.last_name}
-            size="xl"
-            style={styles.avatar}
-          />
+          <View style={styles.avatar}>
+            <Avatar
+              firstName={user.first_name}
+              lastName={user.last_name}
+              size="xl"
+            />
+          </View>
 
-          <Text variant="h2" weight="bold" align="center" style={styles.name}>
+          <Text variant="h2" weight="700" align="center" style={styles.name}>
             {user.first_name} {user.last_name}
           </Text>
 
@@ -89,7 +90,7 @@ export const FacultyProfileScreen: React.FC = () => {
           <InfoRow label="Role" value={user.role.charAt(0).toUpperCase() + user.role.slice(1)} />
         </Card>
 
-        <Divider spacing="lg" />
+        <Divider spacing={6} />
 
         {/* Actions */}
         <View style={styles.actionsContainer}>
@@ -112,7 +113,7 @@ export const FacultyProfileScreen: React.FC = () => {
           />
         </View>
 
-        <Divider spacing="lg" />
+        <Divider spacing={6} />
 
         {/* Sign out */}
         <View style={styles.signOutContainer}>
@@ -121,9 +122,9 @@ export const FacultyProfileScreen: React.FC = () => {
             size="lg"
             fullWidth
             onPress={handleSignOut}
-            leftIcon={<LogOut size={20} color={theme.colors.status.error} />}
+            leftIcon={<LogOut size={20} color={theme.colors.error} />}
           >
-            <Text variant="button" color={theme.colors.status.error}>
+            <Text variant="button" color={theme.colors.error}>
               {strings.student.signOut}
             </Text>
           </Button>
@@ -138,7 +139,7 @@ const InfoRow: React.FC<{ label: string; value: string }> = ({ label, value }) =
     <Text variant="bodySmall" color={theme.colors.text.tertiary}>
       {label}
     </Text>
-    <Text variant="body" weight="medium">
+    <Text variant="body" weight="500">
       {value}
     </Text>
   </View>

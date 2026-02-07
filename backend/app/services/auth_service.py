@@ -225,6 +225,75 @@ class AuthService:
         logger.info(f"Password changed for user: {user.email}")
         return True
 
+    def forgot_password(self, email: str) -> dict:
+        """
+        Handle forgot password request
+
+        For MVP: Log the request and return a success message.
+        In production: Send a password reset email with a token.
+
+        Args:
+            email: User email address
+
+        Returns:
+            Dictionary with success message
+        """
+        user = self.user_repo.get_by_email(email)
+
+        # Always return success to prevent email enumeration
+        if not user:
+            logger.warning(f"Password reset requested for unknown email: {email}")
+            return {
+                "success": True,
+                "message": "If an account with that email exists, a password reset link has been sent."
+            }
+
+        # TODO: In production, generate a reset token and send via email
+        # For MVP, log the request
+        logger.info(f"Password reset requested for user: {email}")
+
+        return {
+            "success": True,
+            "message": "If an account with that email exists, a password reset link has been sent."
+        }
+
+    def update_profile(self, user_id: str, update_data: dict) -> User:
+        """
+        Update user profile (self-service, limited fields)
+
+        Args:
+            user_id: User UUID
+            update_data: Fields to update (email, phone)
+
+        Returns:
+            Updated user
+
+        Raises:
+            NotFoundError: If user not found
+            DuplicateError: If email already taken
+        """
+        user = self.user_repo.get_by_id(user_id)
+        if not user:
+            raise NotFoundError(f"User not found: {user_id}")
+
+        # Only allow certain fields to be updated via profile endpoint
+        allowed_fields = {"email", "phone"}
+        filtered_data = {k: v for k, v in update_data.items() if k in allowed_fields and v is not None}
+
+        if not filtered_data:
+            raise ValidationError("No valid fields to update")
+
+        # Check for email uniqueness if email is being changed
+        if "email" in filtered_data and filtered_data["email"] != user.email:
+            existing = self.user_repo.get_by_email(filtered_data["email"])
+            if existing:
+                from app.utils.exceptions import DuplicateError
+                raise DuplicateError(f"Email already in use: {filtered_data['email']}")
+
+        updated_user = self.user_repo.update(user_id, filtered_data)
+        logger.info(f"Profile updated for user: {updated_user.email}")
+        return updated_user
+
     def _generate_tokens(self, user: User) -> dict:
         """
         Generate access and refresh tokens

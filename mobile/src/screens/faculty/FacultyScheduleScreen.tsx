@@ -45,7 +45,7 @@ export const FacultyScheduleScreen: React.FC = () => {
       >
         <Text
           variant="caption"
-          weight={isSelected ? 'semibold' : 'regular'}
+          weight={isSelected ? '600' : '400'}
           color={isSelected ? theme.colors.background : theme.colors.text.secondary}
           style={styles.dayText}
         >
@@ -92,6 +92,7 @@ export const FacultyScheduleScreen: React.FC = () => {
           <ScheduleCard schedule={item} onPress={() => handleCardPress(item)} />
         )}
         ListEmptyComponent={renderEmpty}
+        style={styles.list}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
       />
@@ -101,6 +102,7 @@ export const FacultyScheduleScreen: React.FC = () => {
 
 const styles = StyleSheet.create({
   daySelectorContainer: {
+    flexGrow: 0,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
   },
@@ -113,7 +115,7 @@ const styles = StyleSheet.create({
     paddingVertical: theme.spacing[2],
     marginRight: theme.spacing[2],
     borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.backgroundSecondary,
+    backgroundColor: theme.colors.secondary,
     minWidth: 48,
     alignItems: 'center',
     position: 'relative',
@@ -131,6 +133,9 @@ const styles = StyleSheet.create({
     height: 4,
     borderRadius: 2,
     backgroundColor: theme.colors.primary,
+  },
+  list: {
+    flex: 1,
   },
   listContent: {
     padding: theme.spacing[4],

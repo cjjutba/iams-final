@@ -27,30 +27,30 @@ export const ScheduleCard: React.FC<ScheduleCardProps> = ({ schedule, onPress })
         {/* Main content */}
         <View style={styles.mainContent}>
           {/* Time */}
-          <Text variant="h3" weight="bold" style={styles.time}>
-            {formatTime(schedule.startTime)}
+          <Text variant="h3" weight="700" style={styles.time}>
+            {formatTime(schedule.start_time)}
           </Text>
 
           {/* Subject */}
-          <Text variant="body" weight="semibold" numberOfLines={1} style={styles.subject}>
-            {schedule.subjectName}
+          <Text variant="body" weight="600" numberOfLines={1} style={styles.subject}>
+            {schedule.subject_name}
           </Text>
           <Text variant="caption" color={theme.colors.text.tertiary} style={styles.code}>
-            {schedule.subjectCode}
+            {schedule.subject_code}
           </Text>
 
           {/* Meta info */}
           <View style={styles.metaRow}>
             <Text variant="bodySmall" color={theme.colors.text.secondary}>
-              {schedule.roomName}
+              {schedule.room_name}
             </Text>
-            {schedule.facultyName && (
+            {schedule.faculty_name && (
               <>
                 <Text variant="bodySmall" color={theme.colors.text.tertiary}>
                   {' • '}
                 </Text>
                 <Text variant="bodySmall" color={theme.colors.text.secondary}>
-                  {schedule.facultyName}
+                  {schedule.faculty_name}
                 </Text>
               </>
             )}

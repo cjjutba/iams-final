@@ -2,74 +2,142 @@
  * Schedule Service
  *
  * Handles all schedule-related API calls:
- * - Fetching user schedules
- * - Schedule details
- * - Enrolled students
+ * - Retrieving user schedules (student enrolled / faculty teaching)
+ * - Schedule details by ID
+ * - Enrolled students list (faculty/admin)
+ * - All schedules listing with day filter
+ *
+ * All endpoints are relative to the base URL configured in api.ts.
+ * Backend router prefix: /schedules
+ *
+ * IMPORTANT: The backend returns response data directly from the
+ * Pydantic response_model -- there is NO generic ApiResponse wrapper.
+ *
+ * @see backend/app/routers/schedules.py
+ * @see backend/app/schemas/schedule.py
  */
 
 import { api } from '../utils/api';
-import type { Schedule, ScheduleWithAttendance, User, ApiResponse } from '../types';
+import type { Schedule, ScheduleWithStudents } from '../types';
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
 
 export const scheduleService = {
   /**
-   * Get my schedules (student: enrolled classes, faculty: teaching classes)
+   * Get schedules for the current authenticated user.
+   * - Students receive their enrolled schedules
+   * - Faculty receive their teaching schedules
+   * - Admins receive all schedules
+   *
+   * @returns Array of schedule objects
+   * @throws AxiosError on network or auth errors
+   *
+   * Backend: GET /schedules/me
+   * Response: List[ScheduleResponse]
    */
-  async getMySchedules(): Promise<ScheduleWithAttendance[]> {
-    const response = await api.get<ApiResponse<ScheduleWithAttendance[]>>('/schedules/me');
-    return response.data.data || [];
+  async getMySchedules(): Promise<Schedule[]> {
+    const response = await api.get<Schedule[]>('/schedules/me');
+    return response.data;
   },
 
   /**
-   * Get schedule by ID
+   * Get a single schedule by its UUID.
+   *
+   * @param scheduleId - The schedule UUID
+   * @returns The schedule object
+   * @throws AxiosError (404 if not found)
+   *
+   * Backend: GET /schedules/{scheduleId}
+   * Response: ScheduleResponse
    */
-  async getSchedule(id: string): Promise<Schedule> {
-    const response = await api.get<ApiResponse<Schedule>>(`/schedules/${id}`);
-    return response.data.data!;
+  async getScheduleById(scheduleId: string): Promise<Schedule> {
+    const response = await api.get<Schedule>(`/schedules/${scheduleId}`);
+    return response.data;
   },
 
   /**
-   * Get students enrolled in a schedule (faculty only)
+   * Get enrolled students for a schedule (faculty/admin only).
+   *
+   * @param scheduleId - The schedule UUID
+   * @returns Schedule object with enrolled_students array
+   * @throws AxiosError (404 if schedule not found, 403 if not faculty/admin)
+   *
+   * Backend: GET /schedules/{scheduleId}/students
+   * Response: ScheduleWithStudents (extends ScheduleResponse with enrolled_students)
    */
-  async getScheduleStudents(id: string): Promise<User[]> {
-    const response = await api.get<ApiResponse<User[]>>(`/schedules/${id}/students`);
-    return response.data.data || [];
-  },
-
-  /**
-   * Get schedules by day of week
-   */
-  async getSchedulesByDay(dayOfWeek: number): Promise<ScheduleWithAttendance[]> {
-    const response = await api.get<ApiResponse<ScheduleWithAttendance[]>>(
-      '/schedules/me',
-      { params: { day_of_week: dayOfWeek } }
+  async getScheduleStudents(scheduleId: string): Promise<ScheduleWithStudents> {
+    const response = await api.get<ScheduleWithStudents>(
+      `/schedules/${scheduleId}/students`,
     );
-    return response.data.data || [];
+    return response.data;
   },
 
   /**
-   * Get today's schedules
+   * Get all schedules, optionally filtered by day of week.
+   * Available to any authenticated user.
+   *
+   * @param day - Optional day filter (0=Monday .. 6=Sunday)
+   * @returns Array of schedules
+   * @throws AxiosError on network or auth errors
+   *
+   * Backend: GET /schedules/?day={day}
+   * Response: List[ScheduleResponse]
    */
-  async getTodaySchedules(): Promise<ScheduleWithAttendance[]> {
-    const today = new Date().getDay();
-    return await this.getSchedulesByDay(today);
+  async getAllSchedules(day?: number): Promise<Schedule[]> {
+    const response = await api.get<Schedule[]>('/schedules/', {
+      params: day !== undefined ? { day } : undefined,
+    });
+    return response.data;
+  },
+
+  // ---------------------------------------------------------------------------
+  // Client-side convenience methods (no extra API calls)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Get schedules for a specific day of the week.
+   * Fetches all user schedules first, then filters client-side.
+   *
+   * @param dayOfWeek - Day number (0=Monday .. 6=Sunday)
+   * @returns Filtered array of active schedules for that day
+   */
+  async getSchedulesByDay(dayOfWeek: number): Promise<Schedule[]> {
+    const schedules = await this.getMySchedules();
+    return schedules.filter(
+      (s) => s.day_of_week === dayOfWeek && s.is_active,
+    );
   },
 
   /**
-   * Get current ongoing class (if any)
+   * Get today's schedules for the current user.
+   * Converts JS Date.getDay() (0=Sunday) to backend format (0=Monday).
+   *
+   * @returns Array of today's active schedules
    */
-  async getCurrentClass(): Promise<ScheduleWithAttendance | null> {
+  async getTodaySchedules(): Promise<Schedule[]> {
+    const jsDay = new Date().getDay(); // 0=Sunday, 1=Monday, ..., 6=Saturday
+    const backendDay = jsDay === 0 ? 6 : jsDay - 1; // 0=Monday, ..., 6=Sunday
+    return this.getSchedulesByDay(backendDay);
+  },
+
+  /**
+   * Find the currently-ongoing class, if any.
+   * Compares current local time against each of today's schedule time ranges.
+   *
+   * @returns The ongoing schedule or null if no class is in session
+   */
+  async getCurrentClass(): Promise<Schedule | null> {
     const todaySchedules = await this.getTodaySchedules();
     const now = new Date();
-    const currentTime = now.getHours() * 60 + now.getMinutes();
+    const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now
+      .getMinutes()
+      .toString()
+      .padStart(2, '0')}:00`;
 
     for (const schedule of todaySchedules) {
-      const [startHour, startMin] = schedule.startTime.split(':').map(Number);
-      const [endHour, endMin] = schedule.endTime.split(':').map(Number);
-
-      const startMinutes = startHour * 60 + startMin;
-      const endMinutes = endHour * 60 + endMin;
-
-      if (currentTime >= startMinutes && currentTime <= endMinutes) {
+      if (currentTime >= schedule.start_time && currentTime <= schedule.end_time) {
         return schedule;
       }
     }

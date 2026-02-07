@@ -30,7 +30,16 @@
       "Bash(venv/Scripts/python.exe -m alembic:*)",
       "Bash(venv/Scripts/python.exe -m scripts.seed_data:*)",
       "Bash(venv/Scripts/pip.exe show:*)",
-      "Bash(venv/Scripts/python.exe -m pytest:*)"
+      "Bash(venv/Scripts/python.exe -m pytest:*)",
+      "Bash(venvScriptspython.exe -m pytest:*)",
+      "Bash(echo:*)",
+      "Bash(venvScriptspython -m pytest --tb=short -q)",
+      "Bash(\"C:\\\\.cjjutba\\\\.thesis\\\\iams\\\\backend\\\\venv\\\\Scripts\\\\python.exe\" -m alembic revision --autogenerate -m \"add_notifications_table\")",
+      "Bash(\"C:\\\\.cjjutba\\\\.thesis\\\\iams\\\\backend\\\\venv\\\\Scripts\\\\python.exe\" -m alembic heads)",
+      "Bash(\"C:\\\\.cjjutba\\\\.thesis\\\\iams\\\\backend\\\\venv\\\\Scripts\\\\python.exe\" -m alembic history)",
+      "Bash(\"C:\\\\.cjjutba\\\\.thesis\\\\iams\\\\backend\\\\venv\\\\Scripts\\\\python.exe\" -m alembic current)",
+      "Bash(\"venv/Scripts/python.exe\" -m scripts.seed_content)",
+      "Bash(\"venv/Scripts/python.exe\":*)"
     ]
   }
 }

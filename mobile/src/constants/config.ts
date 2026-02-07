@@ -11,11 +11,11 @@ const isDev = __DEV__;
 export const config = {
   // API URLs
   API_BASE_URL: isDev
-    ? 'http://192.168.1.100:8000/api/v1'
+    ? 'http://192.168.1.11:8000/api/v1'
     : 'https://api.iams.com/api/v1',
 
   WS_URL: isDev
-    ? 'ws://192.168.1.100:8000/api/v1/ws'
+    ? 'ws://192.168.1.11:8000/api/v1/ws'
     : 'wss://api.iams.com/api/v1/ws',
 
   // Storage keys

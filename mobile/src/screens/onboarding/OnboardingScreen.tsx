@@ -109,7 +109,7 @@ export const OnboardingScreen: React.FC = () => {
               </Text>
             </View>
 
-            <Text variant="h2" weight="bold" align="center" style={styles.title}>
+            <Text variant="h2" weight="700" align="center" style={styles.title}>
               {slide.title}
             </Text>
 

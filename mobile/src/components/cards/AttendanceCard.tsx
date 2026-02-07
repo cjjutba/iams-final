@@ -26,8 +26,8 @@ export const AttendanceCard: React.FC<AttendanceCardProps> = ({
   presenceScore,
   onPress,
 }) => {
-  const displayStatus = status || schedule.todayStatus;
-  const displayScore = presenceScore !== undefined ? presenceScore : schedule.presenceScore;
+  const displayStatus = status || schedule.today_attendance?.status as AttendanceStatus | undefined;
+  const displayScore = presenceScore !== undefined ? presenceScore : schedule.today_attendance?.presence_score;
 
   return (
     <Card onPress={onPress} style={styles.card}>
@@ -36,22 +36,22 @@ export const AttendanceCard: React.FC<AttendanceCardProps> = ({
         <View style={styles.mainInfo}>
           {/* Subject */}
           <Text variant="caption" color={theme.colors.text.tertiary} style={styles.code}>
-            {schedule.subjectCode}
+            {schedule.subject_code}
           </Text>
-          <Text variant="body" weight="semibold" numberOfLines={1} style={styles.subject}>
-            {schedule.subjectName}
+          <Text variant="body" weight="600" numberOfLines={1} style={styles.subject}>
+            {schedule.subject_name}
           </Text>
 
           {/* Time and room */}
           <View style={styles.metaRow}>
             <Text variant="bodySmall" color={theme.colors.text.secondary}>
-              {formatTime(schedule.startTime)} - {formatTime(schedule.endTime)}
+              {formatTime(schedule.start_time)} - {formatTime(schedule.end_time)}
             </Text>
             <Text variant="bodySmall" color={theme.colors.text.tertiary}>
               {' • '}
             </Text>
             <Text variant="bodySmall" color={theme.colors.text.secondary}>
-              {schedule.roomName}
+              {schedule.room_name}
             </Text>
           </View>
 

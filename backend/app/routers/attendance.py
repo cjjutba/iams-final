@@ -19,7 +19,9 @@ from app.schemas.attendance import (
     PresenceLogResponse,
     EarlyLeaveResponse,
     LiveAttendanceResponse,
-    StudentAttendanceStatus
+    StudentAttendanceStatus,
+    AttendanceUpdateRequest,
+    AlertResponse
 )
 from app.repositories.attendance_repository import AttendanceRepository
 from app.repositories.schedule_repository import ScheduleRepository
@@ -42,7 +44,32 @@ def get_today_attendance(
 
     Get attendance records for all students in a schedule for today.
 
-    - **schedule_id**: Schedule UUID
+    - **schedule_id**: Schedule UUID (query parameter)
+
+    Returns list of attendance records with student information.
+
+    Requires faculty authentication.
+    """
+    attendance_repo = AttendanceRepository(db)
+    today = date.today()
+
+    records = attendance_repo.get_by_schedule_date(schedule_id, today)
+
+    return [AttendanceRecordResponse.model_validate(r) for r in records]
+
+
+@router.get("/today/{schedule_id}", response_model=List[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
+def get_today_attendance_by_path(
+    schedule_id: str,
+    current_user: User = Depends(get_current_faculty),
+    db: Session = Depends(get_db)
+):
+    """
+    **Get Today's Attendance by Schedule** (Faculty Only)
+
+    Get attendance records for all students in a schedule for today.
+
+    - **schedule_id**: Schedule UUID (path parameter)
 
     Returns list of attendance records with student information.
 
@@ -205,6 +232,210 @@ async def get_live_attendance(
     )
 
 
+@router.get("/alerts", response_model=List[AlertResponse], status_code=status.HTTP_200_OK)
+def get_early_leave_alerts(
+    filter: Optional[str] = Query("all", description="Filter: today, week, or all"),
+    schedule_id: Optional[str] = Query(None, description="Filter by schedule"),
+    current_user: User = Depends(get_current_faculty),
+    db: Session = Depends(get_db)
+):
+    """
+    **Get Early Leave Alerts** (Faculty Only)
+
+    Get early leave alerts for the faculty's schedules.
+
+    - **filter**: Time filter (today, week, all)
+    - **schedule_id**: Optional schedule filter
+
+    Returns list of early leave alerts with student and schedule details.
+
+    Requires faculty authentication.
+    """
+    from datetime import timedelta
+    from fastapi import HTTPException
+
+    attendance_repo = AttendanceRepository(db)
+    schedule_repo = ScheduleRepository(db)
+
+    # Determine date range based on filter
+    start_date = None
+    end_date = None
+    today_date = date.today()
+
+    if filter == "today":
+        start_date = today_date
+        end_date = today_date
+    elif filter == "week":
+        # Start of current week (Monday)
+        start_date = today_date - timedelta(days=today_date.weekday())
+        end_date = today_date
+
+    # Get early leave events
+    events = attendance_repo.get_early_leave_events(
+        schedule_id=schedule_id,
+        start_date=start_date,
+        end_date=end_date
+    )
+
+    # Build enriched response with student and schedule info
+    alerts = []
+    for event in events:
+        attendance = attendance_repo.get_by_id(str(event.attendance_id))
+        if not attendance:
+            continue
+
+        # Only show alerts for schedules this faculty teaches
+        schedule = schedule_repo.get_by_id(str(attendance.schedule_id))
+        if not schedule or str(schedule.faculty_id) != str(current_user.id):
+            continue
+
+        # Get student info
+        student = db.query(User).filter(User.id == attendance.student_id).first()
+        if not student:
+            continue
+
+        alerts.append(AlertResponse(
+            id=str(event.id),
+            attendance_id=str(event.attendance_id),
+            student_id=str(student.id),
+            student_name=f"{student.first_name} {student.last_name}",
+            student_student_id=student.student_id,
+            schedule_id=str(attendance.schedule_id),
+            subject_code=schedule.subject_code,
+            subject_name=schedule.subject_name,
+            detected_at=event.detected_at,
+            last_seen_at=event.last_seen_at,
+            consecutive_misses=event.consecutive_misses,
+            notified=event.notified,
+            date=attendance.date
+        ))
+
+    return alerts
+
+
+@router.get("/export", status_code=status.HTTP_200_OK)
+def export_attendance(
+    schedule_id: str = Query(..., description="Schedule UUID"),
+    start_date: date = Query(..., description="Start date"),
+    end_date: date = Query(..., description="End date"),
+    format: str = Query("csv", description="Export format: csv or json"),
+    current_user: User = Depends(get_current_faculty),
+    db: Session = Depends(get_db)
+):
+    """
+    **Export Attendance Report** (Faculty Only)
+
+    Export attendance records for a schedule within a date range.
+
+    - **schedule_id**: Schedule UUID
+    - **start_date**: Start date
+    - **end_date**: End date
+    - **format**: Export format (csv or json)
+
+    Returns attendance data in the requested format.
+
+    Requires faculty authentication.
+    """
+    from fastapi import HTTPException
+    from fastapi.responses import StreamingResponse
+    import io
+    import csv
+
+    attendance_repo = AttendanceRepository(db)
+    schedule_repo = ScheduleRepository(db)
+
+    # Verify schedule exists and faculty owns it
+    schedule = schedule_repo.get_by_id(schedule_id)
+    if not schedule:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Schedule not found"
+        )
+
+    if str(schedule.faculty_id) != str(current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only export attendance for your own schedules"
+        )
+
+    # Get all attendance records in range
+    records = attendance_repo.get_by_schedule_date_range(schedule_id, start_date, end_date)
+
+    if format == "csv":
+        # Build CSV
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        # Header
+        writer.writerow([
+            "Date", "Student ID", "Student Name", "Status",
+            "Check In", "Check Out", "Presence Score",
+            "Total Scans", "Scans Present", "Remarks"
+        ])
+
+        for record in records:
+            student = db.query(User).filter(User.id == record.student_id).first()
+            student_name = f"{student.first_name} {student.last_name}" if student else "Unknown"
+            student_sid = student.student_id if student else "N/A"
+
+            writer.writerow([
+                record.date.isoformat(),
+                student_sid,
+                student_name,
+                record.status.value if record.status else "unknown",
+                record.check_in_time.isoformat() if record.check_in_time else "",
+                record.check_out_time.isoformat() if record.check_out_time else "",
+                record.presence_score,
+                record.total_scans,
+                record.scans_present,
+                record.remarks or ""
+            ])
+
+        output.seek(0)
+        filename = f"attendance_{schedule.subject_code}_{start_date}_{end_date}.csv"
+
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    else:
+        # JSON format
+        result = []
+        for record in records:
+            student = db.query(User).filter(User.id == record.student_id).first()
+            student_name = f"{student.first_name} {student.last_name}" if student else "Unknown"
+            student_sid = student.student_id if student else "N/A"
+
+            result.append({
+                "date": record.date.isoformat(),
+                "student_id": student_sid,
+                "student_name": student_name,
+                "status": record.status.value if record.status else "unknown",
+                "check_in_time": record.check_in_time.isoformat() if record.check_in_time else None,
+                "check_out_time": record.check_out_time.isoformat() if record.check_out_time else None,
+                "presence_score": record.presence_score,
+                "total_scans": record.total_scans,
+                "scans_present": record.scans_present,
+                "remarks": record.remarks
+            })
+
+        return {
+            "schedule": {
+                "id": str(schedule.id),
+                "subject_code": schedule.subject_code,
+                "subject_name": schedule.subject_name
+            },
+            "date_range": {
+                "start": start_date.isoformat(),
+                "end": end_date.isoformat()
+            },
+            "total_records": len(result),
+            "records": result
+        }
+
+
 @router.get("/{attendance_id}", response_model=AttendanceRecordResponse, status_code=status.HTTP_200_OK)
 def get_attendance_record(
     attendance_id: str,
@@ -330,7 +561,7 @@ def manual_attendance_entry(
 @router.patch("/{attendance_id}", response_model=AttendanceRecordResponse, status_code=status.HTTP_200_OK)
 def update_attendance_record(
     attendance_id: str,
-    update_data: dict,
+    update_data: AttendanceUpdateRequest,
     current_user: User = Depends(get_current_faculty),
     db: Session = Depends(get_db)
 ):
@@ -342,15 +573,22 @@ def update_attendance_record(
     Allowed fields: status, remarks
 
     - **attendance_id**: Attendance record UUID
-    - **update_data**: Fields to update
+    - **status**: New attendance status (optional)
+    - **remarks**: Notes or comments (optional)
 
     Requires faculty authentication.
     """
     attendance_repo = AttendanceRepository(db)
 
-    # Only allow certain fields to be updated
-    allowed_fields = ["status", "remarks"]
-    filtered_data = {k: v for k, v in update_data.items() if k in allowed_fields}
+    # Filter out None values
+    filtered_data = {k: v for k, v in update_data.model_dump().items() if v is not None}
+
+    if not filtered_data:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No fields to update"
+        )
 
     record = attendance_repo.update(attendance_id, filtered_data)
 

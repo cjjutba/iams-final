@@ -75,7 +75,7 @@ export function FormSelect<T extends FieldValues>({
 
             {/* Error */}
             {error && (
-              <Text variant="caption" color={theme.colors.status.error} style={styles.error}>
+              <Text variant="caption" color={theme.colors.error} style={styles.error}>
                 {error.message}
               </Text>
             )}
@@ -91,7 +91,7 @@ export function FormSelect<T extends FieldValues>({
                 <View style={styles.modalContent}>
                   {/* Header */}
                   <View style={styles.modalHeader}>
-                    <Text variant="h3" weight="semibold">
+                    <Text variant="h3" weight="600">
                       {label}
                     </Text>
                     <Button variant="ghost" onPress={() => setModalVisible(false)}>
@@ -117,7 +117,7 @@ export function FormSelect<T extends FieldValues>({
                       >
                         <Text
                           variant="body"
-                          weight={item.value === value ? 'semibold' : 'regular'}
+                          weight={item.value === value ? '600' : '400'}
                           color={
                             item.value === value
                               ? theme.colors.primary
@@ -150,7 +150,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: theme.colors.backgroundSecondary,
+    backgroundColor: theme.colors.secondary,
     borderWidth: 1,
     borderColor: theme.colors.border,
     borderRadius: theme.borderRadius.md,
@@ -159,7 +159,7 @@ const styles = StyleSheet.create({
     minHeight: theme.layout.inputHeight.md,
   },
   triggerError: {
-    borderColor: theme.colors.status.error,
+    borderColor: theme.colors.error,
   },
   triggerText: {
     flex: 1,
@@ -169,7 +169,7 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: theme.colors.overlay,
+    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
   },
   modalContent: {
@@ -195,6 +195,6 @@ const styles = StyleSheet.create({
     borderBottomColor: theme.colors.border,
   },
   optionSelected: {
-    backgroundColor: theme.colors.backgroundSecondary,
+    backgroundColor: theme.colors.secondary,
   },
 });

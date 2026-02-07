@@ -12,7 +12,7 @@ import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { IdCard, Lock } from 'lucide-react-native';
 import type { AuthStackParamList } from '../../types';
-import { studentLoginSchema, type StudentLoginData } from '../../utils/validators';
+import { studentLoginSchema, type StudentLoginFormData } from '../../utils/validators';
 import { useAuthStore } from '../../stores';
 import { theme, strings } from '../../constants';
 import { AuthLayout } from '../../components/layouts';
@@ -29,7 +29,7 @@ export const StudentLoginScreen: React.FC = () => {
     control,
     handleSubmit,
     formState: { errors },
-  } = useForm<StudentLoginData>({
+  } = useForm<StudentLoginFormData>({
     resolver: zodResolver(studentLoginSchema),
     defaultValues: {
       student_id: '',
@@ -37,11 +37,11 @@ export const StudentLoginScreen: React.FC = () => {
     },
   });
 
-  const onSubmit = async (data: StudentLoginData) => {
+  const onSubmit = async (data: StudentLoginFormData) => {
     try {
       setIsSubmitting(true);
       clearError();
-      await login({ ...data, role: 'student' });
+      await login({ email: data.student_id, password: data.password });
     } catch (err) {
       console.error('Login error:', err);
     } finally {

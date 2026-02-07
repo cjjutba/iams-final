@@ -121,3 +121,37 @@ class LiveAttendanceResponse(BaseModel):
     absent_count: int
     early_leave_count: int
     students: List[StudentAttendanceStatus] = []
+
+
+class AttendanceUpdateRequest(BaseModel):
+    """Request model for updating attendance record"""
+    status: Optional[AttendanceStatus] = None
+    remarks: Optional[str] = None
+
+
+class AlertResponse(BaseModel):
+    """Early leave alert response for faculty dashboard"""
+    id: str
+    attendance_id: str
+    student_id: str
+    student_name: str
+    student_student_id: Optional[str] = None
+    schedule_id: str
+    subject_code: str
+    subject_name: str
+    detected_at: datetime
+    last_seen_at: datetime
+    consecutive_misses: int
+    notified: bool
+    date: date
+
+    @field_validator("id", "attendance_id", "student_id", "schedule_id", mode="before")
+    @classmethod
+    def coerce_uuid_to_str(cls, v):
+        """Convert UUID to string if needed"""
+        if isinstance(v, UUID):
+            return str(v)
+        return v
+
+    class Config:
+        from_attributes = True

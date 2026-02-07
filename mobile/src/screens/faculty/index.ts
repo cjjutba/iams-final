@@ -12,3 +12,4 @@ export { FacultyAlertsScreen } from './FacultyAlertsScreen';
 export { FacultyReportsScreen } from './FacultyReportsScreen';
 export { FacultyProfileScreen } from './FacultyProfileScreen';
 export { FacultyNotificationsScreen } from './FacultyNotificationsScreen';
+export { FacultyEditProfileScreen } from './FacultyEditProfileScreen';

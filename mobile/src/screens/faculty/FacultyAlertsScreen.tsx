@@ -1,17 +1,30 @@
 /**
  * Faculty Alerts Screen
  *
- * Shows early leave alerts with filtering
+ * Shows early leave alerts fetched from the API with filtering.
+ * Supports pull-to-refresh, loading/error/empty states, and
+ * navigation to student detail on tap.
  */
 
-import React, { useState } from 'react';
-import { View, StyleSheet, FlatList, ScrollView, TouchableOpacity } from 'react-native';
+import React, { useEffect, useState, useCallback } from 'react';
+import {
+  View,
+  StyleSheet,
+  FlatList,
+  ScrollView,
+  TouchableOpacity,
+  RefreshControl,
+  ActivityIndicator,
+} from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
+import { AlertTriangle, RefreshCw } from 'lucide-react-native';
+import { api } from '../../utils/api';
 import { theme, strings } from '../../constants';
-import type { FacultyStackParamList, EarlyLeaveEvent } from '../../types';
+import { getErrorMessage } from '../../utils';
+import type { FacultyStackParamList, EarlyLeaveEvent, ApiResponse } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
-import { Text } from '../../components/ui';
+import { Text, Button } from '../../components/ui';
 import { AlertCard } from '../../components/cards';
 
 type FacultyAlertsNavigationProp = StackNavigationProp<FacultyStackParamList, 'FacultyTabs'>;
@@ -20,42 +33,63 @@ const FILTERS = [
   { label: 'Today', value: 'today' },
   { label: 'This Week', value: 'week' },
   { label: 'All', value: 'all' },
-];
+] as const;
 
-// Mock data
-const MOCK_ALERTS: EarlyLeaveEvent[] = [
-  {
-    id: '1',
-    attendanceId: 'att1',
-    studentName: 'John Doe',
-    detectedAt: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
-    consecutiveMisses: 3,
-    notified: true,
-  },
-  {
-    id: '2',
-    attendanceId: 'att2',
-    studentName: 'Jane Smith',
-    detectedAt: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
-    consecutiveMisses: 3,
-    notified: true,
-  },
-];
+type FilterValue = typeof FILTERS[number]['value'];
 
 export const FacultyAlertsScreen: React.FC = () => {
   const navigation = useNavigation<FacultyAlertsNavigationProp>();
 
-  const [selectedFilter, setSelectedFilter] = useState('today');
-  const alerts = MOCK_ALERTS; // Replace with real data
+  const [selectedFilter, setSelectedFilter] = useState<FilterValue>('today');
+  const [alerts, setAlerts] = useState<EarlyLeaveEvent[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // ---------- data fetching ----------
+
+  const fetchAlerts = useCallback(
+    async (silent = false) => {
+      if (!silent) setIsLoading(true);
+      setError(null);
+
+      try {
+        const response = await api.get<ApiResponse<EarlyLeaveEvent[]>>(
+          '/attendance/alerts',
+          { params: { filter: selectedFilter } }
+        );
+        setAlerts(response.data.data || []);
+      } catch (err) {
+        setError(getErrorMessage(err));
+      } finally {
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
+    },
+    [selectedFilter]
+  );
+
+  useEffect(() => {
+    fetchAlerts();
+  }, [fetchAlerts]);
+
+  const handleRefresh = useCallback(() => {
+    setIsRefreshing(true);
+    fetchAlerts(true);
+  }, [fetchAlerts]);
+
+  // ---------- navigation ----------
 
   const handleAlertPress = (event: EarlyLeaveEvent) => {
     navigation.navigate('StudentDetail', {
-      studentId: event.id,
-      scheduleId: event.attendanceId,
+      studentId: event.student_id,
+      scheduleId: event.schedule_id,
     });
   };
 
-  const renderFilterButton = (filter: typeof FILTERS[0]) => {
+  // ---------- filter buttons ----------
+
+  const renderFilterButton = (filter: typeof FILTERS[number]) => {
     const isSelected = filter.value === selectedFilter;
 
     return (
@@ -67,8 +101,8 @@ export const FacultyAlertsScreen: React.FC = () => {
       >
         <Text
           variant="bodySmall"
-          weight={isSelected ? 'semibold' : 'regular'}
-          color={isSelected ? theme.colors.background : theme.colors.text.secondary}
+          weight={isSelected ? '600' : '400'}
+          color={isSelected ? theme.colors.primaryForeground : theme.colors.text.secondary}
         >
           {filter.label}
         </Text>
@@ -76,13 +110,82 @@ export const FacultyAlertsScreen: React.FC = () => {
     );
   };
 
+  // ---------- empty state ----------
+
   const renderEmpty = () => (
     <View style={styles.emptyContainer}>
+      <AlertTriangle size={48} color={theme.colors.text.tertiary} style={styles.emptyIcon} />
       <Text variant="body" color={theme.colors.text.secondary} align="center">
         {strings.faculty.noAlertsToday}
       </Text>
+      <Text
+        variant="bodySmall"
+        color={theme.colors.text.tertiary}
+        align="center"
+        style={styles.emptySubtext}
+      >
+        No early leave alerts for the selected period
+      </Text>
     </View>
   );
+
+  // ---------- error state ----------
+
+  if (error && !isRefreshing && alerts.length === 0) {
+    return (
+      <ScreenLayout safeArea padded={false}>
+        <Header title={strings.faculty.alerts} />
+        <View style={styles.errorContainer}>
+          <RefreshCw size={40} color={theme.colors.text.tertiary} style={styles.errorIcon} />
+          <Text variant="body" color={theme.colors.text.secondary} align="center">
+            {error}
+          </Text>
+          <Button
+            variant="secondary"
+            size="md"
+            onPress={() => fetchAlerts()}
+            style={styles.retryButton}
+          >
+            {strings.common.retry}
+          </Button>
+        </View>
+      </ScreenLayout>
+    );
+  }
+
+  // ---------- loading state ----------
+
+  if (isLoading && alerts.length === 0) {
+    return (
+      <ScreenLayout safeArea padded={false}>
+        <Header title={strings.faculty.alerts} />
+
+        {/* Filters */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filterList}
+          style={styles.filterContainer}
+        >
+          {FILTERS.map(renderFilterButton)}
+        </ScrollView>
+
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+          <Text
+            variant="bodySmall"
+            color={theme.colors.text.secondary}
+            align="center"
+            style={styles.loadingText}
+          >
+            {strings.common.loading}
+          </Text>
+        </View>
+      </ScreenLayout>
+    );
+  }
+
+  // ---------- main render ----------
 
   return (
     <ScreenLayout safeArea padded={false}>
@@ -106,8 +209,20 @@ export const FacultyAlertsScreen: React.FC = () => {
           <AlertCard event={item} onPress={() => handleAlertPress(item)} />
         )}
         ListEmptyComponent={renderEmpty}
-        contentContainerStyle={styles.listContent}
+        style={styles.list}
+        contentContainerStyle={[
+          styles.listContent,
+          alerts.length === 0 && styles.listContentEmpty,
+        ]}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={handleRefresh}
+            colors={[theme.colors.primary]}
+            tintColor={theme.colors.primary}
+          />
+        }
       />
     </ScreenLayout>
   );
@@ -115,6 +230,7 @@ export const FacultyAlertsScreen: React.FC = () => {
 
 const styles = StyleSheet.create({
   filterContainer: {
+    flexGrow: 0,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
   },
@@ -127,15 +243,50 @@ const styles = StyleSheet.create({
     paddingVertical: theme.spacing[2],
     marginRight: theme.spacing[2],
     borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.backgroundSecondary,
+    backgroundColor: theme.colors.secondary,
   },
   filterButtonSelected: {
     backgroundColor: theme.colors.primary,
   },
+  list: {
+    flex: 1,
+  },
   listContent: {
     padding: theme.spacing[4],
   },
+  listContentEmpty: {
+    flexGrow: 1,
+  },
   emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
     paddingVertical: theme.spacing[12],
+  },
+  emptyIcon: {
+    marginBottom: theme.spacing[4],
+  },
+  emptySubtext: {
+    marginTop: theme.spacing[2],
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: theme.spacing[3],
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: theme.spacing[6],
+  },
+  errorIcon: {
+    marginBottom: theme.spacing[4],
+  },
+  retryButton: {
+    marginTop: theme.spacing[4],
   },
 });

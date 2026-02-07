@@ -21,7 +21,7 @@ from app.utils.exceptions import (
 )
 
 # Import routers
-from app.routers import auth, users, face, schedules, attendance, websocket
+from app.routers import auth, users, face, schedules, attendance, websocket, notifications
 
 # Global scheduler instance for background tasks
 scheduler = AsyncIOScheduler()
@@ -245,6 +245,13 @@ app.include_router(
     attendance.router,
     prefix=f"{settings.API_PREFIX}/attendance",
     tags=["Attendance"]
+)
+
+# Notification routes
+app.include_router(
+    notifications.router,
+    prefix=f"{settings.API_PREFIX}/notifications",
+    tags=["Notifications"]
 )
 
 # WebSocket routes

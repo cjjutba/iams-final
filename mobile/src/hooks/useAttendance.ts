@@ -9,9 +9,10 @@ import { useAttendanceStore } from '../stores';
 
 export const useAttendance = () => {
   const {
+    myAttendance,
     todayAttendance,
-    history,
     liveAttendance,
+    presenceLogs,
     summary,
     isLoading,
     error,
@@ -26,12 +27,16 @@ export const useAttendance = () => {
 
   return {
     // State
+    myAttendance,
     todayAttendance,
-    history,
     liveAttendance,
+    presenceLogs,
     summary,
     isLoading,
     error,
+
+    // Alias for backward compat: screens reference "history"
+    history: myAttendance,
 
     // Actions
     fetchMyAttendance,
@@ -43,7 +48,7 @@ export const useAttendance = () => {
     clearError,
 
     // Computed
-    hasAttendanceToday: todayAttendance !== null,
-    totalRecords: history.length,
+    hasAttendanceToday: todayAttendance.length > 0,
+    totalRecords: myAttendance.length,
   };
 };

@@ -2,16 +2,16 @@
  * Auth Store - Zustand State Management
  *
  * Manages authentication state including user, tokens, and auth actions.
- * Integrates with storage for persistence and API for authentication.
+ * Delegates all API calls to authService for correct request/response handling.
  */
 
 import { create } from 'zustand';
-import { api, storage, getErrorMessage } from '../utils';
+import { storage, getErrorMessage } from '../utils';
+import { authService } from '../services';
 import type {
   User,
   LoginRequest,
   RegisterRequest,
-  AuthResponse,
   VerifyStudentIdRequest,
   VerifyStudentIdResponse,
 } from '../types';
@@ -29,6 +29,9 @@ interface AuthState {
   register: (data: RegisterRequest) => Promise<void>;
   logout: () => Promise<void>;
   verifyStudentId: (data: VerifyStudentIdRequest) => Promise<VerifyStudentIdResponse>;
+  changePassword: (oldPassword: string, newPassword: string) => Promise<void>;
+  updateProfile: (data: Partial<User>) => Promise<void>;
+  forgotPassword: (email: string) => Promise<void>;
   clearError: () => void;
 }
 
@@ -51,26 +54,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         return;
       }
 
-      // Get user from backend to verify token
-      const response = await api.get<AuthResponse>('/auth/me');
+      // GET /auth/me returns UserResponse directly (not wrapped)
+      const user = await authService.getMe();
 
-      if (response.data && response.data.user) {
-        await storage.setUser(response.data.user);
-        set({
-          user: response.data.user,
-          isAuthenticated: true,
-          isLoading: false,
-        });
-      } else {
-        // Invalid response, clear auth
-        await storage.clearAuth();
-        set({ isLoading: false, isAuthenticated: false, user: null });
-      }
+      await storage.setUser(user);
+      set({
+        user,
+        isAuthenticated: true,
+        isLoading: false,
+      });
     } catch (error) {
       console.error('Failed to load user:', error);
       await storage.clearAuth();
       set({
-        error: getErrorMessage(error),
         isLoading: false,
         isAuthenticated: false,
         user: null,
@@ -83,28 +79,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      // Convert to URLSearchParams for form data
-      const formData = new URLSearchParams();
-      formData.append('email', data.email);
-      formData.append('password', data.password);
-
-      const response = await api.post<AuthResponse>('/auth/login', formData, {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-      });
-
-      const { access_token, refresh_token, user } = response.data;
-
-      // Store tokens and user
-      await storage.setAccessToken(access_token);
-      await storage.setRefreshToken(refresh_token);
-      if (user) {
-        await storage.setUser(user);
-      }
+      // authService.login sends JSON { identifier, password } and stores tokens
+      const authData = await authService.login(data.email, data.password);
 
       set({
-        user: user || null,
+        user: authData.user || null,
         isAuthenticated: true,
         isLoading: false,
       });
@@ -124,19 +103,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const response = await api.post<AuthResponse>('/auth/register', data);
-
-      const { access_token, refresh_token, user } = response.data;
-
-      // Store tokens and user
-      await storage.setAccessToken(access_token);
-      await storage.setRefreshToken(refresh_token);
-      if (user) {
-        await storage.setUser(user);
-      }
+      // authService.register handles nested tokens response and stores tokens
+      const result = await authService.register({
+        student_id: data.student_id || '',
+        email: data.email,
+        password: data.password,
+        first_name: data.first_name,
+        last_name: data.last_name,
+        phone: data.phone,
+      });
 
       set({
-        user: user || null,
+        user: result.user || null,
         isAuthenticated: true,
         isLoading: false,
       });
@@ -155,10 +133,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const response = await api.post<VerifyStudentIdResponse>('/auth/verify-student-id', data);
-
+      const result = await authService.verifyStudentId(data.student_id);
       set({ isLoading: false });
-      return response.data;
+      return result;
     } catch (error) {
       console.error('Student ID verification failed:', error);
       set({
@@ -169,24 +146,77 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  // Logout
-  logout: async () => {
+  // Change password
+  changePassword: async (oldPassword: string, newPassword: string) => {
     set({ isLoading: true, error: null });
 
     try {
-      // Clear local storage
-      await storage.clearAuth();
+      await authService.changePassword(oldPassword, newPassword);
+      set({ isLoading: false });
+    } catch (error) {
+      console.error('Change password failed:', error);
+      set({
+        error: getErrorMessage(error),
+        isLoading: false,
+      });
+      throw error;
+    }
+  },
 
+  // Update user profile
+  updateProfile: async (data: Partial<User>) => {
+    set({ isLoading: true, error: null });
+
+    try {
+      const currentUser = get().user;
+      if (!currentUser) throw new Error('No user logged in');
+
+      const updatedUser = await authService.updateProfile(currentUser.id, data);
+      await storage.setUser(updatedUser);
+      set({
+        user: updatedUser,
+        isLoading: false,
+      });
+    } catch (error) {
+      console.error('Update profile failed:', error);
+      set({
+        error: getErrorMessage(error),
+        isLoading: false,
+      });
+      throw error;
+    }
+  },
+
+  // Request password reset via email
+  forgotPassword: async (email: string) => {
+    set({ isLoading: true, error: null });
+
+    try {
+      await authService.forgotPassword(email);
+      set({ isLoading: false });
+    } catch (error) {
+      console.error('Forgot password request failed:', error);
+      set({
+        error: getErrorMessage(error),
+        isLoading: false,
+      });
+      throw error;
+    }
+  },
+
+  // Logout
+  logout: async () => {
+    try {
+      await authService.logout();
+    } catch (error) {
+      console.error('Logout API call failed:', error);
+    } finally {
+      // Always reset state regardless of API result
       set({
         user: null,
         isAuthenticated: false,
         isLoading: false,
-      });
-    } catch (error) {
-      console.error('Logout failed:', error);
-      set({
-        error: getErrorMessage(error),
-        isLoading: false,
+        error: null,
       });
     }
   },

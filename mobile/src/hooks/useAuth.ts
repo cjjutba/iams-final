@@ -18,6 +18,9 @@ export const useAuth = () => {
     register,
     logout,
     verifyStudentId,
+    changePassword,
+    updateProfile,
+    forgotPassword,
     clearError,
   } = useAuthStore();
 
@@ -34,6 +37,9 @@ export const useAuth = () => {
     register,
     logout,
     verifyStudentId,
+    changePassword,
+    updateProfile,
+    forgotPassword,
     clearError,
 
     // Computed

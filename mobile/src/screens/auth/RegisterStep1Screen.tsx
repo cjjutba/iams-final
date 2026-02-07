@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { IdCard, CheckCircle } from 'lucide-react-native';
 import { useAuth } from '../../hooks';
 import { theme, strings } from '../../constants';
-import type { AuthStackParamList } from '../../types';
+import type { AuthStackParamList, StudentInfo } from '../../types';
 import { AuthLayout } from '../../components/layouts';
 import { Text, Button } from '../../components/ui';
 import { FormInput } from '../../components/forms';
@@ -37,7 +37,7 @@ export const RegisterStep1Screen: React.FC = () => {
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [studentInfo, setStudentInfo] = useState<any | null>(null);
+  const [studentInfo, setStudentInfo] = useState<StudentInfo | null>(null);
 
   const { control, handleSubmit } = useForm<StudentIdData>({
     resolver: zodResolver(studentIdSchema),
@@ -54,7 +54,15 @@ export const RegisterStep1Screen: React.FC = () => {
       const response = await verifyStudentId({ student_id: data.studentId });
 
       if (response.success && response.data.valid) {
-        setStudentInfo({ studentId: data.studentId, ...response.data });
+        setStudentInfo({
+          studentId: data.studentId,
+          first_name: response.data.first_name || '',
+          last_name: response.data.last_name || '',
+          course: response.data.course || '',
+          year: response.data.year || '',
+          section: response.data.section || '',
+          email: response.data.email,
+        });
       } else {
         setError('Student ID not found in university database');
       }
@@ -66,6 +74,7 @@ export const RegisterStep1Screen: React.FC = () => {
   };
 
   const handleContinue = () => {
+    if (!studentInfo) return;
     navigation.navigate('RegisterStep2', { studentInfo });
   };
 

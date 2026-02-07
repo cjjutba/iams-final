@@ -2,12 +2,15 @@
  * Student Edit Profile Screen
  *
  * Allows students to update their profile:
- * - Email and phone number
- * - Password change section
+ * - Email and phone number (with validation)
+ * - Password change section (current + new + confirm)
+ * - Success/error feedback via Alert
+ * - Refreshes user data after successful update
  */
 
 import React, { useState } from 'react';
 import { View, StyleSheet, Alert } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -15,8 +18,9 @@ import { Mail, Phone, Lock } from 'lucide-react-native';
 import { useAuth } from '../../hooks';
 import { authService } from '../../services';
 import { theme, strings } from '../../constants';
+import { getErrorMessage } from '../../utils';
 import { ScreenLayout, Header } from '../../components/layouts';
-import { Button, Divider } from '../../components/ui';
+import { Text, Button, Divider } from '../../components/ui';
 import { FormInput, FormPassword } from '../../components/forms';
 
 // Profile update schema
@@ -44,10 +48,13 @@ type ProfileData = z.infer<typeof profileSchema>;
 type PasswordData = z.infer<typeof passwordSchema>;
 
 export const StudentEditProfileScreen: React.FC = () => {
-  const { user } = useAuth();
+  const navigation = useNavigation();
+  const { user, loadUser } = useAuth();
 
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+
+  // ---------- profile form ----------
 
   const {
     control: profileControl,
@@ -60,6 +67,8 @@ export const StudentEditProfileScreen: React.FC = () => {
       phone: user?.phone || '',
     },
   });
+
+  // ---------- password form ----------
 
   const {
     control: passwordControl,
@@ -74,14 +83,23 @@ export const StudentEditProfileScreen: React.FC = () => {
     },
   });
 
+  // ---------- handlers ----------
+
   const onSaveProfile = async (data: ProfileData) => {
     try {
       setIsSavingProfile(true);
-      await authService.updateProfile(data);
+      await authService.updateProfile(user!.id, {
+        email: data.email,
+        phone: data.phone,
+      });
+
+      // Reload user data so the rest of the app picks up the changes
+      await loadUser();
 
       Alert.alert('Success', 'Profile updated successfully');
-    } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.message || strings.errors.generic);
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      Alert.alert('Error', message);
     } finally {
       setIsSavingProfile(false);
     }
@@ -90,19 +108,19 @@ export const StudentEditProfileScreen: React.FC = () => {
   const onChangePassword = async (data: PasswordData) => {
     try {
       setIsChangingPassword(true);
-      await authService.changePassword({
-        current_password: data.currentPassword,
-        new_password: data.newPassword,
-      });
+      await authService.changePassword(data.currentPassword, data.newPassword);
 
       resetPasswordForm();
       Alert.alert('Success', 'Password changed successfully');
-    } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.message || strings.errors.generic);
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      Alert.alert('Error', message);
     } finally {
       setIsChangingPassword(false);
     }
   };
+
+  // ---------- render ----------
 
   return (
     <ScreenLayout safeArea scrollable keyboardAvoiding>
@@ -110,6 +128,10 @@ export const StudentEditProfileScreen: React.FC = () => {
 
       <View style={styles.container}>
         {/* Profile section */}
+        <Text variant="h4" weight="600" style={styles.sectionTitle}>
+          Personal Information
+        </Text>
+
         <View style={styles.section}>
           <FormInput
             name="email"
@@ -138,13 +160,17 @@ export const StudentEditProfileScreen: React.FC = () => {
             loading={isSavingProfile}
             disabled={!isProfileDirty}
           >
-            {strings.common.save}
+            {strings.student.saveChanges}
           </Button>
         </View>
 
-        <Divider spacing="lg" />
+        <Divider spacing={6} />
 
         {/* Password section */}
+        <Text variant="h4" weight="600" style={styles.sectionTitle}>
+          {strings.student.changePassword}
+        </Text>
+
         <View style={styles.section}>
           <FormPassword
             name="currentPassword"
@@ -188,6 +214,9 @@ export const StudentEditProfileScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     padding: theme.spacing[4],
+  },
+  sectionTitle: {
+    marginBottom: theme.spacing[4],
   },
   section: {
     marginBottom: theme.spacing[6],

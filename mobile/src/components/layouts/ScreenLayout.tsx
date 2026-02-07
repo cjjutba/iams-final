@@ -34,7 +34,7 @@ export const ScreenLayout: React.FC<ScreenLayoutProps> = ({
   keyboardAvoiding = false,
   backgroundColor = 'background',
 }) => {
-  const bgColor = theme.colors[backgroundColor];
+  const bgColor = theme.colors[backgroundColor] as string;
 
   const containerStyle = [
     styles.container,

@@ -13,6 +13,7 @@ from app.models.enrollment import Enrollment
 from app.models.attendance_record import AttendanceRecord, AttendanceStatus
 from app.models.presence_log import PresenceLog
 from app.models.early_leave_event import EarlyLeaveEvent
+from app.models.notification import Notification
 
 __all__ = [
     "Base",
@@ -26,4 +27,5 @@ __all__ = [
     "AttendanceStatus",
     "PresenceLog",
     "EarlyLeaveEvent",
+    "Notification",
 ]

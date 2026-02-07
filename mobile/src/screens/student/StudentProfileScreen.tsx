@@ -2,19 +2,27 @@
  * Student Profile Screen
  *
  * Shows student information and profile actions:
- * - Avatar and basic info
- * - Student details (course, year, section)
+ * - Avatar with initials and basic info
+ * - Student details (email, phone, role)
  * - Action menu (Edit Profile, Re-register Face, Notifications, Settings)
- * - Sign out
+ * - Sign out with confirmation
  */
 
 import React from 'react';
 import { View, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
-import { ChevronRight, User, Camera, Bell, Settings as SettingsIcon, LogOut } from 'lucide-react-native';
+import {
+  ChevronRight,
+  User,
+  Camera,
+  Bell,
+  Settings as SettingsIcon,
+  LogOut,
+} from 'lucide-react-native';
 import { useAuth } from '../../hooks';
 import { theme, strings } from '../../constants';
+import { capitalize } from '../../utils';
 import type { StudentStackParamList } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
 import { Text, Avatar, Card, Divider, Button } from '../../components/ui';
@@ -25,12 +33,14 @@ export const StudentProfileScreen: React.FC = () => {
   const navigation = useNavigation<StudentProfileNavigationProp>();
   const { user, logout } = useAuth();
 
+  // ---------- navigation handlers ----------
+
   const handleEditProfile = () => {
     navigation.navigate('EditProfile');
   };
 
   const handleReregisterFace = () => {
-    navigation.navigate('FaceRegister');
+    navigation.navigate('FaceRegister', { mode: 'reregister' });
   };
 
   const handleNotifications = () => {
@@ -58,7 +68,11 @@ export const StudentProfileScreen: React.FC = () => {
     );
   };
 
+  // ---------- guard ----------
+
   if (!user) return null;
+
+  // ---------- render ----------
 
   return (
     <ScreenLayout safeArea padded={false}>
@@ -67,14 +81,15 @@ export const StudentProfileScreen: React.FC = () => {
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Profile header */}
         <View style={styles.profileHeader}>
-          <Avatar
-            firstName={user.first_name}
-            lastName={user.last_name}
-            size="xl"
-            style={styles.avatar}
-          />
+          <View style={styles.avatar}>
+            <Avatar
+              firstName={user.first_name}
+              lastName={user.last_name}
+              size="xl"
+            />
+          </View>
 
-          <Text variant="h2" weight="bold" align="center" style={styles.name}>
+          <Text variant="h2" weight="700" align="center" style={styles.name}>
             {user.first_name} {user.last_name}
           </Text>
 
@@ -87,12 +102,12 @@ export const StudentProfileScreen: React.FC = () => {
 
         {/* User info card */}
         <Card style={styles.card}>
-          <InfoRow label="Email" value={user.email} />
-          {user.phone && <InfoRow label="Phone" value={user.phone} />}
-          <InfoRow label="Role" value={user.role.charAt(0).toUpperCase() + user.role.slice(1)} />
+          <InfoRow label={strings.form.email} value={user.email} />
+          {user.phone && <InfoRow label={strings.form.phone} value={user.phone} />}
+          <InfoRow label="Role" value={capitalize(user.role)} />
         </Card>
 
-        <Divider spacing="lg" />
+        <Divider spacing={6} />
 
         {/* Actions */}
         <View style={styles.actionsContainer}>
@@ -121,7 +136,7 @@ export const StudentProfileScreen: React.FC = () => {
           />
         </View>
 
-        <Divider spacing="lg" />
+        <Divider spacing={6} />
 
         {/* Sign out */}
         <View style={styles.signOutContainer}>
@@ -130,9 +145,9 @@ export const StudentProfileScreen: React.FC = () => {
             size="lg"
             fullWidth
             onPress={handleSignOut}
-            leftIcon={<LogOut size={20} color={theme.colors.status.error} />}
+            leftIcon={<LogOut size={20} color={theme.colors.error} />}
           >
-            <Text variant="button" color={theme.colors.status.error}>
+            <Text variant="button" color={theme.colors.error}>
               {strings.student.signOut}
             </Text>
           </Button>
@@ -142,19 +157,21 @@ export const StudentProfileScreen: React.FC = () => {
   );
 };
 
-// InfoRow component
+// ---------- sub-components ----------
+
+/** Single row of label + value in the info card */
 const InfoRow: React.FC<{ label: string; value: string }> = ({ label, value }) => (
   <View style={styles.infoRow}>
     <Text variant="bodySmall" color={theme.colors.text.tertiary}>
       {label}
     </Text>
-    <Text variant="body" weight="medium">
+    <Text variant="body" weight="500">
       {value}
     </Text>
   </View>
 );
 
-// ActionItem component
+/** Pressable action row with icon, label, and chevron */
 const ActionItem: React.FC<{
   icon: React.ReactNode;
   label: string;

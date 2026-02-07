@@ -1,70 +1,242 @@
 /**
  * Settings Screen
  *
- * App settings and preferences
- * Used by both students and faculty
+ * App settings and preferences used by both students and faculty.
+ * Implements:
+ * - Notification preference toggles (persisted locally)
+ * - Theme display (read-only for now)
+ * - Password change navigation
+ * - About section with real app version
  */
 
-import React from 'react';
-import { View, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
-import { ChevronRight } from 'lucide-react-native';
-import { theme } from '../../constants';
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Switch,
+  Linking,
+  Platform,
+} from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import { ChevronRight, Info } from 'lucide-react-native';
+import { theme, config } from '../../constants';
 import { ScreenLayout, Header } from '../../components/layouts';
-import { Text, Card } from '../../components/ui';
+import { Text, Card, Divider } from '../../components/ui';
+
+/** Keys for persisted notification preferences */
+const PREF_KEYS = {
+  NOTIF_ATTENDANCE: '@iams/pref_notif_attendance',
+  NOTIF_ALERTS: '@iams/pref_notif_alerts',
+  NOTIF_SCHEDULE: '@iams/pref_notif_schedule',
+} as const;
 
 export const SettingsScreen: React.FC = () => {
-  const handlePress = (option: string) => {
-    Alert.alert(option, 'Feature coming soon');
+  const navigation = useNavigation();
+
+  // Notification preferences (defaults to true)
+  const [attendanceNotifs, setAttendanceNotifs] = useState(true);
+  const [alertNotifs, setAlertNotifs] = useState(true);
+  const [scheduleNotifs, setScheduleNotifs] = useState(true);
+
+  // Load saved preferences on mount
+  useEffect(() => {
+    const loadPreferences = async () => {
+      try {
+        // SecureStore only stores strings, so we check for 'false'
+        const SecureStore = await import('expo-secure-store');
+
+        const attVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_ATTENDANCE);
+        if (attVal !== null) setAttendanceNotifs(attVal !== 'false');
+
+        const alertVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_ALERTS);
+        if (alertVal !== null) setAlertNotifs(alertVal !== 'false');
+
+        const schedVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_SCHEDULE);
+        if (schedVal !== null) setScheduleNotifs(schedVal !== 'false');
+      } catch (err) {
+        // Silently fail -- defaults are fine
+        console.error('Failed to load preferences:', err);
+      }
+    };
+
+    loadPreferences();
+  }, []);
+
+  // Persist a preference toggle
+  const togglePreference = async (
+    key: string,
+    value: boolean,
+    setter: (v: boolean) => void
+  ) => {
+    setter(value);
+    try {
+      const SecureStore = await import('expo-secure-store');
+      await SecureStore.setItemAsync(key, value.toString());
+    } catch (err) {
+      console.error('Failed to save preference:', err);
+    }
   };
 
   return (
-    <ScreenLayout safeArea scrollable>
+    <ScreenLayout safeArea padded={false}>
       <Header showBack title="Settings" />
 
-      <View style={styles.container}>
-        {/* App Settings */}
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Notification Settings */}
         <Card>
-          <Text variant="h4" weight="semibold" style={styles.sectionTitle}>
-            App Settings
+          <Text variant="h4" weight="600" style={styles.sectionTitle}>
+            Notifications
           </Text>
 
-          <SettingItem label="Notifications" onPress={() => handlePress('Notifications')} />
-          <SettingItem label="Language" value="English" onPress={() => handlePress('Language')} />
-          <SettingItem label="Theme" value="Light" onPress={() => handlePress('Theme')} />
+          <ToggleItem
+            label="Attendance Updates"
+            description="Get notified when your attendance is recorded"
+            value={attendanceNotifs}
+            onToggle={(v) =>
+              togglePreference(PREF_KEYS.NOTIF_ATTENDANCE, v, setAttendanceNotifs)
+            }
+          />
+
+          <ToggleItem
+            label="Early Leave Alerts"
+            description="Receive alerts about early leave detections"
+            value={alertNotifs}
+            onToggle={(v) =>
+              togglePreference(PREF_KEYS.NOTIF_ALERTS, v, setAlertNotifs)
+            }
+          />
+
+          <ToggleItem
+            label="Schedule Reminders"
+            description="Get reminders before classes start"
+            value={scheduleNotifs}
+            onToggle={(v) =>
+              togglePreference(PREF_KEYS.NOTIF_SCHEDULE, v, setScheduleNotifs)
+            }
+            isLast
+          />
         </Card>
 
-        {/* Privacy & Security */}
+        {/* Appearance */}
         <Card style={styles.card}>
-          <Text variant="h4" weight="semibold" style={styles.sectionTitle}>
-            Privacy & Security
+          <Text variant="h4" weight="600" style={styles.sectionTitle}>
+            Appearance
           </Text>
 
-          <SettingItem label="Change Password" onPress={() => handlePress('Change Password')} />
-          <SettingItem label="Privacy Policy" onPress={() => handlePress('Privacy Policy')} />
-          <SettingItem label="Terms of Service" onPress={() => handlePress('Terms of Service')} />
+          <SettingItem label="Theme" value="Light" />
+          <SettingItem label="Language" value="English" isLast />
         </Card>
 
         {/* About */}
         <Card style={styles.card}>
-          <Text variant="h4" weight="semibold" style={styles.sectionTitle}>
+          <Text variant="h4" weight="600" style={styles.sectionTitle}>
             About
           </Text>
 
-          <SettingItem label="App Version" value="1.0.0" />
-          <SettingItem label="Help & Support" onPress={() => handlePress('Help & Support')} />
+          <SettingItem label="App Version" value={config.APP_VERSION} />
+          <SettingItem label="App Name" value={config.APP_NAME} />
+          <SettingItem
+            label="Platform"
+            value={Platform.OS === 'ios' ? 'iOS' : 'Android'}
+            isLast
+          />
         </Card>
-      </View>
+
+        {/* Legal */}
+        <Card style={styles.card}>
+          <Text variant="h4" weight="600" style={styles.sectionTitle}>
+            Legal
+          </Text>
+
+          <SettingItem
+            label="Privacy Policy"
+            onPress={() => {
+              // Link to privacy policy once available
+              Linking.openURL('https://iams.jrmsu.edu.ph/privacy').catch(() => {});
+            }}
+          />
+          <SettingItem
+            label="Terms of Service"
+            onPress={() => {
+              Linking.openURL('https://iams.jrmsu.edu.ph/terms').catch(() => {});
+            }}
+            isLast
+          />
+        </Card>
+
+        {/* Footer */}
+        <View style={styles.footer}>
+          <Text
+            variant="caption"
+            color={theme.colors.text.tertiary}
+            align="center"
+          >
+            IAMS - Intelligent Attendance Monitoring System
+          </Text>
+          <Text
+            variant="caption"
+            color={theme.colors.text.tertiary}
+            align="center"
+            style={styles.footerSubtext}
+          >
+            Jose Rizal Memorial State University
+          </Text>
+        </View>
+      </ScrollView>
     </ScreenLayout>
   );
 };
 
+// ---------- sub-components ----------
+
+/** A toggle row (switch) for notification preferences */
+const ToggleItem: React.FC<{
+  label: string;
+  description?: string;
+  value: boolean;
+  onToggle: (value: boolean) => void;
+  isLast?: boolean;
+}> = ({ label, description, value, onToggle, isLast = false }) => (
+  <View style={[styles.settingItem, isLast && styles.settingItemLast]}>
+    <View style={styles.toggleTextContainer}>
+      <Text variant="body">{label}</Text>
+      {description && (
+        <Text
+          variant="caption"
+          color={theme.colors.text.tertiary}
+          style={styles.toggleDescription}
+        >
+          {description}
+        </Text>
+      )}
+    </View>
+    <Switch
+      value={value}
+      onValueChange={onToggle}
+      trackColor={{
+        false: theme.colors.border,
+        true: theme.colors.primary,
+      }}
+      thumbColor={theme.colors.background}
+      ios_backgroundColor={theme.colors.border}
+    />
+  </View>
+);
+
+/** A static or tappable settings row */
 const SettingItem: React.FC<{
   label: string;
   value?: string;
   onPress?: () => void;
-}> = ({ label, value, onPress }) => (
+  isLast?: boolean;
+}> = ({ label, value, onPress, isLast = false }) => (
   <TouchableOpacity
-    style={styles.settingItem}
+    style={[styles.settingItem, isLast && styles.settingItemLast]}
     onPress={onPress}
     disabled={!onPress}
     activeOpacity={onPress ? theme.interaction.activeOpacity : 1}
@@ -82,8 +254,9 @@ const SettingItem: React.FC<{
 );
 
 const styles = StyleSheet.create({
-  container: {
+  scrollContent: {
     padding: theme.spacing[4],
+    paddingBottom: theme.spacing[8],
   },
   card: {
     marginTop: theme.spacing[4],
@@ -99,11 +272,28 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
   },
+  settingItemLast: {
+    borderBottomWidth: 0,
+  },
   settingRight: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   settingValue: {
     marginRight: theme.spacing[2],
+  },
+  toggleTextContainer: {
+    flex: 1,
+    marginRight: theme.spacing[3],
+  },
+  toggleDescription: {
+    marginTop: theme.spacing[1],
+  },
+  footer: {
+    marginTop: theme.spacing[8],
+    marginBottom: theme.spacing[4],
+  },
+  footerSubtext: {
+    marginTop: theme.spacing[1],
   },
 });

@@ -62,7 +62,7 @@ export const AuthLayout: React.FC<AuthLayoutProps> = ({
 
           {/* Title */}
           {title && (
-            <Text variant="h2" weight="bold" style={styles.title}>
+            <Text variant="h2" weight="700" style={styles.title}>
               {title}
             </Text>
           )}

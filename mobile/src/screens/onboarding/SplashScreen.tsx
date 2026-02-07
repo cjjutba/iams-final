@@ -32,15 +32,15 @@ export const SplashScreen: React.FC = () => {
       <View style={styles.logoContainer}>
         {/* Logo placeholder - replace with actual IAMS logo */}
         <View style={styles.logoPlaceholder}>
-          <Text variant="h1" weight="bold" color={theme.colors.primary}>
+          <Text variant="h1" weight="700" color={theme.colors.primary}>
             IAMS
           </Text>
         </View>
 
-        <Text variant="h3" weight="semibold" style={styles.title}>
+        <Text variant="h3" weight="600" style={styles.title}>
           Intelligent Attendance
         </Text>
-        <Text variant="h3" weight="semibold" style={styles.title}>
+        <Text variant="h3" weight="600" style={styles.title}>
           Monitoring System
         </Text>
 

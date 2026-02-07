@@ -37,6 +37,31 @@ class AttendanceRepository:
             )
         ).first()
 
+    def get_by_schedule_date_range(
+        self,
+        schedule_id: str,
+        start_date: date,
+        end_date: date
+    ) -> List[AttendanceRecord]:
+        """
+        Get all attendance records for a schedule within a date range
+
+        Args:
+            schedule_id: Schedule UUID
+            start_date: Start date (inclusive)
+            end_date: End date (inclusive)
+
+        Returns:
+            List of attendance records sorted by date
+        """
+        return self.db.query(AttendanceRecord).filter(
+            and_(
+                AttendanceRecord.schedule_id == schedule_id,
+                AttendanceRecord.date >= start_date,
+                AttendanceRecord.date <= end_date
+            )
+        ).order_by(AttendanceRecord.date.desc()).all()
+
     def get_by_schedule_date(self, schedule_id: str, attendance_date: date) -> List[AttendanceRecord]:
         """Get all attendance records for a schedule on a specific date"""
         return self.db.query(AttendanceRecord).filter(

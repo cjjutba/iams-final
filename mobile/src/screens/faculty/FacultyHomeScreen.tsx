@@ -42,7 +42,11 @@ export const FacultyHomeScreen: React.FC = () => {
 
   const handleViewLiveAttendance = () => {
     if (currentClass) {
-      navigation.navigate('LiveAttendance', { scheduleId: currentClass.id });
+      navigation.navigate('LiveAttendance', {
+        scheduleId: currentClass.id,
+        subjectCode: currentClass.subject_code,
+        subjectName: currentClass.subject_name,
+      });
     }
   };
 
@@ -53,7 +57,7 @@ export const FacultyHomeScreen: React.FC = () => {
   const renderHeader = () => (
     <View style={styles.headerContent}>
       {/* Greeting */}
-      <Text variant="h2" weight="bold" style={styles.greeting}>
+      <Text variant="h2" weight="700" style={styles.greeting}>
         {getGreeting()}, {fullName}!
       </Text>
 
@@ -70,19 +74,22 @@ export const FacultyHomeScreen: React.FC = () => {
               <Text variant="caption" color={theme.colors.primary} style={styles.currentClassLabel}>
                 {strings.schedule.currentClass}
               </Text>
-              <Text variant="h3" weight="semibold" style={styles.currentClassName}>
-                {currentClass.subjectName}
+              <Text variant="h3" weight="600" style={styles.currentClassName}>
+                {currentClass.subject_name}
               </Text>
               <Text variant="bodySmall" color={theme.colors.text.secondary}>
-                {currentClass.roomName} • {formatTime(currentClass.startTime)} -{' '}
-                {formatTime(currentClass.endTime)}
+                {currentClass.room_name} • {formatTime(currentClass.start_time)} -{' '}
+                {formatTime(currentClass.end_time)}
               </Text>
             </View>
 
-            <TouchableOpacity style={styles.studentsButton}>
+            <TouchableOpacity
+              style={styles.studentsButton}
+              onPress={handleViewLiveAttendance}
+            >
               <Users size={20} color={theme.colors.text.secondary} />
               <Text variant="caption" color={theme.colors.text.secondary}>
-                {currentClass.section}
+                View
               </Text>
             </TouchableOpacity>
           </View>
@@ -100,7 +107,7 @@ export const FacultyHomeScreen: React.FC = () => {
       )}
 
       {/* Section title */}
-      <Text variant="h3" weight="semibold" style={styles.sectionTitle}>
+      <Text variant="h3" weight="600" style={styles.sectionTitle}>
         {strings.schedule.todayClasses}
       </Text>
     </View>
@@ -156,7 +163,7 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing[6],
   },
   currentClassCard: {
-    backgroundColor: theme.colors.backgroundSecondary,
+    backgroundColor: theme.colors.secondary,
     padding: theme.spacing[4],
     borderRadius: theme.borderRadius.lg,
     borderLeftWidth: 4,

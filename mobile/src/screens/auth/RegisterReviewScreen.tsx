@@ -10,6 +10,7 @@ import { useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import { CheckSquare, Square, CheckCircle } from 'lucide-react-native';
 import { useAuth } from '../../hooks';
+import { faceService } from '../../services';
 import { theme, strings, config } from '../../constants';
 import type { AuthStackParamList } from '../../types';
 import { AuthLayout } from '../../components/layouts';
@@ -34,6 +35,7 @@ export const RegisterReviewScreen: React.FC = () => {
       setIsSubmitting(true);
       setError(null);
 
+      // Step 1: Create the account
       await register({
         email: accountInfo.email,
         password: accountInfo.password,
@@ -43,6 +45,19 @@ export const RegisterReviewScreen: React.FC = () => {
         student_id: studentInfo.studentId,
         phone: accountInfo.phone,
       });
+
+      // Step 2: Upload face images (user is now authenticated after register)
+      if (faceImages.length > 0) {
+        try {
+          await faceService.registerFace(faceImages);
+        } catch (faceErr: any) {
+          console.error('Face registration failed:', faceErr);
+          // Account was created successfully but face registration failed.
+          // The user can re-register their face later from their profile.
+        }
+      }
+
+      // Navigation happens automatically via RootNavigator auth state change
     } catch (err: any) {
       setError(err.response?.data?.message || strings.errors.generic);
       setIsSubmitting(false);
