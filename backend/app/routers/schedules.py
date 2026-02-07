@@ -48,7 +48,7 @@ def list_schedules(
     else:
         schedules = schedule_repo.get_all()
 
-    return [ScheduleResponse.from_orm(s) for s in schedules]
+    return [ScheduleResponse.model_validate(s) for s in schedules]
 
 
 @router.get("/me", response_model=List[ScheduleResponse], status_code=status.HTTP_200_OK)
@@ -82,7 +82,7 @@ def get_my_schedules(
         # Admin gets all schedules
         schedules = schedule_repo.get_all()
 
-    return [ScheduleResponse.from_orm(s) for s in schedules]
+    return [ScheduleResponse.model_validate(s) for s in schedules]
 
 
 @router.get("/{schedule_id}", response_model=ScheduleResponse, status_code=status.HTTP_200_OK)
@@ -107,7 +107,7 @@ def get_schedule(
         from fastapi import HTTPException
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
 
-    return ScheduleResponse.from_orm(schedule)
+    return ScheduleResponse.model_validate(schedule)
 
 
 @router.get("/{schedule_id}/students", response_model=ScheduleWithStudents, status_code=status.HTTP_200_OK)
@@ -137,7 +137,7 @@ def get_enrolled_students(
     students = schedule_repo.get_enrolled_students(schedule_id)
 
     # Convert to response format
-    response = ScheduleResponse.from_orm(schedule)
+    response = ScheduleResponse.model_validate(schedule)
     student_info = [
         {
             "id": str(s.id),
@@ -149,7 +149,7 @@ def get_enrolled_students(
         for s in students
     ]
 
-    return ScheduleWithStudents(**response.dict(), enrolled_students=student_info)
+    return ScheduleWithStudents(**response.model_dump(), enrolled_students=student_info)
 
 
 @router.post("/", response_model=ScheduleResponse, status_code=status.HTTP_201_CREATED)
@@ -168,11 +168,11 @@ def create_schedule(
     Requires admin authentication.
     """
     schedule_repo = ScheduleRepository(db)
-    schedule = schedule_repo.create(schedule_data.dict())
+    schedule = schedule_repo.create(schedule_data.model_dump())
 
     logger.info(f"Schedule created: {schedule.subject_code} by admin {current_user.email}")
 
-    return ScheduleResponse.from_orm(schedule)
+    return ScheduleResponse.model_validate(schedule)
 
 
 @router.patch("/{schedule_id}", response_model=ScheduleResponse, status_code=status.HTTP_200_OK)
@@ -195,13 +195,13 @@ def update_schedule(
     schedule_repo = ScheduleRepository(db)
 
     # Filter out None values
-    update_dict = {k: v for k, v in update_data.dict().items() if v is not None}
+    update_dict = {k: v for k, v in update_data.model_dump().items() if v is not None}
 
     schedule = schedule_repo.update(schedule_id, update_dict)
 
     logger.info(f"Schedule updated: {schedule_id} by admin {current_user.email}")
 
-    return ScheduleResponse.from_orm(schedule)
+    return ScheduleResponse.model_validate(schedule)
 
 
 @router.delete("/{schedule_id}", status_code=status.HTTP_200_OK)

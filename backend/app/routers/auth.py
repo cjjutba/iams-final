@@ -59,6 +59,8 @@ def register(
     - **student_id**: Verified student ID
     - **email**: Student email address
     - **password**: Account password (min 8 characters)
+    - **first_name**: Student's first name
+    - **last_name**: Student's last name
     - **phone**: Optional phone number
 
     Returns the created user and authentication tokens.
@@ -66,7 +68,7 @@ def register(
     **Note:** Face registration (Step 3) is done via `/face/register` endpoint.
     """
     auth_service = AuthService(db)
-    user, tokens = auth_service.register_student(request.dict())
+    user, tokens = auth_service.register_student(request.model_dump())
 
     return RegisterResponse(
         success=True,

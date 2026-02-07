@@ -4,6 +4,7 @@ User Repository
 Data access layer for User operations.
 """
 
+import uuid as uuid_mod
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
@@ -20,6 +21,8 @@ class UserRepository:
 
     def get_by_id(self, user_id: str) -> Optional[User]:
         """Get user by ID"""
+        if isinstance(user_id, str):
+            user_id = uuid_mod.UUID(user_id)
         return self.db.query(User).filter(User.id == user_id).first()
 
     def get_by_email(self, email: str) -> Optional[User]:

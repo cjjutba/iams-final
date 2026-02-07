@@ -5,8 +5,9 @@ Request and response models for class schedules.
 """
 
 from typing import Optional, List
+from uuid import UUID
 from datetime import time
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from app.schemas.user import UserResponse
 
 
@@ -48,6 +49,14 @@ class RoomInfo(BaseModel):
     building: str
     capacity: Optional[int]
 
+    @field_validator("id", mode="before")
+    @classmethod
+    def coerce_id_to_str(cls, v):
+        """Convert UUID to string if needed"""
+        if isinstance(v, UUID):
+            return str(v)
+        return v
+
     class Config:
         from_attributes = True
 
@@ -60,6 +69,14 @@ class ScheduleResponse(ScheduleBase):
     is_active: bool
     faculty: Optional[UserResponse] = None
     room: Optional[RoomInfo] = None
+
+    @field_validator("id", "faculty_id", "room_id", mode="before")
+    @classmethod
+    def coerce_uuid_to_str(cls, v):
+        """Convert UUID to string if needed"""
+        if isinstance(v, UUID):
+            return str(v)
+        return v
 
     class Config:
         from_attributes = True

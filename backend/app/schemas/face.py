@@ -24,6 +24,7 @@ class FaceStatusResponse(BaseModel):
     """Face registration status"""
     registered: bool
     registered_at: Optional[datetime] = None
+    embedding_id: Optional[int] = None
 
 
 # ===== Edge API Contract (Raspberry Pi → Backend) =====

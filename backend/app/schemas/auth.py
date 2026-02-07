@@ -36,11 +36,11 @@ class VerifyStudentIDRequest(BaseModel):
 class StudentInfo(BaseModel):
     """Student information from university database"""
     student_id: str
-    first_name: str
-    last_name: str
-    course: str
-    year: int
-    section: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    course: Optional[str] = None
+    year: Optional[int] = None
+    section: Optional[str] = None
     email: Optional[str] = None
 
 
@@ -56,8 +56,9 @@ class RegisterRequest(BaseModel):
     student_id: str
     email: EmailStr
     password: str = Field(..., min_length=8)
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: str = Field(..., min_length=1, max_length=100)
     phone: Optional[str] = None
-    # first_name, last_name, etc. are pre-filled from verification
 
 
 class RegisterResponse(BaseModel):

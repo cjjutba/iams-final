@@ -53,7 +53,7 @@ def get_today_attendance(
 
     records = attendance_repo.get_by_schedule_date(schedule_id, today)
 
-    return [AttendanceRecordResponse.from_orm(r) for r in records]
+    return [AttendanceRecordResponse.model_validate(r) for r in records]
 
 
 @router.get("/me", response_model=List[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
@@ -83,7 +83,7 @@ def get_my_attendance(
         end_date
     )
 
-    return [AttendanceRecordResponse.from_orm(r) for r in records]
+    return [AttendanceRecordResponse.model_validate(r) for r in records]
 
 
 @router.get("/me/summary", response_model=AttendanceSummary, status_code=status.HTTP_200_OK)
@@ -235,7 +235,7 @@ def get_attendance_record(
         from fastapi import HTTPException
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    return AttendanceRecordResponse.from_orm(record)
+    return AttendanceRecordResponse.model_validate(record)
 
 
 @router.get("/{attendance_id}/logs", response_model=List[PresenceLogResponse], status_code=status.HTTP_200_OK)
@@ -270,7 +270,7 @@ def get_presence_logs(
     # Get presence logs
     logs = attendance_repo.get_presence_logs(attendance_id)
 
-    return [PresenceLogResponse.from_orm(log) for log in logs]
+    return [PresenceLogResponse.model_validate(log) for log in logs]
 
 
 @router.post("/manual", response_model=AttendanceRecordResponse, status_code=status.HTTP_201_CREATED)
@@ -324,7 +324,7 @@ def manual_attendance_entry(
         })
         logger.info(f"Attendance created manually by {current_user.email}: {record.id}")
 
-    return AttendanceRecordResponse.from_orm(record)
+    return AttendanceRecordResponse.model_validate(record)
 
 
 @router.patch("/{attendance_id}", response_model=AttendanceRecordResponse, status_code=status.HTTP_200_OK)
@@ -356,7 +356,7 @@ def update_attendance_record(
 
     logger.info(f"Attendance record updated by {current_user.email}: {attendance_id}")
 
-    return AttendanceRecordResponse.from_orm(record)
+    return AttendanceRecordResponse.model_validate(record)
 
 
 @router.get("/early-leaves/", response_model=List[EarlyLeaveResponse], status_code=status.HTTP_200_OK)
@@ -384,4 +384,4 @@ def get_early_leave_events(
 
     events = attendance_repo.get_early_leave_events(schedule_id, start_date, end_date)
 
-    return [EarlyLeaveResponse.from_orm(event) for event in events]
+    return [EarlyLeaveResponse.model_validate(event) for event in events]

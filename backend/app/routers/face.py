@@ -8,6 +8,7 @@ CRITICAL: Contains Edge API contract for continuous presence tracking.
 
 from typing import List
 from datetime import datetime
+import io
 from fastapi import APIRouter, Depends, UploadFile, File, status
 from sqlalchemy.orm import Session
 import base64
@@ -158,7 +159,6 @@ async def recognize_face(
         image = face_service.facenet.decode_base64_image(request.image)
 
         # Convert to bytes
-        import io
         img_bytes = io.BytesIO()
         image.save(img_bytes, format='JPEG')
         img_bytes = img_bytes.getvalue()
@@ -259,7 +259,6 @@ async def process_faces(
             image = face_service.facenet.decode_base64_image(face_data.image)
 
             # Convert to bytes
-            import io
             img_bytes = io.BytesIO()
             image.save(img_bytes, format='JPEG')
             img_bytes = img_bytes.getvalue()
@@ -299,7 +298,7 @@ async def process_faces(
             scan_day = request.timestamp.weekday()
 
             # Find schedule that matches room and time
-            current_schedule = schedule_repo.get_current_schedule(request.room_id)
+            current_schedule = schedule_repo.get_current_schedule(request.room_id, scan_day, scan_time)
 
             if current_schedule:
                 schedule_id = str(current_schedule.id)
@@ -339,7 +338,7 @@ async def process_faces(
         success=True,
         data={
             "processed": processed_count,
-            "matched": [user.dict() for user in matched_users],
+            "matched": [user.model_dump() for user in matched_users],
             "unmatched": unmatched_count
         }
     )

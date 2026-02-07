@@ -35,8 +35,8 @@ class AuthService:
         """
         Verify student ID against university database
 
-        For MVP: Mock validation (returns success for any ID)
-        In production: Query university database or CSV
+        For MVP: Accept any non-empty student ID with minimal length.
+        In production: Query university database or CSV.
 
         Args:
             student_id: Student ID to verify
@@ -45,30 +45,25 @@ class AuthService:
             Dictionary with validation result and student info
         """
         # TODO: Replace with actual university database query
-        # For MVP, mock validation
         logger.info(f"Verifying student ID: {student_id}")
 
-        # Mock student data (replace with actual DB query)
-        if student_id.startswith("2024"):
-            return {
-                "valid": True,
-                "student_info": {
-                    "student_id": student_id,
-                    "first_name": "John",
-                    "last_name": "Doe",
-                    "course": "BSCpE",
-                    "year": 3,
-                    "section": "A",
-                    "email": f"{student_id}@jrmsu.edu.ph"
-                },
-                "message": "Student ID verified successfully"
-            }
-        else:
+        # Reject empty or too-short IDs
+        if not student_id or len(student_id.strip()) < 3:
             return {
                 "valid": False,
                 "student_info": None,
-                "message": "Student ID not found in university records"
+                "message": "Invalid student ID format"
             }
+
+        # For MVP, accept any valid-length student ID.
+        # Name details are provided during registration, not verification.
+        return {
+            "valid": True,
+            "student_info": {
+                "student_id": student_id.strip(),
+            },
+            "message": "Student ID verified successfully"
+        }
 
     def register_student(self, registration_data: dict) -> Tuple[User, dict]:
         """
@@ -93,16 +88,13 @@ class AuthService:
         if not is_valid:
             raise ValidationError(error_msg)
 
-        # Get student info from verification
-        student_info = verification["student_info"]
-
-        # Create user
+        # Create user with name details from registration request
         user_data = {
             "email": registration_data["email"],
             "password_hash": hash_password(registration_data["password"]),
             "role": UserRole.STUDENT,
-            "first_name": student_info["first_name"],
-            "last_name": student_info["last_name"],
+            "first_name": registration_data["first_name"],
+            "last_name": registration_data["last_name"],
             "student_id": registration_data["student_id"],
             "phone": registration_data.get("phone"),
             "is_active": True

@@ -1,41 +1,11 @@
 ﻿# MOD-03: Face Registration and Recognition
 
-This file is a module-level source of truth derived from `docs/main/master-blueprint.md` section 6.
-Update both files together when module scope changes.
+Primary module documentation has moved to:
+- `docs/modules/MOD-03-face-registration-and-recognition/README.md`
 
-## Specification
+Use that folder as the source of truth for all Module 3 implementation work.
 
-Purpose:
-- Register student face embeddings and identify faces during class.
-
-Functions:
-- `FUN-03-01`: Upload and validate 3-5 face images.
-- `FUN-03-02`: Generate embeddings.
-- `FUN-03-03`: Store and sync embeddings with FAISS.
-- `FUN-03-04`: Recognize faces using similarity threshold.
-- `FUN-03-05`: Check whether user already has registered face.
-
-API Contracts:
-- `POST /face/register`
-- `POST /face/recognize`
-- `GET /face/status`
-
-Data:
-- `face_registrations`
-- `users`
-- Local FAISS index file
-
-Screens:
-- `SCR-009` StudentRegisterStep3Screen
-- `SCR-017` StudentFaceReregisterScreen
-- `SCR-030` CameraScreen
-
-Done Criteria:
-- Reject invalid images (blur, no face, multiple faces, too small).
-- Embeddings remain consistent between DB and FAISS.
-- Recognition threshold is configurable.
-
-
-## Implementation Rule
-- Implement only the listed `FUN-*` items for this module when this doc is referenced.
-- If scope/API/data/screen changes are needed, update docs first before code.
+## Legacy Summary
+- Module ID: `MOD-03`
+- Functions: `FUN-03-01` to `FUN-03-05`
+- Endpoints: `/face/register`, `/face/recognize`, `/face/status`

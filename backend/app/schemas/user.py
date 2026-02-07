@@ -5,8 +5,9 @@ Request and response models for user operations.
 """
 
 from typing import Optional
+from uuid import UUID
 from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from app.models.user import UserRole
 
 
@@ -46,6 +47,14 @@ class UserResponse(UserBase):
     student_id: Optional[str]
     is_active: bool
     created_at: datetime
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def coerce_id_to_str(cls, v):
+        """Convert UUID to string if needed"""
+        if isinstance(v, UUID):
+            return str(v)
+        return v
 
     class Config:
         from_attributes = True

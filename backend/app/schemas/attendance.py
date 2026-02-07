@@ -5,8 +5,9 @@ Request and response models for attendance tracking.
 """
 
 from typing import Optional, List
+from uuid import UUID
 from datetime import datetime, date, time
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from app.models.attendance_record import AttendanceStatus
 
 
@@ -39,6 +40,14 @@ class AttendanceRecordResponse(AttendanceRecordBase):
     student_name: Optional[str] = None
     subject_code: Optional[str] = None
 
+    @field_validator("id", "student_id", "schedule_id", mode="before")
+    @classmethod
+    def coerce_uuid_to_str(cls, v):
+        """Convert UUID to string if needed"""
+        if isinstance(v, UUID):
+            return str(v)
+        return v
+
     class Config:
         from_attributes = True
 
@@ -63,6 +72,14 @@ class EarlyLeaveResponse(BaseModel):
     consecutive_misses: int
     notified: bool
     notified_at: Optional[datetime] = None
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def coerce_id_to_str(cls, v):
+        """Convert UUID to string if needed"""
+        if isinstance(v, UUID):
+            return str(v)
+        return v
 
     class Config:
         from_attributes = True

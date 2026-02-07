@@ -7,12 +7,12 @@ Use this folder as the module-level reference point during implementation.
 |---|---|---|
 | MOD-01 | Authentication and Identity | [MOD-01-authentication-and-identity/README.md](MOD-01-authentication-and-identity/README.md) |
 | MOD-02 | User and Profile Management | [MOD-02-user-and-profile-management/README.md](MOD-02-user-and-profile-management/README.md) |
-| MOD-03 | Face Registration and Recognition | [MOD-03-face-registration-and-recognition.md](MOD-03-face-registration-and-recognition.md) |
-| MOD-04 | Edge Device Capture and Ingestion | [MOD-04-edge-device-capture-and-ingestion.md](MOD-04-edge-device-capture-and-ingestion.md) |
-| MOD-05 | Schedules and Enrollments | [MOD-05-schedules-and-enrollments.md](MOD-05-schedules-and-enrollments.md) |
-| MOD-06 | Attendance Records | [MOD-06-attendance-records.md](MOD-06-attendance-records.md) |
-| MOD-07 | Presence Tracking and Early Leave | [MOD-07-presence-tracking-and-early-leave.md](MOD-07-presence-tracking-and-early-leave.md) |
-| MOD-08 | Realtime Notifications and WebSocket | [MOD-08-realtime-notifications-and-websocket.md](MOD-08-realtime-notifications-and-websocket.md) |
+| MOD-03 | Face Registration and Recognition | [MOD-03-face-registration-and-recognition/README.md](MOD-03-face-registration-and-recognition/README.md) |
+| MOD-04 | Edge Device Capture and Ingestion | [MOD-04-edge-device-capture-and-ingestion/README.md](MOD-04-edge-device-capture-and-ingestion/README.md) |
+| MOD-05 | Schedules and Enrollments | [MOD-05-schedules-and-enrollments/README.md](MOD-05-schedules-and-enrollments/README.md) |
+| MOD-06 | Attendance Records | [MOD-06-attendance-records/README.md](MOD-06-attendance-records/README.md) |
+| MOD-07 | Presence Tracking and Early Leave | [MOD-07-presence-tracking-and-early-leave/README.md](MOD-07-presence-tracking-and-early-leave/README.md) |
+| MOD-08 | Realtime Notifications and WebSocket | [MOD-08-realtime-notifications-and-websocket/README.md](MOD-08-realtime-notifications-and-websocket/README.md) |
 | MOD-09 | Student Mobile App | [MOD-09-student-mobile-app.md](MOD-09-student-mobile-app.md) |
 | MOD-10 | Faculty Mobile App | [MOD-10-faculty-mobile-app.md](MOD-10-faculty-mobile-app.md) |
 | MOD-11 | Data Import and Seed Operations | [MOD-11-data-import-and-seed-operations.md](MOD-11-data-import-and-seed-operations.md) |
@@ -27,3 +27,5 @@ Use this folder as the module-level reference point during implementation.
 
 ## Standardization Template
 - Use `docs/modules/TEMPLATE-MODULE-PACK/README.md` when creating the next module folder pack.
+
+

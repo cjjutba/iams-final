@@ -5,6 +5,7 @@ Dependency injection functions for authentication, database sessions,
 and role-based access control.
 """
 
+import uuid
 from typing import List
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -74,7 +75,8 @@ async def get_current_user(
             raise AuthenticationError("Invalid token: missing user_id")
 
         # Fetch user from database
-        user = db.query(User).filter(User.id == user_id).first()
+        # Convert string to UUID for cross-dialect compatibility (PostgreSQL + SQLite)
+        user = db.query(User).filter(User.id == uuid.UUID(user_id)).first()
 
         if not user:
             raise NotFoundError(f"User not found: {user_id}")

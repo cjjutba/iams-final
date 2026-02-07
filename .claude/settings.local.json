@@ -23,7 +23,14 @@
       "Bash(pnpm install:*)",
       "Bash(pnpm view:*)",
       "Bash(pnpm config:*)",
-      "Bash(pnpm config set:*)"
+      "Bash(pnpm config set:*)",
+      "Bash(venvScriptspip list)",
+      "Bash(venv/Scripts/pip.exe list:*)",
+      "Bash(venv/Scripts/pip.exe install:*)",
+      "Bash(venv/Scripts/python.exe -m alembic:*)",
+      "Bash(venv/Scripts/python.exe -m scripts.seed_data:*)",
+      "Bash(venv/Scripts/pip.exe show:*)",
+      "Bash(venv/Scripts/python.exe -m pytest:*)"
     ]
   }
 }
