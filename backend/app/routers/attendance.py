@@ -113,6 +113,38 @@ def get_my_attendance(
     return [AttendanceRecordResponse.model_validate(r) for r in records]
 
 
+@router.get("/my-attendance", response_model=List[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
+def get_my_attendance_alias(
+    start_date: Optional[date] = Query(None, description="Start date filter"),
+    end_date: Optional[date] = Query(None, description="End date filter"),
+    current_user: User = Depends(get_current_student),
+    db: Session = Depends(get_db)
+):
+    """
+    **Get My Attendance History** (Student Only) - Alias endpoint
+
+    Get attendance history for the current student.
+
+    - **start_date**: Optional start date filter
+    - **end_date**: Optional end date filter
+
+    Returns attendance records sorted by date (most recent first).
+
+    Requires student authentication.
+
+    Note: This is an alias for /me endpoint for backward compatibility.
+    """
+    attendance_repo = AttendanceRepository(db)
+
+    records = attendance_repo.get_student_history(
+        str(current_user.id),
+        start_date,
+        end_date
+    )
+
+    return [AttendanceRecordResponse.model_validate(r) for r in records]
+
+
 @router.get("/me/summary", response_model=AttendanceSummary, status_code=status.HTTP_200_OK)
 def get_my_attendance_summary(
     start_date: date = Query(..., description="Start date"),
@@ -141,6 +173,105 @@ def get_my_attendance_summary(
     )
 
     return AttendanceSummary(**summary)
+
+
+@router.get("/schedule/{schedule_id}", response_model=List[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
+def get_schedule_attendance(
+    schedule_id: str,
+    date: Optional[date] = Query(None, description="Specific date filter (defaults to today)"),
+    current_user: User = Depends(get_current_faculty),
+    db: Session = Depends(get_db)
+):
+    """
+    **Get Schedule Attendance** (Faculty Only)
+
+    Get attendance records for a schedule on a specific date.
+
+    - **schedule_id**: Schedule UUID
+    - **date**: Specific date (defaults to today)
+
+    Returns list of attendance records with student information.
+
+    Requires faculty authentication.
+    """
+    attendance_repo = AttendanceRepository(db)
+    attendance_date = date if date else datetime.now().date()
+
+    records = attendance_repo.get_by_schedule_date(schedule_id, attendance_date)
+
+    return [AttendanceRecordResponse.model_validate(r) for r in records]
+
+
+@router.get("/schedule/{schedule_id}/summary", response_model=dict, status_code=status.HTTP_200_OK)
+def get_schedule_attendance_summary(
+    schedule_id: str,
+    start_date: Optional[date] = Query(None, description="Start date"),
+    end_date: Optional[date] = Query(None, description="End date"),
+    current_user: User = Depends(get_current_faculty),
+    db: Session = Depends(get_db)
+):
+    """
+    **Get Schedule Attendance Summary** (Faculty Only)
+
+    Get attendance summary statistics for a schedule.
+
+    - **schedule_id**: Schedule UUID
+    - **start_date**: Optional start date (defaults to semester start)
+    - **end_date**: Optional end date (defaults to today)
+
+    Returns summary with attendance counts and rates.
+
+    Requires faculty authentication.
+    """
+    from app.repositories.schedule_repository import ScheduleRepository
+    from app.models.attendance_record import AttendanceStatus
+
+    attendance_repo = AttendanceRepository(db)
+    schedule_repo = ScheduleRepository(db)
+
+    # Verify schedule exists
+    schedule = schedule_repo.get_by_id(schedule_id)
+    if not schedule:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
+
+    # Default date range
+    if not start_date:
+        start_date = datetime.now().date().replace(month=8, day=1)  # Default to August 1
+    if not end_date:
+        end_date = datetime.now().date()
+
+    # Get all records in range
+    records = attendance_repo.get_by_schedule_date_range(schedule_id, start_date, end_date)
+
+    # Calculate statistics
+    total_records = len(records)
+    present_count = sum(1 for r in records if r.status == AttendanceStatus.PRESENT)
+    late_count = sum(1 for r in records if r.status == AttendanceStatus.LATE)
+    absent_count = sum(1 for r in records if r.status == AttendanceStatus.ABSENT)
+    excused_count = sum(1 for r in records if r.status == AttendanceStatus.EXCUSED)
+    early_leave_count = sum(1 for r in records if r.status == AttendanceStatus.EARLY_LEAVE)
+
+    attendance_rate = 0.0
+    if total_records > 0:
+        attendance_rate = ((present_count + late_count) / total_records) * 100
+
+    return {
+        "schedule_id": schedule_id,
+        "subject_code": schedule.subject_code,
+        "subject_name": schedule.subject_name,
+        "date_range": {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat()
+        },
+        "total_records": total_records,
+        "present_count": present_count,
+        "late_count": late_count,
+        "absent_count": absent_count,
+        "excused_count": excused_count,
+        "early_leave_count": early_leave_count,
+        "attendance_rate": round(attendance_rate, 2)
+    }
 
 
 @router.get("/live/{schedule_id}", response_model=LiveAttendanceResponse, status_code=status.HTTP_200_OK)
@@ -504,7 +635,7 @@ def get_presence_logs(
     return [PresenceLogResponse.model_validate(log) for log in logs]
 
 
-@router.post("/manual", response_model=AttendanceRecordResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/manual-entry", response_model=AttendanceRecordResponse, status_code=status.HTTP_201_CREATED)
 def manual_attendance_entry(
     request: ManualAttendanceRequest,
     current_user: User = Depends(get_current_faculty),

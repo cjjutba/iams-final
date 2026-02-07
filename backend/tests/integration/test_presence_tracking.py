@@ -237,7 +237,7 @@ class TestEarlyLeaveDetection:
         assert record.status == AttendanceStatus.EARLY_LEAVE
 
         # Check early leave event was created
-        events = repo.get_early_leave_events(str(record.id))
+        events = repo.get_early_leave_events_by_attendance(str(record.id))
         assert len(events) >= 1
         assert events[0].consecutive_misses == 3
 
@@ -368,7 +368,7 @@ class TestEarlyLeaveDetection:
             date.today()
         )
 
-        events = repo.get_early_leave_events(str(record.id))
+        events = repo.get_early_leave_events_by_attendance(str(record.id))
         assert len(events) == 1
 
 

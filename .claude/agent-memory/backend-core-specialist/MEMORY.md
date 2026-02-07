@@ -36,8 +36,10 @@
 - `FaceStatusResponse` must include `embedding_id: Optional[int] = None` to match the dict returned by `face_service.get_face_status()`
 
 ### Attendance Router Route Ordering
-- Static paths (`/alerts`, `/export`, `/today`, `/today/{id}`, `/me`, `/me/summary`, `/live/{id}`) MUST come before `/{attendance_id}` to avoid path parameter conflicts.
+- Static paths (`/alerts`, `/export`, `/today`, `/today/{id}`, `/me`, `/me/summary`, `/my-attendance`, `/schedule/{id}`, `/schedule/{id}/summary`, `/live/{id}`, `/manual-entry`) MUST come before `/{attendance_id}` to avoid path parameter conflicts.
 - `/early-leaves/` and `/alerts` both exist -- `/alerts` is the enriched version with student/schedule info for mobile, `/early-leaves/` is the raw event list.
+- `/me` and `/my-attendance` are aliases for student attendance history (for backward compatibility)
+- Manual entry endpoint is `/manual-entry` (NOT `/manual`)
 
 ### Notification System
 - Model: `backend/app/models/notification.py` (9th core table: notifications)
@@ -55,6 +57,23 @@
 - `GET /attendance/export` supports CSV (StreamingResponse) and JSON formats
 - Faculty-only, checks schedule ownership via faculty_id comparison
 - Uses `attendance_repo.get_by_schedule_date_range()` added to AttendanceRepository
+
+### Repository Pattern
+- All repositories should include `model = ModelClass` class attribute for test access
+- Example: `AttendanceRepository.model = AttendanceRecord` allows tests to query directly
+- This enables test code like: `db_session.query(repo.model).filter(...).all()`
+
+### AttendanceStatus Enum
+- Values: PRESENT, LATE, ABSENT, EARLY_LEAVE, EXCUSED (5 statuses)
+- Defined in `backend/app/models/attendance_record.py`
+- Used in both model and schemas for validation
+- Faculty can manually set EXCUSED status via `/manual-entry` endpoint
+
+### Test Fixtures - Timing Considerations
+- `test_schedule` fixture uses current time as `start_time` to ensure tests run within grace period
+- Grace period is 15 minutes (settings.GRACE_PERIOD_MINUTES)
+- Attendance logic: if check-in <= start_time + 15min → PRESENT, else → LATE
+- Tests that mock time (e.g., late detection) use `patch('app.services.presence_service.datetime')`
 
 ## Files NOT to Touch
 - face.py, websocket.py routers - handled by another agent

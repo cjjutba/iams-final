@@ -6,7 +6,7 @@ Stores individual scan results for continuous presence tracking.
 
 from datetime import datetime
 from sqlalchemy import Column, BigInteger, Integer, Boolean, Float, DateTime, ForeignKey
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, BIGINT
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -30,8 +30,9 @@ class PresenceLog(Base):
 
     __tablename__ = "presence_logs"
 
-    # Primary key (BigInteger for high volume)
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    # Primary key (BigInteger for high volume, falls back to Integer on SQLite)
+    # Using Integer().with_variant() to ensure autoincrement works on SQLite
+    id = Column(Integer().with_variant(BIGINT, "postgresql"), primary_key=True, autoincrement=True)
 
     # Foreign key
     attendance_id = Column(UUID(as_uuid=True), ForeignKey("attendance_records.id"), nullable=False, index=True)

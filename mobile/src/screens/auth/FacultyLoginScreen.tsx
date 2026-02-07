@@ -50,26 +50,30 @@ export const FacultyLoginScreen: React.FC = () => {
   return (
     <AuthLayout showBack title={strings.auth.welcomeFaculty} subtitle={strings.auth.signInToContinue}>
       <View style={styles.formSection}>
-        <FormInput
-          name="email"
-          control={control}
-          label={strings.form.email}
-          placeholder="your.email@example.com"
-          leftIcon={<Mail size={20} color={theme.colors.text.tertiary} />}
-          keyboardType="email-address"
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
+        <View style={styles.inputContainer}>
+          <FormInput
+            name="email"
+            control={control}
+            label={strings.form.email}
+            placeholder="your.email@example.com"
+            leftIcon={<Mail size={20} color={theme.colors.text.tertiary} />}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
 
-        <FormPassword
-          name="password"
-          control={control}
-          label={strings.form.password}
-          placeholder={strings.form.password}
-          leftIcon={<Lock size={20} color={theme.colors.text.tertiary} />}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
+        <View style={styles.inputContainer}>
+          <FormPassword
+            name="password"
+            control={control}
+            label={strings.form.password}
+            placeholder={strings.form.password}
+            leftIcon={<Lock size={20} color={theme.colors.text.tertiary} />}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
 
         {authError ? (
           <View style={styles.errorContainer}>
@@ -102,19 +106,22 @@ export const FacultyLoginScreen: React.FC = () => {
 
 const styles = StyleSheet.create({
   formSection: {
-    marginTop: theme.spacing[2],
+    marginTop: theme.spacing[8],
+  },
+  inputContainer: {
+    marginBottom: theme.spacing[5],
   },
   errorContainer: {
-    marginBottom: theme.spacing[4],
+    marginBottom: theme.spacing[5],
     padding: theme.spacing[4],
     backgroundColor: theme.colors.errorLight,
     borderRadius: theme.borderRadius.md,
   },
   loginButton: {
-    marginTop: theme.spacing[1],
+    marginTop: theme.spacing[2],
   },
   notice: {
-    marginTop: theme.spacing[6],
+    marginTop: theme.spacing[8],
     paddingHorizontal: theme.spacing[2],
   },
 });

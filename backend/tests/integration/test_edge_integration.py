@@ -188,7 +188,12 @@ class TestEdgeProcessEndpoint:
         assert data["data"]["unmatched"] == 2
 
     def test_process_invalid_base64_image(self, client, test_room):
-        """Edge device sends invalid Base64 data"""
+        """
+        Edge device sends invalid Base64 data.
+
+        Invalid Base64 is handled gracefully: the face is counted as unmatched
+        but NOT processed (processed=0), since we couldn't decode the image.
+        """
         payload = {
             "room_id": str(test_room.id),
             "timestamp": datetime.utcnow().isoformat(),
@@ -199,14 +204,20 @@ class TestEdgeProcessEndpoint:
 
         response = client.post(f"{API}/face/process", json=payload)
 
-        # Should handle gracefully and count as unmatched
+        # Should handle gracefully: success=True, but face counted as unmatched
         assert response.status_code == 200
         data = response.json()
-        assert data["data"]["processed"] == 1
-        assert data["data"]["unmatched"] == 1
+        assert data["success"] is True
+        assert data["data"]["processed"] == 0  # Invalid Base64 prevents processing
+        assert data["data"]["unmatched"] == 1  # But counts as unmatched
 
     def test_process_empty_faces_array(self, client, test_room):
-        """Edge device sends request with no faces"""
+        """
+        Edge device sends request with no faces - should be rejected.
+
+        Empty faces arrays are now rejected at schema level (422 validation error).
+        The RPi should only send requests when it detects faces.
+        """
         payload = {
             "room_id": str(test_room.id),
             "timestamp": datetime.utcnow().isoformat(),
@@ -215,11 +226,14 @@ class TestEdgeProcessEndpoint:
 
         response = client.post(f"{API}/face/process", json=payload)
 
-        assert response.status_code == 200
+        # Schema validation should reject empty faces array
+        assert response.status_code == 422
         data = response.json()
-        assert data["data"]["processed"] == 0
-        assert len(data["data"]["matched"]) == 0
-        assert data["data"]["unmatched"] == 0
+        assert data["success"] is False
+        assert "error" in data
+        assert data["error"]["code"] == "ValidationError"
+        # Verify the error mentions faces field
+        assert any("faces" in str(detail) for detail in data["error"]["details"])
 
     def test_process_missing_room_id(self, client, test_face_image_base64):
         """Request without room_id should fail validation"""
@@ -398,35 +412,49 @@ class TestEdgeErrorHandling:
         client,
         test_room,
         test_schedule,
-        test_face_image_base64,
-        mock_face_service
+        test_student,
+        test_face_image_base64
     ):
         """
         Face recognition succeeds but presence logging fails.
         Should still return successful recognition result.
         """
-        with patch('app.routers.face.PresenceService') as mock_presence:
-            presence_instance = MagicMock()
-            # Mock log_detection to raise exception
-            presence_instance.log_detection = AsyncMock(
-                side_effect=Exception("Database error")
+        # Mock FaceService to return a successful match
+        with patch('app.routers.face.FaceService') as mock_face_svc:
+            face_instance = MagicMock()
+            face_instance.facenet.decode_base64_image = MagicMock(
+                return_value=MagicMock()
             )
-            mock_presence.return_value = presence_instance
 
-            with patch('app.routers.face.ScheduleRepository') as mock_repo:
-                repo_instance = MagicMock()
-                repo_instance.get_current_schedule = MagicMock(
-                    return_value=test_schedule
+            # Mock successful recognition
+            async def mock_recognize(img_bytes, threshold=None):
+                return (str(test_student.id), 0.85)
+
+            face_instance.recognize_face = AsyncMock(side_effect=mock_recognize)
+            mock_face_svc.return_value = face_instance
+
+            # Mock PresenceService to raise exception on logging
+            with patch('app.routers.face.PresenceService') as mock_presence:
+                presence_instance = MagicMock()
+                presence_instance.log_detection = AsyncMock(
+                    side_effect=Exception("Database error")
                 )
-                mock_repo.return_value = repo_instance
+                mock_presence.return_value = presence_instance
 
-                payload = {
-                    "room_id": str(test_room.id),
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "faces": [{"image": test_face_image_base64}]
-                }
+                with patch('app.routers.face.ScheduleRepository') as mock_repo:
+                    repo_instance = MagicMock()
+                    repo_instance.get_current_schedule = MagicMock(
+                        return_value=test_schedule
+                    )
+                    mock_repo.return_value = repo_instance
 
-                response = client.post(f"{API}/face/process", json=payload)
+                    payload = {
+                        "room_id": str(test_room.id),
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "faces": [{"image": test_face_image_base64}]
+                    }
+
+                    response = client.post(f"{API}/face/process", json=payload)
 
         # Should succeed despite logging error
         assert response.status_code == 200
@@ -434,3 +462,4 @@ class TestEdgeErrorHandling:
         assert data["success"] is True
         # Face was recognized successfully
         assert len(data["data"]["matched"]) == 1
+        assert data["data"]["matched"][0]["user_id"] == str(test_student.id)

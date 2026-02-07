@@ -69,16 +69,18 @@ export const ForgotPasswordScreen: React.FC = () => {
   return (
     <AuthLayout showBack title={strings.auth.resetPassword} subtitle={strings.auth.resetInstructions}>
       <View style={styles.formSection}>
-        <FormInput
-          name="email"
-          control={control}
-          label={strings.form.email}
-          placeholder="your.email@example.com"
-          leftIcon={<Mail size={20} color={theme.colors.text.tertiary} />}
-          keyboardType="email-address"
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
+        <View style={styles.inputContainer}>
+          <FormInput
+            name="email"
+            control={control}
+            label={strings.form.email}
+            placeholder="your.email@example.com"
+            leftIcon={<Mail size={20} color={theme.colors.text.tertiary} />}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
 
         {error ? (
           <View style={styles.errorContainer}>
@@ -105,31 +107,35 @@ export const ForgotPasswordScreen: React.FC = () => {
 
 const styles = StyleSheet.create({
   formSection: {
-    marginTop: theme.spacing[2],
+    marginTop: theme.spacing[8],
+  },
+  inputContainer: {
+    marginBottom: theme.spacing[5],
   },
   errorContainer: {
-    marginBottom: theme.spacing[4],
+    marginBottom: theme.spacing[5],
     padding: theme.spacing[4],
     backgroundColor: theme.colors.errorLight,
     borderRadius: theme.borderRadius.md,
   },
   submitButton: {
-    marginTop: theme.spacing[1],
+    marginTop: theme.spacing[2],
   },
   successSection: {
-    marginTop: theme.spacing[6],
+    marginTop: theme.spacing[8],
     alignItems: 'center',
     paddingHorizontal: theme.spacing[2],
   },
   successTitle: {
-    marginTop: theme.spacing[5],
-    marginBottom: theme.spacing[3],
+    marginTop: theme.spacing[6],
+    marginBottom: theme.spacing[4],
   },
   successMessage: {
     lineHeight: 24,
+    marginBottom: theme.spacing[2],
   },
   successHint: {
-    marginTop: theme.spacing[4],
+    marginTop: theme.spacing[5],
     lineHeight: 20,
   },
 });

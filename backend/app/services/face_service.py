@@ -232,7 +232,7 @@ class FaceService:
         """
         Re-register user's face (update)
 
-        Deregisters old face and registers new one.
+        Deletes old face registration and registers new one.
 
         Args:
             user_id: User UUID
@@ -241,10 +241,12 @@ class FaceService:
         Returns:
             Tuple of (embedding_id, message)
         """
-        # Deactivate old registration
+        # Delete old registration (if exists)
         try:
-            self.face_repo.deactivate(user_id)
-            logger.info(f"Deactivated old face registration for user {user_id}")
+            old_registration = self.face_repo.get_by_user(user_id)
+            if old_registration:
+                self.face_repo.delete(str(old_registration.id))
+                logger.info(f"Deleted old face registration for user {user_id}")
         except NotFoundError:
             logger.info(f"No previous face registration found for user {user_id}")
 

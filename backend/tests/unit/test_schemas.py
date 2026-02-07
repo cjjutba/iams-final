@@ -275,14 +275,26 @@ class TestEdgeProcessRequest:
         )
         assert len(req.faces) == 3
 
-    def test_edge_process_request_empty_faces_allowed(self):
-        """An empty faces list may occur when no faces are detected."""
-        req = EdgeProcessRequest(
-            room_id="room-uuid-123",
-            timestamp=datetime.utcnow(),
-            faces=[],
-        )
-        assert len(req.faces) == 0
+    def test_edge_process_request_empty_faces_rejected(self):
+        """
+        An empty faces list should be rejected by schema validation.
+
+        Empty faces arrays are now rejected at the schema level (min_length=1)
+        to prevent unnecessary processing. The RPi should only send requests
+        when it actually detects faces.
+        """
+        with pytest.raises(PydanticValidationError) as exc_info:
+            EdgeProcessRequest(
+                room_id="room-uuid-123",
+                timestamp=datetime.utcnow(),
+                faces=[],
+            )
+
+        # Verify the error is about list length
+        errors = exc_info.value.errors()
+        assert len(errors) == 1
+        assert errors[0]['type'] == 'too_short'
+        assert errors[0]['loc'] == ('faces',)
 
     def test_edge_process_request_missing_room_id(self):
         """Missing room_id should fail validation."""

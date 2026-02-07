@@ -20,6 +20,7 @@ class AttendanceStatus(str, enum.Enum):
     LATE = "late"
     ABSENT = "absent"
     EARLY_LEAVE = "early_leave"
+    EXCUSED = "excused"
 
 
 class AttendanceRecord(Base):

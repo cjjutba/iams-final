@@ -52,49 +52,49 @@ export const StudentLoginScreen: React.FC = () => {
   return (
     <AuthLayout showBack title="Student Login" subtitle={strings.auth.signInToContinue}>
       <View style={styles.formSection}>
-        <Text variant="caption" color={theme.colors.text.secondary} style={styles.helperText}>
-          Use your official student ID format: 21-A-02177
-        </Text>
+        <View style={styles.inputContainer}>
+          <Controller
+            control={control}
+            name="student_id"
+            render={({ field: { onChange, onBlur, value } }) => (
+              <Input
+                label={strings.form.studentId}
+                placeholder={strings.register.studentIdPlaceholder}
+                value={value}
+                onChangeText={onChange}
+                onBlur={onBlur}
+                error={errors.student_id?.message}
+                leftIcon={<IdCard size={20} color={theme.colors.text.tertiary} />}
+                autoCapitalize="characters"
+                autoCorrect={false}
+              />
+            )}
+          />
+        </View>
 
-        <Controller
-          control={control}
-          name="student_id"
-          render={({ field: { onChange, onBlur, value } }) => (
-            <Input
-              label={strings.form.studentId}
-              placeholder={strings.register.studentIdPlaceholder}
-              value={value}
-              onChangeText={onChange}
-              onBlur={onBlur}
-              error={errors.student_id?.message}
-              leftIcon={<IdCard size={20} color={theme.colors.text.tertiary} />}
-              autoCapitalize="characters"
-              autoCorrect={false}
-            />
-          )}
-        />
-
-        <Controller
-          control={control}
-          name="password"
-          render={({ field: { onChange, onBlur, value } }) => (
-            <Input
-              label={strings.form.password}
-              placeholder="Enter your password"
-              value={value}
-              onChangeText={onChange}
-              onBlur={onBlur}
-              error={errors.password?.message}
-              leftIcon={<Lock size={20} color={theme.colors.text.tertiary} />}
-              secureTextEntry
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-          )}
-        />
+        <View style={styles.inputContainer}>
+          <Controller
+            control={control}
+            name="password"
+            render={({ field: { onChange, onBlur, value } }) => (
+              <Input
+                label={strings.form.password}
+                placeholder="Enter your password"
+                value={value}
+                onChangeText={onChange}
+                onBlur={onBlur}
+                error={errors.password?.message}
+                leftIcon={<Lock size={20} color={theme.colors.text.tertiary} />}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            )}
+          />
+        </View>
 
         <TouchableOpacity onPress={() => navigation.navigate('ForgotPassword')} style={styles.forgotPassword}>
-          <Text variant="bodySmall" color={theme.colors.primary}>
+          <Text variant="bodySmall" color={theme.colors.primary} weight="600">
             {strings.auth.forgotPassword}
           </Text>
         </TouchableOpacity>
@@ -135,29 +135,29 @@ export const StudentLoginScreen: React.FC = () => {
 
 const styles = StyleSheet.create({
   formSection: {
-    marginTop: theme.spacing[2],
+    marginTop: theme.spacing[8],
   },
-  helperText: {
-    marginBottom: theme.spacing[4],
+  inputContainer: {
+    marginBottom: theme.spacing[5],
   },
   forgotPassword: {
     alignSelf: 'flex-end',
-    marginTop: theme.spacing[1],
-    marginBottom: theme.spacing[4],
+    marginTop: theme.spacing[2],
+    marginBottom: theme.spacing[6],
   },
   errorContainer: {
-    marginBottom: theme.spacing[4],
+    marginBottom: theme.spacing[5],
     padding: theme.spacing[4],
     backgroundColor: theme.colors.errorLight,
     borderRadius: theme.borderRadius.md,
   },
   loginButton: {
-    marginTop: theme.spacing[1],
+    marginTop: theme.spacing[2],
   },
   registerContainer: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: theme.spacing[6],
+    marginTop: theme.spacing[8],
   },
 });

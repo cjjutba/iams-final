@@ -4,6 +4,7 @@ Face Repository
 Data access layer for FaceRegistration operations.
 """
 
+import uuid
 from typing import List, Optional
 from sqlalchemy.orm import Session
 
@@ -19,7 +20,7 @@ class FaceRepository:
 
     def get_by_id(self, registration_id: str) -> Optional[FaceRegistration]:
         """Get face registration by ID"""
-        return self.db.query(FaceRegistration).filter(FaceRegistration.id == registration_id).first()
+        return self.db.query(FaceRegistration).filter(FaceRegistration.id == uuid.UUID(registration_id)).first()
 
     def get_by_user(self, user_id: str) -> Optional[FaceRegistration]:
         """
@@ -32,7 +33,7 @@ class FaceRepository:
             FaceRegistration if found, None otherwise
         """
         return self.db.query(FaceRegistration).filter(
-            FaceRegistration.user_id == user_id,
+            FaceRegistration.user_id == uuid.UUID(user_id),
             FaceRegistration.is_active == True
         ).first()
 
@@ -85,7 +86,7 @@ class FaceRepository:
             raise DuplicateError(f"User already has active face registration: {user_id}")
 
         registration = FaceRegistration(
-            user_id=user_id,
+            user_id=uuid.UUID(user_id),
             embedding_id=embedding_id,
             embedding_vector=embedding_vector
         )

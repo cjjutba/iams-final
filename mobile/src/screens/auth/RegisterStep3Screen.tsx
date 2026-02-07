@@ -189,20 +189,20 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primary,
   },
   section: {
-    marginTop: theme.spacing[1],
+    marginTop: theme.spacing[4],
   },
   permissionText: {
-    marginBottom: theme.spacing[4],
+    marginBottom: theme.spacing[6],
     lineHeight: 22,
   },
   instruction: {
-    marginBottom: theme.spacing[4],
+    marginBottom: theme.spacing[5],
   },
   cameraContainer: {
     aspectRatio: 3 / 4,
     borderRadius: theme.borderRadius.lg,
     overflow: 'hidden',
-    marginBottom: theme.spacing[5],
+    marginBottom: theme.spacing[6],
   },
   camera: {
     flex: 1,
@@ -223,7 +223,7 @@ const styles = StyleSheet.create({
   thumbnailRow: {
     flexDirection: 'row',
     justifyContent: 'center',
-    marginBottom: theme.spacing[4],
+    marginBottom: theme.spacing[5],
   },
   thumbnailContainer: {
     marginHorizontal: theme.spacing[1],
@@ -242,7 +242,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   progressText: {
-    marginBottom: theme.spacing[5],
+    marginBottom: theme.spacing[6],
   },
   captureButton: {
     width: 70,
@@ -255,6 +255,6 @@ const styles = StyleSheet.create({
     ...theme.shadows.sm,
   },
   nextButton: {
-    marginTop: theme.spacing[1],
+    marginTop: theme.spacing[2],
   },
 });

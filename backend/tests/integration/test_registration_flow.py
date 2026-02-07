@@ -30,9 +30,8 @@ class TestFaceRegistrationFlow:
         img_bytes.seek(0)
 
         return UploadFile(
-            filename=filename,
             file=img_bytes,
-            content_type="image/jpeg"
+            filename=filename
         )
 
     @pytest.mark.asyncio
@@ -205,9 +204,8 @@ class TestFaceReregistrationFlow:
         img_bytes.seek(0)
 
         return UploadFile(
-            filename=filename,
             file=img_bytes,
-            content_type="image/jpeg"
+            filename=filename
         )
 
     @pytest.mark.asyncio

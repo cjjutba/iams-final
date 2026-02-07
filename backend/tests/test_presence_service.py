@@ -123,11 +123,21 @@ class TestPresenceService:
         # Log detection
         await service.log_detection("schedule-123", "student-1", 0.85)
 
-        # Verify check-in recorded
+        # Verify check-in recorded (should be 2 update calls: check-in + metrics)
         assert service.attendance_repo.update.called
-        update_call = service.attendance_repo.update.call_args
-        assert update_call[0][0] == "att-1"
-        assert "check_in_time" in update_call[0][1]
+        assert service.attendance_repo.update.call_count == 2
+
+        # First call should update check-in time and status
+        first_call = service.attendance_repo.update.call_args_list[0]
+        assert first_call[0][0] == "att-1"
+        assert "check_in_time" in first_call[0][1]
+        assert "status" in first_call[0][1]
+
+        # Second call should update metrics
+        second_call = service.attendance_repo.update.call_args_list[1]
+        assert second_call[0][0] == "att-1"
+        assert "scans_present" in second_call[0][1]
+        assert "total_scans" in second_call[0][1]
 
         # Verify presence logged
         assert service.attendance_repo.log_presence.called

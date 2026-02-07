@@ -80,41 +80,49 @@ export const RegisterStep2Screen: React.FC = () => {
           Set your contact details and secure password for your account.
         </Text>
 
-        <FormInput
-          name="email"
-          control={control}
-          label={strings.form.email}
-          placeholder="your.email@example.com"
-          leftIcon={<Mail size={20} color={theme.colors.text.tertiary} />}
-          keyboardType="email-address"
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
+        <View style={styles.inputContainer}>
+          <FormInput
+            name="email"
+            control={control}
+            label={strings.form.email}
+            placeholder="your.email@example.com"
+            leftIcon={<Mail size={20} color={theme.colors.text.tertiary} />}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
 
-        <FormInput
-          name="phone"
-          control={control}
-          label={strings.form.phone}
-          placeholder="09XXXXXXXXX"
-          leftIcon={<Phone size={20} color={theme.colors.text.tertiary} />}
-          keyboardType="phone-pad"
-        />
+        <View style={styles.inputContainer}>
+          <FormInput
+            name="phone"
+            control={control}
+            label={strings.form.phone}
+            placeholder="09XXXXXXXXX"
+            leftIcon={<Phone size={20} color={theme.colors.text.tertiary} />}
+            keyboardType="phone-pad"
+          />
+        </View>
 
-        <FormPassword
-          name="password"
-          control={control}
-          label={strings.form.password}
-          placeholder={strings.form.password}
-          leftIcon={<Lock size={20} color={theme.colors.text.tertiary} />}
-        />
+        <View style={styles.inputContainer}>
+          <FormPassword
+            name="password"
+            control={control}
+            label={strings.form.password}
+            placeholder={strings.form.password}
+            leftIcon={<Lock size={20} color={theme.colors.text.tertiary} />}
+          />
+        </View>
 
-        <FormPassword
-          name="confirmPassword"
-          control={control}
-          label={strings.form.confirmPassword}
-          placeholder={strings.form.confirmPassword}
-          leftIcon={<Lock size={20} color={theme.colors.text.tertiary} />}
-        />
+        <View style={styles.inputContainer}>
+          <FormPassword
+            name="confirmPassword"
+            control={control}
+            label={strings.form.confirmPassword}
+            placeholder={strings.form.confirmPassword}
+            leftIcon={<Lock size={20} color={theme.colors.text.tertiary} />}
+          />
+        </View>
 
         <Button variant="primary" size="lg" fullWidth onPress={handleSubmit(onSubmit)} style={styles.button}>
           {strings.common.next}
@@ -142,12 +150,15 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primary,
   },
   section: {
-    marginTop: theme.spacing[1],
+    marginTop: theme.spacing[4],
   },
   helperText: {
-    marginBottom: theme.spacing[4],
+    marginBottom: theme.spacing[5],
+  },
+  inputContainer: {
+    marginBottom: theme.spacing[5],
   },
   button: {
-    marginTop: theme.spacing[1],
+    marginTop: theme.spacing[2],
   },
 });

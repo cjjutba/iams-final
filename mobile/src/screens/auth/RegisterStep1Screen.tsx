@@ -95,15 +95,17 @@ export const RegisterStep1Screen: React.FC = () => {
             Enter your official student ID to verify your identity.
           </Text>
 
-          <FormInput
-            name="studentId"
-            control={control}
-            label={strings.form.studentId}
-            placeholder={strings.register.studentIdPlaceholder}
-            leftIcon={<IdCard size={20} color={theme.colors.text.tertiary} />}
-            autoCapitalize="characters"
-            autoCorrect={false}
-          />
+          <View style={styles.inputContainer}>
+            <FormInput
+              name="studentId"
+              control={control}
+              label={strings.form.studentId}
+              placeholder={strings.register.studentIdPlaceholder}
+              leftIcon={<IdCard size={20} color={theme.colors.text.tertiary} />}
+              autoCapitalize="characters"
+              autoCorrect={false}
+            />
+          </View>
 
           {error ? (
             <View style={styles.errorContainer}>
@@ -181,24 +183,27 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primary,
   },
   section: {
-    marginTop: theme.spacing[1],
+    marginTop: theme.spacing[4],
   },
   helperText: {
-    marginBottom: theme.spacing[4],
+    marginBottom: theme.spacing[5],
+  },
+  inputContainer: {
+    marginBottom: theme.spacing[5],
   },
   errorContainer: {
-    marginBottom: theme.spacing[4],
+    marginBottom: theme.spacing[5],
     padding: theme.spacing[4],
     backgroundColor: theme.colors.errorLight,
     borderRadius: theme.borderRadius.md,
   },
   button: {
-    marginTop: theme.spacing[1],
+    marginTop: theme.spacing[2],
   },
   successHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: theme.spacing[4],
+    marginBottom: theme.spacing[6],
   },
   successHeaderText: {
     marginLeft: theme.spacing[2],
@@ -207,7 +212,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: theme.spacing[3],
+    marginBottom: theme.spacing[4],
   },
   infoValue: {
     flex: 1,
@@ -215,7 +220,7 @@ const styles = StyleSheet.create({
     marginLeft: theme.spacing[4],
   },
   confirmText: {
-    marginTop: theme.spacing[4],
-    marginBottom: theme.spacing[5],
+    marginTop: theme.spacing[6],
+    marginBottom: theme.spacing[6],
   },
 });

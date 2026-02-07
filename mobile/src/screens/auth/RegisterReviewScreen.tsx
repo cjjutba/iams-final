@@ -182,16 +182,16 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   section: {
-    marginBottom: theme.spacing[5],
+    marginBottom: theme.spacing[6],
   },
   sectionTitle: {
-    marginBottom: theme.spacing[3],
+    marginBottom: theme.spacing[4],
   },
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: theme.spacing[3],
+    marginBottom: theme.spacing[4],
   },
   infoValue: {
     flex: 1,
@@ -207,7 +207,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   faceStatus: {
-    marginTop: theme.spacing[1],
+    marginTop: theme.spacing[2],
   },
   checkbox: {
     flexDirection: 'row',
@@ -219,12 +219,13 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   errorContainer: {
-    marginBottom: theme.spacing[4],
+    marginBottom: theme.spacing[5],
     padding: theme.spacing[4],
     backgroundColor: theme.colors.errorLight,
     borderRadius: theme.borderRadius.md,
   },
   submitButton: {
+    marginTop: theme.spacing[2],
     marginBottom: theme.spacing[8],
   },
 });

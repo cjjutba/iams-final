@@ -233,8 +233,20 @@ def test_room(db_session):
 
 @pytest.fixture()
 def test_schedule(db_session, test_faculty, test_room):
-    """Create a test schedule in the database (requires faculty and room)."""
+    """Create a test schedule in the database (requires faculty and room).
+
+    Uses current time as start_time to ensure tests run within grace period.
+    """
     from app.models.schedule import Schedule
+    from datetime import datetime
+
+    # Use current time as start, ensuring tests are within grace period
+    now = datetime.now()
+    current_time = now.time()
+
+    # End time is 2 hours later
+    end_hour = (now.hour + 2) % 24
+    end_time_obj = time(end_hour, now.minute)
 
     schedule = Schedule(
         id=uuid.uuid4(),
@@ -242,9 +254,9 @@ def test_schedule(db_session, test_faculty, test_room):
         subject_name="Microprocessors",
         faculty_id=test_faculty.id,
         room_id=test_room.id,
-        day_of_week=0,  # Monday
-        start_time=time(8, 0),
-        end_time=time(10, 0),
+        day_of_week=now.weekday(),  # Current day of week
+        start_time=current_time,
+        end_time=end_time_obj,
         semester="1st",
         academic_year="2024-2025",
         is_active=True,
@@ -387,5 +399,35 @@ def mock_ws_manager():
     mock.broadcast = AsyncMock()
     mock.send_to_user = AsyncMock()
     mock.send_to_role = AsyncMock()
+
+    return mock
+
+
+@pytest.fixture()
+def mock_face_service():
+    """Mock FaceService for testing face recognition flows."""
+    from unittest.mock import AsyncMock, MagicMock
+    import numpy as np
+
+    mock = MagicMock()
+
+    # Mock recognize_face to return None (no match) by default
+    async def mock_recognize(image_bytes):
+        return (None, None)
+
+    mock.recognize_face = AsyncMock(side_effect=mock_recognize)
+
+    # Mock register_face
+    async def mock_register(user_id, images):
+        return {"embedding_id": 1, "message": "Face registered successfully"}
+
+    mock.register_face = AsyncMock(side_effect=mock_register)
+
+    # Mock get_face_status
+    mock.get_face_status = MagicMock(return_value={
+        "registered": False,
+        "registered_at": None,
+        "embedding_id": None
+    })
 
     return mock

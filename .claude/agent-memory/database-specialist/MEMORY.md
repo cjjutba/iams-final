@@ -52,3 +52,33 @@
 - Alembic config: `C:\.cjjutba\.thesis\iams\backend\alembic.ini`
 - System python can run alembic via `python -m alembic` from backend dir
 - Venv python may not execute in sandbox -- use system python with packages installed
+
+## SQLite Test Compatibility (CRITICAL FIX - 2026-02-07)
+**Problem:** SQLAlchemy UUID columns fail on SQLite when comparing `Model.id == string_value`
+**Root Cause:** SQLite doesn't have native UUID type; SQLAlchemy stores as CHAR(32). Comparison requires UUID object, not string.
+**Solution:** Convert ALL string UUID parameters to `uuid.UUID()` before using in SQLAlchemy filters.
+
+**Applied to repositories:**
+- `attendance_repository.py` (FIXED): All methods with UUID params now use `uuid.UUID()` conversion
+- `face_repository.py` (FIXED): All UUID filter methods converted
+- `schedule_repository.py` (FIXED): Reference implementation
+
+**Pattern:**
+```python
+import uuid  # Add to imports
+
+def get_by_id(self, id: str):
+    return self.db.query(Model).filter(Model.id == uuid.UUID(id)).first()
+```
+
+**Result:** 45+ test failures eliminated. Tests went from 69 passing to 114 passing.
+
+## BIGSERIAL vs SQLite Autoincrement
+**Issue:** `presence_logs.id` uses BIGSERIAL (PostgreSQL), which doesn't map to SQLite autoincrement properly.
+**Solution:** Use `Integer().with_variant(BIGINT, "postgresql")` in model definition.
+**Implementation:**
+```python
+from sqlalchemy.dialects.postgresql import BIGINT
+id = Column(Integer().with_variant(BIGINT, "postgresql"), primary_key=True, autoincrement=True)
+```
+**Result:** Allows SQLite tests to use INTEGER PRIMARY KEY AUTOINCREMENT while PostgreSQL production uses BIGSERIAL.
