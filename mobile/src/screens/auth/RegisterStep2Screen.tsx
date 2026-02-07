@@ -1,11 +1,10 @@
 /**
  * Register Step 2 Screen - Account Details
  *
- * Second step of student registration
- * Collects email, phone, and password
+ * Second step of student registration.
  */
 
-import React, { useState } from 'react';
+import React from 'react';
 import { View, StyleSheet } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
@@ -17,13 +16,12 @@ import { Mail, Phone, Lock } from 'lucide-react-native';
 import { theme, strings } from '../../constants';
 import type { AuthStackParamList } from '../../types';
 import { AuthLayout } from '../../components/layouts';
-import { Button } from '../../components/ui';
+import { Text, Button } from '../../components/ui';
 import { FormInput, FormPassword } from '../../components/forms';
 
 type RegisterStep2NavigationProp = StackNavigationProp<AuthStackParamList, 'RegisterStep2'>;
 type RegisterStep2RouteProp = RouteProp<AuthStackParamList, 'RegisterStep2'>;
 
-// Validation schema
 const accountDetailsSchema = z
   .object({
     email: z.string().min(1, strings.errors.required).email(strings.errors.invalidEmail),
@@ -44,7 +42,6 @@ type AccountDetailsData = z.infer<typeof accountDetailsSchema>;
 export const RegisterStep2Screen: React.FC = () => {
   const navigation = useNavigation<RegisterStep2NavigationProp>();
   const route = useRoute<RegisterStep2RouteProp>();
-
   const { studentInfo } = route.params;
 
   const { control, handleSubmit } = useForm<AccountDetailsData>({
@@ -68,93 +65,89 @@ export const RegisterStep2Screen: React.FC = () => {
   };
 
   return (
-    <AuthLayout
-      showBack
-      title={strings.auth.createAccount}
-      subtitle={strings.register.step2Title}
-    >
-      <View style={styles.container}>
-        {/* Progress bar */}
-        <View style={styles.progressContainer}>
-          <View style={[styles.progressBar, { width: '50%' }]} />
+    <AuthLayout showBack title={strings.auth.createAccount} subtitle={strings.register.step2Title}>
+      <View style={styles.progressSection}>
+        <Text variant="caption" color={theme.colors.text.secondary}>
+          Step 2 of 4
+        </Text>
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: '50%' }]} />
         </View>
+      </View>
 
-        <View style={styles.form}>
-          {/* Email Input */}
-          <FormInput
-            name="email"
-            control={control}
-            label={strings.form.email}
-            placeholder="your.email@example.com"
-            leftIcon={<Mail size={20} color={theme.colors.text.tertiary} />}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
+      <View style={styles.section}>
+        <Text variant="caption" color={theme.colors.text.secondary} style={styles.helperText}>
+          Set your contact details and secure password for your account.
+        </Text>
 
-          {/* Phone Input */}
-          <FormInput
-            name="phone"
-            control={control}
-            label={strings.form.phone}
-            placeholder="09XXXXXXXXX"
-            leftIcon={<Phone size={20} color={theme.colors.text.tertiary} />}
-            keyboardType="phone-pad"
-          />
+        <FormInput
+          name="email"
+          control={control}
+          label={strings.form.email}
+          placeholder="your.email@example.com"
+          leftIcon={<Mail size={20} color={theme.colors.text.tertiary} />}
+          keyboardType="email-address"
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
 
-          {/* Password Input */}
-          <FormPassword
-            name="password"
-            control={control}
-            label={strings.form.password}
-            placeholder={strings.form.password}
-            leftIcon={<Lock size={20} color={theme.colors.text.tertiary} />}
-          />
+        <FormInput
+          name="phone"
+          control={control}
+          label={strings.form.phone}
+          placeholder="09XXXXXXXXX"
+          leftIcon={<Phone size={20} color={theme.colors.text.tertiary} />}
+          keyboardType="phone-pad"
+        />
 
-          {/* Confirm Password Input */}
-          <FormPassword
-            name="confirmPassword"
-            control={control}
-            label={strings.form.confirmPassword}
-            placeholder={strings.form.confirmPassword}
-            leftIcon={<Lock size={20} color={theme.colors.text.tertiary} />}
-          />
+        <FormPassword
+          name="password"
+          control={control}
+          label={strings.form.password}
+          placeholder={strings.form.password}
+          leftIcon={<Lock size={20} color={theme.colors.text.tertiary} />}
+        />
 
-          {/* Next Button */}
-          <Button
-            variant="primary"
-            size="lg"
-            fullWidth
-            onPress={handleSubmit(onSubmit)}
-            style={styles.button}
-          >
-            {strings.common.next}
-          </Button>
-        </View>
+        <FormPassword
+          name="confirmPassword"
+          control={control}
+          label={strings.form.confirmPassword}
+          placeholder={strings.form.confirmPassword}
+          leftIcon={<Lock size={20} color={theme.colors.text.tertiary} />}
+        />
+
+        <Button variant="primary" size="lg" fullWidth onPress={handleSubmit(onSubmit)} style={styles.button}>
+          {strings.common.next}
+        </Button>
       </View>
     </AuthLayout>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
+  progressSection: {
+    marginTop: theme.spacing[2],
+    marginBottom: theme.spacing[5],
+    gap: theme.spacing[2],
   },
-  progressContainer: {
-    height: 4,
-    backgroundColor: theme.colors.backgroundSecondary,
-    borderRadius: 2,
-    marginBottom: theme.spacing[8],
+  progressTrack: {
+    height: 6,
+    borderRadius: theme.borderRadius.full,
+    backgroundColor: theme.colors.border,
+    overflow: 'hidden',
   },
-  progressBar: {
+  progressFill: {
     height: '100%',
+    borderRadius: theme.borderRadius.full,
     backgroundColor: theme.colors.primary,
-    borderRadius: 2,
   },
-  form: {
-    flex: 1,
+  section: {
+    marginTop: theme.spacing[1],
+  },
+  helperText: {
+    marginBottom: theme.spacing[4],
   },
   button: {
-    marginTop: theme.spacing[8],
+    marginTop: theme.spacing[1],
   },
 });

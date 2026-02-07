@@ -73,12 +73,12 @@ export const strings = {
 
   // Registration
   register: {
-    step1Title: 'Step 1 of 4 — Verify your identity',
-    step2Title: 'Step 2 of 4 — Set up your account',
-    step3Title: 'Step 3 of 4 — Register your face',
-    step4Title: 'Step 4 of 4 — Review your information',
+    step1Title: 'Step 1 of 4 - Verify your identity',
+    step2Title: 'Step 2 of 4 - Set up your account',
+    step3Title: 'Step 3 of 4 - Register your face',
+    step4Title: 'Step 4 of 4 - Review your information',
     verifyStudentId: 'Verify Student ID',
-    studentIdPlaceholder: 'YYYY-NNNN (e.g., 2024-0001)',
+    studentIdPlaceholder: '21-A-02177',
     studentFound: 'Student Found',
     isThisYou: 'Is this you?',
     yesContinue: 'Yes, continue',
@@ -93,7 +93,7 @@ export const strings = {
     captureFace: 'Capture',
     reviewInfo: 'Review your information',
     agreeTerms: 'I agree to the Terms of Service and Privacy Policy',
-    facePhotosCaptured: '5 face photos captured ✓',
+    facePhotosCaptured: '5 face photos captured',
   },
 
   // Common UI
@@ -151,7 +151,7 @@ export const strings = {
     required: 'This field is required',
     invalidEmail: 'Invalid email address',
     invalidPhone: 'Invalid phone number. Format: 09XXXXXXXXX',
-    invalidStudentId: 'Invalid Student ID. Format: YYYY-NNNN',
+    invalidStudentId: 'Invalid Student ID. Format: 21-A-02177',
     passwordMin: 'Password must be at least 8 characters',
     passwordMismatch: 'Passwords do not match',
     serverError: 'Server error. Please try again later.',
@@ -297,3 +297,4 @@ export const strings = {
 } as const;
 
 export type Strings = typeof strings;
+

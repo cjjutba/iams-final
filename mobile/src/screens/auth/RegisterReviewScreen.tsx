@@ -1,27 +1,23 @@
 /**
  * Register Review Screen - Final Review and Submit
  *
- * Fourth and final step of student registration
- * Reviews all information and submits registration
+ * Fourth step of student registration.
  */
 
 import React, { useState } from 'react';
-import { View, StyleSheet, ScrollView } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
-import type { StackNavigationProp } from '@react-navigation/stack';
+import { View, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import { CheckSquare, Square, CheckCircle } from 'lucide-react-native';
 import { useAuth } from '../../hooks';
-import { theme, strings } from '../../constants';
+import { theme, strings, config } from '../../constants';
 import type { AuthStackParamList } from '../../types';
 import { AuthLayout } from '../../components/layouts';
-import { Text, Button, Card, Divider } from '../../components/ui';
+import { Text, Button } from '../../components/ui';
 
-type RegisterReviewNavigationProp = StackNavigationProp<AuthStackParamList, 'RegisterReview'>;
 type RegisterReviewRouteProp = RouteProp<AuthStackParamList, 'RegisterReview'>;
 
 export const RegisterReviewScreen: React.FC = () => {
-  const navigation = useNavigation<RegisterReviewNavigationProp>();
   const route = useRoute<RegisterReviewRouteProp>();
   const { register } = useAuth();
 
@@ -47,11 +43,6 @@ export const RegisterReviewScreen: React.FC = () => {
         student_id: studentInfo.studentId,
         phone: accountInfo.phone,
       });
-
-      // TODO: Upload face images after registration
-      // This would typically be done in a separate API call
-
-      // Navigation handled by RootNavigator when auth state changes
     } catch (err: any) {
       setError(err.response?.data?.message || strings.errors.generic);
       setIsSubmitting(false);
@@ -59,72 +50,60 @@ export const RegisterReviewScreen: React.FC = () => {
   };
 
   return (
-    <AuthLayout
-      showBack
-      title={strings.auth.createAccount}
-      subtitle={strings.register.step4Title}
-    >
-      <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-        {/* Progress bar */}
-        <View style={styles.progressContainer}>
-          <View style={[styles.progressBar, { width: '100%' }]} />
+    <AuthLayout showBack title={strings.auth.createAccount} subtitle={strings.register.step4Title}>
+      <View style={styles.progressSection}>
+        <Text variant="caption" color={theme.colors.text.secondary}>
+          Step 4 of 4
+        </Text>
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: '100%' }]} />
         </View>
+      </View>
 
-        {/* Student Information */}
-        <Card variant="outlined" style={styles.card}>
-          <Text variant="h4" weight="semibold" style={styles.sectionTitle}>
+      <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+        <View style={styles.section}>
+          <Text variant="body" weight="600" style={styles.sectionTitle}>
             Student Information
           </Text>
-
           <InfoRow label="Student ID" value={studentInfo.studentId} />
-          <InfoRow
-            label="Name"
-            value={`${studentInfo.first_name} ${studentInfo.last_name}`}
-          />
+          <InfoRow label="Name" value={`${studentInfo.first_name} ${studentInfo.last_name}`} />
           <InfoRow label="Course" value={studentInfo.course} />
-          <InfoRow
-            label="Year & Section"
-            value={`${studentInfo.year} - ${studentInfo.section}`}
-          />
-        </Card>
+          <InfoRow label="Year & Section" value={`${studentInfo.year} - ${studentInfo.section}`} />
+        </View>
 
-        {/* Account Information */}
-        <Card variant="outlined" style={styles.card}>
-          <Text variant="h4" weight="semibold" style={styles.sectionTitle}>
+        <View style={styles.section}>
+          <Text variant="body" weight="600" style={styles.sectionTitle}>
             Account Information
           </Text>
-
           <InfoRow label="Email" value={accountInfo.email} />
           <InfoRow label="Phone" value={accountInfo.phone} />
-          <InfoRow label="Password" value="••••••••" />
-        </Card>
+          <InfoRow label="Password" value="********" />
+        </View>
 
-        {/* Face Registration */}
-        <Card variant="outlined" style={styles.card}>
+        <View style={styles.section}>
           <View style={styles.faceRow}>
             <View style={styles.faceInfo}>
-              <Text variant="h4" weight="semibold">
+              <Text variant="body" weight="600">
                 Face Registration
               </Text>
-              <Text variant="bodySmall" color={theme.colors.status.success} style={styles.faceStatus}>
-                {strings.register.facePhotosCaptured}
+              <Text variant="bodySmall" color={theme.colors.success} style={styles.faceStatus}>
+                {faceImages.length}/{config.REQUIRED_FACE_IMAGES} photos captured
               </Text>
             </View>
-            <CheckCircle size={24} color={theme.colors.status.success} />
+            <CheckCircle size={22} color={theme.colors.success} />
           </View>
-        </Card>
+        </View>
 
-        {/* Terms Agreement */}
-        <View style={styles.agreementContainer}>
+        <View style={styles.section}>
           <TouchableOpacity
             style={styles.checkbox}
             onPress={() => setIsAgreed(!isAgreed)}
             activeOpacity={theme.interaction.activeOpacity}
           >
             {isAgreed ? (
-              <CheckSquare size={24} color={theme.colors.primary} />
+              <CheckSquare size={22} color={theme.colors.primary} />
             ) : (
-              <Square size={24} color={theme.colors.text.tertiary} />
+              <Square size={22} color={theme.colors.text.tertiary} />
             )}
             <Text variant="bodySmall" color={theme.colors.text.secondary} style={styles.agreementText}>
               {strings.register.agreeTerms}
@@ -132,16 +111,14 @@ export const RegisterReviewScreen: React.FC = () => {
           </TouchableOpacity>
         </View>
 
-        {/* Error Message */}
-        {error && (
+        {error ? (
           <View style={styles.errorContainer}>
-            <Text variant="bodySmall" color={theme.colors.status.error}>
+            <Text variant="bodySmall" color={theme.colors.error}>
               {error}
             </Text>
           </View>
-        )}
+        ) : null}
 
-        {/* Submit Button */}
         <Button
           variant="primary"
           size="lg"
@@ -158,46 +135,53 @@ export const RegisterReviewScreen: React.FC = () => {
   );
 };
 
-// InfoRow component
 const InfoRow: React.FC<{ label: string; value: string }> = ({ label, value }) => (
   <View style={styles.infoRow}>
     <Text variant="bodySmall" color={theme.colors.text.tertiary}>
       {label}
     </Text>
-    <Text variant="body" weight="medium">
+    <Text variant="body" weight="500" style={styles.infoValue}>
       {value}
     </Text>
   </View>
 );
 
-import { TouchableOpacity } from 'react-native';
-
 const styles = StyleSheet.create({
+  progressSection: {
+    marginTop: theme.spacing[2],
+    marginBottom: theme.spacing[5],
+    gap: theme.spacing[2],
+  },
+  progressTrack: {
+    height: 6,
+    borderRadius: theme.borderRadius.full,
+    backgroundColor: theme.colors.border,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: theme.borderRadius.full,
+    backgroundColor: theme.colors.primary,
+  },
   container: {
     flex: 1,
   },
-  progressContainer: {
-    height: 4,
-    backgroundColor: theme.colors.backgroundSecondary,
-    borderRadius: 2,
-    marginBottom: theme.spacing[8],
-  },
-  progressBar: {
-    height: '100%',
-    backgroundColor: theme.colors.primary,
-    borderRadius: 2,
-  },
-  card: {
-    marginBottom: theme.spacing[4],
+  section: {
+    marginBottom: theme.spacing[5],
   },
   sectionTitle: {
-    marginBottom: theme.spacing[4],
+    marginBottom: theme.spacing[3],
   },
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     marginBottom: theme.spacing[3],
+  },
+  infoValue: {
+    flex: 1,
+    textAlign: 'right',
+    marginLeft: theme.spacing[4],
   },
   faceRow: {
     flexDirection: 'row',
@@ -209,10 +193,6 @@ const styles = StyleSheet.create({
   },
   faceStatus: {
     marginTop: theme.spacing[1],
-  },
-  agreementContainer: {
-    marginTop: theme.spacing[6],
-    marginBottom: theme.spacing[6],
   },
   checkbox: {
     flexDirection: 'row',
@@ -226,7 +206,7 @@ const styles = StyleSheet.create({
   errorContainer: {
     marginBottom: theme.spacing[4],
     padding: theme.spacing[4],
-    backgroundColor: theme.colors.status.errorLight,
+    backgroundColor: theme.colors.errorLight,
     borderRadius: theme.borderRadius.md,
   },
   submitButton: {

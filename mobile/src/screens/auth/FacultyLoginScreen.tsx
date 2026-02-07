@@ -1,9 +1,7 @@
 /**
  * Faculty Login Screen
  *
- * Login form for faculty using Email + Password
- * Uses React Hook Form with Zod validation
- * Integrates with authStore for authentication
+ * Login form for faculty using Email + Password.
  */
 
 import React, { useState } from 'react';
@@ -18,7 +16,6 @@ import { AuthLayout } from '../../components/layouts';
 import { Text, Button } from '../../components/ui';
 import { FormInput, FormPassword } from '../../components/forms';
 
-// Validation schema
 const facultyLoginSchema = z.object({
   email: z.string().min(1, strings.errors.required).email(strings.errors.invalidEmail),
   password: z.string().min(1, strings.errors.required),
@@ -43,7 +40,6 @@ export const FacultyLoginScreen: React.FC = () => {
       setIsSubmitting(true);
       clearError();
       await login({ email: data.email, password: data.password });
-      // Navigation handled by RootNavigator when auth state changes
     } catch (err) {
       console.error('Login error:', err);
     } finally {
@@ -52,13 +48,8 @@ export const FacultyLoginScreen: React.FC = () => {
   };
 
   return (
-    <AuthLayout
-      showBack
-      title={strings.auth.welcomeFaculty}
-      subtitle={strings.auth.signInToContinue}
-    >
-      <View style={styles.form}>
-        {/* Email Input */}
+    <AuthLayout showBack title={strings.auth.welcomeFaculty} subtitle={strings.auth.signInToContinue}>
+      <View style={styles.formSection}>
         <FormInput
           name="email"
           control={control}
@@ -70,7 +61,6 @@ export const FacultyLoginScreen: React.FC = () => {
           autoCorrect={false}
         />
 
-        {/* Password Input */}
         <FormPassword
           name="password"
           control={control}
@@ -81,16 +71,14 @@ export const FacultyLoginScreen: React.FC = () => {
           autoCorrect={false}
         />
 
-        {/* Error Message */}
-        {authError && (
+        {authError ? (
           <View style={styles.errorContainer}>
-            <Text variant="bodySmall" color={theme.colors.status.error}>
+            <Text variant="bodySmall" color={theme.colors.error}>
               {authError}
             </Text>
           </View>
-        )}
+        ) : null}
 
-        {/* Login Button */}
         <Button
           variant="primary"
           size="lg"
@@ -101,35 +89,32 @@ export const FacultyLoginScreen: React.FC = () => {
         >
           {strings.auth.signIn}
         </Button>
+      </View>
 
-        {/* Faculty notice */}
-        <View style={styles.notice}>
-          <Text variant="bodySmall" color={theme.colors.text.secondary} align="center">
-            {strings.auth.facultyNotice}
-          </Text>
-        </View>
+      <View style={styles.notice}>
+        <Text variant="bodySmall" color={theme.colors.text.secondary} align="center">
+          {strings.auth.facultyNotice}
+        </Text>
       </View>
     </AuthLayout>
   );
 };
 
 const styles = StyleSheet.create({
-  form: {
-    flex: 1,
+  formSection: {
+    marginTop: theme.spacing[2],
   },
   errorContainer: {
-    marginTop: theme.spacing[4],
+    marginBottom: theme.spacing[4],
     padding: theme.spacing[4],
-    backgroundColor: theme.colors.status.errorLight,
+    backgroundColor: theme.colors.errorLight,
     borderRadius: theme.borderRadius.md,
   },
   loginButton: {
-    marginTop: theme.spacing[8],
+    marginTop: theme.spacing[1],
   },
   notice: {
     marginTop: theme.spacing[6],
-    paddingTop: theme.spacing[6],
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
+    paddingHorizontal: theme.spacing[2],
   },
 });

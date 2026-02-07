@@ -1,8 +1,7 @@
 /**
  * Register Step 3 Screen - Face Registration
  *
- * Third step of student registration
- * Captures 5 face images from different angles using camera
+ * Third step of student registration.
  */
 
 import React, { useState, useRef } from 'react';
@@ -10,7 +9,7 @@ import { View, StyleSheet, TouchableOpacity } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import type { RouteProp } from '@react-navigation/native';
-import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Image } from 'expo-image';
 import { Camera } from 'lucide-react-native';
 import { theme, strings, config } from '../../constants';
@@ -51,7 +50,7 @@ export const RegisterStep3Screen: React.FC = () => {
         base64: true,
       });
 
-      if (photo && photo.uri) {
+      if (photo?.uri) {
         const newImages = [...capturedImages, photo.uri];
         setCapturedImages(newImages);
 
@@ -78,73 +77,56 @@ export const RegisterStep3Screen: React.FC = () => {
     });
   };
 
-  if (!permission) {
+  if (!permission || !permission.granted) {
     return (
-      <AuthLayout
-        showBack
-        title={strings.auth.createAccount}
-        subtitle={strings.register.step3Title}
-      >
-        <View style={styles.permissionContainer}>
-          <Text variant="body" align="center">
-            Loading camera...
+      <AuthLayout showBack title={strings.auth.createAccount} subtitle={strings.register.step3Title}>
+        <View style={styles.progressSection}>
+          <Text variant="caption" color={theme.colors.text.secondary}>
+            Step 3 of 4
           </Text>
+          <View style={styles.progressTrack}>
+            <View style={[styles.progressFill, { width: '75%' }]} />
+          </View>
         </View>
-      </AuthLayout>
-    );
-  }
 
-  if (!permission.granted) {
-    return (
-      <AuthLayout
-        showBack
-        title={strings.auth.createAccount}
-        subtitle={strings.register.step3Title}
-      >
-        <View style={styles.permissionContainer}>
-          <Text variant="body" align="center" style={styles.permissionText}>
-            Camera permission is required to register your face
+        <View style={styles.section}>
+          <Text variant="body" align="center" color={theme.colors.text.secondary} style={styles.permissionText}>
+            {permission ? 'Camera permission is required to register your face.' : 'Loading camera permissions...'}
           </Text>
-          <Button variant="primary" onPress={requestPermission}>
-            Grant Permission
-          </Button>
+          {permission ? (
+            <Button variant="primary" onPress={requestPermission}>
+              Grant Permission
+            </Button>
+          ) : null}
         </View>
       </AuthLayout>
     );
   }
 
   return (
-    <AuthLayout
-      showBack
-      title={strings.auth.createAccount}
-      subtitle={strings.register.step3Title}
-    >
-      <View style={styles.container}>
-        {/* Progress bar */}
-        <View style={styles.progressContainer}>
-          <View style={[styles.progressBar, { width: '75%' }]} />
+    <AuthLayout showBack title={strings.auth.createAccount} subtitle={strings.register.step3Title}>
+      <View style={styles.progressSection}>
+        <Text variant="caption" color={theme.colors.text.secondary}>
+          Step 3 of 4
+        </Text>
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: '75%' }]} />
         </View>
+      </View>
 
-        {/* Instruction */}
-        <Text variant="body" weight="semibold" align="center" style={styles.instruction}>
+      <View style={styles.section}>
+        <Text variant="body" weight="600" align="center" style={styles.instruction}>
           {INSTRUCTIONS[currentIndex] || INSTRUCTIONS[INSTRUCTIONS.length - 1]}
         </Text>
 
-        {/* Camera preview */}
         <View style={styles.cameraContainer}>
-          <CameraView
-            ref={cameraRef}
-            style={styles.camera}
-            facing="front"
-          >
-            {/* Face oval overlay */}
+          <CameraView ref={cameraRef} style={styles.camera} facing="front">
             <View style={styles.overlay}>
               <View style={styles.faceGuide} />
             </View>
           </CameraView>
         </View>
 
-        {/* Captured images thumbnails */}
         <View style={styles.thumbnailRow}>
           {Array.from({ length: REQUIRED_IMAGES }).map((_, index) => (
             <TouchableOpacity
@@ -152,12 +134,10 @@ export const RegisterStep3Screen: React.FC = () => {
               style={styles.thumbnailContainer}
               onPress={() => capturedImages[index] && handleRemoveImage(index)}
               disabled={!capturedImages[index]}
+              activeOpacity={theme.interaction.activeOpacity}
             >
               {capturedImages[index] ? (
-                <Image
-                  source={{ uri: capturedImages[index] }}
-                  style={styles.thumbnail}
-                />
+                <Image source={{ uri: capturedImages[index] }} style={styles.thumbnail} />
               ) : (
                 <View style={styles.thumbnailPlaceholder}>
                   <Text variant="caption" color={theme.colors.text.tertiary}>
@@ -169,31 +149,20 @@ export const RegisterStep3Screen: React.FC = () => {
           ))}
         </View>
 
-        {/* Progress text */}
         <Text variant="bodySmall" color={theme.colors.text.secondary} align="center" style={styles.progressText}>
           Captured: {capturedImages.length}/{REQUIRED_IMAGES}
         </Text>
 
-        {/* Capture button */}
-        {capturedImages.length < REQUIRED_IMAGES && (
+        {capturedImages.length < REQUIRED_IMAGES ? (
           <TouchableOpacity
             style={styles.captureButton}
             onPress={handleCapture}
             activeOpacity={theme.interaction.activeOpacity}
           >
-            <Camera size={32} color={theme.colors.background} />
+            <Camera size={30} color={theme.colors.background} />
           </TouchableOpacity>
-        )}
-
-        {/* Next button */}
-        {capturedImages.length === REQUIRED_IMAGES && (
-          <Button
-            variant="primary"
-            size="lg"
-            fullWidth
-            onPress={handleNext}
-            style={styles.nextButton}
-          >
+        ) : (
+          <Button variant="primary" size="lg" fullWidth onPress={handleNext} style={styles.nextButton}>
             {strings.common.next}
           </Button>
         )}
@@ -203,28 +172,37 @@ export const RegisterStep3Screen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
+  progressSection: {
+    marginTop: theme.spacing[2],
+    marginBottom: theme.spacing[5],
+    gap: theme.spacing[2],
   },
-  progressContainer: {
-    height: 4,
-    backgroundColor: theme.colors.backgroundSecondary,
-    borderRadius: 2,
-    marginBottom: theme.spacing[8],
+  progressTrack: {
+    height: 6,
+    borderRadius: theme.borderRadius.full,
+    backgroundColor: theme.colors.border,
+    overflow: 'hidden',
   },
-  progressBar: {
+  progressFill: {
     height: '100%',
+    borderRadius: theme.borderRadius.full,
     backgroundColor: theme.colors.primary,
-    borderRadius: 2,
+  },
+  section: {
+    marginTop: theme.spacing[1],
+  },
+  permissionText: {
+    marginBottom: theme.spacing[4],
+    lineHeight: 22,
   },
   instruction: {
-    marginBottom: theme.spacing[6],
+    marginBottom: theme.spacing[4],
   },
   cameraContainer: {
     aspectRatio: 3 / 4,
     borderRadius: theme.borderRadius.lg,
     overflow: 'hidden',
-    marginBottom: theme.spacing[6],
+    marginBottom: theme.spacing[5],
   },
   camera: {
     flex: 1,
@@ -237,7 +215,7 @@ const styles = StyleSheet.create({
   faceGuide: {
     width: 200,
     height: 280,
-    borderWidth: 3,
+    borderWidth: 2,
     borderColor: theme.colors.background,
     borderRadius: 100,
     backgroundColor: 'transparent',
@@ -259,34 +237,24 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: theme.borderRadius.md,
-    backgroundColor: theme.colors.backgroundSecondary,
+    backgroundColor: theme.colors.secondary,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: theme.colors.border,
   },
   progressText: {
-    marginBottom: theme.spacing[6],
+    marginBottom: theme.spacing[5],
   },
   captureButton: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
+    width: 70,
+    height: 70,
+    borderRadius: 35,
     backgroundColor: theme.colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
     alignSelf: 'center',
-    ...theme.shadows.md,
+    ...theme.shadows.sm,
   },
   nextButton: {
-    marginTop: theme.spacing[6],
-  },
-  permissionContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  permissionText: {
-    marginBottom: theme.spacing[6],
+    marginTop: theme.spacing[1],
   },
 });

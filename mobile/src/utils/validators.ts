@@ -21,11 +21,15 @@ export const passwordSchema = z
   .regex(/[a-zA-Z]/, 'Password must contain at least one letter')
   .regex(/[0-9]/, 'Password must contain at least one number');
 
-// Student ID schema (format: YYYY-NNNN, e.g., 2024-0001)
+// Student ID schema (format: 21-A-02177)
+export const studentIdPattern = /^\d{2}-[A-Za-z]-\d{5}$/;
+
 export const studentIdSchema = z
   .string()
   .min(1, 'Student ID is required')
-  .regex(/^\d{4}-\d{4}$/, 'Student ID must be in format YYYY-NNNN (e.g., 2024-0001)');
+  .trim()
+  .regex(studentIdPattern, 'Student ID must be in format 21-A-02177')
+  .transform((value) => value.toUpperCase());
 
 // Phone number schema (format: 09XXXXXXXXX)
 export const phoneSchema = z

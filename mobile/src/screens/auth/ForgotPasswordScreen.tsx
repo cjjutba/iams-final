@@ -1,7 +1,7 @@
 /**
  * Forgot Password Screen
  *
- * Allows users to request password reset via email
+ * Allows users to request password reset via email.
  */
 
 import React, { useState } from 'react';
@@ -13,10 +13,9 @@ import { Mail, CheckCircle } from 'lucide-react-native';
 import { authService } from '../../services';
 import { theme, strings } from '../../constants';
 import { AuthLayout } from '../../components/layouts';
-import { Text, Button, Card } from '../../components/ui';
+import { Text, Button } from '../../components/ui';
 import { FormInput } from '../../components/forms';
 
-// Validation schema
 const forgotPasswordSchema = z.object({
   email: z.string().min(1, strings.errors.required).email(strings.errors.invalidEmail),
 });
@@ -39,7 +38,6 @@ export const ForgotPasswordScreen: React.FC = () => {
     try {
       setIsSubmitting(true);
       setError(null);
-
       await authService.requestPasswordReset(data.email);
       setIsSubmitted(true);
     } catch (err: any) {
@@ -51,39 +49,26 @@ export const ForgotPasswordScreen: React.FC = () => {
 
   if (isSubmitted) {
     return (
-      <AuthLayout showBack title={strings.auth.resetPassword}>
-        <View style={styles.successContainer}>
-          <View style={styles.iconContainer}>
-            <CheckCircle size={64} color={theme.colors.status.success} />
-          </View>
-
-          <Text variant="h3" weight="semibold" align="center" style={styles.successTitle}>
+      <AuthLayout showBack title={strings.auth.resetPassword} subtitle={strings.auth.resetInstructions}>
+        <View style={styles.successSection}>
+          <CheckCircle size={56} color={theme.colors.success} />
+          <Text variant="h3" weight="600" align="center" style={styles.successTitle}>
             {strings.auth.resetEmailSent}
           </Text>
-
           <Text variant="body" color={theme.colors.text.secondary} align="center" style={styles.successMessage}>
-            We've sent password reset instructions to your email. Please check your inbox and follow
-            the link to reset your password.
+            We sent password reset instructions to your email. Follow the link in your inbox to continue.
           </Text>
-
-          <Card variant="outlined" style={styles.infoCard}>
-            <Text variant="bodySmall" color={theme.colors.text.secondary} align="center">
-              Didn't receive the email? Check your spam folder or try again in a few minutes.
-            </Text>
-          </Card>
+          <Text variant="bodySmall" color={theme.colors.text.tertiary} align="center" style={styles.successHint}>
+            If you do not see the email, check spam or try again after a few minutes.
+          </Text>
         </View>
       </AuthLayout>
     );
   }
 
   return (
-    <AuthLayout
-      showBack
-      title={strings.auth.resetPassword}
-      subtitle={strings.auth.resetInstructions}
-    >
-      <View style={styles.form}>
-        {/* Email Input */}
+    <AuthLayout showBack title={strings.auth.resetPassword} subtitle={strings.auth.resetInstructions}>
+      <View style={styles.formSection}>
         <FormInput
           name="email"
           control={control}
@@ -95,16 +80,14 @@ export const ForgotPasswordScreen: React.FC = () => {
           autoCorrect={false}
         />
 
-        {/* Error Message */}
-        {error && (
+        {error ? (
           <View style={styles.errorContainer}>
-            <Text variant="bodySmall" color={theme.colors.status.error}>
+            <Text variant="bodySmall" color={theme.colors.error}>
               {error}
             </Text>
           </View>
-        )}
+        ) : null}
 
-        {/* Submit Button */}
         <Button
           variant="primary"
           size="lg"
@@ -121,35 +104,32 @@ export const ForgotPasswordScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  form: {
-    flex: 1,
+  formSection: {
+    marginTop: theme.spacing[2],
   },
   errorContainer: {
-    marginTop: theme.spacing[4],
+    marginBottom: theme.spacing[4],
     padding: theme.spacing[4],
-    backgroundColor: theme.colors.status.errorLight,
+    backgroundColor: theme.colors.errorLight,
     borderRadius: theme.borderRadius.md,
   },
   submitButton: {
-    marginTop: theme.spacing[8],
+    marginTop: theme.spacing[1],
   },
-  successContainer: {
-    flex: 1,
-    justifyContent: 'center',
+  successSection: {
+    marginTop: theme.spacing[6],
     alignItems: 'center',
-    paddingVertical: theme.spacing[8],
-  },
-  iconContainer: {
-    marginBottom: theme.spacing[6],
+    paddingHorizontal: theme.spacing[2],
   },
   successTitle: {
-    marginBottom: theme.spacing[4],
+    marginTop: theme.spacing[5],
+    marginBottom: theme.spacing[3],
   },
   successMessage: {
-    marginBottom: theme.spacing[8],
     lineHeight: 24,
   },
-  infoCard: {
-    width: '100%',
+  successHint: {
+    marginTop: theme.spacing[4],
+    lineHeight: 20,
   },
 });
