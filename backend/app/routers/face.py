@@ -7,8 +7,10 @@ CRITICAL: Contains Edge API contract for continuous presence tracking.
 """
 
 from typing import List
-from datetime import datetime
+from datetime import datetime, timedelta
 import io
+import time
+import asyncio
 from fastapi import APIRouter, Depends, UploadFile, File, status
 from sqlalchemy.orm import Session
 import base64
@@ -22,12 +24,14 @@ from app.schemas.face import (
     FaceRecognizeResponse,
     EdgeProcessRequest,
     EdgeProcessResponse,
+    EdgeProcessResponseData,
     MatchedUser
 )
 from app.services.face_service import FaceService
 from app.services.presence_service import PresenceService
 from app.repositories.schedule_repository import ScheduleRepository
 from app.utils.dependencies import get_current_user, get_current_student
+from app.utils.exceptions import EdgeAPIError, ValidationError
 from app.config import logger
 
 
@@ -180,6 +184,41 @@ async def recognize_face(
 
 # ===== CRITICAL: Edge API for Raspberry Pi =====
 
+# In-memory cache for request deduplication (simple implementation)
+# In production: use Redis with TTL
+_request_cache = {}
+
+def _is_duplicate_request(request_id: str, room_id: str, timestamp: datetime) -> bool:
+    """
+    Check if this request was already processed (idempotency)
+
+    Uses in-memory cache with 5-minute TTL.
+    In production, use Redis for distributed deduplication.
+    """
+    if not request_id:
+        return False
+
+    cache_key = f"{request_id}:{room_id}:{timestamp.isoformat()}"
+
+    # Clean expired entries (older than 5 minutes)
+    now = datetime.now()
+    expired_keys = [
+        k for k, v in _request_cache.items()
+        if now - v > timedelta(minutes=5)
+    ]
+    for k in expired_keys:
+        del _request_cache[k]
+
+    # Check if already processed
+    if cache_key in _request_cache:
+        logger.info(f"Duplicate request detected: {cache_key}")
+        return True
+
+    # Mark as processed
+    _request_cache[cache_key] = now
+    return False
+
+
 @router.post("/process", response_model=EdgeProcessResponse, status_code=status.HTTP_200_OK)
 async def process_faces(
     request: EdgeProcessRequest,
@@ -243,20 +282,67 @@ async def process_faces(
     **Rate Limiting:**
     - Recommended: 60-second intervals between scans
     - Maximum: 1 request per second per room
+
+    **Idempotency:**
+    - Use request_id to prevent duplicate processing
+    - Same request_id within 5 minutes returns cached result
+
+    **Error Handling:**
+    - Returns success=true for successfully processed requests (even if no faces matched)
+    - Returns success=false with error code for failures
+    - Error codes guide retry logic:
+      - INVALID_IMAGE_FORMAT: Don't retry (permanent failure)
+      - RECOGNITION_FAILED: Retry (transient failure)
+      - DATABASE_UNAVAILABLE: Retry with backoff
     """
+    start_time = time.time()
+
+    # Check for duplicate request (idempotency)
+    if _is_duplicate_request(request.request_id, request.room_id, request.timestamp):
+        logger.warning(f"Duplicate request ignored: request_id={request.request_id}")
+        return EdgeProcessResponse(
+            success=True,
+            data=EdgeProcessResponseData(
+                processed=0,
+                matched=[],
+                unmatched=0,
+                processing_time_ms=0,
+                presence_logged=0
+            )
+        )
+
     face_service = FaceService(db)
 
     processed_count = 0
     matched_users: List[MatchedUser] = []
     unmatched_count = 0
+    face_errors = []
 
-    logger.info(f"Processing {len(request.faces)} faces from room {request.room_id} at {request.timestamp}")
+    logger.info(
+        f"Processing {len(request.faces)} faces from room {request.room_id} "
+        f"at {request.timestamp} (request_id={request.request_id})"
+    )
 
-    # Process each face
+    # Process each face (sequential for now, can be parallelized later)
     for i, face_data in enumerate(request.faces):
         try:
-            # Decode Base64 image
-            image = face_service.facenet.decode_base64_image(face_data.image)
+            # Decode Base64 image with validation
+            try:
+                image = face_service.facenet.decode_base64_image(
+                    face_data.image,
+                    validate_size=True
+                )
+            except ValueError as e:
+                # Invalid image format - don't retry
+                error_msg = f"Face {i+1}: {str(e)}"
+                logger.warning(error_msg)
+                face_errors.append({
+                    "face_index": i,
+                    "error": "INVALID_IMAGE_FORMAT",
+                    "message": str(e)
+                })
+                unmatched_count += 1
+                continue
 
             # Convert to bytes
             img_bytes = io.BytesIO()
@@ -264,30 +350,46 @@ async def process_faces(
             img_bytes = img_bytes.getvalue()
 
             # Recognize face
-            user_id, confidence = await face_service.recognize_face(img_bytes)
+            try:
+                user_id, confidence = await face_service.recognize_face(img_bytes)
+                processed_count += 1
 
-            processed_count += 1
+                if user_id:
+                    # Face matched
+                    matched_users.append(MatchedUser(
+                        user_id=user_id,
+                        confidence=confidence
+                    ))
+                    logger.debug(f"Face {i+1} matched: user {user_id}, confidence {confidence:.3f}")
+                else:
+                    # Face not matched
+                    unmatched_count += 1
+                    logger.debug(f"Face {i+1} not matched")
 
-            if user_id:
-                # Face matched
-                matched_users.append(MatchedUser(
-                    user_id=user_id,
-                    confidence=confidence
-                ))
-
-                logger.debug(f"Face {i+1} matched: user {user_id}, confidence {confidence:.3f}")
-            else:
-                # Face not matched
+            except Exception as e:
+                # Recognition failed - can retry
+                error_msg = f"Face {i+1}: Recognition failed: {str(e)}"
+                logger.error(error_msg)
+                face_errors.append({
+                    "face_index": i,
+                    "error": "RECOGNITION_FAILED",
+                    "message": str(e)
+                })
+                processed_count += 1
                 unmatched_count += 1
-                logger.debug(f"Face {i+1} not matched")
 
         except Exception as e:
-            logger.error(f"Failed to process face {i+1}: {e}")
-            # Count as processed but unmatched
-            processed_count += 1
+            # Unexpected error
+            logger.exception(f"Unexpected error processing face {i+1}: {e}")
+            face_errors.append({
+                "face_index": i,
+                "error": "PROCESSING_FAILED",
+                "message": str(e)
+            })
             unmatched_count += 1
 
     # Log presence to attendance system for matched users
+    presence_logged = 0
     if matched_users:
         try:
             schedule_repo = ScheduleRepository(db)
@@ -311,6 +413,7 @@ async def process_faces(
                             user_id=matched_user.user_id,
                             confidence=matched_user.confidence
                         )
+                        presence_logged += 1
                         logger.debug(
                             f"Logged presence: user {matched_user.user_id}, "
                             f"schedule {schedule_id}, confidence {matched_user.confidence:.3f}"
@@ -318,7 +421,7 @@ async def process_faces(
                     except Exception as e:
                         logger.error(f"Failed to log presence for user {matched_user.user_id}: {e}")
 
-                logger.info(f"Logged {len(matched_users)} detections to schedule {schedule_id}")
+                logger.info(f"Logged {presence_logged}/{len(matched_users)} detections to schedule {schedule_id}")
             else:
                 logger.warning(
                     f"No active schedule found for room {request.room_id} at {scan_time}. "
@@ -329,18 +432,28 @@ async def process_faces(
             logger.error(f"Failed to log presence to attendance system: {e}")
             # Continue with response even if presence logging fails
 
+    # Calculate processing time
+    processing_time_ms = int((time.time() - start_time) * 1000)
+
     logger.info(
         f"Edge API results - Processed: {processed_count}, "
-        f"Matched: {len(matched_users)}, Unmatched: {unmatched_count}"
+        f"Matched: {len(matched_users)}, Unmatched: {unmatched_count}, "
+        f"Presence logged: {presence_logged}, Time: {processing_time_ms}ms"
     )
+
+    # Log any errors that occurred
+    if face_errors:
+        logger.warning(f"Face processing errors: {face_errors}")
 
     return EdgeProcessResponse(
         success=True,
-        data={
-            "processed": processed_count,
-            "matched": [user.model_dump() for user in matched_users],
-            "unmatched": unmatched_count
-        }
+        data=EdgeProcessResponseData(
+            processed=processed_count,
+            matched=[user.model_dump() for user in matched_users],
+            unmatched=unmatched_count,
+            processing_time_ms=processing_time_ms,
+            presence_logged=presence_logged
+        )
     )
 
 

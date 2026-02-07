@@ -55,10 +55,19 @@ class AttendanceRecordResponse(AttendanceRecordBase):
 class PresenceLogResponse(BaseModel):
     """Individual presence scan log"""
     id: int
+    attendance_id: str
     scan_number: int
     scan_time: datetime
     detected: bool
     confidence: Optional[float] = None
+
+    @field_validator("attendance_id", mode="before")
+    @classmethod
+    def coerce_attendance_id_to_str(cls, v):
+        """Convert UUID to string if needed"""
+        if isinstance(v, UUID):
+            return str(v)
+        return v
 
     class Config:
         from_attributes = True
@@ -76,6 +85,28 @@ class EarlyLeaveResponse(BaseModel):
     @field_validator("id", mode="before")
     @classmethod
     def coerce_id_to_str(cls, v):
+        """Convert UUID to string if needed"""
+        if isinstance(v, UUID):
+            return str(v)
+        return v
+
+    class Config:
+        from_attributes = True
+
+
+class EarlyLeaveEventResponse(BaseModel):
+    """Early leave event with attendance ID"""
+    id: str
+    attendance_id: str
+    detected_at: datetime
+    last_seen_at: datetime
+    consecutive_misses: int
+    notified: bool
+    notified_at: Optional[datetime] = None
+
+    @field_validator("id", "attendance_id", mode="before")
+    @classmethod
+    def coerce_uuid_to_str(cls, v):
         """Convert UUID to string if needed"""
         if isinstance(v, UUID):
             return str(v)

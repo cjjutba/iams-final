@@ -39,7 +39,8 @@
       "Bash(\"C:\\\\.cjjutba\\\\.thesis\\\\iams\\\\backend\\\\venv\\\\Scripts\\\\python.exe\" -m alembic history)",
       "Bash(\"C:\\\\.cjjutba\\\\.thesis\\\\iams\\\\backend\\\\venv\\\\Scripts\\\\python.exe\" -m alembic current)",
       "Bash(\"venv/Scripts/python.exe\" -m scripts.seed_content)",
-      "Bash(\"venv/Scripts/python.exe\":*)"
+      "Bash(\"venv/Scripts/python.exe\":*)",
+      "Bash(pytest:*)"
     ]
   }
 }

@@ -12,13 +12,14 @@
 ## Connection Notes
 - See [supabase-connection.md](supabase-connection.md) for detailed connection troubleshooting notes
 
-## Schema State
+## Schema State (Updated 2026-02-07)
 - **Migration chain:** e49171084f7c (Initial 8 tables) -> 86d63351d3e9 (notifications table) [head]
-- **DB stamped at:** e49171084f7c (8 core tables exist in Supabase; notifications pending `upgrade head`)
+- **DB stamped at:** 86d63351d3e9 (ALL MIGRATIONS APPLIED, schema sync verified)
 - **Tables (9+1):** users, face_registrations, rooms, schedules, enrollments, attendance_records, presence_logs, early_leave_events, notifications, alembic_version
 - **Enums:** userrole (STUDENT, FACULTY, ADMIN), attendancestatus (PRESENT, LATE, ABSENT, EARLY_LEAVE)
 - All tables use UUID primary keys (no default gen_random_uuid -- UUIDs must be generated app-side)
 - presence_logs uses BIGSERIAL for id (auto-incrementing, high-volume table)
+- **Migration testing:** Rollback and re-apply tested successfully on 2026-02-07, data preserved
 
 ## Key Indexes
 - users: unique on email, unique on student_id, index on role
@@ -43,6 +44,7 @@
 - env.py loads DATABASE_URL from app.config.settings (Pydantic Settings, .env file)
 - env.py must import ALL models for autogenerate to detect new/changed tables
 - sqlalchemy.url is NOT set in alembic.ini -- overridden in env.py via config.set_main_option()
+- See [migration-process.md](migration-process.md) for detailed migration workflow and best practices
 
 ## Environment Setup
 - Backend venv: `C:\.cjjutba\.thesis\iams\backend\venv`

@@ -7,10 +7,11 @@ Uses SQLite in-memory database with UUID compatibility workarounds.
 
 import os
 import uuid
-from datetime import datetime, time
+from datetime import datetime, time, date
 from unittest.mock import patch, MagicMock
 
 import pytest
+from PIL import Image
 
 # ============================================================
 # Environment variable overrides MUST happen before any app
@@ -281,3 +282,110 @@ def auth_headers_faculty(test_faculty):
 def auth_headers_admin(test_admin):
     """Authorization headers for the test admin."""
     return _make_auth_headers(test_admin)
+
+
+# ---------------------------------------------------------------------------
+# Integration test fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def test_enrollment(db_session, test_student, test_schedule):
+    """Create a test enrollment linking student to schedule."""
+    from app.models.enrollment import Enrollment
+
+    enrollment = Enrollment(
+        id=uuid.uuid4(),
+        student_id=test_student.id,
+        schedule_id=test_schedule.id,
+        enrolled_at=datetime.utcnow()
+    )
+    db_session.add(enrollment)
+    db_session.commit()
+    db_session.refresh(enrollment)
+    return enrollment
+
+
+@pytest.fixture()
+def test_face_image_base64():
+    """Generate a simple test image as Base64 for face processing tests."""
+    from PIL import Image
+    import base64
+    import io
+
+    # Create a simple 112x112 test image
+    img = Image.new('RGB', (112, 112), color='blue')
+
+    # Convert to Base64
+    img_bytes = io.BytesIO()
+    img.save(img_bytes, format='JPEG')
+    img_bytes = img_bytes.getvalue()
+
+    return base64.b64encode(img_bytes).decode('utf-8')
+
+
+@pytest.fixture()
+def mock_facenet():
+    """Mock FaceNet model for face recognition tests."""
+    from unittest.mock import MagicMock, patch
+    import numpy as np
+
+    mock = MagicMock()
+
+    # Mock generate_embedding to return a random 512-dim vector
+    def mock_generate_embedding(image_bytes):
+        embedding = np.random.randn(512).astype(np.float32)
+        embedding = embedding / np.linalg.norm(embedding)  # L2 normalize
+        return embedding
+
+    mock.generate_embedding = mock_generate_embedding
+    mock.decode_base64_image = MagicMock(return_value=Image.new('RGB', (112, 112)))
+
+    return mock
+
+
+@pytest.fixture()
+def mock_faiss():
+    """Mock FAISS manager for face search tests."""
+    from unittest.mock import MagicMock
+
+    mock = MagicMock()
+    mock.add = MagicMock(return_value=1)  # Return FAISS ID
+    mock.search = MagicMock(return_value=[])  # Empty by default
+    mock.save = MagicMock()
+    mock.user_map = {}
+
+    return mock
+
+
+@pytest.fixture()
+def test_attendance_record(db_session, test_student, test_schedule):
+    """Create a test attendance record."""
+    from app.models.attendance_record import AttendanceRecord, AttendanceStatus
+
+    record = AttendanceRecord(
+        id=uuid.uuid4(),
+        student_id=test_student.id,
+        schedule_id=test_schedule.id,
+        date=date.today(),
+        status=AttendanceStatus.ABSENT,
+        total_scans=0,
+        scans_present=0,
+        presence_score=0.0
+    )
+    db_session.add(record)
+    db_session.commit()
+    db_session.refresh(record)
+    return record
+
+
+@pytest.fixture()
+def mock_ws_manager():
+    """Mock WebSocket manager for notification tests."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock = MagicMock()
+    mock.broadcast = AsyncMock()
+    mock.send_to_user = AsyncMock()
+    mock.send_to_role = AsyncMock()
+
+    return mock

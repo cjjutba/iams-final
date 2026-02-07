@@ -54,6 +54,18 @@ class DatabaseError(IAMSException):
     pass
 
 
+class EdgeAPIError(IAMSException):
+    """
+    Raised when Edge API processing fails
+
+    Includes error_code and retry flag for edge device retry logic.
+    """
+    def __init__(self, message: str, error_code: str, retry: bool = False):
+        super().__init__(message)
+        self.error_code = error_code
+        self.retry = retry
+
+
 # ===== Exception Handlers =====
 
 async def iams_exception_handler(request: Request, exc: IAMSException):
@@ -70,12 +82,27 @@ async def iams_exception_handler(request: Request, exc: IAMSException):
         DuplicateError: status.HTTP_409_CONFLICT,
         FaceRecognitionError: status.HTTP_422_UNPROCESSABLE_ENTITY,
         DatabaseError: status.HTTP_500_INTERNAL_SERVER_ERROR,
+        EdgeAPIError: status.HTTP_200_OK,  # Edge API returns 200 with error details
     }
 
     status_code = status_code_map.get(type(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     # Log the error
     logger.error(f"{exc.__class__.__name__}: {exc.message}")
+
+    # Special handling for EdgeAPIError
+    if isinstance(exc, EdgeAPIError):
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "success": False,
+                "error": {
+                    "code": exc.error_code,
+                    "message": exc.message,
+                    "retry": exc.retry
+                }
+            }
+        )
 
     return JSONResponse(
         status_code=status_code,
@@ -95,7 +122,20 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
     Returns formatted validation errors
     """
-    logger.error(f"Validation error: {exc.errors()}")
+    errors = exc.errors()
+    logger.error(f"Validation error: {errors}")
+
+    # Convert error context to JSON-serializable format
+    serializable_errors = []
+    for error in errors:
+        error_dict = {
+            "type": error.get("type"),
+            "loc": error.get("loc"),
+            "msg": error.get("msg"),
+            "input": str(error.get("input")) if error.get("input") is not None else None
+        }
+        # Skip ctx field as it may contain non-serializable objects
+        serializable_errors.append(error_dict)
 
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -104,7 +144,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "error": {
                 "code": "ValidationError",
                 "message": "Request validation failed",
-                "details": exc.errors()
+                "details": serializable_errors
             }
         }
     )

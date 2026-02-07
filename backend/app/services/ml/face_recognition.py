@@ -175,35 +175,69 @@ class FaceNetModel:
 
         return np.array(embeddings)
 
-    def decode_base64_image(self, base64_string: str) -> Image.Image:
+    def decode_base64_image(self, base64_string: str, validate_size: bool = True) -> Image.Image:
         """
         Decode Base64 image string to PIL Image
 
         Args:
             base64_string: Base64-encoded image
+            validate_size: If True, validate image size before decode (prevents DoS)
 
         Returns:
             PIL Image
 
         Raises:
-            ValueError: If decoding fails
+            ValueError: If decoding fails or validation fails
         """
         try:
+            # Validate Base64 string length before decode (prevent memory attacks)
+            if validate_size and len(base64_string) > 15_000_000:  # ~10MB encoded
+                raise ValueError(
+                    f"Base64 image too large: {len(base64_string)} bytes "
+                    "(max 15MB encoded / ~10MB decoded)"
+                )
+
             # Remove data URL prefix if present
             if ',' in base64_string:
                 base64_string = base64_string.split(',')[1]
 
             # Decode Base64
-            image_bytes = base64.b64decode(base64_string)
+            try:
+                image_bytes = base64.b64decode(base64_string, validate=True)
+            except Exception as e:
+                raise ValueError(f"Invalid Base64 encoding: {e}")
+
+            # Validate decoded size
+            if validate_size and len(image_bytes) > 10_000_000:  # 10MB decoded
+                raise ValueError(
+                    f"Decoded image too large: {len(image_bytes)} bytes (max 10MB)"
+                )
 
             # Open as PIL Image
-            image = Image.open(io.BytesIO(image_bytes))
+            try:
+                image = Image.open(io.BytesIO(image_bytes))
+            except Exception as e:
+                raise ValueError(f"Invalid image format: {e}")
+
+            # Validate image format (ensure JPEG or PNG)
+            if image.format not in ['JPEG', 'PNG']:
+                raise ValueError(f"Unsupported image format: {image.format} (expected JPEG or PNG)")
+
+            # Validate image dimensions (prevent extreme sizes)
+            width, height = image.size
+            if width < 10 or height < 10:
+                raise ValueError(f"Image too small: {width}x{height} (minimum 10x10)")
+            if width > 4096 or height > 4096:
+                raise ValueError(f"Image too large: {width}x{height} (maximum 4096x4096)")
 
             return image
 
+        except ValueError:
+            # Re-raise ValueError with original message
+            raise
         except Exception as e:
             logger.error(f"Failed to decode Base64 image: {e}")
-            raise ValueError(f"Invalid Base64 image: {e}")
+            raise ValueError(f"Image decoding failed: {e}")
 
     def compute_similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
         """

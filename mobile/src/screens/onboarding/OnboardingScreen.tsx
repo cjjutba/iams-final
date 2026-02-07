@@ -8,7 +8,7 @@
  * 4. Easy Access
  */
 
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useCallback, useEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -19,6 +19,7 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
+import LottieView from 'lottie-react-native';
 import type { AuthStackParamList } from '../../types';
 import { theme } from '../../constants';
 import { Text, Button } from '../../components/ui';
@@ -27,32 +28,95 @@ type OnboardingScreenNavigationProp = StackNavigationProp<AuthStackParamList, 'O
 
 const { width } = Dimensions.get('window');
 
+/**
+ * Animated Icon Component with controlled timing
+ * - Slower speed (0.6x)
+ * - 2-second delay between loops
+ * - Only plays when slide is active/visible
+ */
+interface AnimatedIconProps {
+  source: any;
+  isActive: boolean;
+}
+
+const AnimatedIcon: React.FC<AnimatedIconProps> = ({ source, isActive }) => {
+  const animationRef = useRef<LottieView>(null);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleAnimationFinish = useCallback(() => {
+    if (!isActive) return; // Don't restart if slide is no longer active
+
+    // Add 2-second delay before restarting
+    timeoutRef.current = setTimeout(() => {
+      if (isActive) {
+        animationRef.current?.play(0);
+      }
+    }, 2000);
+  }, [isActive]);
+
+  useEffect(() => {
+    if (isActive) {
+      // Slide became active - play animation from start
+      animationRef.current?.reset();
+      animationRef.current?.play();
+    } else {
+      // Slide is no longer active - pause and reset
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+      animationRef.current?.pause();
+      animationRef.current?.reset();
+    }
+
+    // Cleanup timeout on unmount
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, [isActive]);
+
+  return (
+    <LottieView
+      ref={animationRef}
+      source={source}
+      autoPlay={false}
+      loop={false}
+      speed={0.6}
+      renderMode="SOFTWARE"
+      style={styles.lottieAnimation}
+      onAnimationFinish={handleAnimationFinish}
+    />
+  );
+};
+
 interface Slide {
   title: string;
   description: string;
-  icon: string;
+  lottieSource: any;
 }
 
 const slides: Slide[] = [
   {
     title: 'Automated Attendance',
     description: 'No more manual roll calls. Our AI-powered system automatically tracks your attendance using facial recognition.',
-    icon: '📋',
+    lottieSource: require('../../../assets/icons/ai.json'),
   },
   {
     title: 'Real-time Monitoring',
     description: 'Stay updated with live attendance status. Faculty can monitor classes in real-time, students can check their records instantly.',
-    icon: '⏱️',
+    lottieSource: require('../../../assets/icons/analytics.json'),
   },
   {
     title: 'Face Recognition',
     description: 'Secure and accurate identification using advanced face recognition technology. Your face is your attendance card.',
-    icon: '👤',
+    lottieSource: require('../../../assets/icons/security-camera.json'),
   },
   {
     title: 'Easy Access',
     description: 'View your schedule, attendance history, and presence scores all in one place. Simple, fast, and reliable.',
-    icon: '📱',
+    lottieSource: require('../../../assets/icons/phone.json'),
   },
 ];
 
@@ -104,9 +168,10 @@ export const OnboardingScreen: React.FC = () => {
         {slides.map((slide, index) => (
           <View key={index} style={styles.slide}>
             <View style={styles.iconContainer}>
-              <Text variant="h1" style={styles.icon}>
-                {slide.icon}
-              </Text>
+              <AnimatedIcon
+                source={slide.lottieSource}
+                isActive={currentIndex === index}
+              />
             </View>
 
             <Text variant="h2" weight="700" align="center" style={styles.title}>
@@ -173,16 +238,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   iconContainer: {
-    width: 120,
-    height: 120,
-    borderRadius: theme.borderRadius.xl,
-    backgroundColor: theme.colors.secondary,
+    width: 250,
+    height: 250,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: theme.spacing[8],
   },
-  icon: {
-    fontSize: 60,
+  lottieAnimation: {
+    width: 250,
+    height: 250,
   },
   title: {
     marginBottom: theme.spacing[4],

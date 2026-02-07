@@ -17,6 +17,7 @@ from app.repositories.attendance_repository import AttendanceRepository
 from app.repositories.schedule_repository import ScheduleRepository
 from app.repositories.user_repository import UserRepository
 from app.services.notification_service import NotificationService
+from app.services.tracking_service import get_tracking_service, Detection
 from app.services import session_manager
 from app.utils.exceptions import NotFoundError, ValidationError
 from app.config import settings, logger
@@ -81,6 +82,9 @@ class PresenceService:
 
         # Active sessions (schedule_id → SessionState)
         self.active_sessions: Dict[str, SessionState] = {}
+
+        # Tracking service for continuous face tracking
+        self.tracking_service = get_tracking_service()
 
     async def start_session(self, schedule_id: str) -> SessionState:
         """
@@ -147,6 +151,9 @@ class PresenceService:
         # Store active session
         self.active_sessions[schedule_id] = session
 
+        # Initialize tracking session
+        self.tracking_service.start_session(schedule_id)
+
         # Register in global session manager for cross-module access
         session_manager.register_session(schedule_id, {
             "subject_code": schedule.subject_code,
@@ -169,17 +176,20 @@ class PresenceService:
         self,
         schedule_id: str,
         user_id: str,
-        confidence: float
+        confidence: float,
+        bbox: Optional[List[float]] = None
     ):
         """
         Log student detection during active session
 
         Called by face recognition endpoint when student is detected.
+        Integrates with tracking service to maintain persistent track IDs.
 
         Args:
             schedule_id: Schedule UUID
             user_id: Student UUID
             confidence: Recognition confidence (0-1)
+            bbox: Optional bounding box [x1, y1, x2, y2]
         """
         # Check if session is active
         if schedule_id not in self.active_sessions:
@@ -201,6 +211,16 @@ class PresenceService:
         if not attendance:
             logger.error(f"Attendance record not found: {attendance_id}")
             return
+
+        # Update tracking (if bbox provided)
+        if bbox:
+            detection = Detection(
+                bbox=bbox,
+                confidence=1.0,  # Detection confidence (assume 1.0 for now)
+                user_id=user_id,
+                recognition_confidence=confidence
+            )
+            self.tracking_service.update(schedule_id, [detection])
 
         # Check if this is first detection (check-in)
         if attendance.status == AttendanceStatus.ABSENT:
@@ -285,7 +305,8 @@ class PresenceService:
         """
         Process one scan cycle for a session
 
-        Checks all students and flags early leaves based on consecutive misses.
+        Uses tracking service to determine which students are currently present.
+        Logs presence for all enrolled students and flags early leaves.
 
         Args:
             schedule_id: Schedule UUID
@@ -298,7 +319,16 @@ class PresenceService:
 
         logger.debug(f"Processing scan #{session.scan_count} for schedule {schedule_id}")
 
-        # Check each student
+        # Get currently identified users from tracking service
+        identified_users = self.tracking_service.get_identified_users(schedule_id)
+        present_user_ids = set(identified_users.keys())
+
+        logger.debug(
+            f"Scan #{session.scan_count}: {len(present_user_ids)} students detected "
+            f"(tracking stats: {self.tracking_service.get_session_stats(schedule_id)})"
+        )
+
+        # Check each enrolled student
         for student_id, student_state in session.student_states.items():
             attendance_id = student_state["attendance_id"]
 
@@ -315,16 +345,38 @@ class PresenceService:
             if student_state["early_leave_flagged"]:
                 continue
 
-            # Check if student was detected in this scan
-            # (This would be set by log_detection, but if not called, it means not detected)
-            # For this implementation, we'll check recent presence logs
+            # Check if student is currently present (detected by tracker)
+            is_present = student_id in present_user_ids
 
-            recent_logs = self.attendance_repo.get_recent_logs(attendance_id, limit=1)
-            latest_scan_number = recent_logs[0].scan_number if recent_logs else -1
+            if is_present:
+                # Student detected - reset miss counter
+                session.update_student(student_id, detected=True)
 
-            # If latest scan is not current scan, student was not detected
-            if latest_scan_number < session.scan_count:
-                # Not detected - increment miss counter
+                # Get recognition confidence from track
+                track = identified_users[student_id]
+                confidence = track.recognition_confidence
+
+                # Log presence
+                self.attendance_repo.log_presence(attendance_id, {
+                    "scan_number": session.scan_count,
+                    "scan_time": datetime.now(),
+                    "detected": True,
+                    "confidence": confidence
+                })
+
+                # Update attendance metrics
+                scans_present = attendance.scans_present + 1
+                total_scans = attendance.total_scans + 1
+                presence_score = self.calculate_presence_score(total_scans, scans_present)
+
+                self.attendance_repo.update(attendance_id, {
+                    "scans_present": scans_present,
+                    "total_scans": total_scans,
+                    "presence_score": presence_score
+                })
+
+            else:
+                # Student not detected - increment miss counter
                 session.update_student(student_id, detected=False)
 
                 # Log as not detected
@@ -453,6 +505,9 @@ class PresenceService:
 
         # Remove from active sessions
         del self.active_sessions[schedule_id]
+
+        # End tracking session
+        self.tracking_service.end_session(schedule_id)
 
         # Unregister from global session manager
         session_manager.unregister_session(schedule_id)

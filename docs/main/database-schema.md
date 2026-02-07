@@ -1,18 +1,18 @@
 # Database Schema
 
 ## Overview
-PostgreSQL database with 8 core tables. For IAMS, these tables are hosted in **Supabase** (PostgreSQL 15). Backend and mobile app connect to Supabase for users, schedules, attendance; FAISS index remains on the backend server.
+PostgreSQL database with 9 core tables. For IAMS, these tables are hosted in **Supabase** (PostgreSQL 15). Backend and mobile app connect to Supabase for users, schedules, attendance; FAISS index remains on the backend server.
 
 ---
 
 ## Entity Relationship
 
 ```
-users ─────────────────┬───────────────────────────────────┐
-  │                    │                                   │
-  │ 1:1                │ 1:N                               │ 1:N
-  ▼                    ▼                                   ▼
-face_registrations   schedules (as faculty)            enrollments
+users ─────────────────┬───────────────────────────────────┬──────────────────┐
+  │                    │                                   │                  │
+  │ 1:1                │ 1:N                               │ 1:N              │ 1:N
+  ▼                    ▼                                   ▼                  ▼
+face_registrations   schedules (as faculty)            enrollments      notifications
                        │                                   │
                        │ 1:N                               │
                        ▼                                   │
@@ -190,6 +190,29 @@ Records when students leave early.
 
 ---
 
+### notifications
+In-app notifications for users (attendance alerts, system messages).
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| id | UUID | PK | Unique identifier |
+| user_id | UUID | FK → users | Notification recipient |
+| title | VARCHAR(255) | NOT NULL | Notification title |
+| message | TEXT | NOT NULL | Notification body |
+| type | VARCHAR(50) | NOT NULL | Notification category (attendance, alert, system) |
+| read | BOOLEAN | DEFAULT false | Read status |
+| read_at | TIMESTAMPTZ | | When the notification was read |
+| reference_id | VARCHAR(255) | | Optional reference to related entity (e.g., attendance_id) |
+| reference_type | VARCHAR(50) | | Type of referenced entity (e.g., "attendance", "early_leave") |
+| created_at | TIMESTAMPTZ | DEFAULT now() | Creation time |
+
+**Indexes:**
+- `idx_notifications_user` on (user_id)
+- `idx_notifications_type` on (type)
+- `idx_notifications_created` on (created_at)
+
+---
+
 ## Status Values
 
 ### User Roles
@@ -217,6 +240,7 @@ Records when students leave early.
 | users | schedules | 1:N (as faculty) |
 | users | enrollments | 1:N (as student) |
 | users | attendance_records | 1:N |
+| users | notifications | 1:N |
 | rooms | schedules | 1:N |
 | schedules | enrollments | 1:N |
 | schedules | attendance_records | 1:N |

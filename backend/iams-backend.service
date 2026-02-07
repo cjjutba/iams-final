@@ -1,0 +1,36 @@
+[Unit]
+Description=IAMS Backend API Service
+After=network.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=iams
+Group=iams
+WorkingDirectory=/opt/iams/backend
+Environment="PATH=/opt/iams/backend/venv/bin"
+ExecStart=/opt/iams/backend/venv/bin/python /opt/iams/backend/run_production.py
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=200
+StartLimitBurst=5
+
+# Resource limits
+MemoryLimit=2G
+CPUQuota=200%
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/iams/backend/data /opt/iams/backend/logs
+
+# Logging
+StandardOutput=append:/opt/iams/backend/logs/service.log
+StandardError=append:/opt/iams/backend/logs/service-error.log
+
+[Install]
+WantedBy=multi-user.target

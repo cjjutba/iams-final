@@ -21,6 +21,10 @@ class ScheduleRepository:
 
     def get_by_id(self, schedule_id: str) -> Optional[Schedule]:
         """Get schedule by ID"""
+        import uuid
+        # Convert string to UUID for SQLite compatibility
+        if isinstance(schedule_id, str):
+            schedule_id = uuid.UUID(schedule_id)
         return self.db.query(Schedule).filter(Schedule.id == schedule_id).first()
 
     def get_all(self, skip: int = 0, limit: int = 100) -> List[Schedule]:
@@ -79,6 +83,12 @@ class ScheduleRepository:
         Returns:
             Current schedule if found, None otherwise
         """
+        import uuid
+
+        # Convert string to UUID for SQLite compatibility
+        if isinstance(room_id, str):
+            room_id = uuid.UUID(room_id)
+
         return self.db.query(Schedule).filter(
             Schedule.room_id == room_id,
             Schedule.day_of_week == day_of_week,
@@ -99,6 +109,11 @@ class ScheduleRepository:
         """
         from app.models.enrollment import Enrollment
         from app.models.user import User
+        import uuid
+
+        # Convert string to UUID for SQLite compatibility
+        if isinstance(schedule_id, str):
+            schedule_id = uuid.UUID(schedule_id)
 
         return self.db.query(User).join(
             Enrollment, Enrollment.student_id == User.id

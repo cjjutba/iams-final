@@ -7,7 +7,7 @@ CRITICAL: Includes Edge API contract for Raspberry Pi integration.
 
 from typing import List, Optional
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ===== Face Registration (Mobile App) =====
@@ -36,8 +36,29 @@ class FaceData(BaseModel):
     CRITICAL: This is the contract between Raspberry Pi and backend.
     Do not change without updating edge code.
     """
-    image: str = Field(..., description="Base64-encoded JPEG image")
-    bbox: List[int] = Field(..., min_items=4, max_items=4, description="Bounding box [x, y, w, h]")
+    image: str = Field(
+        ...,
+        description="Base64-encoded JPEG image",
+        min_length=1,  # Prevent empty strings
+        max_length=15_000_000  # ~10MB Base64 encoded (prevents DoS)
+    )
+    bbox: Optional[List[int]] = Field(
+        None,
+        min_length=4,
+        max_length=4,
+        description="Bounding box [x, y, w, h]. Optional for MediaPipe compatibility."
+    )
+
+    @field_validator('bbox')
+    @classmethod
+    def validate_bbox(cls, v):
+        """Validate bounding box values are reasonable"""
+        if v is not None and len(v) == 4:
+            if any(val < 0 for val in v):
+                raise ValueError("bbox values must be non-negative")
+            if v[2] <= 0 or v[3] <= 0:  # width and height
+                raise ValueError("bbox width and height must be positive")
+        return v
 
 
 class EdgeProcessRequest(BaseModel):
@@ -46,9 +67,24 @@ class EdgeProcessRequest(BaseModel):
 
     CRITICAL: This is the primary interface for continuous presence tracking.
     """
-    room_id: str = Field(..., description="Room UUID or identifier")
+    request_id: Optional[str] = Field(
+        None,
+        description="Idempotency key for retries. Prevents duplicate processing.",
+        max_length=100
+    )
+    room_id: str = Field(
+        ...,
+        description="Room UUID or identifier",
+        max_length=100,
+        pattern=r'^[a-zA-Z0-9\-]+$'
+    )
     timestamp: datetime = Field(..., description="Scan timestamp (ISO format)")
-    faces: List[FaceData] = Field(..., description="List of detected faces")
+    faces: List[FaceData] = Field(
+        ...,
+        description="List of detected faces",
+        min_length=1,
+        max_length=10  # Limit batch size to prevent resource exhaustion
+    )
 
 
 class MatchedUser(BaseModel):
@@ -57,22 +93,30 @@ class MatchedUser(BaseModel):
     confidence: float = Field(..., ge=0.0, le=1.0)
 
 
+class EdgeProcessResponseData(BaseModel):
+    """Processing results data"""
+    processed: int = Field(..., description="Number of faces processed")
+    matched: List[dict] = Field(..., description="Matched users with confidence")
+    unmatched: int = Field(..., description="Number of unmatched faces")
+    processing_time_ms: Optional[int] = Field(None, description="Total processing time in milliseconds")
+    presence_logged: Optional[int] = Field(None, description="Number of presence logs created")
+
+
 class EdgeProcessResponse(BaseModel):
     """
     Edge API response to Raspberry Pi
 
-    Returns processing results including matched users.
+    Returns processing results including matched users and metrics.
     """
     success: bool
-    data: dict = Field(
-        ...,
-        description="Processing results",
+    data: Optional[EdgeProcessResponseData] = None
+    error: Optional[dict] = Field(
+        None,
+        description="Error details if success=false",
         example={
-            "processed": 3,
-            "matched": [
-                {"user_id": "uuid", "confidence": 0.85}
-            ],
-            "unmatched": 1
+            "code": "INVALID_IMAGE_FORMAT",
+            "message": "Face 1: Invalid Base64 encoding",
+            "retry": False
         }
     )
 
