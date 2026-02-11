@@ -52,19 +52,43 @@ def _make_user(
     return user
 
 
+def _make_student_record(student_id):
+    """Build a mock StudentRecord for a given student_id."""
+    record = MagicMock()
+    record.student_id = student_id
+    record.first_name = "Test"
+    record.last_name = "Student"
+    record.email = f"test@jrmsu.edu.ph"
+    record.course = "BSCPE"
+    record.year_level = 1
+    record.section = "A"
+    record.is_active = True
+    return record
+
+
 def _make_auth_service(db_session=None):
     """
-    Create an AuthService instance with a mocked DB session and
-    a mocked UserRepository.
+    Create an AuthService instance with mocked repositories.
 
-    Returns (service, mock_user_repo) so tests can configure the
-    repository's return values.
+    Mocks both user_repo and student_record_repo so that:
+    - student_record_repo.get_by_student_id() returns a valid record by default
+    - user_repo.get_by_student_id() returns None by default (not yet registered)
+
+    Returns (service, mock_user_repo) so tests can configure repo return values.
     """
     if db_session is None:
         db_session = MagicMock()
 
     service = AuthService(db_session)
     service.user_repo = MagicMock()
+    # Default: student not yet registered
+    service.user_repo.get_by_student_id.return_value = None
+
+    # Mock student_record_repo: returns a valid record for any ID by default
+    mock_record_repo = MagicMock()
+    mock_record_repo.get_by_student_id.side_effect = _make_student_record
+    service.student_record_repo = mock_record_repo
+
     return service, service.user_repo
 
 

@@ -274,6 +274,7 @@ export const FacultyClassDetailScreen: React.FC = () => {
         ListEmptyComponent={renderEmpty}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
+        alwaysBounceVertical={true}
         refreshControl={
           <RefreshControl
             refreshing={isRefreshing}

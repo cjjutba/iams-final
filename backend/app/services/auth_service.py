@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models.user import User, UserRole
 from app.repositories.user_repository import UserRepository
+from app.repositories.student_record_repository import StudentRecordRepository
 from app.utils.security import (
     hash_password,
     verify_password,
@@ -30,24 +31,26 @@ class AuthService:
     def __init__(self, db: Session):
         self.db = db
         self.user_repo = UserRepository(db)
+        self.student_record_repo = StudentRecordRepository(db)
 
     def verify_student_id(self, student_id: str) -> dict:
         """
-        Verify student ID against university database
+        Verify student ID against the student_records reference table.
 
-        For MVP: Accept any non-empty student ID with minimal length.
-        In production: Query university database or CSV.
+        Returns the official student information (name, course, year, section,
+        email) pre-populated from the school's registry so the mobile app can
+        display it for the student to confirm before proceeding.
+
+        Also rejects IDs that are already registered to prevent duplicate accounts.
 
         Args:
-            student_id: Student ID to verify
+            student_id: Student ID to verify (e.g. "21-A-02177")
 
         Returns:
             Dictionary with validation result and student info
         """
-        # TODO: Replace with actual university database query
         logger.info(f"Verifying student ID: {student_id}")
 
-        # Reject empty or too-short IDs
         if not student_id or len(student_id.strip()) < 3:
             return {
                 "valid": False,
@@ -55,12 +58,45 @@ class AuthService:
                 "message": "Invalid student ID format"
             }
 
-        # For MVP, accept any valid-length student ID.
-        # Name details are provided during registration, not verification.
+        normalized = student_id.strip().upper()
+
+        # Look up in the school's official registry
+        record = self.student_record_repo.get_by_student_id(normalized)
+
+        if not record:
+            logger.warning(f"Student ID not found in registry: {normalized}")
+            return {
+                "valid": False,
+                "student_info": None,
+                "message": "Student ID not found in university records"
+            }
+
+        if not record.is_active:
+            return {
+                "valid": False,
+                "student_info": None,
+                "message": "Student ID is no longer active"
+            }
+
+        # Reject if already has an app account (prevent duplicate registration)
+        existing_user = self.user_repo.get_by_student_id(normalized)
+        if existing_user:
+            return {
+                "valid": False,
+                "student_info": None,
+                "message": "This student ID is already registered. Please login instead."
+            }
+
         return {
             "valid": True,
             "student_info": {
-                "student_id": student_id.strip(),
+                "student_id": record.student_id,
+                "first_name": record.first_name,
+                "last_name": record.last_name,
+                "course": record.course,
+                "year": record.year_level,
+                "section": record.section,
+                "email": record.email,
             },
             "message": "Student ID verified successfully"
         }
@@ -78,24 +114,27 @@ class AuthService:
         Raises:
             ValidationError: If validation fails
         """
-        # Validate student ID first
+        # Validate student ID against the school registry
         verification = self.verify_student_id(registration_data["student_id"])
         if not verification["valid"]:
-            raise ValidationError("Invalid student ID")
+            raise ValidationError(verification["message"])
 
         # Validate password strength
         is_valid, error_msg = validate_password_strength(registration_data["password"])
         if not is_valid:
             raise ValidationError(error_msg)
 
-        # Create user with name details from registration request
+        # Use official name from student_records (prevents tampering)
+        normalized_id = registration_data["student_id"].strip().upper()
+        record = self.student_record_repo.get_by_student_id(normalized_id)
+
         user_data = {
             "email": registration_data["email"],
             "password_hash": hash_password(registration_data["password"]),
             "role": UserRole.STUDENT,
-            "first_name": registration_data["first_name"],
-            "last_name": registration_data["last_name"],
-            "student_id": registration_data["student_id"],
+            "first_name": record.first_name,
+            "last_name": record.last_name,
+            "student_id": normalized_id,
             "phone": registration_data.get("phone"),
             "is_active": True
         }

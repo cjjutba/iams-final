@@ -23,6 +23,7 @@ import LottieView from 'lottie-react-native';
 import type { AuthStackParamList } from '../../types';
 import { theme } from '../../constants';
 import { Text, Button } from '../../components/ui';
+import { storage } from '../../utils';
 
 type OnboardingScreenNavigationProp = StackNavigationProp<AuthStackParamList, 'Onboarding'>;
 
@@ -131,18 +132,22 @@ export const OnboardingScreen: React.FC = () => {
     setCurrentIndex(index);
   };
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (currentIndex < slides.length - 1) {
       scrollViewRef.current?.scrollTo({
         x: width * (currentIndex + 1),
         animated: true,
       });
     } else {
+      // Mark onboarding as complete when user finishes all slides
+      await storage.setOnboardingComplete(true);
       navigation.replace('Welcome');
     }
   };
 
-  const handleSkip = () => {
+  const handleSkip = async () => {
+    // Mark onboarding as complete when user skips
+    await storage.setOnboardingComplete(true);
     navigation.replace('Welcome');
   };
 

@@ -14,6 +14,7 @@ const STORAGE_KEYS = {
   REFRESH_TOKEN: 'refresh_token',
   USER: 'user',
   ONBOARDING_COMPLETE: 'onboarding_complete',
+  LAST_USER_ROLE: 'last_user_role',
 } as const;
 
 /**
@@ -98,6 +99,26 @@ export const storage = {
       return true;
     } catch (error) {
       console.error('Failed to set onboarding status:', error);
+      return false;
+    }
+  },
+
+  // Last user role (for post-logout navigation)
+  async getLastUserRole(): Promise<string | null> {
+    try {
+      return await SecureStore.getItemAsync(STORAGE_KEYS.LAST_USER_ROLE);
+    } catch (error) {
+      console.error('Failed to get last user role:', error);
+      return null;
+    }
+  },
+
+  async setLastUserRole(role: string): Promise<boolean> {
+    try {
+      await SecureStore.setItemAsync(STORAGE_KEYS.LAST_USER_ROLE, role);
+      return true;
+    } catch (error) {
+      console.error('Failed to set last user role:', error);
       return false;
     }
   },

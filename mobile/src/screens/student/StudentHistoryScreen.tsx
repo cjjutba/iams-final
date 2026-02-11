@@ -243,6 +243,7 @@ export const StudentHistoryScreen: React.FC = () => {
         style={styles.list}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
+        alwaysBounceVertical={true}
         refreshControl={
           <RefreshControl
             refreshing={isLoading}

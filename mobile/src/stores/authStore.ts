@@ -207,6 +207,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   // Logout
   logout: async () => {
     try {
+      // Save user role before clearing for post-logout navigation
+      const currentUser = get().user;
+      if (currentUser?.role) {
+        await storage.setLastUserRole(currentUser.role);
+      }
+
       await authService.logout();
     } catch (error) {
       console.error('Logout API call failed:', error);

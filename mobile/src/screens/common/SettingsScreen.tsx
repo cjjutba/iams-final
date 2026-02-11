@@ -9,7 +9,7 @@
  * - About section with real app version
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   StyleSheet,
@@ -18,6 +18,7 @@ import {
   Switch,
   Linking,
   Platform,
+  RefreshControl,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { ChevronRight, Info } from 'lucide-react-native';
@@ -39,30 +40,37 @@ export const SettingsScreen: React.FC = () => {
   const [attendanceNotifs, setAttendanceNotifs] = useState(true);
   const [alertNotifs, setAlertNotifs] = useState(true);
   const [scheduleNotifs, setScheduleNotifs] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Load saved preferences on mount
-  useEffect(() => {
-    const loadPreferences = async () => {
-      try {
-        // SecureStore only stores strings, so we check for 'false'
-        const SecureStore = await import('expo-secure-store');
+  const loadPreferences = useCallback(async () => {
+    try {
+      // SecureStore only stores strings, so we check for 'false'
+      const SecureStore = await import('expo-secure-store');
 
-        const attVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_ATTENDANCE);
-        if (attVal !== null) setAttendanceNotifs(attVal !== 'false');
+      const attVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_ATTENDANCE);
+      if (attVal !== null) setAttendanceNotifs(attVal !== 'false');
 
-        const alertVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_ALERTS);
-        if (alertVal !== null) setAlertNotifs(alertVal !== 'false');
+      const alertVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_ALERTS);
+      if (alertVal !== null) setAlertNotifs(alertVal !== 'false');
 
-        const schedVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_SCHEDULE);
-        if (schedVal !== null) setScheduleNotifs(schedVal !== 'false');
-      } catch (err) {
-        // Silently fail -- defaults are fine
-        console.error('Failed to load preferences:', err);
-      }
-    };
-
-    loadPreferences();
+      const schedVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_SCHEDULE);
+      if (schedVal !== null) setScheduleNotifs(schedVal !== 'false');
+    } catch (err) {
+      // Silently fail -- defaults are fine
+      console.error('Failed to load preferences:', err);
+    }
   }, []);
+
+  useEffect(() => {
+    loadPreferences();
+  }, [loadPreferences]);
+
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    await loadPreferences();
+    setIsRefreshing(false);
+  }, [loadPreferences]);
 
   // Persist a preference toggle
   const togglePreference = async (
@@ -86,6 +94,15 @@ export const SettingsScreen: React.FC = () => {
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        alwaysBounceVertical={true}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={handleRefresh}
+            colors={[theme.colors.primary]}
+            tintColor={theme.colors.primary}
+          />
+        }
       >
         {/* Notification Settings */}
         <Card>

@@ -5,8 +5,8 @@
  * Similar to student schedule but for faculty
  */
 
-import React, { useState } from 'react';
-import { View, StyleSheet, FlatList, ScrollView, TouchableOpacity } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { View, StyleSheet, FlatList, ScrollView, TouchableOpacity, RefreshControl } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { useSchedule } from '../../hooks';
@@ -23,7 +23,7 @@ const DAYS = [0, 1, 2, 3, 4, 5, 6];
 
 export const FacultyScheduleScreen: React.FC = () => {
   const navigation = useNavigation<FacultyScheduleNavigationProp>();
-  const { getSchedulesByDay } = useSchedule();
+  const { getSchedulesByDay, isLoading, fetchMySchedules, clearError } = useSchedule();
 
   const [selectedDay, setSelectedDay] = useState(new Date().getDay());
   const schedules = getSchedulesByDay(selectedDay);
@@ -31,6 +31,11 @@ export const FacultyScheduleScreen: React.FC = () => {
   const handleCardPress = (schedule: ScheduleWithAttendance) => {
     navigation.navigate('ClassDetail', { scheduleId: schedule.id, date: new Date().toISOString() });
   };
+
+  const handleRefresh = useCallback(() => {
+    clearError();
+    fetchMySchedules();
+  }, [fetchMySchedules, clearError]);
 
   const renderDayButton = (day: number) => {
     const isSelected = day === selectedDay;
@@ -95,6 +100,15 @@ export const FacultyScheduleScreen: React.FC = () => {
         style={styles.list}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
+        alwaysBounceVertical={true}
+        refreshControl={
+          <RefreshControl
+            refreshing={isLoading}
+            onRefresh={handleRefresh}
+            colors={[theme.colors.primary]}
+            tintColor={theme.colors.primary}
+          />
+        }
       />
     </ScreenLayout>
   );

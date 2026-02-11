@@ -215,6 +215,7 @@ export const FacultyAlertsScreen: React.FC = () => {
           alerts.length === 0 && styles.listContentEmpty,
         ]}
         showsVerticalScrollIndicator={false}
+        alwaysBounceVertical={true}
         refreshControl={
           <RefreshControl
             refreshing={isRefreshing}

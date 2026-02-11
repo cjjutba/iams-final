@@ -8,8 +8,8 @@
  * - Refreshes user data after successful update
  */
 
-import React, { useState } from 'react';
-import { View, StyleSheet, Alert } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { View, StyleSheet, Alert, RefreshControl } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -53,6 +53,20 @@ export const StudentEditProfileScreen: React.FC = () => {
 
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // ---------- refresh handler ----------
+
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      await loadUser();
+    } catch (error) {
+      console.error('Failed to refresh user data:', error);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [loadUser]);
 
   // ---------- profile form ----------
 
@@ -123,7 +137,19 @@ export const StudentEditProfileScreen: React.FC = () => {
   // ---------- render ----------
 
   return (
-    <ScreenLayout safeArea scrollable keyboardAvoiding>
+    <ScreenLayout
+      safeArea
+      scrollable
+      keyboardAvoiding
+      refreshControl={
+        <RefreshControl
+          refreshing={isRefreshing}
+          onRefresh={handleRefresh}
+          colors={[theme.colors.primary]}
+          tintColor={theme.colors.primary}
+        />
+      }
+    >
       <Header showBack title={strings.student.editProfile} />
 
       <View style={styles.container}>

@@ -103,11 +103,9 @@ def seed():
         # 2. Create Faculty User
         # ------------------------------------------------------------------
         print("\n[2/5] Creating faculty user...")
-        # Password "123" is hashed directly via hash_password(), bypassing
-        # validate_password_strength() intentionally for seed/test convenience.
         faculty = User(
             email="faculty@gmail.com",
-            password_hash=hash_password("123"),
+            password_hash=hash_password("password123"),
             role=UserRole.FACULTY,
             first_name="Faculty",
             last_name="User",
@@ -194,7 +192,7 @@ def seed():
         print(f"  Password:   password123")
         print(f"\nFaculty Login:")
         print(f"  Email:      faculty@gmail.com")
-        print(f"  Password:   123")
+        print(f"  Password:   password123")
         print(f"\nRoom: {room.name} ({room.building})")
         print(f"Schedule: CPE 301 - Mon-Fri 07:00-22:00")
         print(f"Student enrolled in {len(schedules)} schedule(s)")

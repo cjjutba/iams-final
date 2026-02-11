@@ -60,17 +60,48 @@ TestingSessionLocal = sessionmaker(
 # Core Fixtures
 # ---------------------------------------------------------------------------
 
+# Student IDs that must exist in student_records for registration/verify tests
+_TEST_STUDENT_IDS = [
+    "STU-2024-001",
+    "STU-2024-100", "STU-2024-101", "STU-2024-102", "STU-2024-103",
+    "STU-2024-104", "STU-2024-105", "STU-2024-106",
+    "STU-LOGIN-001", "STU-LOGIN-002", "STU-LOGIN-003",
+    "STU-REFRESH-001",
+]
+
+
+def _seed_test_student_records(session):
+    """
+    Seed student_records with all test IDs so verify_student_id() can
+    find them in the reference table during registration tests.
+    """
+    from app.models.student_record import StudentRecord
+
+    for i, sid in enumerate(_TEST_STUDENT_IDS):
+        session.add(StudentRecord(
+            student_id=sid,
+            first_name="Test",
+            last_name=f"Student{i + 1}",
+            email=f"teststudent{i + 1}@test.jrmsu.edu.ph",
+            course="BSCPE",
+            year_level=1,
+            section="A",
+            is_active=True,
+        ))
+    session.commit()
+
 
 @pytest.fixture(scope="function")
 def db_session():
     """
     Provide a clean database session for each test.
 
-    Creates all tables before the test and drops them afterward to ensure
-    full isolation between tests.
+    Creates all tables before the test, seeds student_records with test IDs,
+    then drops everything afterward to ensure full isolation between tests.
     """
     Base.metadata.create_all(bind=engine)
     session = TestingSessionLocal()
+    _seed_test_student_records(session)
     try:
         yield session
     finally:

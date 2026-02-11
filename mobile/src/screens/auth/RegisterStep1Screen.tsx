@@ -25,8 +25,8 @@ const studentIdSchema = z.object({
   studentId: z
     .string()
     .min(1, strings.errors.required)
-    .regex(/^\d{2}-[A-Za-z]-\d{5}$/, strings.errors.invalidStudentId)
-    .transform((value) => value.toUpperCase()),
+    .min(5, 'Student ID is too short')
+    .transform((value) => value.trim().toUpperCase()),
 });
 
 type StudentIdData = z.infer<typeof studentIdSchema>;

@@ -13,6 +13,7 @@ import {
   Platform,
   StyleSheet,
   StatusBar,
+  RefreshControlProps,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { theme } from '../../constants';
@@ -24,6 +25,7 @@ interface ScreenLayoutProps {
   safeArea?: boolean;
   keyboardAvoiding?: boolean;
   backgroundColor?: keyof typeof theme.colors;
+  refreshControl?: React.ReactElement<RefreshControlProps>;
 }
 
 export const ScreenLayout: React.FC<ScreenLayoutProps> = ({
@@ -33,6 +35,7 @@ export const ScreenLayout: React.FC<ScreenLayoutProps> = ({
   safeArea = true,
   keyboardAvoiding = false,
   backgroundColor = 'background',
+  refreshControl,
 }) => {
   const bgColor = theme.colors[backgroundColor] as string;
 
@@ -49,6 +52,8 @@ export const ScreenLayout: React.FC<ScreenLayoutProps> = ({
       contentContainerStyle={styles.scrollContent}
       showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"
+      refreshControl={refreshControl}
+      alwaysBounceVertical={true}
     >
       {children}
     </ScrollView>

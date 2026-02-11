@@ -6,8 +6,8 @@
  * Follows the same pattern as StudentEditProfileScreen.
  */
 
-import React, { useState } from 'react';
-import { View, StyleSheet, Alert } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { View, StyleSheet, Alert, RefreshControl } from 'react-native';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -45,10 +45,22 @@ type ProfileData = z.infer<typeof profileSchema>;
 type PasswordData = z.infer<typeof passwordSchema>;
 
 export const FacultyEditProfileScreen: React.FC = () => {
-  const { user } = useAuth();
+  const { user, loadUser } = useAuth();
 
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      await loadUser();
+    } catch (error) {
+      console.error('Failed to refresh user data:', error);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [loadUser]);
 
   const {
     control: profileControl,
@@ -108,7 +120,19 @@ export const FacultyEditProfileScreen: React.FC = () => {
   };
 
   return (
-    <ScreenLayout safeArea scrollable keyboardAvoiding>
+    <ScreenLayout
+      safeArea
+      scrollable
+      keyboardAvoiding
+      refreshControl={
+        <RefreshControl
+          refreshing={isRefreshing}
+          onRefresh={handleRefresh}
+          colors={[theme.colors.primary]}
+          tintColor={theme.colors.primary}
+        />
+      }
+    >
       <Header showBack title={strings.student.editProfile} />
 
       <View style={styles.container}>

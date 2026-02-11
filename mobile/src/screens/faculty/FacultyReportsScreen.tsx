@@ -8,7 +8,7 @@
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, StyleSheet, Alert, ActivityIndicator, ScrollView } from 'react-native';
+import { View, StyleSheet, Alert, ActivityIndicator, ScrollView, RefreshControl } from 'react-native';
 import { useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import { useForm } from 'react-hook-form';
@@ -44,11 +44,12 @@ export const FacultyReportsScreen: React.FC = () => {
   const route = useRoute<ReportsRouteProp>();
   const initialScheduleId = route.params?.scheduleId || '';
 
-  const { schedules, isLoading: schedulesLoading, fetchMySchedules } = useSchedule();
+  const { schedules, isLoading: schedulesLoading, fetchMySchedules, clearError } = useSchedule();
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [reportSummary, setReportSummary] = useState<AttendanceSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Build class options from real schedules
   const classOptions = schedules.map((s: Schedule) => ({
@@ -71,6 +72,15 @@ export const FacultyReportsScreen: React.FC = () => {
       fetchMySchedules();
     }
   }, []);
+
+  // ---------- refresh handler ----------
+
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    clearError();
+    await fetchMySchedules();
+    setIsRefreshing(false);
+  }, [fetchMySchedules, clearError]);
 
   // ---------- generate report ----------
 
@@ -145,6 +155,15 @@ export const FacultyReportsScreen: React.FC = () => {
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        alwaysBounceVertical={true}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={handleRefresh}
+            colors={[theme.colors.primary]}
+            tintColor={theme.colors.primary}
+          />
+        }
       >
         <View style={styles.container}>
           {/* Generate report card */}

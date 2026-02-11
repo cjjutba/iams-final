@@ -225,6 +225,7 @@ export const StudentNotificationsScreen: React.FC = () => {
           notifications.length === 0 && styles.listContentEmpty,
         ]}
         showsVerticalScrollIndicator={false}
+        alwaysBounceVertical={true}
         refreshControl={
           <RefreshControl
             refreshing={isRefreshing}

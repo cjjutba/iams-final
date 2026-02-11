@@ -8,15 +8,22 @@ import Constants from 'expo-constants';
 
 const isDev = __DEV__;
 
-export const config = {
-  // API URLs
-  API_BASE_URL: isDev
-    ? 'http://192.168.1.11:8000/api/v1'
-    : 'https://api.iams.com/api/v1',
+// Read from EXPO_PUBLIC_ env vars if set, otherwise fall back to defaults.
+// To override: set EXPO_PUBLIC_API_BASE_URL in your .env file.
+const API_BASE_URL_ENV = process.env.EXPO_PUBLIC_API_BASE_URL;
+const WS_BASE_URL_ENV  = process.env.EXPO_PUBLIC_WS_BASE_URL;
 
-  WS_URL: isDev
-    ? 'ws://192.168.1.11:8000/api/v1/ws'
-    : 'wss://api.iams.com/api/v1/ws',
+export const config = {
+  // API URLs — prefer env var so you can point at ngrok/tunnel without rebuilding
+  API_BASE_URL: API_BASE_URL_ENV
+    ?? (isDev
+      ? 'http://192.168.137.1:8000/api/v1'
+      : 'https://api.iams.com/api/v1'),
+
+  WS_URL: WS_BASE_URL_ENV
+    ?? (isDev
+      ? 'ws://192.168.137.1:8000/api/v1/ws'
+      : 'wss://api.iams.com/api/v1/ws'),
 
   // Storage keys
   STORAGE_KEYS: {

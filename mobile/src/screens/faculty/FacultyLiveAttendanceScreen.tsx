@@ -327,6 +327,7 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
             filteredStudents.length === 0 && styles.listContentEmpty,
           ]}
           showsVerticalScrollIndicator={false}
+          alwaysBounceVertical={true}
           refreshControl={
             <RefreshControl
               refreshing={isRefreshing}

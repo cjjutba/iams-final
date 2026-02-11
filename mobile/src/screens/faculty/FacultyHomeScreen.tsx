@@ -138,11 +138,13 @@ export const FacultyHomeScreen: React.FC = () => {
         ListHeaderComponent={renderHeader}
         ListEmptyComponent={renderEmpty}
         contentContainerStyle={styles.listContent}
+        alwaysBounceVertical={true}
         refreshControl={
           <RefreshControl
             refreshing={isLoading}
             onRefresh={fetchMySchedules}
             colors={[theme.colors.primary]}
+            tintColor={theme.colors.primary}
           />
         }
         showsVerticalScrollIndicator={false}

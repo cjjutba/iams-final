@@ -217,6 +217,7 @@ export const StudentHomeScreen: React.FC = () => {
         ListHeaderComponent={renderHeader}
         ListEmptyComponent={renderEmpty}
         contentContainerStyle={styles.listContent}
+        alwaysBounceVertical={true}
         refreshControl={
           <RefreshControl
             refreshing={isLoading}

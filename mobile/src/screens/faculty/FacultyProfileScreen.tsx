@@ -5,8 +5,8 @@
  * Similar to student profile but without face registration
  */
 
-import React from 'react';
-import { View, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { View, StyleSheet, ScrollView, TouchableOpacity, Alert, RefreshControl } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import {
@@ -26,7 +26,19 @@ type FacultyProfileNavigationProp = StackNavigationProp<FacultyStackParamList, '
 
 export const FacultyProfileScreen: React.FC = () => {
   const navigation = useNavigation<FacultyProfileNavigationProp>();
-  const { user, logout } = useAuth();
+  const { user, logout, loadUser } = useAuth();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      await loadUser();
+    } catch (error) {
+      console.error('Failed to refresh user data:', error);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [loadUser]);
 
   const handleEditProfile = () => {
     navigation.navigate('EditProfile');
@@ -63,7 +75,19 @@ export const FacultyProfileScreen: React.FC = () => {
     <ScreenLayout safeArea padded={false}>
       <Header title={strings.faculty.profile} />
 
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        alwaysBounceVertical={true}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={handleRefresh}
+            colors={[theme.colors.primary]}
+            tintColor={theme.colors.primary}
+          />
+        }
+      >
         {/* Profile header */}
         <View style={styles.profileHeader}>
           <View style={styles.avatar}>

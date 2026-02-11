@@ -12,6 +12,7 @@ import type { StackNavigationProp } from '@react-navigation/stack';
 import type { AuthStackParamList } from '../../types';
 import { theme } from '../../constants';
 import { Text, Loader } from '../../components/ui';
+import { storage } from '../../utils';
 
 type SplashScreenNavigationProp = StackNavigationProp<AuthStackParamList, 'Splash'>;
 
@@ -19,12 +20,38 @@ export const SplashScreen: React.FC = () => {
   const navigation = useNavigation<SplashScreenNavigationProp>();
 
   useEffect(() => {
-    // Simulate initial app loading
-    const timer = setTimeout(() => {
-      navigation.replace('Onboarding');
-    }, 2000);
+    const initializeApp = async () => {
+      try {
+        // Check if onboarding has been completed
+        const onboardingComplete = await storage.getOnboardingComplete();
 
-    return () => clearTimeout(timer);
+        // Simulate initial app loading
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        if (onboardingComplete) {
+          // Onboarding complete - check for last user role to determine login screen
+          const lastUserRole = await storage.getLastUserRole();
+
+          if (lastUserRole === 'student') {
+            navigation.replace('StudentLogin');
+          } else if (lastUserRole === 'faculty' || lastUserRole === 'admin') {
+            navigation.replace('FacultyLogin');
+          } else {
+            // No previous role, show Welcome screen for role selection
+            navigation.replace('Welcome');
+          }
+        } else {
+          // First time user - show onboarding
+          navigation.replace('Onboarding');
+        }
+      } catch (error) {
+        console.error('Error initializing app:', error);
+        // Fallback to onboarding on error
+        navigation.replace('Onboarding');
+      }
+    };
+
+    initializeApp();
   }, [navigation]);
 
   return (
