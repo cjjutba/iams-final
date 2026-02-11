@@ -2,9 +2,12 @@
 Authentication Service
 
 Business logic for authentication and authorization.
+Supports dual mode: custom JWT (legacy) and Supabase Auth.
 """
 
-from typing import Tuple
+import uuid as uuid_mod
+from datetime import datetime
+from typing import Optional, Tuple
 from sqlalchemy.orm import Session
 
 from app.models.user import User, UserRole
@@ -22,7 +25,7 @@ from app.utils.exceptions import (
     ValidationError,
     NotFoundError
 )
-from app.config import logger
+from app.config import settings, logger
 
 
 class AuthService:
@@ -32,6 +35,10 @@ class AuthService:
         self.db = db
         self.user_repo = UserRepository(db)
         self.student_record_repo = StudentRecordRepository(db)
+
+    # ------------------------------------------------------------------
+    # FUN-01-01: Verify Student Identity
+    # ------------------------------------------------------------------
 
     def verify_student_id(self, student_id: str) -> dict:
         """
@@ -101,18 +108,31 @@ class AuthService:
             "message": "Student ID verified successfully"
         }
 
+    # ------------------------------------------------------------------
+    # FUN-01-02: Register Student Account
+    # ------------------------------------------------------------------
+
     def register_student(self, registration_data: dict) -> Tuple[User, dict]:
         """
-        Register a new student account
+        Register a new student account.
+
+        When USE_SUPABASE_AUTH is enabled the flow is:
+            1. Validate student ID against school registry
+            2. Validate password strength
+            3. Create user in Supabase Auth (triggers email verification)
+            4. Create local user record linked via supabase_user_id
+
+        When USE_SUPABASE_AUTH is disabled (legacy):
+            1-2. Same as above
+            3. Hash password locally
+            4. Create user record with password_hash
+            5. Return custom JWT tokens
 
         Args:
             registration_data: Registration data from request
 
         Returns:
-            Tuple of (created user, tokens)
-
-        Raises:
-            ValidationError: If validation fails
+            Tuple of (created user, response dict with tokens or message)
         """
         # Validate student ID against the school registry
         verification = self.verify_student_id(registration_data["student_id"])
@@ -128,6 +148,62 @@ class AuthService:
         normalized_id = registration_data["student_id"].strip().upper()
         record = self.student_record_repo.get_by_student_id(normalized_id)
 
+        if settings.USE_SUPABASE_AUTH:
+            return self._register_student_supabase(registration_data, record, normalized_id)
+        else:
+            return self._register_student_legacy(registration_data, record, normalized_id)
+
+    def _register_student_supabase(self, registration_data: dict, record, normalized_id: str) -> Tuple[User, dict]:
+        """Create student via Supabase Auth Admin API."""
+        from app.services.supabase_client import get_supabase_admin
+
+        supabase = get_supabase_admin()
+
+        # Create user in Supabase Auth (email_confirm=False → sends verification email)
+        try:
+            sb_response = supabase.auth.admin.create_user({
+                "email": registration_data["email"],
+                "password": registration_data["password"],
+                "email_confirm": False,
+                "user_metadata": {
+                    "first_name": record.first_name,
+                    "last_name": record.last_name,
+                    "student_id": normalized_id,
+                    "role": "student",
+                },
+            })
+            supabase_user = sb_response.user
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Supabase user creation failed: {error_msg}")
+            if "already been registered" in error_msg.lower() or "duplicate" in error_msg.lower():
+                from app.utils.exceptions import DuplicateError
+                raise DuplicateError("An account with this email already exists")
+            raise ValidationError(f"Failed to create account: {error_msg}")
+
+        # Create local user record
+        user_data = {
+            "email": registration_data["email"],
+            "password_hash": None,  # Managed by Supabase
+            "role": UserRole.STUDENT,
+            "first_name": record.first_name,
+            "last_name": record.last_name,
+            "student_id": normalized_id,
+            "phone": registration_data.get("phone"),
+            "is_active": True,
+            "email_verified": False,
+            "supabase_user_id": uuid_mod.UUID(supabase_user.id),
+        }
+
+        user = self.user_repo.create(user_data)
+
+        logger.info(f"Student registered via Supabase Auth: {user.email}")
+        return user, {
+            "message": "Account created. Please check your email to verify your address.",
+        }
+
+    def _register_student_legacy(self, registration_data: dict, record, normalized_id: str) -> Tuple[User, dict]:
+        """Create student with local password hashing (legacy / custom JWT mode)."""
         user_data = {
             "email": registration_data["email"],
             "password_hash": hash_password(registration_data["password"]),
@@ -136,20 +212,27 @@ class AuthService:
             "last_name": record.last_name,
             "student_id": normalized_id,
             "phone": registration_data.get("phone"),
-            "is_active": True
+            "is_active": True,
+            "email_verified": True,  # Legacy mode: skip email verification
         }
 
         user = self.user_repo.create(user_data)
-
-        # Generate tokens
         tokens = self._generate_tokens(user)
 
-        logger.info(f"Student registered successfully: {user.email}")
+        logger.info(f"Student registered (legacy): {user.email}")
         return user, tokens
+
+    # ------------------------------------------------------------------
+    # FUN-01-03: Login (custom JWT — kept for dual-auth)
+    # ------------------------------------------------------------------
 
     def login(self, identifier: str, password: str) -> Tuple[User, dict]:
         """
-        Authenticate user and generate tokens
+        Authenticate user and generate tokens (custom JWT mode).
+
+        When USE_SUPABASE_AUTH is True, login is handled by the mobile
+        Supabase SDK (signInWithPassword). This method remains for
+        backward compatibility and the dual-auth transition.
 
         Args:
             identifier: Email or student ID
@@ -157,52 +240,47 @@ class AuthService:
 
         Returns:
             Tuple of (user, tokens)
-
-        Raises:
-            AuthenticationError: If authentication fails
         """
-        # Find user by email or student ID
         user = self.user_repo.get_by_identifier(identifier)
 
         if not user:
             logger.warning(f"Login failed: User not found for identifier {identifier}")
             raise AuthenticationError("Invalid email/student ID or password")
 
-        # Verify password
+        if not user.password_hash:
+            raise AuthenticationError(
+                "This account uses Supabase Auth. Please login via the mobile app."
+            )
+
         if not verify_password(password, user.password_hash):
             logger.warning(f"Login failed: Invalid password for user {user.id}")
             raise AuthenticationError("Invalid email/student ID or password")
 
-        # Check if user is active
         if not user.is_active:
             logger.warning(f"Login failed: User {user.id} is inactive")
             raise AuthenticationError("User account is inactive")
 
-        # Generate tokens
         tokens = self._generate_tokens(user)
 
         logger.info(f"User logged in successfully: {user.email}")
         return user, tokens
 
+    # ------------------------------------------------------------------
+    # FUN-01-04: Refresh Token (custom JWT)
+    # ------------------------------------------------------------------
+
     def refresh_access_token(self, refresh_token: str) -> dict:
         """
-        Generate new access token from refresh token
+        Generate new access token from refresh token (custom JWT mode).
 
-        Args:
-            refresh_token: Refresh token
-
-        Returns:
-            New access token
-
-        Raises:
-            AuthenticationError: If refresh token is invalid
+        When USE_SUPABASE_AUTH is True, refresh is handled automatically
+        by the Supabase client SDK.
         """
         from app.utils.security import verify_token
 
         try:
             payload = verify_token(refresh_token)
 
-            # Verify it's a refresh token
             if payload.get("type") != "refresh":
                 raise AuthenticationError("Invalid token type")
 
@@ -210,12 +288,10 @@ class AuthService:
             if not user_id:
                 raise AuthenticationError("Invalid token payload")
 
-            # Verify user still exists and is active
             user = self.user_repo.get_by_id(user_id)
             if not user or not user.is_active:
                 raise AuthenticationError("User not found or inactive")
 
-            # Generate new access token
             access_token = create_access_token({"user_id": str(user.id)})
 
             return {
@@ -227,49 +303,22 @@ class AuthService:
             logger.error(f"Token refresh failed: {e}")
             raise AuthenticationError("Invalid or expired refresh token")
 
-    def change_password(self, user_id: str, old_password: str, new_password: str) -> bool:
-        """
-        Change user password
+    # ------------------------------------------------------------------
+    # FUN-01-05: Get Current User (handled by dependency in dependencies.py)
+    # ------------------------------------------------------------------
 
-        Args:
-            user_id: User UUID
-            old_password: Current password
-            new_password: New password
-
-        Returns:
-            True if password changed successfully
-
-        Raises:
-            AuthenticationError: If old password is incorrect
-            ValidationError: If new password is invalid
-        """
-        user = self.user_repo.get_by_id(user_id)
-        if not user:
-            raise NotFoundError(f"User not found: {user_id}")
-
-        # Verify old password
-        if not verify_password(old_password, user.password_hash):
-            raise AuthenticationError("Current password is incorrect")
-
-        # Validate new password
-        is_valid, error_msg = validate_password_strength(new_password)
-        if not is_valid:
-            raise ValidationError(error_msg)
-
-        # Update password
-        self.user_repo.update(user_id, {
-            "password_hash": hash_password(new_password)
-        })
-
-        logger.info(f"Password changed for user: {user.email}")
-        return True
+    # ------------------------------------------------------------------
+    # FUN-01-06: Request Password Reset
+    # ------------------------------------------------------------------
 
     def forgot_password(self, email: str) -> dict:
         """
-        Handle forgot password request
+        Handle forgot password request.
 
-        For MVP: Log the request and return a success message.
-        In production: Send a password reset email with a token.
+        When USE_SUPABASE_AUTH is True, delegates to Supabase Auth
+        to generate a password recovery link and send the email.
+
+        Always returns a success response to prevent email enumeration.
 
         Args:
             email: User email address
@@ -277,45 +326,154 @@ class AuthService:
         Returns:
             Dictionary with success message
         """
-        user = self.user_repo.get_by_email(email)
+        success_msg = "If an account with that email exists, a password reset link has been sent."
 
-        # Always return success to prevent email enumeration
-        if not user:
-            logger.warning(f"Password reset requested for unknown email: {email}")
-            return {
-                "success": True,
-                "message": "If an account with that email exists, a password reset link has been sent."
-            }
+        if settings.USE_SUPABASE_AUTH:
+            try:
+                from app.services.supabase_client import get_supabase_admin
+                supabase = get_supabase_admin()
 
-        # TODO: In production, generate a reset token and send via email
-        # For MVP, log the request
-        logger.info(f"Password reset requested for user: {email}")
+                supabase.auth.admin.generate_link({
+                    "type": "recovery",
+                    "email": email,
+                })
+                logger.info(f"Password reset link generated for: {email}")
+            except Exception as e:
+                # Don't reveal whether the email exists
+                logger.warning(f"Password reset generation failed (may be unknown email): {e}")
+        else:
+            # Legacy mode: log the request
+            user = self.user_repo.get_by_email(email)
+            if not user:
+                logger.warning(f"Password reset requested for unknown email: {email}")
+            else:
+                logger.info(f"Password reset requested for user: {email}")
 
         return {
             "success": True,
-            "message": "If an account with that email exists, a password reset link has been sent."
+            "message": success_msg,
         }
 
-    def update_profile(self, user_id: str, update_data: dict) -> User:
+    # ------------------------------------------------------------------
+    # Email Verification helpers
+    # ------------------------------------------------------------------
+
+    def handle_email_verified(self, supabase_user_id: str) -> Optional[User]:
         """
-        Update user profile (self-service, limited fields)
+        Mark a user's email as verified.
+
+        Called from the Supabase webhook handler when Supabase Auth
+        confirms the user's email.
 
         Args:
-            user_id: User UUID
-            update_data: Fields to update (email, phone)
+            supabase_user_id: The Supabase Auth user UUID
 
         Returns:
-            Updated user
+            Updated user or None if not found
+        """
+        try:
+            sb_uuid = uuid_mod.UUID(supabase_user_id)
+        except ValueError:
+            logger.error(f"Invalid supabase_user_id: {supabase_user_id}")
+            return None
 
-        Raises:
-            NotFoundError: If user not found
-            DuplicateError: If email already taken
+        user = (
+            self.db.query(User)
+            .filter(User.supabase_user_id == sb_uuid)
+            .first()
+        )
+
+        if not user:
+            logger.warning(f"Webhook: no local user for supabase_user_id {supabase_user_id}")
+            return None
+
+        user.email_verified = True
+        user.email_verified_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(user)
+
+        logger.info(f"Email verified for user {user.email}")
+        return user
+
+    def resend_verification_email(self, email: str) -> dict:
+        """
+        Resend the email verification link.
+
+        Uses Supabase Admin API to re-send the sign-up confirmation email.
+        Always returns success to prevent email enumeration.
+        """
+        success_msg = "If an account with that email exists, a verification email has been sent."
+
+        if not settings.USE_SUPABASE_AUTH:
+            return {"success": True, "message": success_msg}
+
+        try:
+            from app.services.supabase_client import get_supabase_admin
+            supabase = get_supabase_admin()
+
+            supabase.auth.admin.generate_link({
+                "type": "signup",
+                "email": email,
+            })
+            logger.info(f"Verification email re-sent to: {email}")
+        except Exception as e:
+            logger.warning(f"Resend verification failed: {e}")
+
+        return {"success": True, "message": success_msg}
+
+    # ------------------------------------------------------------------
+    # Password & Profile management
+    # ------------------------------------------------------------------
+
+    def change_password(self, user_id: str, old_password: str, new_password: str) -> bool:
+        """
+        Change user password.
+
+        When USE_SUPABASE_AUTH is True and the user has a supabase_user_id,
+        the password is also updated in Supabase Auth.
         """
         user = self.user_repo.get_by_id(user_id)
         if not user:
             raise NotFoundError(f"User not found: {user_id}")
 
-        # Only allow certain fields to be updated via profile endpoint
+        # Verify old password (only for users with local password)
+        if user.password_hash:
+            if not verify_password(old_password, user.password_hash):
+                raise AuthenticationError("Current password is incorrect")
+
+        # Validate new password
+        is_valid, error_msg = validate_password_strength(new_password)
+        if not is_valid:
+            raise ValidationError(error_msg)
+
+        # Update local password hash
+        self.user_repo.update(user_id, {
+            "password_hash": hash_password(new_password)
+        })
+
+        # Also update in Supabase Auth if applicable
+        if settings.USE_SUPABASE_AUTH and user.supabase_user_id:
+            try:
+                from app.services.supabase_client import get_supabase_admin
+                supabase = get_supabase_admin()
+                supabase.auth.admin.update_user_by_id(
+                    str(user.supabase_user_id),
+                    {"password": new_password},
+                )
+            except Exception as e:
+                logger.error(f"Failed to update Supabase password: {e}")
+
+        logger.info(f"Password changed for user: {user.email}")
+        return True
+
+    def update_profile(self, user_id: str, update_data: dict) -> User:
+        """
+        Update user profile (self-service, limited fields)
+        """
+        user = self.user_repo.get_by_id(user_id)
+        if not user:
+            raise NotFoundError(f"User not found: {user_id}")
+
         allowed_fields = {"email", "phone"}
         filtered_data = {k: v for k, v in update_data.items() if k in allowed_fields and v is not None}
 
@@ -333,16 +491,12 @@ class AuthService:
         logger.info(f"Profile updated for user: {updated_user.email}")
         return updated_user
 
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
     def _generate_tokens(self, user: User) -> dict:
-        """
-        Generate access and refresh tokens
-
-        Args:
-            user: User object
-
-        Returns:
-            Dictionary with tokens
-        """
+        """Generate access and refresh tokens (custom JWT)."""
         access_token = create_access_token({"user_id": str(user.id)})
         refresh_token = create_refresh_token({"user_id": str(user.id)})
 

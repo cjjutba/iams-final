@@ -10,9 +10,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from app.config import settings, logger
 from app.database import check_db_connection, get_db
+from app.rate_limiter import limiter
 from app.utils.exceptions import (
     IAMSException,
     iams_exception_handler,
@@ -45,6 +48,9 @@ app = FastAPI(
     }
 )
 
+# Attach limiter to app state (required by slowapi)
+app.state.limiter = limiter
+
 
 # ===== CORS Middleware =====
 
@@ -67,6 +73,9 @@ app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
 # Generic exception handler for unexpected errors
 app.add_exception_handler(Exception, generic_exception_handler)
+
+# Rate limit exceeded (429)
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 # ===== Startup and Shutdown Events =====

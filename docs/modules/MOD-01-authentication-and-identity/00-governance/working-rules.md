@@ -7,14 +7,18 @@
 4. Every implementation task must reference `MOD-01` and at least one `FUN-01-*` ID.
 
 ## Scope Control
-- Implement only `FUN-01-01` to `FUN-01-05` under this module.
+- Implement only `FUN-01-01` to `FUN-01-07` under this module.
 - Do not add unrelated profile CRUD or attendance features in this module.
+- Backend implements only: `POST /auth/verify-student-id`, `POST /auth/register`, `GET /auth/me`.
+- Mobile implements Supabase client SDK operations for login (`FUN-01-03`), token refresh (`FUN-01-04`), password reset (`FUN-01-06`, `FUN-01-07`).
+- Email verification is triggered automatically by Supabase Auth on registration; backend enforces `email_confirmed_at`.
 
 ## Quality Rules
-- All protected auth routes require bearer token verification.
+- All protected auth routes require Supabase JWT verification.
 - Errors must follow documented JSON error shape.
-- Passwords are never stored in plain text.
-- Sensitive values are only sourced from env variables.
+- Passwords are managed by Supabase Auth (bcrypt cost factor 12); never stored or hashed locally.
+- Sensitive values are only sourced from env variables (`SUPABASE_JWT_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`, etc.).
+- Backend must verify `is_active = true` and `email_confirmed_at IS NOT NULL` on all protected routes.
 
 ## Delivery Rules
 - Each commit/PR should include traceability, for example:

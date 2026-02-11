@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict
 from passlib.context import CryptContext
 from jose import JWTError, jwt
-import httpx
 
 from app.config import settings, logger
 from app.utils.exceptions import AuthenticationError
@@ -48,7 +47,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
 
-# ===== JWT Token Management (Custom for Faculty) =====
+# ===== JWT Token Management (Custom JWT) =====
 
 def create_access_token(data: Dict, expires_delta: Optional[timedelta] = None) -> str:
     """
@@ -117,11 +116,12 @@ def verify_token(token: str) -> Dict:
 
 # ===== Supabase Auth Token Verification =====
 
-async def verify_supabase_token(token: str) -> Dict:
+def verify_supabase_token(token: str) -> Dict:
     """
-    Verify a Supabase Auth JWT token
+    Verify a Supabase Auth JWT token.
 
-    This validates the token against Supabase's JWKS endpoint
+    When SUPABASE_JWT_SECRET is configured, the token signature is verified
+    using HS256. Otherwise falls back to unverified decode for development.
 
     Args:
         token: Supabase JWT token from Authorization header
@@ -133,23 +133,29 @@ async def verify_supabase_token(token: str) -> Dict:
         AuthenticationError: If token is invalid
     """
     try:
-        # Supabase uses RS256 algorithm with JWKS
-        # For simplicity in MVP, we'll decode without verification
-        # In production, implement proper JWKS validation
+        jwt_secret = settings.SUPABASE_JWT_SECRET
 
-        # Extract project ref from SUPABASE_URL
-        project_ref = settings.SUPABASE_URL.split("//")[1].split(".")[0]
+        if jwt_secret:
+            # Production: verify signature with the Supabase JWT secret
+            payload = jwt.decode(
+                token,
+                jwt_secret,
+                algorithms=["HS256"],
+                audience="authenticated",
+                options={"verify_aud": True},
+            )
+        else:
+            # Development fallback: decode without signature verification
+            logger.warning("SUPABASE_JWT_SECRET not set — skipping signature verification")
+            payload = jwt.decode(
+                token,
+                settings.SUPABASE_ANON_KEY,
+                algorithms=["HS256"],
+                audience="authenticated",
+                options={"verify_signature": False, "verify_aud": True},
+            )
 
-        # Decode token (without verification for now)
-        # TODO: Implement proper JWKS verification for production
-        payload = jwt.decode(
-            token,
-            settings.SUPABASE_ANON_KEY,
-            algorithms=["HS256"],
-            options={"verify_signature": False}  # Disable for MVP
-        )
-
-        # Validate token hasn't expired
+        # Validate token hasn't expired (belt-and-suspenders; jwt.decode checks too)
         exp = payload.get("exp")
         if exp and datetime.utcnow().timestamp() > exp:
             raise AuthenticationError("Token has expired")
@@ -159,6 +165,23 @@ async def verify_supabase_token(token: str) -> Dict:
     except JWTError as e:
         logger.error(f"Supabase token verification failed: {e}")
         raise AuthenticationError("Invalid Supabase token")
+
+
+def is_supabase_token(token: str) -> bool:
+    """
+    Heuristic to detect whether a token was issued by Supabase Auth.
+
+    Supabase tokens contain an "iss" claim pointing to the project URL
+    and an "aud" claim set to "authenticated".
+    """
+    try:
+        # Peek at claims without verifying (just to route)
+        unverified = jwt.get_unverified_claims(token)
+        iss = unverified.get("iss", "")
+        aud = unverified.get("aud", "")
+        return "supabase" in iss or aud == "authenticated"
+    except Exception:
+        return False
 
 
 # ===== Utility Functions =====

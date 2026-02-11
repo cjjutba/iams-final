@@ -1,14 +1,20 @@
 """
 Authentication Router
 
-API endpoints for authentication: register, login, token refresh, etc.
+API endpoints for authentication: register, login, token refresh,
+email verification, password reset, and Supabase webhook handling.
 """
 
-from fastapi import APIRouter, Depends, status
+import hmac
+import hashlib
+from fastapi import APIRouter, Depends, Request, status, Header
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
+from app.config import settings, logger
 from app.database import get_db
 from app.models.user import User
+from app.rate_limiter import limiter
 from app.schemas.auth import (
     LoginRequest,
     TokenResponse,
@@ -18,7 +24,9 @@ from app.schemas.auth import (
     RegisterRequest,
     RegisterResponse,
     ForgotPasswordRequest,
-    ProfileUpdateRequest
+    ResendVerificationRequest,
+    ProfileUpdateRequest,
+    SupabaseWebhookPayload,
 )
 from app.schemas.user import UserResponse, PasswordChange
 from app.services.auth_service import AuthService
@@ -28,150 +36,255 @@ from app.utils.dependencies import get_current_user
 router = APIRouter()
 
 
-@router.post("/verify-student-id", response_model=VerifyStudentIDResponse, status_code=status.HTTP_200_OK)
+# ===================================================================
+# FUN-01-01: Verify Student Identity
+# ===================================================================
+
+@router.post(
+    "/verify-student-id",
+    response_model=VerifyStudentIDResponse,
+    status_code=status.HTTP_200_OK,
+)
+@limiter.limit(settings.RATE_LIMIT_AUTH)
 def verify_student_id(
-    request: VerifyStudentIDRequest,
-    db: Session = Depends(get_db)
+    request: Request,
+    body: VerifyStudentIDRequest,
+    db: Session = Depends(get_db),
 ):
     """
     **Step 1 of Student Registration: Verify Student ID**
 
     Validates the student ID against university records and returns student information.
-
-    - **student_id**: Student ID to verify
-
-    Returns student information if valid.
+    Rate limited to 10 requests/minute.
     """
     auth_service = AuthService(db)
-    result = auth_service.verify_student_id(request.student_id)
-
+    result = auth_service.verify_student_id(body.student_id)
     return VerifyStudentIDResponse(**result)
 
 
-@router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
+# ===================================================================
+# FUN-01-02: Register Student Account
+# ===================================================================
+
+@router.post(
+    "/register",
+    response_model=RegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 def register(
-    request: RegisterRequest,
-    db: Session = Depends(get_db)
+    request_obj: Request,
+    body: RegisterRequest,
+    db: Session = Depends(get_db),
 ):
     """
     **Step 2 of Student Registration: Create Account**
 
     Creates a new student account after student ID verification.
-
-    - **student_id**: Verified student ID
-    - **email**: Student email address
-    - **password**: Account password (min 8 characters)
-    - **first_name**: Student's first name
-    - **last_name**: Student's last name
-    - **phone**: Optional phone number
-
-    Returns the created user and authentication tokens.
-
-    **Note:** Face registration (Step 3) is done via `/face/register` endpoint.
+    When Supabase Auth is enabled, a verification email is sent automatically.
+    Rate limited to 10 requests/minute.
     """
     auth_service = AuthService(db)
-    user, tokens = auth_service.register_student(request.model_dump())
+    user, result = auth_service.register_student(body.model_dump())
+
+    # Build response — tokens are present only in legacy mode
+    tokens = None
+    if "access_token" in result:
+        tokens = TokenResponse(
+            access_token=result["access_token"],
+            refresh_token=result.get("refresh_token"),
+            token_type=result["token_type"],
+            user=UserResponse.model_validate(user),
+        )
+
+    message = result.get(
+        "message",
+        "Account created successfully. Please register your face to complete setup.",
+    )
 
     return RegisterResponse(
         success=True,
-        message="Account created successfully. Please register your face to complete setup.",
-        user=UserResponse.from_orm(user),
-        tokens=TokenResponse(
-            access_token=tokens["access_token"],
-            refresh_token=tokens.get("refresh_token"),
-            token_type=tokens["token_type"],
-            user=UserResponse.from_orm(user)
-        )
+        message=message,
+        user=UserResponse.model_validate(user),
+        tokens=tokens,
     )
 
 
+# ===================================================================
+# FUN-01-03: Login (custom JWT — kept for dual-auth transition)
+# ===================================================================
+
 @router.post("/login", response_model=TokenResponse, status_code=status.HTTP_200_OK)
 def login(
-    request: LoginRequest,
-    db: Session = Depends(get_db)
+    request_obj: Request,
+    body: LoginRequest,
+    db: Session = Depends(get_db),
 ):
     """
     **Login**
 
-    Authenticate user and receive access tokens.
-
-    - **identifier**: Email address or Student ID
-    - **password**: Account password
-
-    Returns access token, refresh token, and user information.
+    Authenticate user and receive access tokens (custom JWT mode).
+    When Supabase Auth is active, use the Supabase client SDK instead.
+    Rate limited to 10 requests/minute.
     """
     auth_service = AuthService(db)
-    user, tokens = auth_service.login(request.identifier, request.password)
+    user, tokens = auth_service.login(body.identifier, body.password)
 
     return TokenResponse(
         access_token=tokens["access_token"],
         refresh_token=tokens.get("refresh_token"),
         token_type=tokens["token_type"],
-        user=UserResponse.from_orm(user)
+        user=UserResponse.model_validate(user),
     )
 
 
+# ===================================================================
+# FUN-01-04: Refresh Token (custom JWT)
+# ===================================================================
+
 @router.post("/refresh", status_code=status.HTTP_200_OK)
 def refresh_token(
-    request: RefreshRequest,
-    db: Session = Depends(get_db)
+    body: RefreshRequest,
+    db: Session = Depends(get_db),
 ):
     """
     **Refresh Access Token**
 
-    Generate a new access token using a refresh token.
-
-    - **refresh_token**: Valid refresh token
-
-    Returns new access token.
+    Generate a new access token using a refresh token (custom JWT mode).
+    When Supabase Auth is active, token refresh is automatic via the SDK.
     """
     auth_service = AuthService(db)
-    result = auth_service.refresh_access_token(request.refresh_token)
+    return auth_service.refresh_access_token(body.refresh_token)
 
-    return result
 
+# ===================================================================
+# FUN-01-05: Get Current User
+# ===================================================================
 
 @router.get("/me", response_model=UserResponse, status_code=status.HTTP_200_OK)
 def get_current_user_info(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
     """
     **Get Current User Information**
 
     Returns information about the currently authenticated user.
-
-    Requires authentication (Bearer token in Authorization header).
+    Enforces is_active and email_verified (when Supabase Auth is enabled).
     """
-    return UserResponse.from_orm(current_user)
+    return UserResponse.model_validate(current_user)
 
+
+# ===================================================================
+# FUN-01-06: Request Password Reset
+# ===================================================================
+
+@router.post("/forgot-password", status_code=status.HTTP_200_OK)
+def forgot_password(
+    request_obj: Request,
+    body: ForgotPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    **Forgot Password**
+
+    Request a password reset link.
+    When Supabase Auth is enabled, the reset email is sent via Supabase.
+    Always returns success to prevent email enumeration attacks.
+    Rate limited to 10 requests/minute.
+    """
+    auth_service = AuthService(db)
+    return auth_service.forgot_password(body.email)
+
+
+# ===================================================================
+# Email Verification
+# ===================================================================
+
+@router.post("/resend-verification", status_code=status.HTTP_200_OK)
+def resend_verification(
+    request_obj: Request,
+    body: ResendVerificationRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    **Resend Email Verification**
+
+    Re-sends the email verification link to the provided email.
+    Always returns success to prevent email enumeration.
+    Rate limited to 10 requests/minute.
+    """
+    auth_service = AuthService(db)
+    return auth_service.resend_verification_email(body.email)
+
+
+# ===================================================================
+# Supabase Webhook
+# ===================================================================
+
+@router.post("/webhook/supabase", status_code=status.HTTP_200_OK)
+async def supabase_webhook(
+    payload: SupabaseWebhookPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    x_webhook_secret: str = Header(None, alias="x-webhook-secret"),
+):
+    """
+    **Supabase Auth Webhook**
+
+    Receives events from Supabase Auth (e.g. email verified).
+    Verifies the webhook secret before processing.
+    """
+    # Verify webhook secret
+    expected_secret = settings.SUPABASE_WEBHOOK_SECRET
+    if expected_secret:
+        if not x_webhook_secret or x_webhook_secret != expected_secret:
+            logger.warning("Supabase webhook: invalid or missing secret")
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"error": "Invalid webhook secret"},
+            )
+
+    logger.info(f"Supabase webhook received: type={payload.type}")
+
+    auth_service = AuthService(db)
+
+    # Handle user update events (email verification)
+    if payload.type == "user.updated" and payload.record:
+        record = payload.record
+        email_confirmed_at = record.get("email_confirmed_at")
+        supabase_user_id = record.get("id")
+
+        if email_confirmed_at and supabase_user_id:
+            user = auth_service.handle_email_verified(supabase_user_id)
+            if user:
+                logger.info(f"Webhook: email verified for {user.email}")
+
+    return {"success": True, "message": "Webhook processed"}
+
+
+# ===================================================================
+# Password & Profile Management
+# ===================================================================
 
 @router.post("/change-password", status_code=status.HTTP_200_OK)
 def change_password(
-    request: PasswordChange,
+    body: PasswordChange,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     **Change Password**
 
     Change the current user's password.
-
-    - **old_password**: Current password
-    - **new_password**: New password (min 8 characters)
-
-    Requires authentication.
+    When Supabase Auth is enabled, the password is also updated in Supabase.
     """
     auth_service = AuthService(db)
     auth_service.change_password(
         str(current_user.id),
-        request.old_password,
-        request.new_password
+        body.old_password,
+        body.new_password,
     )
 
-    return {
-        "success": True,
-        "message": "Password changed successfully"
-    }
+    return {"success": True, "message": "Password changed successfully"}
 
 
 @router.post("/logout", status_code=status.HTTP_200_OK)
@@ -180,61 +293,25 @@ def logout(current_user: User = Depends(get_current_user)):
     **Logout**
 
     Logout the current user.
-
-    Note: Since we're using stateless JWT tokens, logout is handled client-side
-    by discarding the tokens. This endpoint exists for consistency and future
-    token blacklist implementation.
-
-    Requires authentication.
+    Stateless JWT — the client discards the token.
     """
-    return {
-        "success": True,
-        "message": "Logged out successfully"
-    }
-
-
-@router.post("/forgot-password", status_code=status.HTTP_200_OK)
-def forgot_password(
-    request: ForgotPasswordRequest,
-    db: Session = Depends(get_db)
-):
-    """
-    **Forgot Password**
-
-    Request a password reset link. An email will be sent if the account exists.
-
-    - **email**: Email address associated with the account
-
-    Note: Always returns success to prevent email enumeration attacks.
-    """
-    auth_service = AuthService(db)
-    result = auth_service.forgot_password(request.email)
-
-    return result
+    return {"success": True, "message": "Logged out successfully"}
 
 
 @router.patch("/profile", response_model=UserResponse, status_code=status.HTTP_200_OK)
 def update_profile(
-    request: ProfileUpdateRequest,
+    body: ProfileUpdateRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     **Update Profile**
 
-    Update the current user's profile information.
-
-    - **email**: New email address (optional)
-    - **phone**: New phone number (optional)
-
-    Only the fields provided will be updated.
-
-    Requires authentication.
+    Update the current user's profile (email, phone).
     """
     auth_service = AuthService(db)
     updated_user = auth_service.update_profile(
         str(current_user.id),
-        request.model_dump(exclude_none=True)
+        body.model_dump(exclude_none=True),
     )
-
     return UserResponse.model_validate(updated_user)

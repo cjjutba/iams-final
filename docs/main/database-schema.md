@@ -33,14 +33,15 @@ Stores all system users (students, faculty, admin).
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| id | UUID | PK, DEFAULT uuid | Unique identifier |
-| email | VARCHAR(255) | UNIQUE, NOT NULL | Login email |
-| password_hash | VARCHAR(255) | NOT NULL | Bcrypt hash |
+| id | UUID | PK, DEFAULT uuid | Unique identifier (matches Supabase Auth user ID) |
+| email | VARCHAR(255) | UNIQUE, NOT NULL | Login email (immutable after registration) |
 | role | VARCHAR(20) | NOT NULL | student, faculty, admin |
 | first_name | VARCHAR(100) | | First name |
 | last_name | VARCHAR(100) | | Last name |
 | student_id | VARCHAR(50) | UNIQUE | School ID (students only) |
+| phone | VARCHAR(20) | | Contact number (optional) |
 | is_active | BOOLEAN | DEFAULT true | Account status |
+| email_confirmed_at | TIMESTAMPTZ | | Email verification timestamp (synced from Supabase Auth) |
 | created_at | TIMESTAMPTZ | DEFAULT now() | Creation time |
 | updated_at | TIMESTAMPTZ | DEFAULT now() | Last update |
 

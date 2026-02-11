@@ -1,4 +1,4 @@
-﻿# Working Rules
+# Working Rules
 
 ## Source-of-Truth Rules
 1. This folder is the implementation reference for `MOD-03`.
@@ -10,11 +10,17 @@
 - Implement only `FUN-03-01` to `FUN-03-05` under this module.
 - Do not add attendance/presence business logic in this module.
 
+## Auth Rules
+- Student-facing endpoints (`POST /face/register`, `GET /face/status`) require Supabase JWT verification via middleware from MOD-01.
+- Edge-facing endpoint (`POST /face/recognize`) requires shared API key (`X-API-Key` header) — no Supabase JWT.
+- Backend must verify `is_active = true` and `email_confirmed_at IS NOT NULL` on JWT-protected routes (from MOD-01).
+
 ## Quality Rules
 - Registration images must pass validation gates before embedding generation.
-- Recognition threshold must be configurable.
-- API responses must follow documented envelopes.
+- Recognition threshold must be configurable (via `RECOGNITION_THRESHOLD` env var).
+- API responses must follow documented envelopes (include optional `message` field).
 - FAISS and DB mapping must stay consistent.
+- Backend handles resize from edge crop size to model input size (160x160).
 
 ## Delivery Rules
 - Each commit/PR should include traceability, for example:

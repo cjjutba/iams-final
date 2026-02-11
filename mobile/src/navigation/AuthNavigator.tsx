@@ -7,6 +7,8 @@
  * - Welcome (role selection)
  * - Student/Faculty login
  * - Student registration (4 steps)
+ * - Email verification (Supabase Auth)
+ * - Password reset (Supabase Auth deep link)
  */
 
 import React from 'react';
@@ -21,6 +23,8 @@ import {
   StudentLoginScreen,
   FacultyLoginScreen,
   ForgotPasswordScreen,
+  EmailVerificationScreen,
+  ResetPasswordScreen,
   RegisterStep1Screen,
   RegisterStep2Screen,
   RegisterStep3Screen,
@@ -43,6 +47,8 @@ export const AuthNavigator: React.FC = () => {
       <Stack.Screen name="StudentLogin" component={StudentLoginScreen} />
       <Stack.Screen name="FacultyLogin" component={FacultyLoginScreen} />
       <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
+      <Stack.Screen name="EmailVerification" component={EmailVerificationScreen} />
+      <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} />
       <Stack.Screen name="RegisterStep1" component={RegisterStep1Screen} />
       <Stack.Screen name="RegisterStep2" component={RegisterStep2Screen} />
       <Stack.Screen name="RegisterStep3" component={RegisterStep3Screen} />

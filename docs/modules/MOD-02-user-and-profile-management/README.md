@@ -4,6 +4,9 @@
 This folder is the full implementation reference for Module 2.
 When implementing user/profile features, use this folder as the primary source of truth.
 
+## Auth Context
+All MOD-02 endpoints are protected by **Supabase JWT** verification middleware (established in MOD-01). The middleware enforces `is_active = true` and `email_confirmed_at IS NOT NULL` before any MOD-02 endpoint is reached.
+
 ## Coverage
 This pack documents:
 - Goal and governance rules
@@ -30,7 +33,7 @@ This pack documents:
 - `01-catalog/`: module catalog, capabilities, glossary
 - `02-specification/`: module specs, function specs, business rules, acceptance criteria
 - `03-api/`: API inventory and endpoint contracts
-- `04-data/`: data model, users fields, lifecycle and soft-delete policy
+- `04-data/`: data model, users fields, lifecycle and delete policy
 - `05-screens/`: screen inventory, profile flows, UI states
 - `06-dependencies/`: dependency order, integration points, env config
 - `07-testing/`: test strategy, test cases, demo checklist
@@ -39,12 +42,12 @@ This pack documents:
 - `10-traceability/`: mapping from functions to API/data/screens/tests
 
 ## Canonical Sources
-- `docs/main/master-blueprint.md`
+- `docs/main/architecture.md`
 - `docs/main/api-reference.md`
 - `docs/main/database-schema.md`
 - `docs/main/technical-specification.md`
 - `docs/main/prd.md`
-- `docs/main/testing.md`
+- `docs/main/implementation.md`
 - `docs/screens/screen-list.md`
 
 ## Module IDs
@@ -57,4 +60,5 @@ Module 2 documentation is considered complete when:
 - All files in this folder are populated and internally consistent.
 - Every function has test cases and acceptance criteria.
 - API docs and screen docs reference the same behavior.
+- Supabase Auth lifecycle handling is documented for delete operations.
 - Traceability matrix has no missing mappings.

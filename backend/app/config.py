@@ -23,14 +23,23 @@ class Settings(BaseSettings):
     # Supabase
     SUPABASE_URL: str
     SUPABASE_ANON_KEY: str
-    SUPABASE_SERVICE_KEY: str = ""  # Optional, for admin operations
+    SUPABASE_SERVICE_KEY: str = ""  # Service role key for admin operations
+    SUPABASE_JWT_SECRET: str = ""  # Supabase JWT secret for token verification
+    SUPABASE_WEBHOOK_SECRET: str = ""  # Webhook signature verification
     DATABASE_URL: str  # PostgreSQL connection string
 
-    # JWT Settings (Custom JWT for faculty)
+    # JWT Settings (Custom JWT — kept for dual-auth migration)
     SECRET_KEY: str = "dev-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # Auth Feature Flags
+    USE_SUPABASE_AUTH: bool = False  # Enable Supabase Auth (set True after migration)
+
+    # Rate Limiting
+    RATE_LIMIT_AUTH: str = "10/minute"  # Auth endpoint rate limit
+    RATE_LIMIT_ENABLED: bool = True
 
     # CORS
     CORS_ORIGINS: List[str] = ["*"]  # In production, specify exact origins

@@ -47,7 +47,7 @@ export interface AccountInfo {
   password: string;
 }
 
-// Auth Stack (Onboarding, Login, Registration)
+// Auth Stack (Onboarding, Login, Registration, Verification)
 export type AuthStackParamList = {
   Splash: undefined;
   Onboarding: undefined;
@@ -55,6 +55,8 @@ export type AuthStackParamList = {
   StudentLogin: undefined;
   FacultyLogin: undefined;
   ForgotPassword: undefined;
+  EmailVerification: undefined;
+  ResetPassword: undefined;
   RegisterStep1: undefined;
   RegisterStep2: {
     studentInfo: StudentInfo;

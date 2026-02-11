@@ -13,6 +13,10 @@ const isDev = __DEV__;
 const API_BASE_URL_ENV = process.env.EXPO_PUBLIC_API_BASE_URL;
 const WS_BASE_URL_ENV  = process.env.EXPO_PUBLIC_WS_BASE_URL;
 
+// Supabase settings (read from env — empty strings disable Supabase mode)
+const SUPABASE_URL_ENV      = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
+const SUPABASE_ANON_KEY_ENV = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
+
 export const config = {
   // API URLs — prefer env var so you can point at ngrok/tunnel without rebuilding
   API_BASE_URL: API_BASE_URL_ENV
@@ -24,6 +28,12 @@ export const config = {
     ?? (isDev
       ? 'ws://192.168.137.1:8000/api/v1/ws'
       : 'wss://api.iams.com/api/v1/ws'),
+
+  // Supabase
+  SUPABASE_URL: SUPABASE_URL_ENV,
+  SUPABASE_ANON_KEY: SUPABASE_ANON_KEY_ENV,
+  /** True when both SUPABASE_URL and SUPABASE_ANON_KEY are provided */
+  USE_SUPABASE_AUTH: !!(SUPABASE_URL_ENV && SUPABASE_ANON_KEY_ENV),
 
   // Storage keys
   STORAGE_KEYS: {

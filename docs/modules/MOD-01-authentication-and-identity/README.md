@@ -4,13 +4,16 @@
 This folder is the full implementation reference for Module 1.
 When implementing auth features, use this folder as the primary source of truth.
 
+## Auth Provider
+**Supabase Auth** — Mobile uses Supabase client SDK for login, token refresh, and password reset. Backend verifies Supabase-issued JWT and provides identity verification, registration, and authenticated profile endpoints.
+
 ## Coverage
 This pack documents:
 - Goal and governance rules
 - MVP scope boundaries
 - Module catalog and capability matrix
-- Detailed function specifications (`FUN-01-01` to `FUN-01-05`)
-- API inventory and endpoint-level contracts
+- Detailed function specifications (`FUN-01-01` to `FUN-01-07`)
+- API inventory and endpoint-level contracts (backend endpoints + Supabase client operations)
 - Data model and validation source documentation
 - Screen inventory and auth flow behavior
 - Module dependency order and integration points
@@ -39,22 +42,25 @@ This pack documents:
 - `10-traceability/`: mapping from functions to API/data/screens/tests
 
 ## Canonical Sources
-- `docs/main/master-blueprint.md`
+- `docs/main/architecture.md`
 - `docs/main/api-reference.md`
 - `docs/main/technical-specification.md`
 - `docs/main/prd.md`
 - `docs/main/database-schema.md`
-- `docs/main/testing.md`
+- `docs/main/implementation.md`
 - `docs/screens/screen-list.md`
 
 ## Module IDs
 - Module: `MOD-01`
-- Functions: `FUN-01-01` to `FUN-01-05`
-- Screens: `SCR-004`, `SCR-005`, `SCR-006`, `SCR-007`, `SCR-008`, `SCR-010`
+- Functions: `FUN-01-01` to `FUN-01-07`
+- Backend Endpoints: `POST /auth/verify-student-id`, `POST /auth/register`, `GET /auth/me`
+- Supabase Client Operations: Login, Token Refresh, Password Reset Request, Password Reset Completion
+- Screens: `SCR-004`, `SCR-005`, `SCR-006`, `SCR-007`, `SCR-008`, `SCR-010`, `EmailVerificationPendingScreen`, `SetNewPasswordScreen`
 
 ## Definition of Documentation Completion
 Module 1 documentation is considered complete when:
 - All files in this folder are populated and internally consistent.
 - Every function has test cases and acceptance criteria.
 - API docs and screen docs reference the same behavior.
+- Backend endpoints and Supabase client operations are clearly distinguished.
 - Traceability matrix has no missing mappings.

@@ -10,6 +10,7 @@ export { scheduleService } from './scheduleService';
 export { faceService } from './faceService';
 export { websocketService } from './websocketService';
 export { notificationService } from './notificationService';
+export { getSupabaseClient, supabase } from './supabase';
 
 // Re-export API client and error utilities for convenience
 export { api, extractApiError } from '../utils/api';

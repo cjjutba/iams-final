@@ -46,7 +46,8 @@ class User(Base):
 
     # Authentication
     email = Column(String(255), unique=True, nullable=False, index=True)
-    password_hash = Column(String(255), nullable=False)
+    password_hash = Column(String(255), nullable=True)  # Nullable when using Supabase Auth
+    supabase_user_id = Column(UUID(as_uuid=True), unique=True, nullable=True, index=True)
 
     # Profile
     role = Column(SQLEnum(UserRole), nullable=False, index=True)
@@ -56,6 +57,10 @@ class User(Base):
 
     # Student-specific
     student_id = Column(String(50), unique=True, nullable=True, index=True)
+
+    # Email verification
+    email_verified = Column(Boolean, default=False, nullable=False)
+    email_verified_at = Column(DateTime, nullable=True)
 
     # Status
     is_active = Column(Boolean, default=True, nullable=False)

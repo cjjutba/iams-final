@@ -21,6 +21,8 @@ from app.utils.security import (
     verify_token,
     validate_password_strength,
     extract_bearer_token,
+    is_supabase_token,
+    verify_supabase_token,
 )
 from app.utils.exceptions import AuthenticationError
 from app.config import settings
@@ -309,3 +311,74 @@ class TestExtractBearerToken:
         """Authorization header with extra parts should raise AuthenticationError."""
         with pytest.raises(AuthenticationError, match="Invalid authorization header format"):
             extract_bearer_token("Bearer token extra-stuff")
+
+
+# ===================================================================
+# Supabase Token Detection
+# ===================================================================
+
+
+class TestIsSupabaseToken:
+    """Tests for is_supabase_token()."""
+
+    def test_custom_jwt_not_supabase(self):
+        """A custom JWT (no iss or aud claims) should return False."""
+        token = create_access_token({"user_id": "abc-123"})
+        assert is_supabase_token(token) is False
+
+    def test_supabase_token_with_iss(self):
+        """A JWT with 'supabase' in the iss claim should return True."""
+        token = jwt.encode(
+            {"sub": "user-id", "iss": "https://project.supabase.co/auth/v1", "exp": 9999999999},
+            "some-secret",
+            algorithm="HS256",
+        )
+        assert is_supabase_token(token) is True
+
+    def test_supabase_token_with_aud(self):
+        """A JWT with aud='authenticated' should return True."""
+        token = jwt.encode(
+            {"sub": "user-id", "aud": "authenticated", "exp": 9999999999},
+            "some-secret",
+            algorithm="HS256",
+        )
+        assert is_supabase_token(token) is True
+
+    def test_invalid_token_returns_false(self):
+        """A non-JWT string should return False (not crash)."""
+        assert is_supabase_token("not-a-jwt") is False
+
+    def test_empty_string_returns_false(self):
+        """Empty string should return False."""
+        assert is_supabase_token("") is False
+
+
+# ===================================================================
+# Supabase Token Verification
+# ===================================================================
+
+
+class TestVerifySupabaseToken:
+    """Tests for verify_supabase_token()."""
+
+    def test_verify_supabase_token_valid(self):
+        """A valid Supabase-style token should decode successfully."""
+        payload = {
+            "sub": "user-uuid-123",
+            "aud": "authenticated",
+            "iss": "https://project.supabase.co/auth/v1",
+            "exp": 9999999999,
+            "iat": 1000000000,
+        }
+        # When SUPABASE_JWT_SECRET is set, it's used for HS256 verification
+        secret = settings.SUPABASE_JWT_SECRET if settings.SUPABASE_JWT_SECRET else "test-secret"
+        token = jwt.encode(payload, secret, algorithm="HS256")
+
+        result = verify_supabase_token(token)
+        assert result["sub"] == "user-uuid-123"
+        assert result["aud"] == "authenticated"
+
+    def test_verify_supabase_token_invalid(self):
+        """An invalid token should raise AuthenticationError."""
+        with pytest.raises(AuthenticationError):
+            verify_supabase_token("garbage-token-value")

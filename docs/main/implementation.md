@@ -61,13 +61,17 @@ Implementation: use a bounded in-memory queue (e.g. `collections.deque(maxlen=50
 
 ### Module Breakdown
 
-#### Authentication Module
+#### Authentication Module (Supabase Auth)
 | Function | Description |
 |----------|-------------|
-| Register | Create new user account |
-| Login | Verify credentials, return JWT |
-| Verify Token | Check JWT validity |
-| Refresh Token | Issue new token |
+| Verify Student ID | Validate student identity against university data |
+| Register | Create Supabase Auth user + local DB record; triggers email verification |
+| Login | Via Supabase client SDK on mobile (`signInWithPassword`) |
+| Verify Token | Backend middleware verifies Supabase JWT on protected routes |
+| Refresh Token | Via Supabase client SDK on mobile (automatic `refreshSession`) |
+| Get Current User | Return authenticated user profile from local DB |
+| Email Verification | Supabase sends confirmation email; backend enforces on protected routes |
+| Password Reset | Via Supabase client SDK (`resetPasswordForEmail` + `updateUser`) |
 
 #### Face Module
 | Function | Description |
@@ -111,7 +115,7 @@ DeepSORT runs on the **server**, not on the RPi. The server receives multiple cr
 ### Registration Flow
 ```
 1. User opens mobile app
-2. User captures face photos (5 angles)
+2. User captures face photos (3-5 angles)
 3. App sends photos to server
 4. Server generates embedding for each
 5. Server averages embeddings
@@ -212,19 +216,21 @@ Score = (total_present / total_scans) × 100%
 2. **Welcome** — User selects "Student" or "Faculty".
 
 ### Student Registration (3 steps + review)
-1. **Step 1 – Verify identity:** Enter Student ID (manual) or optionally scan/upload ID. Backend validates against university data (CSV/JRMSU). Show name, course, year; user confirms "Is this me?"
-2. **Step 2 – Account setup:** Email (pre-filled if from university), phone, password. Create account in Supabase Auth (or backend); store profile in Supabase/Postgres.
+1. **Step 1 – Verify identity:** Enter Student ID (manual) or optionally scan/upload ID. Backend validates against university data (CSV/JRMSU) via `POST /auth/verify-student-id`. Show name, course, year; user confirms "Is this me?"
+2. **Step 2 – Account setup:** Email (pre-filled if from university), phone (optional), password.
 3. **Step 3 – Face registration:** Capture 3–5 angles in React Native app; upload to backend; backend generates embeddings and saves to FAISS.
-4. **Review & submit:** Summary screen; user agrees to terms and submits. Backend validates and finalizes (link face to user).
+4. **Review & submit:** Summary screen; user agrees to terms and submits. Backend creates Supabase Auth user (via Admin API) + local DB record via `POST /auth/register`. Supabase sends email verification automatically. User must verify email before logging in.
 
 ### Faculty (MVP)
-- **No self-registration.** Faculty accounts are **pre-seeded** from client list (JRMSU). Faculty only **login** (email + password) via Supabase Auth. Message on login: "Faculty accounts are created by the administrator. Contact your department if you need access."
+- **No self-registration.** Faculty accounts are **pre-seeded** from client list (JRMSU). Faculty only **login** (email + password) via Supabase Auth client SDK. Message on login: "Faculty accounts are created by the administrator. Contact your department if you need access."
 
 ### University Data (JRMSU)
 - Student validation and faculty list come from **university data** (CSV export from client). Import once or sync via script. Backend checks Student ID against this data before allowing registration.
 
 ### Auth and Database (Supabase)
-- **Supabase** provides hosted PostgreSQL and Auth. Backend connects to Supabase Postgres for users, schedules, attendance. Mobile app uses Supabase Auth for login/signup (students) and login only (faculty). Backend can verify JWT from Supabase on protected routes.
+- **Supabase Auth** is the authentication provider. Backend creates users via Supabase Admin API on registration. Mobile app uses Supabase client SDK for login (`signInWithPassword`), token refresh (`refreshSession`), and password reset (`resetPasswordForEmail`). Backend verifies Supabase-issued JWT on all protected routes.
+- **Supabase PostgreSQL** hosts all application data (users, schedules, attendance). Backend connects via Supabase pooler or direct connection.
+- **Email verification** is required. Supabase sends confirmation email on signup. Backend enforces `email_confirmed` status on protected route access.
 
 ---
 
@@ -272,8 +278,8 @@ Score = (total_present / total_scans) × 100%
 ### User Registration
 ```
 1. Validate input
-2. Hash password
-3. Insert into users table
+2. Create user in Supabase Auth (via Admin API — Supabase handles password hashing)
+3. Insert profile into local users table (id matches Supabase Auth user ID)
 4. Return user ID
 ```
 

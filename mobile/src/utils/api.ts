@@ -5,6 +5,7 @@
  * - Base URL configuration from app config
  * - Auth token injection via request interceptor
  * - Automatic token refresh on 401 with request queuing
+ * - Supabase session-aware token handling when USE_SUPABASE_AUTH is enabled
  * - Consistent error normalization to ApiError shape
  * - Configurable timeout (default 30s)
  */
@@ -16,6 +17,7 @@ import axios, {
 } from 'axios';
 import { storage } from './storage';
 import { config } from '../constants/config';
+import { getSupabaseClient } from '../services/supabase';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -89,6 +91,77 @@ const processQueue = (error: unknown, token: string | null = null): void => {
   failedQueue = [];
 };
 
+/**
+ * Get the current access token.
+ * In Supabase mode, prefer the token from the Supabase session.
+ * Falls back to storage for both modes.
+ */
+const getAccessToken = async (): Promise<string | null> => {
+  if (config.USE_SUPABASE_AUTH) {
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      try {
+        const { data } = await supabase.auth.getSession();
+        if (data.session?.access_token) {
+          return data.session.access_token;
+        }
+      } catch {
+        // Fall through to storage
+      }
+    }
+  }
+
+  return storage.getAccessToken();
+};
+
+/**
+ * Refresh the access token.
+ * In Supabase mode uses supabase.auth.refreshSession().
+ * In legacy mode calls the backend refresh endpoint directly.
+ */
+const refreshAccessToken = async (): Promise<string> => {
+  if (config.USE_SUPABASE_AUTH) {
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      const { data, error } = await supabase.auth.refreshSession();
+
+      if (error || !data.session) {
+        throw error || new Error('No session returned from refresh');
+      }
+
+      const token = data.session.access_token;
+      await storage.setAccessToken(token);
+      if (data.session.refresh_token) {
+        await storage.setRefreshToken(data.session.refresh_token);
+      }
+
+      return token;
+    }
+  }
+
+  // Legacy mode: call backend refresh endpoint
+  const refreshToken = await storage.getRefreshToken();
+
+  if (!refreshToken) {
+    throw new Error('No refresh token available');
+  }
+
+  const response = await axios.post(
+    `${config.API_BASE_URL}/auth/refresh`,
+    { refresh_token: refreshToken },
+    { headers: { 'Content-Type': 'application/json' } },
+  );
+
+  const { access_token } = response.data;
+  await storage.setAccessToken(access_token);
+
+  if (response.data.refresh_token) {
+    await storage.setRefreshToken(response.data.refresh_token);
+  }
+
+  return access_token;
+};
+
 // ---------------------------------------------------------------------------
 // Request interceptor - attach auth token
 // ---------------------------------------------------------------------------
@@ -96,7 +169,7 @@ const processQueue = (error: unknown, token: string | null = null): void => {
 api.interceptors.request.use(
   async (requestConfig: InternalAxiosRequestConfig) => {
     try {
-      const accessToken = await storage.getAccessToken();
+      const accessToken = await getAccessToken();
       if (accessToken && requestConfig.headers) {
         requestConfig.headers.Authorization = `Bearer ${accessToken}`;
       }
@@ -148,37 +221,14 @@ api.interceptors.response.use(
       isRefreshing = true;
 
       try {
-        const refreshToken = await storage.getRefreshToken();
-
-        if (!refreshToken) {
-          // No refresh token available -- clear local auth state.
-          await storage.clearAuth();
-          processQueue(error, null);
-          return Promise.reject(error);
-        }
-
-        // Call the refresh endpoint using a fresh axios instance so that
-        // the interceptors on `api` do not interfere.
-        const response = await axios.post(
-          `${config.API_BASE_URL}/auth/refresh`,
-          { refresh_token: refreshToken },
-          { headers: { 'Content-Type': 'application/json' } },
-        );
-
-        const { access_token } = response.data;
-        await storage.setAccessToken(access_token);
-
-        // If the backend also returns a new refresh token, persist it.
-        if (response.data.refresh_token) {
-          await storage.setRefreshToken(response.data.refresh_token);
-        }
+        const newToken = await refreshAccessToken();
 
         // Flush queued requests with the new token.
-        processQueue(null, access_token);
+        processQueue(null, newToken);
 
         // Retry the original request.
         if (originalRequest.headers) {
-          originalRequest.headers.Authorization = `Bearer ${access_token}`;
+          originalRequest.headers.Authorization = `Bearer ${newToken}`;
         }
         return api(originalRequest);
       } catch (refreshError) {

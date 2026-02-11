@@ -22,6 +22,7 @@ export interface User {
   student_id?: string; // Only for students
   phone?: string;
   is_active: boolean;
+  email_verified: boolean; // True after email confirmation (Supabase Auth)
   created_at: string;
   updated_at?: string;
 }

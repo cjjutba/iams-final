@@ -1,16 +1,12 @@
 /**
  * Auth Service
  *
- * Handles all authentication-related API calls:
- * - Login (email / student ID + password)
- * - Student registration (verify ID then create account)
- * - Token refresh
- * - Logout (backend + local storage)
- * - User profile retrieval and update
- * - Password management
+ * Handles all authentication-related API calls with dual-mode support:
+ * - Supabase Auth (when USE_SUPABASE_AUTH is enabled)
+ * - Custom JWT (legacy fallback)
  *
- * All endpoints are relative to the base URL configured in api.ts.
- * Backend router prefix: /auth
+ * Login and password flows use Supabase SDK directly when enabled.
+ * Registration always goes through the backend (student ID verification).
  *
  * @see backend/app/routers/auth.py
  * @see backend/app/schemas/auth.py
@@ -18,6 +14,8 @@
 
 import { api } from '../utils/api';
 import { storage } from '../utils/storage';
+import { config } from '../constants/config';
+import { getSupabaseClient } from './supabase';
 import type {
   User,
   VerifyStudentIdResponse,
@@ -62,14 +60,15 @@ interface TokenResponse {
 /**
  * Backend RegisterResponse shape (returned by POST /auth/register)
  *
- * The register endpoint wraps the token response inside a `tokens` field
- * alongside `success`, `message`, and a top-level `user`.
+ * In Supabase mode `tokens` is null — the user must verify their email
+ * before they can sign in via Supabase SDK.
+ * In legacy mode `tokens` contains access/refresh tokens.
  */
 interface RegisterResponse {
   success: boolean;
   message: string;
   user: User;
-  tokens: TokenResponse;
+  tokens: TokenResponse | null;
 }
 
 /** POST /auth/change-password -- mirrors backend PasswordChange */
@@ -108,23 +107,11 @@ export const authService = {
   /**
    * Verify that a student ID exists in the university database.
    * This is Step 1 of the student self-registration flow.
-   *
-   * The backend returns { valid, student_info, message } but the frontend
-   * VerifyStudentIdResponse type expects { success, data: { valid, ... } }.
-   * This method transforms the backend response to match the frontend type.
-   *
-   * @param studentId - The student ID to verify
-   * @returns Verification result with student info if valid
-   * @throws AxiosError on network or server errors
-   *
-   * Backend: POST /auth/verify-student-id
-   * Backend response: { valid: bool, student_info?: { student_id, first_name, ... }, message: str }
-   * Frontend type: { success: bool, data: { valid, first_name?, ... } }
+   * Always uses the backend API (student records are server-side only).
    */
   async verifyStudentId(studentId: string): Promise<VerifyStudentIdResponse> {
     const payload: VerifyStudentIdPayload = { student_id: studentId };
 
-    // Backend VerifyStudentIDResponse shape
     interface BackendVerifyResponse {
       valid: boolean;
       student_info?: {
@@ -145,7 +132,6 @@ export const authService = {
     );
     const backendData = response.data;
 
-    // Transform to frontend expected shape
     return {
       success: backendData.valid,
       data: {
@@ -162,29 +148,29 @@ export const authService = {
 
   /**
    * Register a new student account.
-   * This is Step 2 of the student self-registration flow.
-   * After success the user is authenticated and tokens are stored locally.
+   * This always goes through the backend because student ID verification
+   * must happen server-side before account creation.
    *
-   * @param data - Registration payload matching backend RegisterRequest
-   * @returns The created user and auth tokens
-   * @throws AxiosError on validation or server errors
+   * In Supabase mode: backend creates Supabase Auth user + local record.
+   * A verification email is sent automatically. No tokens are returned —
+   * the user must verify email first, then sign in.
    *
-   * Backend: POST /auth/register  (201 Created)
-   * Response shape: RegisterResponse { success, message, user, tokens }
+   * In legacy mode: tokens are returned and the user is signed in immediately.
    */
   async register(data: RegisterPayload): Promise<RegisterResponse> {
     const response = await api.post<RegisterResponse>('/auth/register', data);
     const result = response.data;
 
-    // Persist tokens from the nested tokens object
-    if (result.tokens.access_token) {
-      await storage.setAccessToken(result.tokens.access_token);
-    }
-    if (result.tokens.refresh_token) {
-      await storage.setRefreshToken(result.tokens.refresh_token);
+    // Legacy mode: persist tokens immediately
+    if (result.tokens) {
+      if (result.tokens.access_token) {
+        await storage.setAccessToken(result.tokens.access_token);
+      }
+      if (result.tokens.refresh_token) {
+        await storage.setRefreshToken(result.tokens.refresh_token);
+      }
     }
 
-    // Persist user (top-level user field has the same data as tokens.user)
     if (result.user) {
       await storage.setUser(result.user);
     }
@@ -194,31 +180,70 @@ export const authService = {
 
   /**
    * Authenticate with email or student ID plus password.
-   * On success, tokens and user profile are stored locally.
    *
-   * @param identifier - Email address or student ID
-   * @param password - Account password
-   * @returns Token response including user profile
-   * @throws AxiosError on invalid credentials or server errors
+   * Supabase mode: uses supabase.auth.signInWithPassword(), then fetches
+   * the full user profile from the backend via GET /auth/me.
    *
-   * Backend: POST /auth/login
-   * Request body: { identifier, password } as JSON
-   * Response shape: TokenResponse { access_token, refresh_token, token_type, user }
+   * Legacy mode: sends credentials to POST /auth/login and stores tokens.
    */
   async login(identifier: string, password: string): Promise<TokenResponse> {
+    const supabase = getSupabaseClient();
+
+    if (supabase && config.USE_SUPABASE_AUTH) {
+      // Supabase requires an email. If identifier looks like a student ID
+      // (contains a dash), we need to resolve it to an email first via backend.
+      let email = identifier;
+      if (identifier.includes('-') && !identifier.includes('@')) {
+        // Looks like a student ID — resolve to email via verify endpoint
+        const verifyResult = await this.verifyStudentId(identifier);
+        if (!verifyResult.data.valid || !verifyResult.data.email) {
+          throw new Error('Student ID not found or has no associated email');
+        }
+        email = verifyResult.data.email;
+      }
+
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      if (!data.session) {
+        throw new Error('No session returned from authentication');
+      }
+
+      // Store the Supabase session tokens for the API interceptor
+      await storage.setAccessToken(data.session.access_token);
+      if (data.session.refresh_token) {
+        await storage.setRefreshToken(data.session.refresh_token);
+      }
+
+      // Fetch the full user profile from our backend
+      const user = await this.getMe();
+      await storage.setUser(user);
+
+      return {
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+        token_type: 'bearer',
+        user,
+      };
+    }
+
+    // Legacy mode
     const payload: LoginPayload = { identifier, password };
     const response = await api.post<TokenResponse>('/auth/login', payload);
     const authData = response.data;
 
-    // Store tokens
     if (authData.access_token) {
       await storage.setAccessToken(authData.access_token);
     }
     if (authData.refresh_token) {
       await storage.setRefreshToken(authData.refresh_token);
     }
-
-    // Store user
     if (authData.user) {
       await storage.setUser(authData.user);
     }
@@ -228,19 +253,19 @@ export const authService = {
 
   /**
    * Log the current user out.
-   * Calls the backend logout endpoint (for future token blacklisting)
-   * and clears all locally stored auth data regardless of the API result.
-   *
-   * @throws Never -- local storage is always cleared even if the API call fails.
-   *
-   * Backend: POST /auth/logout (requires auth)
+   * Supabase mode: calls supabase.auth.signOut() + backend logout.
+   * Legacy mode: calls backend logout only.
+   * Local storage is always cleared regardless of API results.
    */
   async logout(): Promise<void> {
     try {
+      const supabase = getSupabaseClient();
+      if (supabase && config.USE_SUPABASE_AUTH) {
+        await supabase.auth.signOut();
+      }
       await api.post<SuccessResponse>('/auth/logout');
     } catch {
-      // Backend logout is best-effort; the important part is clearing
-      // local state below.
+      // Backend/Supabase logout is best-effort
     } finally {
       await storage.clearAuth();
     }
@@ -248,13 +273,7 @@ export const authService = {
 
   /**
    * Retrieve the currently authenticated user's profile from the backend.
-   * Useful for verifying that the stored token is still valid.
-   *
-   * @returns The authenticated user's profile
-   * @throws AxiosError if the token is invalid or expired
-   *
-   * Backend: GET /auth/me
-   * Response shape: UserResponse (returned directly, NOT wrapped in ApiResponse)
+   * Checks email verification status as well.
    */
   async getMe(): Promise<User> {
     const response = await api.get<User>('/auth/me');
@@ -262,19 +281,40 @@ export const authService = {
   },
 
   /**
-   * Refresh the access token using a stored refresh token.
+   * Refresh the access token.
    *
-   * Note: In most cases the response interceptor in api.ts handles
-   * refresh automatically. This method is exposed for manual control.
+   * Supabase mode: uses supabase.auth.refreshSession().
+   * Legacy mode: calls POST /auth/refresh.
    *
-   * @param refreshToken - The refresh token string
-   * @returns New access token and token type
-   * @throws AxiosError if the refresh token is invalid or expired
-   *
-   * Backend: POST /auth/refresh
-   * Response shape: { access_token, token_type }
+   * Note: Supabase auto-refreshes tokens via onAuthStateChange, so this
+   * is mainly for manual control or legacy mode.
    */
   async refreshToken(refreshToken: string): Promise<{ access_token: string; token_type: string }> {
+    const supabase = getSupabaseClient();
+
+    if (supabase && config.USE_SUPABASE_AUTH) {
+      const { data, error } = await supabase.auth.refreshSession();
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      if (!data.session) {
+        throw new Error('No session returned from refresh');
+      }
+
+      await storage.setAccessToken(data.session.access_token);
+      if (data.session.refresh_token) {
+        await storage.setRefreshToken(data.session.refresh_token);
+      }
+
+      return {
+        access_token: data.session.access_token,
+        token_type: 'bearer',
+      };
+    }
+
+    // Legacy mode
     const response = await api.post<{ access_token: string; token_type: string }>(
       '/auth/refresh',
       { refresh_token: refreshToken },
@@ -289,59 +329,120 @@ export const authService = {
   /**
    * Change the current user's password.
    *
-   * @param oldPassword - The user's current password
-   * @param newPassword - The desired new password (min 8 characters)
-   * @returns Success confirmation
-   * @throws AxiosError if the old password is incorrect or validation fails
+   * Supabase mode: calls supabase.auth.updateUser() + backend change-password
+   * to keep both systems in sync.
    *
-   * Backend: POST /auth/change-password
-   * Request body: { old_password, new_password }
+   * Legacy mode: calls backend change-password only.
    */
   async changePassword(oldPassword: string, newPassword: string): Promise<SuccessResponse> {
+    const supabase = getSupabaseClient();
+
+    // Always call backend (it handles Supabase sync internally)
     const payload: ChangePasswordPayload = {
       old_password: oldPassword,
       new_password: newPassword,
     };
     const response = await api.post<SuccessResponse>('/auth/change-password', payload);
+
+    // If Supabase is enabled, also update via SDK for immediate session sync
+    if (supabase && config.USE_SUPABASE_AUTH) {
+      try {
+        await supabase.auth.updateUser({ password: newPassword });
+      } catch {
+        // Backend already handled it; SDK call is best-effort
+      }
+    }
+
     return response.data;
   },
 
   /**
    * Request a password reset email.
    *
-   * @param email - The email associated with the account
-   * @returns Success confirmation
-   * @throws AxiosError on server errors
+   * Supabase mode: uses supabase.auth.resetPasswordForEmail() which sends
+   * a magic link to the user's email. The deep link redirects to the app's
+   * ResetPasswordScreen where they can set a new password.
    *
-   * Backend: POST /auth/forgot-password
+   * Legacy mode: calls backend POST /auth/forgot-password.
    */
   async forgotPassword(email: string): Promise<SuccessResponse> {
+    const supabase = getSupabaseClient();
+
+    if (supabase && config.USE_SUPABASE_AUTH) {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: 'iams://reset-password',
+      });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      return {
+        success: true,
+        message: 'Password reset instructions sent to your email',
+      };
+    }
+
+    // Legacy mode
     const payload: ForgotPasswordPayload = { email };
     const response = await api.post<SuccessResponse>('/auth/forgot-password', payload);
     return response.data;
   },
 
   /**
+   * Complete password reset (Supabase mode only).
+   * Called from ResetPasswordScreen after the user clicks the deep link.
+   * The Supabase SDK automatically picks up the session from the deep link.
+   */
+  async resetPassword(newPassword: string): Promise<SuccessResponse> {
+    const supabase = getSupabaseClient();
+
+    if (!supabase) {
+      throw new Error('Password reset requires Supabase Auth');
+    }
+
+    const { error } = await supabase.auth.updateUser({
+      password: newPassword,
+    });
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return {
+      success: true,
+      message: 'Password updated successfully',
+    };
+  },
+
+  /**
+   * Resend email verification.
+   * Calls backend POST /auth/resend-verification which uses Supabase admin.
+   */
+  async resendVerification(email: string): Promise<SuccessResponse> {
+    const response = await api.post<SuccessResponse>(
+      '/auth/resend-verification',
+      { email },
+    );
+    return response.data;
+  },
+
+  /**
+   * Check the current user's email verification status.
+   * Returns the user profile; caller should check user.email_verified.
+   */
+  async checkVerificationStatus(): Promise<User> {
+    return this.getMe();
+  },
+
+  /**
    * Update the current user's profile.
-   *
-   * This hits the users router (PATCH /users/{user_id}) because the
-   * auth router does not have a profile update endpoint.
-   *
-   * @param userId - The current user's UUID
-   * @param data - Fields to update (all optional)
-   * @returns The updated user profile
-   * @throws AxiosError on validation or permission errors
-   *
-   * Backend: PATCH /users/{user_id}
-   * Response shape: UserResponse (returned directly)
+   * Uses the users router (PATCH /users/{user_id}).
    */
   async updateProfile(userId: string, data: ProfileUpdatePayload): Promise<User> {
     const response = await api.patch<User>(`/users/${userId}`, data);
     const user = response.data;
-
-    // Keep local storage in sync
     await storage.setUser(user);
-
     return user;
   },
 
@@ -349,23 +450,18 @@ export const authService = {
   // Local-only helpers (no network calls)
   // ---------------------------------------------------------------------------
 
-  /**
-   * Retrieve the user profile from local secure storage.
-   * Does not hit the network.
-   *
-   * @returns The stored user or null if not available
-   */
   async getStoredUser(): Promise<User | null> {
     return storage.getUser();
   },
 
-  /**
-   * Check whether the user has a stored access token.
-   * Does not validate the token against the backend.
-   *
-   * @returns true if an access token exists in storage
-   */
   async isAuthenticated(): Promise<boolean> {
+    const supabase = getSupabaseClient();
+
+    if (supabase && config.USE_SUPABASE_AUTH) {
+      const { data } = await supabase.auth.getSession();
+      return !!data.session;
+    }
+
     const token = await storage.getAccessToken();
     return !!token;
   },

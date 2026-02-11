@@ -7,17 +7,16 @@ http://localhost:8000/api/v1
 
 ## Authentication
 
-- **Option A (Supabase):** Mobile app uses Supabase Auth for sign up / sign in. Backend verifies Supabase-issued JWT on protected routes.
-- **Option B (Custom):** Backend issues JWT on login; mobile stores and sends token.
+**Auth Provider:** Supabase Auth. Mobile app uses Supabase client SDK (`@supabase/supabase-js`) for login, token refresh, and password reset. Backend verifies Supabase-issued JWT on all protected routes.
 
 All protected endpoints require:
 ```
-Header: Authorization: Bearer <token>
+Header: Authorization: Bearer <supabase_jwt>
 ```
 
 ---
 
-## Auth Endpoints
+## Auth Endpoints (Backend)
 
 ### Verify Student Identity (Registration Step 1)
 ```
@@ -61,7 +60,8 @@ Request:
   "first_name": "Juan",
   "last_name": "Dela Cruz",
   "role": "student",
-  "student_id": "2024-0001"
+  "student_id": "2024-0001",
+  "phone": "09171234567"
 }
 
 Response (201):
@@ -71,53 +71,17 @@ Response (201):
     "id": "uuid",
     "email": "student@email.com",
     "role": "student"
-  }
+  },
+  "message": "Account created. Please check your email to verify your account."
 }
 ```
-
-### Login
-```
-POST /auth/login
-
-Request:
-{
-  "email": "student@email.com",
-  "password": "securepassword"
-}
-
-Response (200):
-{
-  "success": true,
-  "data": {
-    "access_token": "jwt_token",
-    "refresh_token": "refresh_token",
-    "token_type": "bearer",
-    "expires_in": 1800
-  }
-}
-```
-
-### Refresh Token
-```
-POST /auth/refresh
-
-Request:
-{
-  "refresh_token": "refresh_token"
-}
-
-Response (200):
-{
-  "success": true,
-  "data": {
-    "access_token": "new_jwt_token"
-  }
-}
-```
+*Backend creates user in Supabase Auth (via Admin API) and inserts profile into local `users` table. Supabase sends email verification automatically. `phone` is optional.*
 
 ### Get Current User
 ```
 GET /auth/me
+
+Header: Authorization: Bearer <supabase_jwt>
 
 Response (200):
 {
@@ -128,9 +92,62 @@ Response (200):
     "first_name": "Juan",
     "last_name": "Dela Cruz",
     "role": "student",
-    "student_id": "2024-0001"
+    "student_id": "2024-0001",
+    "phone": "09171234567",
+    "email_confirmed": true
   }
 }
+```
+
+---
+
+## Auth Operations (Supabase Client — Mobile)
+
+These operations are handled by the Supabase client SDK on the mobile app. They do not hit backend endpoints.
+
+### Login
+```
+supabase.auth.signInWithPassword({ email, password })
+
+Returns Supabase session:
+{
+  "access_token": "supabase_jwt",
+  "refresh_token": "refresh_token",
+  "token_type": "bearer",
+  "expires_in": 1800,
+  "user": { ... }
+}
+```
+*Mobile stores tokens via Supabase client. Backend does not have a /auth/login endpoint; login is handled entirely by Supabase client. Backend checks `is_active` and `email_confirmed` on protected route access.*
+
+### Token Refresh
+```
+supabase.auth.refreshSession()
+
+Returns new Supabase session with refreshed access_token.
+```
+*Supabase client handles refresh automatically when access token expires. No backend endpoint needed.*
+
+### Request Password Reset
+```
+supabase.auth.resetPasswordForEmail(email, { redirectTo })
+
+Supabase sends password reset email to user.
+```
+
+### Complete Password Reset
+```
+supabase.auth.updateUser({ password: newPassword })
+
+Called after user clicks reset link and is redirected back to the app.
+```
+
+### Email Verification
+```
+Automatic: Supabase sends confirmation email on registration.
+User clicks verification link in email.
+Supabase sets email_confirmed_at on the user record.
+Backend syncs this status and enforces it on protected routes.
 ```
 
 ---
@@ -165,18 +182,25 @@ Response (200):
     "email": "student@email.com",
     "first_name": "Juan",
     "last_name": "Dela Cruz",
-    "role": "student"
+    "role": "student",
+    "student_id": "2024-0001",
+    "phone": "09171234567",
+    "is_active": true,
+    "email_confirmed": true,
+    "created_at": "2026-01-15T10:00:00Z"
   }
 }
 ```
+*Requires admin or own record (JWT `sub` matches path `id`).*
 
 ### Update User
 ```
 PATCH /users/{id}
 
-Request:
+Request (student/faculty — own profile):
 {
-  "first_name": "Updated Name"
+  "first_name": "Updated Name",
+  "phone": "09179876543"
 }
 
 Response (200):
@@ -185,6 +209,7 @@ Response (200):
   "data": { ... }
 }
 ```
+*Editable fields: first_name, last_name, phone. Email is immutable (returns 400). Admin can also update role, student_id, is_active.*
 
 ### Delete User (Admin)
 ```
@@ -193,7 +218,7 @@ DELETE /users/{id}
 Response (200):
 {
   "success": true,
-  "message": "User deleted"
+  "message": "User permanently deleted"
 }
 ```
 

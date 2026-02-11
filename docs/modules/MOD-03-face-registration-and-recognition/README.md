@@ -1,8 +1,11 @@
-﻿# MOD-03 Face Registration and Recognition Documentation Pack
+# MOD-03 Face Registration and Recognition Documentation Pack
 
 ## Purpose
 This folder is the full implementation reference for Module 3.
 When implementing face registration and recognition features, use this folder as the primary source of truth.
+
+## Auth Context
+All student-facing endpoints (`POST /face/register`, `GET /face/status`) are protected by **Supabase JWT middleware** from MOD-01. The recognition endpoint (`POST /face/recognize`) uses **shared API key** authentication (`X-API-Key` header) since it is called by edge devices (RPi) that do not hold Supabase JWTs.
 
 ## Coverage
 This pack documents:
@@ -39,12 +42,10 @@ This pack documents:
 - `10-traceability/`: mapping from functions to API/data/screens/tests
 
 ## Canonical Sources
-- `docs/main/master-blueprint.md`
+- `docs/main/architecture.md`
 - `docs/main/api-reference.md`
-- `docs/main/technical-specification.md`
 - `docs/main/implementation.md`
 - `docs/main/database-schema.md`
-- `docs/main/testing.md`
 - `docs/screens/screen-list.md`
 
 ## Module IDs
@@ -57,4 +58,7 @@ Module 3 documentation is considered complete when:
 - All files in this folder are populated and internally consistent.
 - Every function has test cases and acceptance criteria.
 - API docs and screen docs reference the same behavior.
+- Supabase JWT protection is documented for student-facing endpoints.
+- API key authentication is documented for edge-facing endpoints.
+- FAISS and face_registrations lifecycle includes MOD-02 deletion coordination.
 - Traceability matrix has no missing mappings.

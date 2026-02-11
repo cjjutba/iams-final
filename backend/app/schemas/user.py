@@ -46,6 +46,7 @@ class UserResponse(UserBase):
     role: UserRole
     student_id: Optional[str]
     is_active: bool
+    email_verified: bool = False
     created_at: datetime
 
     @field_validator("id", mode="before")

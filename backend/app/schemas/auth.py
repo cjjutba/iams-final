@@ -66,7 +66,7 @@ class RegisterResponse(BaseModel):
     success: bool
     message: str
     user: UserResponse
-    tokens: TokenResponse
+    tokens: Optional[TokenResponse] = None  # None when Supabase Auth is used (login via SDK)
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -74,7 +74,20 @@ class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
 
+class ResendVerificationRequest(BaseModel):
+    """Resend email verification request"""
+    email: EmailStr
+
+
 class ProfileUpdateRequest(BaseModel):
     """Profile update request (limited fields for self-service)"""
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
+
+
+class SupabaseWebhookPayload(BaseModel):
+    """Supabase Auth webhook payload"""
+    type: str  # e.g. "user.updated"
+    table: Optional[str] = None
+    record: Optional[dict] = None
+    old_record: Optional[dict] = None

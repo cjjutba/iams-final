@@ -1,31 +1,35 @@
-# Endpoint Contract: POST /auth/refresh
+# Supabase Client Operation: Token Refresh
 
 ## Function Mapping
 - `FUN-01-04`
 
-## Purpose
-Refresh access token without forcing re-login.
+## Implementation
+**Not a backend endpoint.** Token refresh is handled automatically by Supabase client SDK on mobile.
 
-## Request
+## Supabase SDK Call
+```typescript
+// Automatic — Supabase client refreshes when access token expires
+// Manual call if needed:
+const { data, error } = await supabase.auth.refreshSession()
+```
+
+## Supabase Session Response
 ```json
 {
-  "refresh_token": "refresh_token"
+  "access_token": "new_supabase_jwt",
+  "refresh_token": "new_refresh_token",
+  "token_type": "bearer",
+  "expires_in": 1800
 }
 ```
 
-## Success Response
-```json
-{
-  "success": true,
-  "data": {
-    "access_token": "new_jwt_token"
-  }
-}
-```
+## Token Lifetimes
+- Access token expiry: 30 minutes (configurable in Supabase project settings)
+- Refresh token expiry: 7 days (Supabase default)
 
 ## Error Cases
-- `401`: invalid or expired refresh token
-- `500`: token refresh service failure
+- Expired/invalid refresh token: Supabase returns error; mobile redirects to login screen.
 
 ## Caller Context
-- Automatic refresh handling in mobile auth/session layer.
+- Automatic refresh handling in Supabase client session management.
+- Mobile auth layer should handle `onAuthStateChange` events from Supabase client.

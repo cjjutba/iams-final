@@ -358,3 +358,103 @@ class TestLogoutRoute:
         """Unauthenticated logout attempt should return 401/403."""
         response = client.post(f"{API}/auth/logout")
         assert response.status_code in (401, 403)
+
+
+# ===================================================================
+# Resend Verification
+# ===================================================================
+
+
+class TestResendVerificationRoute:
+    """Tests for POST /api/v1/auth/resend-verification."""
+
+    def test_resend_verification_success(self, client):
+        """Should return success even if email is unknown (prevents enumeration)."""
+        response = client.post(f"{API}/auth/resend-verification", json={
+            "email": "any@test.edu",
+        })
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+
+    def test_resend_verification_missing_email(self, client):
+        """Missing email should return 422."""
+        response = client.post(f"{API}/auth/resend-verification", json={})
+        assert response.status_code == 422
+
+
+# ===================================================================
+# Forgot Password
+# ===================================================================
+
+
+class TestForgotPasswordRoute:
+    """Tests for POST /api/v1/auth/forgot-password."""
+
+    def test_forgot_password_success(self, client):
+        """Should return success regardless of email existence."""
+        response = client.post(f"{API}/auth/forgot-password", json={
+            "email": "test@test.edu",
+        })
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+
+    def test_forgot_password_missing_email(self, client):
+        """Missing email should return 422."""
+        response = client.post(f"{API}/auth/forgot-password", json={})
+        assert response.status_code == 422
+
+
+# ===================================================================
+# Supabase Webhook
+# ===================================================================
+
+
+class TestSupabaseWebhookRoute:
+    """Tests for POST /api/v1/auth/webhook/supabase."""
+
+    def test_webhook_missing_secret(self, client):
+        """Request without webhook secret header should return 401."""
+        response = client.post(f"{API}/auth/webhook/supabase", json={
+            "type": "UPDATE",
+            "table": "users",
+            "record": {"id": str(uuid.uuid4()), "email_confirmed_at": "2024-01-01T00:00:00"},
+        })
+        assert response.status_code == 401
+
+    def test_webhook_invalid_secret(self, client):
+        """Request with wrong webhook secret should return 401."""
+        response = client.post(
+            f"{API}/auth/webhook/supabase",
+            json={
+                "type": "UPDATE",
+                "table": "users",
+                "record": {"id": str(uuid.uuid4()), "email_confirmed_at": "2024-01-01T00:00:00"},
+            },
+            headers={"x-webhook-secret": "wrong-secret"},
+        )
+        assert response.status_code == 401
+
+
+# ===================================================================
+# Registration Response includes email_verified
+# ===================================================================
+
+
+class TestRegistrationResponseFormat:
+    """Tests that registration response includes email_verified field."""
+
+    def test_register_response_has_email_verified(self, client):
+        """Registration response user object should include email_verified."""
+        payload = {
+            "student_id": "STU-2024-100",
+            "email": "newformat@test.edu",
+            "password": "StrongPass1",
+            "first_name": "New",
+            "last_name": "Format",
+        }
+        response = client.post(f"{API}/auth/register", json=payload)
+        assert response.status_code == 201
+        data = response.json()
+        assert "email_verified" in data["user"]

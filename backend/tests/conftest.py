@@ -20,9 +20,12 @@ from PIL import Image
 # ============================================================
 os.environ.setdefault("SUPABASE_URL", "https://test-project.supabase.co")
 os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key-for-testing-only")
+os.environ.setdefault("SUPABASE_SERVICE_KEY", "test-service-key-for-testing-only")
 os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing-32chars!!")
 os.environ.setdefault("DEBUG", "false")
+os.environ.setdefault("USE_SUPABASE_AUTH", "false")
+os.environ.setdefault("SUPABASE_WEBHOOK_SECRET", "test-webhook-secret-for-testing")
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -161,7 +164,7 @@ def client(db_session):
 
 def _create_user(db_session, *, role, email, first_name, last_name,
                  student_id=None, password="TestPass123",
-                 is_active=True):
+                 is_active=True, email_verified=True):
     """
     Helper to insert a User row directly into the test database.
 
@@ -179,6 +182,7 @@ def _create_user(db_session, *, role, email, first_name, last_name,
         last_name=last_name,
         student_id=student_id,
         is_active=is_active,
+        email_verified=email_verified,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     )

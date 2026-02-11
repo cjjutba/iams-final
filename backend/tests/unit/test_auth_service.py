@@ -28,6 +28,8 @@ def _make_user(
     password="TestPass123",
     student_id="STU-001",
     is_active=True,
+    email_verified=True,
+    supabase_user_id=None,
 ):
     """
     Build a mock User object that quacks like the SQLAlchemy model.
@@ -47,6 +49,9 @@ def _make_user(
     user.student_id = student_id
     user.phone = None
     user.is_active = is_active
+    user.email_verified = email_verified
+    user.email_verified_at = datetime.utcnow() if email_verified else None
+    user.supabase_user_id = supabase_user_id
     user.created_at = datetime.utcnow()
     user.updated_at = datetime.utcnow()
     return user
@@ -475,3 +480,122 @@ class TestGenerateTokens:
         _, tokens = service.login("student@test.edu", "TestPass123")
 
         assert tokens["token_type"] == "bearer"
+
+
+# ===================================================================
+# login - Supabase user (no password_hash)
+# ===================================================================
+
+
+class TestLoginSupabaseUser:
+    """Test login behavior for users who only have Supabase auth (no local password)."""
+
+    def test_login_no_password_hash_raises(self):
+        """A user with password_hash=None should be rejected with helpful message."""
+        service, repo = _make_auth_service()
+        user = _make_user(password="TestPass123")
+        user.password_hash = None  # Supabase-managed account
+        repo.get_by_identifier.return_value = user
+
+        with pytest.raises(AuthenticationError, match="Supabase Auth"):
+            service.login("student@test.edu", "AnyPassword1")
+
+
+# ===================================================================
+# handle_email_verified
+# ===================================================================
+
+
+class TestHandleEmailVerified:
+    """Tests for AuthService.handle_email_verified()."""
+
+    def test_handle_email_verified_success(self):
+        """Valid supabase_user_id should mark user as email_verified."""
+        mock_db = MagicMock()
+        service = AuthService(mock_db)
+
+        sb_user_id = str(uuid.uuid4())
+        user = _make_user(email_verified=False)
+        user.supabase_user_id = uuid.UUID(sb_user_id)
+
+        # Mock the query chain
+        mock_query = MagicMock()
+        mock_db.query.return_value = mock_query
+        mock_query.filter.return_value = mock_query
+        mock_query.first.return_value = user
+
+        result = service.handle_email_verified(sb_user_id)
+
+        assert result is not None
+        assert user.email_verified is True
+        assert user.email_verified_at is not None
+        mock_db.commit.assert_called_once()
+
+    def test_handle_email_verified_user_not_found(self):
+        """Unknown supabase_user_id should return None."""
+        mock_db = MagicMock()
+        service = AuthService(mock_db)
+
+        mock_query = MagicMock()
+        mock_db.query.return_value = mock_query
+        mock_query.filter.return_value = mock_query
+        mock_query.first.return_value = None
+
+        result = service.handle_email_verified(str(uuid.uuid4()))
+
+        assert result is None
+        mock_db.commit.assert_not_called()
+
+    def test_handle_email_verified_invalid_uuid(self):
+        """Invalid UUID string should return None."""
+        mock_db = MagicMock()
+        service = AuthService(mock_db)
+
+        result = service.handle_email_verified("not-a-uuid")
+
+        assert result is None
+
+
+# ===================================================================
+# resend_verification_email
+# ===================================================================
+
+
+class TestResendVerificationEmail:
+    """Tests for AuthService.resend_verification_email()."""
+
+    def test_resend_returns_success_in_legacy_mode(self):
+        """In legacy mode (USE_SUPABASE_AUTH=False), returns success without calling Supabase."""
+        service, _ = _make_auth_service()
+        result = service.resend_verification_email("test@test.edu")
+
+        assert result["success"] is True
+        assert "message" in result
+
+
+# ===================================================================
+# forgot_password
+# ===================================================================
+
+
+class TestForgotPassword:
+    """Tests for AuthService.forgot_password()."""
+
+    def test_forgot_password_legacy_mode(self):
+        """In legacy mode, forgot_password returns success message."""
+        service, repo = _make_auth_service()
+        repo.get_by_email.return_value = _make_user()
+
+        result = service.forgot_password("student@test.edu")
+
+        assert result["success"] is True
+        assert "message" in result
+
+    def test_forgot_password_unknown_email_returns_success(self):
+        """Unknown email should return same success to prevent enumeration."""
+        service, repo = _make_auth_service()
+        repo.get_by_email.return_value = None
+
+        result = service.forgot_password("unknown@test.edu")
+
+        assert result["success"] is True

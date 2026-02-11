@@ -46,6 +46,15 @@
 - sqlalchemy.url is NOT set in alembic.ini -- overridden in env.py via config.set_main_option()
 - See [migration-process.md](migration-process.md) for detailed migration workflow and best practices
 
+## Scripts Pattern (`backend/scripts/`)
+- All scripts use `sys.path.insert(0, str(Path(__file__).resolve().parents[1]))` to make `app` importable
+- Run via `python -m scripts.<name>` from the `backend/` directory
+- Use `SessionLocal()` directly (not `get_db()` generator) for standalone scripts
+- Pattern: open session in try, commit on success, rollback on error, close in finally
+- Use `argparse` for CLI flags (e.g., `--confirm`, `--dry-run`)
+- Supabase admin client: lazy-import inside function so dry-run works without credentials
+- `migrate_to_supabase.py`: migrates users without supabase_user_id, sets email_confirm=True, temp passwords
+
 ## Environment Setup
 - Backend venv: `C:\.cjjutba\.thesis\iams\backend\venv`
 - .env file: `C:\.cjjutba\.thesis\iams\backend\.env`

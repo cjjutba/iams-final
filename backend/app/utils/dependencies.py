@@ -12,9 +12,14 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.config import logger
+from app.config import settings, logger
 from app.models.user import User, UserRole
-from app.utils.security import verify_token, extract_bearer_token, verify_supabase_token
+from app.utils.security import (
+    verify_token,
+    extract_bearer_token,
+    verify_supabase_token,
+    is_supabase_token,
+)
 from app.utils.exceptions import AuthenticationError, AuthorizationError, NotFoundError
 
 
@@ -43,11 +48,15 @@ async def get_current_user(
     db: Session = Depends(get_db)
 ) -> User:
     """
-    Get current authenticated user from JWT token
+    Get current authenticated user from JWT token.
 
-    Supports both:
-    - Custom JWT tokens (for faculty)
-    - Supabase Auth tokens (for students)
+    Supports dual authentication:
+    - Supabase Auth tokens (detected via issuer / audience claims)
+    - Custom JWT tokens (legacy / fallback)
+
+    Enforces:
+    - is_active must be True
+    - email_verified must be True (when USE_SUPABASE_AUTH is enabled)
 
     Args:
         credentials: HTTP Bearer credentials
@@ -57,35 +66,59 @@ async def get_current_user(
         Current user object
 
     Raises:
-        AuthenticationError: If token is invalid or user not found
+        HTTPException 401: If token is invalid or user not found
+        HTTPException 403: If email is not verified or account inactive
     """
     token = credentials.credentials
 
     try:
-        # Try to decode as custom JWT first
-        payload = verify_token(token)
-        user_id = payload.get("user_id")
+        user_id = None
+
+        # Route to the correct verifier based on token claims
+        if is_supabase_token(token):
+            payload = verify_supabase_token(token)
+            user_id = payload.get("sub")
+        else:
+            try:
+                payload = verify_token(token)
+                user_id = payload.get("user_id")
+            except AuthenticationError:
+                # Custom JWT failed — try Supabase verification as fallback
+                payload = verify_supabase_token(token)
+                user_id = payload.get("sub")
 
         if not user_id:
-            # Try Supabase token
-            supabase_payload = await verify_supabase_token(token)
-            user_id = supabase_payload.get("sub")
+            raise AuthenticationError("Invalid token: missing user identifier")
 
-        if not user_id:
-            raise AuthenticationError("Invalid token: missing user_id")
+        # Fetch user from database (try by id first, then supabase_user_id)
+        try:
+            user_uuid = uuid.UUID(user_id)
+        except ValueError:
+            raise AuthenticationError("Invalid user identifier format")
 
-        # Fetch user from database
-        # Convert string to UUID for cross-dialect compatibility (PostgreSQL + SQLite)
-        user = db.query(User).filter(User.id == uuid.UUID(user_id)).first()
+        user = db.query(User).filter(User.id == user_uuid).first()
+
+        if not user:
+            user = db.query(User).filter(User.supabase_user_id == user_uuid).first()
 
         if not user:
             raise NotFoundError(f"User not found: {user_id}")
 
         if not user.is_active:
-            raise AuthenticationError("User account is inactive")
+            raise AuthorizationError("User account is inactive")
+
+        # Enforce email verification when Supabase Auth is active
+        if settings.USE_SUPABASE_AUTH and not user.email_verified:
+            raise AuthorizationError("Email address has not been verified")
 
         return user
 
+    except AuthorizationError as e:
+        logger.warning(f"Authorization failed: {e.message}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=e.message,
+        )
     except (AuthenticationError, NotFoundError) as e:
         logger.error(f"Authentication failed: {e.message}")
         raise HTTPException(
