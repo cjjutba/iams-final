@@ -43,7 +43,8 @@
       "Bash(pytest:*)",
       "Bash(\"venv\\\\Scripts\\\\python.exe\" -m pytest tests/unit/test_face_service.py -v)",
       "Bash(\"venv\\\\Scripts\\\\python.exe\" -m pytest --tb=short -q)",
-      "mcp__supabase__execute_sql"
+      "mcp__supabase__execute_sql",
+      "Bash(venvScriptspython -m scripts.seed_simulation)"
     ]
   },
   "enableAllProjectMcpServers": true,

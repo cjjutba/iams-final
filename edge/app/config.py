@@ -6,7 +6,10 @@ Manages environment variables and configuration settings for the Raspberry Pi ed
 Environment variables:
 - BACKEND_URL: Backend API base URL (required)
 - ROOM_ID: Room identifier (required)
-- CAMERA_INDEX: Camera device index (default: 0)
+- CAMERA_SOURCE: Camera source type - "picamera", "usb", "rtsp" (default: auto-detect)
+- RTSP_URL: RTSP stream URL for IP cameras (e.g., rtsp://admin:pass@192.168.1.100/Preview_01_main)
+- RTSP_TRANSPORT: RTSP transport protocol - "tcp" or "udp" (default: tcp)
+- CAMERA_INDEX: USB camera device index (default: 0)
 - CAMERA_WIDTH: Camera capture width (default: 640)
 - CAMERA_HEIGHT: Camera capture height (default: 480)
 - CAMERA_FPS: Camera frame rate (default: 15)
@@ -36,6 +39,15 @@ class Config:
     ROOM_ID: str = os.getenv("ROOM_ID", "")
 
     # ===== Camera Configuration =====
+    # Source: "auto" (try picamera→rtsp→usb), "picamera", "rtsp", "usb"
+    CAMERA_SOURCE: str = os.getenv("CAMERA_SOURCE", "auto")
+
+    # RTSP settings (for IP cameras like Reolink P340)
+    RTSP_URL: str = os.getenv("RTSP_URL", "")
+    RTSP_TRANSPORT: str = os.getenv("RTSP_TRANSPORT", "tcp")  # tcp or udp
+    RTSP_RECONNECT_DELAY: int = int(os.getenv("RTSP_RECONNECT_DELAY", "5"))
+
+    # USB / general camera settings
     CAMERA_INDEX: int = int(os.getenv("CAMERA_INDEX", "0"))
     CAMERA_WIDTH: int = int(os.getenv("CAMERA_WIDTH", "640"))
     CAMERA_HEIGHT: int = int(os.getenv("CAMERA_HEIGHT", "480"))
@@ -83,6 +95,20 @@ class Config:
         # Room ID is required
         if not cls.ROOM_ID:
             errors.append("ROOM_ID is required")
+
+        # Camera source validation
+        if cls.CAMERA_SOURCE not in ("auto", "picamera", "rtsp", "usb"):
+            errors.append(f"Invalid CAMERA_SOURCE: {cls.CAMERA_SOURCE} (must be auto/picamera/rtsp/usb)")
+
+        # RTSP validation
+        if cls.CAMERA_SOURCE == "rtsp" and not cls.RTSP_URL:
+            errors.append("RTSP_URL is required when CAMERA_SOURCE=rtsp")
+
+        if cls.RTSP_URL and not cls.RTSP_URL.startswith("rtsp://"):
+            errors.append(f"RTSP_URL must start with rtsp:// (got: {cls.RTSP_URL[:30]}...)")
+
+        if cls.RTSP_TRANSPORT not in ("tcp", "udp"):
+            errors.append(f"Invalid RTSP_TRANSPORT: {cls.RTSP_TRANSPORT} (must be tcp/udp)")
 
         # Camera settings validation
         if cls.CAMERA_WIDTH <= 0 or cls.CAMERA_HEIGHT <= 0:

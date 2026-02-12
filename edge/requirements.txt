@@ -1,27 +1,28 @@
 # IAMS Edge Device Dependencies
-# Raspberry Pi ARM-compatible Python packages
+# Raspberry Pi ARM64 (aarch64) compatible packages
+# Tested on: Raspberry Pi 4/5 with Raspberry Pi OS (64-bit) + Python 3.11
 
 # Core dependencies
-numpy==1.24.3
-opencv-python==4.8.1.78
-Pillow==10.1.0
+numpy>=1.24,<2.0
+Pillow>=10.0,<11.0
 
-# MediaPipe Face Detection (ARM-compatible)
-# Note: MediaPipe supports ARM64 (aarch64) for Raspberry Pi 4/5
-mediapipe==0.10.8
+# OpenCV — use headless on RPi (no GUI/Qt required)
+# On RPi: pip install opencv-python-headless
+# On desktop (for testing): pip install opencv-python
+opencv-python-headless>=4.8,<5.0
 
-# Raspberry Pi Camera (Pi Camera Module)
-# Note: picamera2 requires Raspberry Pi OS Bullseye or later
-# picamera2>=0.3.12  # Uncomment if using Pi Camera Module
+# MediaPipe Face Detection
+# ARM64 support available since 0.10.9+
+# Note: If pip fails on RPi, try: pip install mediapipe --no-deps
+#   then install missing deps manually
+mediapipe>=0.10.9
 
-# HTTP client
-httpx==0.25.2
+# HTTP client (async)
+httpx>=0.25,<1.0
 
 # Environment variables
-python-dotenv==1.0.0
+python-dotenv>=1.0,<2.0
 
-# Optional: USB camera fallback uses OpenCV (already included above)
-
-# Development dependencies (optional)
-# pytest==7.4.3
-# pytest-asyncio==0.21.1
+# Raspberry Pi Camera (Pi Camera Module)
+# Uncomment if using Pi Camera Module instead of RTSP IP camera
+# picamera2>=0.3.12

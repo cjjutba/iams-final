@@ -32,6 +32,10 @@ build/
 # FAISS
 data/faiss/*.index
 
+# MediaPipe models (downloaded at runtime)
+edge/app/.models/
+edge/tools/.cache/
+
 # Logs
 *.log
 logs/

@@ -11,6 +11,7 @@ Features:
 - Handles multiple faces per frame
 """
 
+import os
 import numpy as np
 import cv2
 from typing import List, Tuple, Optional
@@ -19,6 +20,46 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
 from app.config import config, logger
+
+# MediaPipe model URLs
+_MODEL_URLS = {
+    0: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite",
+    1: "https://storage.googleapis.com/mediapipe-assets/face_detection_full_range_sparse.tflite",
+}
+
+_MODEL_FILENAMES = {
+    0: "blaze_face_short_range.tflite",
+    1: "face_detection_full_range_sparse.tflite",
+}
+
+
+def _get_model_path(model_selection: int = 0) -> str:
+    """
+    Get path to MediaPipe face detection model, downloading if not cached.
+
+    Args:
+        model_selection: 0 = short-range (up to 2m), 1 = full-range (up to 5m)
+
+    Returns:
+        Path to the .tflite model file
+    """
+    import urllib.request
+
+    cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".models")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    filename = _MODEL_FILENAMES.get(model_selection, _MODEL_FILENAMES[0])
+    model_path = os.path.join(cache_dir, filename)
+
+    if not os.path.exists(model_path):
+        url = _MODEL_URLS.get(model_selection, _MODEL_URLS[0])
+        logger.info(f"Downloading MediaPipe face detection model ({filename})...")
+        urllib.request.urlretrieve(url, model_path)
+        logger.info(f"Model saved to {model_path}")
+    else:
+        logger.debug(f"Using cached model: {model_path}")
+
+    return model_path
 
 
 class FaceBox:
@@ -74,22 +115,25 @@ class FaceDetector:
         """
         Initialize MediaPipe Face Detection model.
 
+        Downloads model on first run (cached for subsequent calls).
+
         Returns:
             True if initialization successful, False otherwise
         """
         try:
             logger.info("Initializing MediaPipe Face Detector...")
 
+            # Download/cache model file
+            model_path = _get_model_path(config.DETECTION_MODEL)
+
             # Create face detector options
             base_options = python.BaseOptions(
-                model_asset_path=None  # Uses default model bundled with MediaPipe
+                model_asset_path=model_path
             )
 
             options = vision.FaceDetectorOptions(
                 base_options=base_options,
                 min_detection_confidence=config.DETECTION_CONFIDENCE,
-                # model_selection: 0 = short-range (up to 2m), 1 = full-range (up to 5m)
-                # Short-range is faster and more accurate for classroom scenarios
             )
 
             self.detector = vision.FaceDetector.create_from_options(options)
