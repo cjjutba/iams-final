@@ -32,6 +32,10 @@ build/
 # FAISS
 data/faiss/*.index
 
+# MediaPipe models (downloaded at runtime)
+edge/app/.models/
+edge/tools/.cache/
+
 # Logs
 *.log
 logs/
@@ -43,6 +47,7 @@ data/uploads/*
 # OS
 .DS_Store
 Thumbs.db
+nul
 
 # Flutter
 mobile/.dart_tool/

@@ -1,0 +1,353 @@
+"""
+Face Service
+
+Business logic for face registration and recognition.
+Orchestrates FaceNet model, FAISS search, and database operations.
+"""
+
+from typing import List, Tuple, Optional
+from fastapi import UploadFile
+from sqlalchemy.orm import Session
+import numpy as np
+
+from app.repositories.face_repository import FaceRepository
+from app.services.ml.face_recognition import facenet_model
+from app.services.ml.faiss_manager import faiss_manager
+from app.utils.exceptions import ValidationError, FaceRecognitionError, NotFoundError
+from app.config import settings, logger
+
+
+class FaceService:
+    """Service for face registration and recognition operations"""
+
+    def __init__(self, db: Session):
+        self.db = db
+        self.face_repo = FaceRepository(db)
+        self.facenet = facenet_model
+        self.faiss = faiss_manager
+
+    async def register_face(
+        self,
+        user_id: str,
+        images: List[UploadFile]
+    ) -> Tuple[int, str]:
+        """
+        Register user's face with multiple images
+
+        Process:
+        1. Validate images (3-5 images required)
+        2. Generate embeddings for each image
+        3. Average embeddings → single 512-dim vector
+        4. Normalize vector
+        5. Add to FAISS index
+        6. Save to database
+
+        Args:
+            user_id: User UUID
+            images: List of 3-5 face images
+
+        Returns:
+            Tuple of (embedding_id, message)
+
+        Raises:
+            ValidationError: If validation fails
+            FaceRecognitionError: If face processing fails
+        """
+        # Validate number of images
+        if len(images) < settings.MIN_FACE_IMAGES:
+            raise ValidationError(
+                f"Minimum {settings.MIN_FACE_IMAGES} images required for registration"
+            )
+
+        if len(images) > settings.MAX_FACE_IMAGES:
+            raise ValidationError(
+                f"Maximum {settings.MAX_FACE_IMAGES} images allowed"
+            )
+
+        # Check if user already has registered face
+        existing = self.face_repo.get_by_user(user_id)
+        if existing:
+            raise ValidationError("User already has registered face. Use re-register to update.")
+
+        logger.info(f"Registering face for user {user_id} with {len(images)} images")
+
+        # Generate embeddings for each image
+        embeddings = []
+        for i, image_file in enumerate(images):
+            try:
+                # Read image bytes
+                image_bytes = await image_file.read()
+
+                # Validate file size
+                if len(image_bytes) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
+                    raise ValidationError(f"Image {i+1} exceeds size limit")
+
+                # Generate embedding
+                embedding = self.facenet.generate_embedding(image_bytes)
+                embeddings.append(embedding)
+
+                logger.debug(f"Generated embedding for image {i+1}/{len(images)}")
+
+            except ValueError as e:
+                raise FaceRecognitionError(f"Image {i+1}: {str(e)}")
+            except Exception as e:
+                logger.error(f"Failed to process image {i+1}: {e}")
+                raise FaceRecognitionError(f"Failed to process image {i+1}")
+
+        if not embeddings:
+            raise FaceRecognitionError("No valid face embeddings generated")
+
+        # Average embeddings to get single representative embedding
+        avg_embedding = np.mean(embeddings, axis=0)
+
+        # L2 normalize (for cosine similarity)
+        avg_embedding = avg_embedding / np.linalg.norm(avg_embedding)
+
+        # Add to FAISS index
+        try:
+            faiss_id = self.faiss.add(avg_embedding, user_id)
+        except Exception as e:
+            logger.error(f"Failed to add to FAISS: {e}")
+            raise FaceRecognitionError("Failed to index face embedding")
+
+        # Convert embedding to bytes for database storage
+        embedding_bytes = avg_embedding.astype(np.float32).tobytes()
+
+        # Save to database
+        try:
+            self.face_repo.create(user_id, faiss_id, embedding_bytes)
+            logger.info(f"Face registered successfully for user {user_id} (FAISS ID: {faiss_id})")
+        except Exception as e:
+            logger.error(f"Failed to save face registration: {e}")
+            # Rollback FAISS addition (rebuild will be needed)
+            raise FaceRecognitionError("Failed to save face registration")
+
+        # Save FAISS index
+        self.faiss.save()
+
+        return faiss_id, "Face registered successfully"
+
+    async def recognize_face(
+        self,
+        image_bytes: bytes,
+        threshold: Optional[float] = None
+    ) -> Tuple[Optional[str], Optional[float]]:
+        """
+        Recognize face from image
+
+        Args:
+            image_bytes: Image data (JPEG/PNG)
+            threshold: Optional similarity threshold (default from settings)
+
+        Returns:
+            Tuple of (user_id, confidence) or (None, None) if no match
+
+        Raises:
+            FaceRecognitionError: If face processing fails
+        """
+        try:
+            # Generate embedding
+            embedding = self.facenet.generate_embedding(image_bytes)
+
+            # Search FAISS
+            results = self.faiss.search(embedding, k=1, threshold=threshold)
+
+            if results:
+                user_id, confidence = results[0]
+                logger.debug(f"Face recognized: user {user_id}, confidence {confidence:.3f}")
+                return user_id, confidence
+            else:
+                logger.debug("No face match found")
+                return None, None
+
+        except Exception as e:
+            logger.error(f"Face recognition failed: {e}")
+            raise FaceRecognitionError(f"Face recognition failed: {str(e)}")
+
+    async def recognize_batch(
+        self,
+        images_bytes: List[bytes],
+        threshold: Optional[float] = None
+    ) -> List[dict]:
+        """
+        Recognize multiple faces
+
+        Args:
+            images_bytes: List of image data
+            threshold: Optional similarity threshold
+
+        Returns:
+            List of recognition results
+        """
+        results = []
+
+        for i, img_bytes in enumerate(images_bytes):
+            try:
+                user_id, confidence = await self.recognize_face(img_bytes, threshold)
+
+                results.append({
+                    "index": i,
+                    "matched": user_id is not None,
+                    "user_id": user_id,
+                    "confidence": confidence
+                })
+
+            except Exception as e:
+                logger.warning(f"Failed to recognize face {i}: {e}")
+                results.append({
+                    "index": i,
+                    "matched": False,
+                    "user_id": None,
+                    "confidence": None,
+                    "error": str(e)
+                })
+
+        return results
+
+    async def deregister_face(self, user_id: str):
+        """
+        Deregister user's face
+
+        Marks face registration as inactive and rebuilds FAISS index.
+
+        Args:
+            user_id: User UUID
+
+        Raises:
+            NotFoundError: If no face registration found
+        """
+        # Deactivate in database
+        self.face_repo.deactivate(user_id)
+
+        logger.info(f"Face deregistered for user {user_id}")
+
+        # Rebuild FAISS index
+        await self.rebuild_faiss_index()
+
+    async def reregister_face(
+        self,
+        user_id: str,
+        images: List[UploadFile]
+    ) -> Tuple[int, str]:
+        """
+        Re-register user's face (update)
+
+        Deletes old face registration and registers new one.
+
+        Args:
+            user_id: User UUID
+            images: New face images
+
+        Returns:
+            Tuple of (embedding_id, message)
+        """
+        # Delete old registration (if exists)
+        try:
+            old_registration = self.face_repo.get_by_user(user_id)
+            if old_registration:
+                self.face_repo.delete(str(old_registration.id))
+                logger.info(f"Deleted old face registration for user {user_id}")
+        except NotFoundError:
+            logger.info(f"No previous face registration found for user {user_id}")
+
+        # Register new face
+        faiss_id, message = await self.register_face(user_id, images)
+
+        return faiss_id, "Face re-registered successfully"
+
+    async def rebuild_faiss_index(self):
+        """
+        Rebuild FAISS index from active face registrations
+
+        This is necessary after deletions since IndexFlatIP doesn't support native deletion.
+        """
+        logger.info("Rebuilding FAISS index from active registrations...")
+
+        # Get all active face registrations
+        active_registrations = self.face_repo.get_active_embeddings()
+
+        if not active_registrations:
+            logger.warning("No active face registrations found")
+            self.faiss.index = self.faiss._create_index()
+            self.faiss.user_map = {}
+            self.faiss.save()
+            return
+
+        # Prepare embeddings data
+        embeddings_data = []
+        for reg in active_registrations:
+            # Convert bytes back to numpy array
+            embedding = np.frombuffer(reg.embedding_vector, dtype=np.float32)
+            embeddings_data.append((embedding, str(reg.user_id)))
+
+        # Rebuild FAISS index
+        self.faiss.rebuild(embeddings_data)
+
+        logger.info(f"FAISS index rebuilt with {len(embeddings_data)} embeddings")
+
+    def get_face_status(self, user_id: str) -> dict:
+        """
+        Get face registration status for user
+
+        Args:
+            user_id: User UUID
+
+        Returns:
+            Dictionary with registration status
+        """
+        registration = self.face_repo.get_by_user(user_id)
+
+        if registration:
+            return {
+                "registered": True,
+                "registered_at": registration.registered_at,
+                "embedding_id": registration.embedding_id
+            }
+        else:
+            return {
+                "registered": False,
+                "registered_at": None,
+                "embedding_id": None
+            }
+
+    def get_statistics(self) -> dict:
+        """
+        Get face recognition statistics
+
+        Returns:
+            Dictionary with stats
+        """
+        active_count = self.face_repo.count_active()
+        faiss_stats = self.faiss.get_stats()
+
+        return {
+            "active_registrations": active_count,
+            "faiss_vectors": faiss_stats["total_vectors"],
+            "faiss_initialized": faiss_stats["initialized"]
+        }
+
+    def load_model(self):
+        """
+        Load FaceNet model (called during startup)
+        """
+        if self.facenet.model is None:
+            self.facenet.load_model()
+
+    def load_faiss_index(self):
+        """
+        Load FAISS index (called during startup)
+        """
+        self.faiss.load_or_create_index()
+
+        # Load user mappings from database
+        active_registrations = self.face_repo.get_active_embeddings()
+        for reg in active_registrations:
+            self.faiss.user_map[reg.embedding_id] = str(reg.user_id)
+
+        logger.info(f"Loaded {len(self.faiss.user_map)} user mappings")
+
+    def save_faiss_index(self):
+        """
+        Save FAISS index (called during shutdown)
+        """
+        self.faiss.save()

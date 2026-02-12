@@ -56,11 +56,15 @@ Production: https://api.domain.com/api/v1
 ```
 
 ### Authentication
-- Type: Bearer Token (JWT) — from Supabase Auth or backend-issued
-- Header: `Authorization: Bearer <token>`
-- Token expiry: 30 minutes (configurable)
-- Refresh token expiry: 7 days (Supabase)
-- Mobile: Supabase client for login/signup; backend verifies JWT on protected routes
+- **Provider:** Supabase Auth (chosen for MVP)
+- **Type:** Bearer Token (Supabase-issued JWT)
+- **Header:** `Authorization: Bearer <supabase_jwt>`
+- **Token expiry:** 30 minutes (configurable in Supabase project settings)
+- **Refresh token expiry:** 7 days (Supabase default)
+- **Mobile:** Uses Supabase client SDK (`@supabase/supabase-js`) for login, refresh, and password reset
+- **Backend:** Verifies Supabase JWT on all protected routes using JWT secret
+- **Email verification:** Required; Supabase sends confirmation email on registration
+- **Password hashing:** bcrypt, cost factor 12 (handled by Supabase Auth internally)
 
 ### Rate Limits
 | Endpoint Type | Limit |
@@ -301,9 +305,12 @@ Heartbeat: 30 seconds
 ### Authentication
 | Mechanism | Details |
 |-----------|---------|
-| Password hashing | bcrypt, cost factor 12 |
-| JWT algorithm | HS256 |
-| Token storage | Secure storage (mobile) |
+| Auth provider | Supabase Auth |
+| Password hashing | bcrypt, cost factor 12 (Supabase Auth) |
+| JWT algorithm | HS256 (Supabase JWT secret) |
+| JWT issuer | Supabase project |
+| Token storage | SecureStore / Keychain (mobile) |
+| Email verification | Required; Supabase sends confirmation email on signup |
 
 ### Data Protection
 | Data | Protection |

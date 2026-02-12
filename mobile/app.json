@@ -1,0 +1,63 @@
+{
+  "expo": {
+    "name": "IAMS",
+    "slug": "iams",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/iams-icon.png",
+    "userInterfaceStyle": "light",
+    "scheme": "iams",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/iams-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.jrmsu.iams",
+      "buildNumber": "1.0.0"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/iams-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.jrmsu.iams",
+      "versionCode": 1,
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ],
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-dev-client",
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow IAMS to access your camera for face registration."
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#FFFFFF",
+          "image": "./assets/iams-icon.png",
+          "imageWidth": 180
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "d9f8c7b6-5a4e-3d2c-1b0a-9e8f7d6c5b4a"
+      }
+    }
+  }
+}

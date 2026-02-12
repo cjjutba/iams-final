@@ -48,7 +48,7 @@ CLASSROOM                    BACKEND (Laptop or Cloud VM)
 | Component | Responsibility |
 |-----------|----------------|
 | API Gateway | Handle all HTTP/WebSocket requests |
-| Auth | Supabase Auth or JWT validation (backend verifies tokens) |
+| Auth | Supabase Auth — backend verifies Supabase-issued JWT on protected routes |
 | Face Service | Generate embeddings, match faces |
 | Tracking Service | Track identities across frames |
 | Presence Service | Log presence, detect early leave |
@@ -58,7 +58,7 @@ CLASSROOM                    BACKEND (Laptop or Cloud VM)
 | Store | Purpose |
 |-------|---------|
 | Supabase (PostgreSQL) | Users, schedules, attendance records |
-| Supabase Auth | Login, registration (students); faculty pre-seeded |
+| Supabase Auth | Authentication provider; mobile uses Supabase client SDK for login/refresh/password-reset; backend creates users via Admin API on registration; email verification on signup |
 | FAISS (on backend) | Face embeddings for fast similarity search |
 | File System | Registered face images (optional backup) |
 
@@ -97,11 +97,12 @@ CLASSROOM                    BACKEND (Laptop or Cloud VM)
 |------------|----------|--------------|
 | RPi → Backend | HTTP POST | 8000 (or cloud URL) |
 | Mobile → Backend | HTTP/WebSocket | 8000 or HTTPS |
-| Mobile → Supabase | HTTPS | Auth, optional data |
+| Mobile → Supabase | HTTPS | Auth (login, refresh, password reset via Supabase client SDK) |
 | Backend → Supabase | TCP (Postgres) | 5432 or Supabase pooler |
 
 ## Security
-- JWT tokens (Supabase Auth or custom) for API authentication
+- Supabase Auth for authentication; backend verifies Supabase-issued JWT
+- Email verification required on student registration
 - HTTPS in production and for Supabase
 - Face embeddings stored (not raw images)
 - Role-based access (student, faculty, admin)
