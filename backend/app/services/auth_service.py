@@ -232,6 +232,13 @@ class AuthService:
 
         user = self.user_repo.create(user_data)
 
+        # Auto-enroll in matching schedules
+        from app.services.enrollment_service import EnrollmentService
+        enrollment_service = EnrollmentService(self.db)
+        enrollments = enrollment_service.auto_enroll_student(user.id, normalized_id)
+        if enrollments:
+            self.db.commit()
+
         logger.info(f"Student registered via Supabase Auth: {user.email}")
         return user, {
             "message": "Account created. Please check your email to verify your address.",
@@ -252,6 +259,14 @@ class AuthService:
         }
 
         user = self.user_repo.create(user_data)
+
+        # Auto-enroll in matching schedules
+        from app.services.enrollment_service import EnrollmentService
+        enrollment_service = EnrollmentService(self.db)
+        enrollments = enrollment_service.auto_enroll_student(user.id, normalized_id)
+        if enrollments:
+            self.db.commit()
+
         tokens = self._generate_tokens(user)
 
         logger.info(f"Student registered (legacy): {user.email}")

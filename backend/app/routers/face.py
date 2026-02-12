@@ -159,13 +159,11 @@ async def recognize_face(
     face_service = FaceService(db)
 
     try:
-        # Decode Base64 image
-        image = face_service.facenet.decode_base64_image(request.image)
-
-        # Convert to bytes
-        img_bytes = io.BytesIO()
-        image.save(img_bytes, format='JPEG')
-        img_bytes = img_bytes.getvalue()
+        # Decode Base64 directly to bytes (skip PIL round-trip)
+        b64_str = request.image
+        if ',' in b64_str:
+            b64_str = b64_str.split(',', 1)[1]
+        img_bytes = base64.b64decode(b64_str, validate=True)
 
         # Recognize
         user_id, confidence = await face_service.recognize_face(img_bytes)
@@ -400,7 +398,11 @@ async def process_faces(
             scan_day = request.timestamp.weekday()
 
             # Find schedule that matches room and time
-            current_schedule = schedule_repo.get_current_schedule(request.room_id, scan_day, scan_time)
+            try:
+                current_schedule = schedule_repo.get_current_schedule(request.room_id, scan_day, scan_time)
+            except (ValueError, Exception) as e:
+                logger.warning(f"Invalid room_id format or schedule lookup failed: {e}")
+                current_schedule = None
 
             if current_schedule:
                 schedule_id = str(current_schedule.id)

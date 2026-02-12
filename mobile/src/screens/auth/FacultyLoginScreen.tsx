@@ -2,15 +2,21 @@
  * Faculty Login Screen
  *
  * Login form for faculty using Email + Password.
+ * Features:
+ * - Input validation with Zod schema
+ * - Toast notifications for errors
+ * - Input sanitization (trim whitespace, lowercase email)
+ * - User-friendly error messages
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, StyleSheet } from 'react-native';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Mail, Lock } from 'lucide-react-native';
 import { useAuth } from '../../hooks';
+import { useToast } from '../../hooks/useToast';
 import { theme, strings } from '../../constants';
 import { AuthLayout } from '../../components/layouts';
 import { Text, Button } from '../../components/ui';
@@ -25,6 +31,7 @@ type FacultyLoginData = z.infer<typeof facultyLoginSchema>;
 
 export const FacultyLoginScreen: React.FC = () => {
   const { login, error: authError, clearError } = useAuth();
+  const { showError } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const { control, handleSubmit } = useForm<FacultyLoginData>({
@@ -35,13 +42,49 @@ export const FacultyLoginScreen: React.FC = () => {
     },
   });
 
+  /**
+   * Convert technical error messages to user-friendly ones
+   */
+  const getUserFriendlyErrorMessage = useCallback((error: string): string => {
+    // Error messages from authService are already user-friendly, so return them directly
+    return error;
+  }, []);
+
+  // Show toast notification when auth error changes
+  useEffect(() => {
+    if (authError && !isSubmitting) {
+      showError(getUserFriendlyErrorMessage(authError), 'Login Failed');
+    }
+  }, [authError, isSubmitting, showError, getUserFriendlyErrorMessage]);
+
   const onSubmit = async (data: FacultyLoginData) => {
     try {
       setIsSubmitting(true);
       clearError();
-      await login({ email: data.email, password: data.password });
-    } catch (err) {
+
+      // Sanitize inputs (trim whitespace, lowercase email)
+      const sanitizedEmail = data.email.trim().toLowerCase();
+      const sanitizedPassword = data.password.trim();
+
+      // Validate after sanitization
+      if (!sanitizedEmail || !sanitizedPassword) {
+        showError('Please enter both email and password', 'Missing Information');
+        return;
+      }
+
+      // Additional email format validation
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(sanitizedEmail)) {
+        showError('Please enter a valid email address', 'Invalid Email');
+        return;
+      }
+
+      await login({ email: sanitizedEmail, password: sanitizedPassword });
+      // Success - navigation is handled by RootNavigator based on auth state
+    } catch (err: any) {
       console.error('Login error:', err);
+      // Error toast is shown via useEffect hook above
+      // Don't navigate away - stay on login screen
     } finally {
       setIsSubmitting(false);
     }

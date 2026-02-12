@@ -4,12 +4,20 @@ Notification Repository
 Data access layer for Notification operations.
 """
 
+import uuid as _uuid
 from typing import List, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.models.notification import Notification
 from app.utils.exceptions import NotFoundError
+
+
+def _to_uuid(value: str) -> _uuid.UUID:
+    """Convert a string to uuid.UUID so SQLAlchemy UUID columns work on SQLite."""
+    if isinstance(value, _uuid.UUID):
+        return value
+    return _uuid.UUID(value)
 
 
 class NotificationRepository:
@@ -21,7 +29,7 @@ class NotificationRepository:
     def get_by_id(self, notification_id: str) -> Optional[Notification]:
         """Get notification by ID"""
         return self.db.query(Notification).filter(
-            Notification.id == notification_id
+            Notification.id == _to_uuid(notification_id)
         ).first()
 
     def get_by_user(
@@ -43,7 +51,7 @@ class NotificationRepository:
         Returns:
             List of notifications sorted by created_at descending
         """
-        query = self.db.query(Notification).filter(Notification.user_id == user_id)
+        query = self.db.query(Notification).filter(Notification.user_id == _to_uuid(user_id))
 
         if unread_only:
             query = query.filter(Notification.read == False)
@@ -53,7 +61,7 @@ class NotificationRepository:
     def get_unread_count(self, user_id: str) -> int:
         """Get count of unread notifications for a user"""
         return self.db.query(Notification).filter(
-            Notification.user_id == user_id,
+            Notification.user_id == _to_uuid(user_id),
             Notification.read == False
         ).count()
 
@@ -108,7 +116,7 @@ class NotificationRepository:
         """
         now = datetime.utcnow()
         count = self.db.query(Notification).filter(
-            Notification.user_id == user_id,
+            Notification.user_id == _to_uuid(user_id),
             Notification.read == False
         ).update({
             "read": True,

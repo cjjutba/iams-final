@@ -199,11 +199,26 @@ export const authService = {
       // (contains a dash), resolve it to an email via the backend resolve endpoint.
       let email = identifier;
       if (identifier.includes('-') && !identifier.includes('@')) {
-        const resolveResp = await api.post<{ email: string }>(
-          '/auth/resolve-email',
-          { identifier, password },
-        );
-        email = resolveResp.data.email;
+        try {
+          const resolveResp = await api.post<{ email: string }>(
+            '/auth/resolve-email',
+            { identifier, password },
+          );
+          email = resolveResp.data.email;
+        } catch (error: any) {
+          // Convert resolve-email errors to user-friendly messages
+          if (error.response?.status === 404) {
+            throw new Error('Student ID not found. Please check your ID or register for an account.');
+          }
+          if (error.response?.status === 401) {
+            throw new Error('Invalid Student ID or password. Please check your credentials and try again.');
+          }
+          if (error.response?.data?.detail) {
+            throw new Error(error.response.data.detail);
+          }
+          // Re-throw other errors
+          throw error;
+        }
       }
 
       const { data, error } = await supabase.auth.signInWithPassword({

@@ -72,6 +72,24 @@ def create(self, data: dict) -> Model:
 - Schedules: CPE 301 Mon-Fri 07:00-22:00 (wide window for testing)
 - Enrollments: student enrolled in all 5 schedules
 
+## PresenceService Session State (CRITICAL)
+- `active_sessions` is a **class-level dict** (`_active_sessions`) shared across all instances
+- Each `__init__` sets `self.active_sessions = PresenceService._active_sessions` (same reference)
+- This ensures sessions persist across API requests (each request creates a new service instance)
+- Tests use `autouse` fixture `_clear_presence_sessions` in conftest to clear between tests
+- All dict mutations (`[]`, `del`, `in`) work directly on the shared class dict
+
+## Face Router Patterns
+- `/recognize` endpoint decodes base64 directly to bytes (no PIL round-trip)
+- `/process` (Edge API) still uses PIL decode for image validation (`validate_size=True`)
+- Edge API wraps `schedule_repo.get_current_schedule()` in try/except for invalid UUID room_ids
+
+## Recent Fixes (2026-02-12)
+- Fixed PresenceService stateless session bug: `active_sessions` now class-level shared dict
+- Fixed face router `/recognize` unnecessary PIL round-trip (base64 -> bytes directly)
+- Fixed Edge API room_id UUID validation (catches ValueError from invalid UUID format)
+- Added `_clear_presence_sessions` autouse fixture in conftest for test isolation
+
 ## Recent Fixes (2026-02-07)
 - Fixed `AttendanceRepository.create()` to convert string UUIDs to UUID objects
 - Fixed `AttendanceRepository.log_presence()` UUID conversion (attendance_id)
@@ -82,7 +100,6 @@ def create(self, data: dict) -> Model:
 - Updated integration tests to use `get_early_leave_events_by_attendance()` correctly
 
 ## Test Results
-- 35/35 presence-related tests passing
-- 21/21 integration tests for presence tracking passing
-- 12/12 unit tests for presence service passing
-- 4/6 end-to-end tests passing (2 failures unrelated to presence service logic)
+- 496 tests passing, 1 skipped (as of 2026-02-12)
+- 33/33 presence-related tests passing
+- Run tests: `"venv\Scripts\python.exe" -m pytest -v` from backend dir

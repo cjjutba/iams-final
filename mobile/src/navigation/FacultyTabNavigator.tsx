@@ -10,6 +10,7 @@
 
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Home, Calendar, Bell, User } from 'lucide-react-native';
 import type { FacultyTabParamList } from '../types';
 import { theme } from '../constants';
@@ -23,6 +24,8 @@ import {
 const Tab = createBottomTabNavigator<FacultyTabParamList>();
 
 export const FacultyTabNavigator: React.FC = () => {
+  const insets = useSafeAreaInsets();
+
   return (
     <Tab.Navigator
       screenOptions={{
@@ -33,8 +36,8 @@ export const FacultyTabNavigator: React.FC = () => {
           backgroundColor: theme.colors.background,
           borderTopColor: theme.colors.border,
           borderTopWidth: 1,
-          height: theme.layout.tabBarHeight,
-          paddingBottom: 8,
+          height: theme.layout.tabBarHeight + insets.bottom,
+          paddingBottom: insets.bottom + 8,
           paddingTop: 8,
         },
         tabBarLabelStyle: {

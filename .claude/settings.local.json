@@ -40,11 +40,14 @@
       "Bash(\"C:\\\\.cjjutba\\\\.thesis\\\\iams\\\\backend\\\\venv\\\\Scripts\\\\python.exe\" -m alembic current)",
       "Bash(\"venv/Scripts/python.exe\" -m scripts.seed_content)",
       "Bash(\"venv/Scripts/python.exe\":*)",
-      "Bash(pytest:*)"
+      "Bash(pytest:*)",
+      "Bash(\"venv\\\\Scripts\\\\python.exe\" -m pytest tests/unit/test_face_service.py -v)",
+      "Bash(\"venv\\\\Scripts\\\\python.exe\" -m pytest --tb=short -q)",
+      "mcp__supabase__execute_sql"
     ]
   },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "supabase"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }

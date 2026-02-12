@@ -69,6 +69,9 @@ class PresenceService:
     - Real-time alert generation
     """
 
+    # Class-level shared state: sessions persist across all instances/requests
+    _active_sessions: Dict[str, SessionState] = {}
+
     def __init__(self, db: Session, ws_manager=None):
         self.db = db
         self.attendance_repo = AttendanceRepository(db)
@@ -80,8 +83,8 @@ class PresenceService:
         if ws_manager:
             self.notification_service = NotificationService(ws_manager, db)
 
-        # Active sessions (schedule_id → SessionState)
-        self.active_sessions: Dict[str, SessionState] = {}
+        # Reference the class-level dict so all instances share session state
+        self.active_sessions = PresenceService._active_sessions
 
         # Tracking service for continuous face tracking
         self.tracking_service = get_tracking_service()

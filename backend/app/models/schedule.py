@@ -54,6 +54,10 @@ class Schedule(Base):
     semester = Column(String(20), nullable=False)  # "1st", "2nd", "Summer"
     academic_year = Column(String(20), nullable=False)  # "2024-2025"
 
+    # Target audience (for auto-enrollment matching)
+    target_course = Column(String(100), nullable=True, index=True)  # e.g., "BSCPE"
+    target_year_level = Column(Integer, nullable=True)               # e.g., 4
+
     # Status
     is_active = Column(Boolean, default=True, nullable=False)
 
@@ -66,6 +70,7 @@ class Schedule(Base):
     # Indexes
     __table_args__ = (
         Index('idx_schedule_day_time', 'day_of_week', 'start_time'),
+        Index('idx_schedule_target', 'target_course', 'target_year_level'),
     )
 
     def __repr__(self):

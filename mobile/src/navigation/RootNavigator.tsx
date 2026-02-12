@@ -13,13 +13,14 @@
  *    - Faculty role -> FacultyNavigator
  */
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
+import { View, StyleSheet, Animated, Easing } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import type { RootStackParamList } from '../types';
 import { useAuthStore } from '../stores';
 import { UserRole } from '../types';
-import { Loader } from '../components/ui';
+import { theme } from '../constants';
 
 import { AuthNavigator } from './AuthNavigator';
 import { StudentNavigator } from './StudentNavigator';
@@ -28,16 +29,54 @@ import { FacultyNavigator } from './FacultyNavigator';
 const Stack = createStackNavigator<RootStackParamList>();
 
 export const RootNavigator: React.FC = () => {
-  const { isAuthenticated, isLoading, user, loadUser } = useAuthStore();
+  const { isAuthenticated, isLoading, user, loadUser, initializeAuthListener } = useAuthStore();
 
-  // Load user on app start
+  // Load user on app start and initialize auth listener
   useEffect(() => {
     loadUser();
+
+    // Initialize Supabase auth listener to handle token refresh and session changes
+    const unsubscribe = initializeAuthListener();
+
+    // Cleanup: unsubscribe from auth listener on unmount
+    return () => {
+      unsubscribe();
+    };
   }, []);
+
+  // Breathing animation for loading state
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const opacityAnim = useRef(new Animated.Value(0.85)).current;
+
+  useEffect(() => {
+    if (!isLoading) return;
+    const breathing = Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(scaleAnim, { toValue: 1.06, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+          Animated.timing(opacityAnim, { toValue: 1, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(scaleAnim, { toValue: 1, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+          Animated.timing(opacityAnim, { toValue: 0.85, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        ]),
+      ]),
+    );
+    breathing.start();
+    return () => breathing.stop();
+  }, [isLoading, scaleAnim, opacityAnim]);
 
   // Show loading screen while checking auth status
   if (isLoading) {
-    return <Loader fullScreen message="Loading..." />;
+    return (
+      <View style={loadingStyles.container}>
+        <Animated.Image
+          source={require('../../assets/iams-icon.png')}
+          style={[loadingStyles.icon, { transform: [{ scale: scaleAnim }], opacity: opacityAnim }]}
+          resizeMode="contain"
+        />
+      </View>
+    );
   }
 
   return (
@@ -60,3 +99,16 @@ export const RootNavigator: React.FC = () => {
     </NavigationContainer>
   );
 };
+
+const loadingStyles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: theme.colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  icon: {
+    width: 140,
+    height: 140,
+  },
+});

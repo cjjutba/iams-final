@@ -33,6 +33,10 @@ class ScheduleRepository:
 
     def get_by_faculty(self, faculty_id: str) -> List[Schedule]:
         """Get all schedules taught by a faculty member"""
+        import uuid
+        # Convert string to UUID for SQLite compatibility
+        if isinstance(faculty_id, str):
+            faculty_id = uuid.UUID(faculty_id)
         return self.db.query(Schedule).filter(
             Schedule.faculty_id == faculty_id,
             Schedule.is_active == True
@@ -131,6 +135,11 @@ class ScheduleRepository:
         Returns:
             Created schedule
         """
+        import uuid as uuid_mod
+        # Convert string IDs to UUID for SQLite compatibility
+        for key in ("faculty_id", "room_id"):
+            if key in schedule_data and isinstance(schedule_data[key], str):
+                schedule_data[key] = uuid_mod.UUID(schedule_data[key])
         schedule = Schedule(**schedule_data)
         self.db.add(schedule)
         self.db.commit()

@@ -17,16 +17,23 @@ const WS_BASE_URL_ENV  = process.env.EXPO_PUBLIC_WS_BASE_URL;
 const SUPABASE_URL_ENV      = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 const SUPABASE_ANON_KEY_ENV = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
 
+// Derive the dev machine IP from Expo's debuggerHost (e.g. "192.168.1.9:8081")
+// so the API URL automatically matches whatever network Metro is using.
+const debuggerHost = Constants.expoConfig?.hostUri
+  ?? Constants.manifest?.debuggerHost
+  ?? '';
+const devHostIp = debuggerHost.split(':')[0] || '192.168.1.9';
+
 export const config = {
-  // API URLs — prefer env var so you can point at ngrok/tunnel without rebuilding
+  // API URLs — prefer env var, then auto-detect from Metro host in dev
   API_BASE_URL: API_BASE_URL_ENV
     ?? (isDev
-      ? 'http://192.168.137.1:8000/api/v1'
+      ? `http://${devHostIp}:8000/api/v1`
       : 'https://api.iams.com/api/v1'),
 
   WS_URL: WS_BASE_URL_ENV
     ?? (isDev
-      ? 'ws://192.168.137.1:8000/api/v1/ws'
+      ? `ws://${devHostIp}:8000/api/v1/ws`
       : 'wss://api.iams.com/api/v1/ws'),
 
   // Supabase

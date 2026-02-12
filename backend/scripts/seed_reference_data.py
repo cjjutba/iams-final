@@ -33,23 +33,24 @@ from app.config import logger
 
 # ---------------------------------------------------------------------------
 # Mock student registry (10 students, BSCPE, JRMSU)
+# Simple repeating-digit IDs and easy-to-type birthdates for testing.
 # Format: (student_id, first_name, last_name, email, course, year_level, section, birthdate, contact_number)
 # ---------------------------------------------------------------------------
 MOCK_STUDENTS = [
-    # 4th year students (born 2003)
-    ("21-A-02177", "Christian Jerald", "Jutba",      "cjjutbaofficial@gmail.com",        "BSCPE", 4, "A", date(2003, 5, 15), "09764556948"),
-    ("21-A-12345", "Juan",             "Dela Cruz",  "juan.delacruz@jrmsu.edu.ph",        "BSCPE", 4, "A", date(2003, 3, 22), "09171234567"),
-    ("21-B-55555", "Sofia",            "Torres",     "sofia.torres@jrmsu.edu.ph",         "BSCPE", 4, "B", date(2003, 7, 10), "09281234567"),
-    # 3rd year students (born 2004)
-    ("22-A-54321", "Maria",            "Santos",     "maria.santos@jrmsu.edu.ph",         "BSCPE", 3, "A", date(2004, 1, 18), "09391234567"),
-    ("22-A-67890", "Jose",             "Reyes",      "jose.reyes@jrmsu.edu.ph",           "BSCPE", 3, "A", date(2004, 11, 5), "09401234567"),
-    ("22-B-66666", "Miguel",           "Flores",     "miguel.flores@jrmsu.edu.ph",        "BSCPE", 3, "B", date(2004, 9, 30), "09511234567"),
-    # 2nd year students (born 2005)
-    ("23-A-11111", "Ana",              "Garcia",     "ana.garcia@jrmsu.edu.ph",           "BSCPE", 2, "A", date(2005, 4, 12), "09621234567"),
-    ("23-A-22222", "Pedro",            "Gonzales",   "pedro.gonzales@jrmsu.edu.ph",       "BSCPE", 2, "A", date(2005, 8, 25), "09731234567"),
-    # 1st year students (born 2006)
-    ("24-A-33333", "Maria",            "Rodriguez",  "maria.rodriguez@jrmsu.edu.ph",      "BSCPE", 1, "A", date(2006, 2, 14), "09841234567"),
-    ("24-A-44444", "Carlo",            "Mendoza",    "carlo.mendoza@jrmsu.edu.ph",        "BSCPE", 1, "B", date(2006, 6, 20), "09951234567"),
+    # 4th year students (enrolled 2021, born 2003)
+    ("21-A-11111", "Christian Jerald", "Jutba",      "cjjutbaofficial@gmail.com",        "BSCPE", 4, "A", date(2003, 1, 1), "09171111111"),
+    ("21-A-22222", "Juan",             "Dela Cruz",  "juan.delacruz@jrmsu.edu.ph",        "BSCPE", 4, "A", date(2003, 2, 2), "09172222222"),
+    ("21-A-33333", "Sofia",            "Torres",     "sofia.torres@jrmsu.edu.ph",         "BSCPE", 4, "B", date(2003, 3, 3), "09173333333"),
+    # 3rd year students (enrolled 2022, born 2004)
+    ("22-A-44444", "Maria",            "Santos",     "maria.santos@jrmsu.edu.ph",         "BSCPE", 3, "A", date(2004, 4, 4), "09174444444"),
+    ("22-A-55555", "Jose",             "Reyes",      "jose.reyes@jrmsu.edu.ph",           "BSCPE", 3, "A", date(2004, 5, 5), "09175555555"),
+    ("22-A-66666", "Miguel",           "Flores",     "miguel.flores@jrmsu.edu.ph",        "BSCPE", 3, "B", date(2004, 6, 6), "09176666666"),
+    # 2nd year students (enrolled 2023, born 2005)
+    ("23-A-77777", "Ana",              "Garcia",     "ana.garcia@jrmsu.edu.ph",           "BSCPE", 2, "A", date(2005, 7, 7), "09177777777"),
+    ("23-A-88888", "Pedro",            "Gonzales",   "pedro.gonzales@jrmsu.edu.ph",       "BSCPE", 2, "A", date(2005, 8, 8), "09178888888"),
+    # 1st year students (enrolled 2024, born 2006)
+    ("24-A-99999", "Maria",            "Rodriguez",  "maria.rodriguez@jrmsu.edu.ph",      "BSCPE", 1, "A", date(2006, 9, 9), "09179999999"),
+    ("24-A-00000", "Carlo",            "Mendoza",    "carlo.mendoza@jrmsu.edu.ph",        "BSCPE", 1, "B", date(2006, 10, 10), "09170000000"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -133,9 +134,10 @@ def seed_reference_data():
         print("=" * 60)
         print(f"\nStudent Records: {added} added, {skipped} skipped")
         print(f"Faculty Records: {fac_added} added, {fac_skipped} skipped")
-        print(f"\nTotal active student IDs for registration:")
-        for student_id, first_name, last_name, *_ in MOCK_STUDENTS:
-            print(f"  {student_id}  ({first_name} {last_name})")
+        print(f"\nAvailable student IDs for registration:")
+        for student_id, first_name, last_name, *rest in MOCK_STUDENTS:
+            birthdate = rest[5]
+            print(f"  {student_id}  ({first_name} {last_name})  DOB: {birthdate}")
 
     except Exception as e:
         db.rollback()

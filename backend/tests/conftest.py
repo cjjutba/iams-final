@@ -117,6 +117,20 @@ def db_session():
         Base.metadata.drop_all(bind=engine)
 
 
+@pytest.fixture(autouse=True)
+def _clear_presence_sessions():
+    """
+    Clear PresenceService class-level session state between tests.
+
+    PresenceService._active_sessions is a class-level dict shared across all
+    instances. Without cleanup, sessions started in one test leak into the next.
+    """
+    from app.services.presence_service import PresenceService
+    PresenceService._active_sessions.clear()
+    yield
+    PresenceService._active_sessions.clear()
+
+
 @pytest.fixture(scope="function")
 def client(db_session):
     """
@@ -471,3 +485,26 @@ def mock_face_service():
     })
 
     return mock
+
+
+@pytest.fixture()
+def test_face_registration(db_session, test_student):
+    """Create a face registration in the DB for the test student."""
+    from app.models.face_registration import FaceRegistration
+    import numpy as np
+
+    embedding = np.random.randn(512).astype(np.float32)
+    embedding = embedding / np.linalg.norm(embedding)
+
+    reg = FaceRegistration(
+        id=uuid.uuid4(),
+        user_id=test_student.id,
+        embedding_id=0,
+        embedding_vector=embedding.tobytes(),
+        is_active=True,
+        registered_at=datetime.utcnow()
+    )
+    db_session.add(reg)
+    db_session.commit()
+    db_session.refresh(reg)
+    return reg

@@ -127,10 +127,11 @@ if [ ! -f ".env" ]; then
     else
         echo "Creating default .env file..."
         cat > .env << EOF
-SERVER_URL=http://192.168.1.100:8000
+BACKEND_URL=http://192.168.1.100:8000
+ROOM_ID=
 CAMERA_INDEX=0
-FRAME_WIDTH=640
-FRAME_HEIGHT=480
+CAMERA_WIDTH=640
+CAMERA_HEIGHT=480
 QUEUE_MAX_SIZE=500
 QUEUE_TTL_SECONDS=300
 RETRY_INTERVAL_SECONDS=10
@@ -141,10 +142,10 @@ EOF
     fi
 
     echo ""
-    echo -e "${YELLOW}⚠️  IMPORTANT: Edit .env file and set SERVER_URL${NC}"
-    read -p "Enter backend server URL (e.g., http://192.168.1.100:8000): " SERVER_URL
-    sed -i "s|SERVER_URL=.*|SERVER_URL=$SERVER_URL|" .env
-    echo -e "${GREEN}✓${NC} SERVER_URL configured"
+    echo -e "${YELLOW}⚠️  IMPORTANT: Edit .env file and set BACKEND_URL${NC}"
+    read -p "Enter backend server URL (e.g., http://192.168.1.100:8000): " BACKEND_URL
+    sed -i "s|BACKEND_URL=.*|BACKEND_URL=$BACKEND_URL|" .env
+    echo -e "${GREEN}✓${NC} BACKEND_URL configured"
 else
     echo -e "${GREEN}✓${NC} .env file already exists"
 fi

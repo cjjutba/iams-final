@@ -7,7 +7,9 @@
  */
 
 import { create } from 'zustand';
-import { storage, getErrorMessage } from '../utils';
+import { storage } from '../utils';
+import { extractApiError } from '../utils/api';
+import { getErrorMessage } from '../utils/helpers';
 import { config } from '../constants/config';
 import { authService } from '../services';
 import { getSupabaseClient } from '../services/supabase';
@@ -143,6 +145,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   // Login with email/student ID + password
   login: async (data: LoginRequest) => {
+    // Store current auth state to restore on error
+    const currentState = get();
     set({ isLoading: true, error: null });
 
     try {
@@ -166,12 +170,27 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         isLoading: false,
         emailVerificationPending: false,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Login failed:', error);
+
+      // Extract user-friendly error message
+      let errorMessage: string;
+      if (error.message && typeof error.message === 'string') {
+        // Use error message from authService (already user-friendly)
+        errorMessage = error.message;
+      } else {
+        // Extract from Axios error
+        const apiError = extractApiError(error);
+        errorMessage = apiError.message;
+      }
+
+      // Set error but DON'T change isAuthenticated to prevent navigation
+      // This keeps the user on the login screen
       set({
-        error: getErrorMessage(error),
+        error: errorMessage,
         isLoading: false,
-        isAuthenticated: false,
+        // Preserve current auth state to prevent unwanted navigation
+        isAuthenticated: currentState.isAuthenticated,
       });
       throw error;
     }

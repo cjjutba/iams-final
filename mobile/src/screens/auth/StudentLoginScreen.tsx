@@ -2,9 +2,14 @@
  * Student Login Screen
  *
  * Login form for students using Student ID + Password.
+ * Features:
+ * - Input validation with Zod schema
+ * - Toast notifications for errors
+ * - Input sanitization (trim whitespace)
+ * - User-friendly error messages
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, StyleSheet, TouchableOpacity } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
@@ -14,6 +19,7 @@ import { IdCard, Lock } from 'lucide-react-native';
 import type { AuthStackParamList } from '../../types';
 import { studentLoginSchema, type StudentLoginFormData } from '../../utils/validators';
 import { useAuthStore } from '../../stores';
+import { useToast } from '../../hooks/useToast';
 import { theme, strings } from '../../constants';
 import { AuthLayout } from '../../components/layouts';
 import { Text, Button, Input } from '../../components/ui';
@@ -23,6 +29,7 @@ type StudentLoginScreenNavigationProp = StackNavigationProp<AuthStackParamList, 
 export const StudentLoginScreen: React.FC = () => {
   const navigation = useNavigation<StudentLoginScreenNavigationProp>();
   const { login, error: authError, clearError } = useAuthStore();
+  const { showError } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const {
@@ -37,13 +44,42 @@ export const StudentLoginScreen: React.FC = () => {
     },
   });
 
+  /**
+   * Convert technical error messages to user-friendly ones
+   */
+  const getUserFriendlyErrorMessage = useCallback((error: string): string => {
+    // Error messages from authService are already user-friendly, so return them directly
+    return error;
+  }, []);
+
+  // Show toast notification when auth error changes
+  useEffect(() => {
+    if (authError && !isSubmitting) {
+      showError(getUserFriendlyErrorMessage(authError), 'Login Failed');
+    }
+  }, [authError, isSubmitting, showError, getUserFriendlyErrorMessage]);
+
   const onSubmit = async (data: StudentLoginFormData) => {
     try {
       setIsSubmitting(true);
       clearError();
-      await login({ email: data.student_id, password: data.password });
-    } catch (err) {
+
+      // Sanitize inputs (trim whitespace)
+      const sanitizedStudentId = data.student_id.trim().toUpperCase();
+      const sanitizedPassword = data.password.trim();
+
+      // Validate after sanitization
+      if (!sanitizedStudentId || !sanitizedPassword) {
+        showError('Please enter both Student ID and password', 'Missing Information');
+        return;
+      }
+
+      await login({ email: sanitizedStudentId, password: sanitizedPassword });
+      // Success - navigation is handled by RootNavigator based on auth state
+    } catch (err: any) {
       console.error('Login error:', err);
+      // Error toast is shown via useEffect hook above
+      // Don't navigate away - stay on login screen
     } finally {
       setIsSubmitting(false);
     }

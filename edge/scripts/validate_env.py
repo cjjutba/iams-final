@@ -47,23 +47,23 @@ def check_platform():
 def validate_server_url(url: str) -> bool:
     """Validate backend server URL"""
     if not url:
-        print(f"❌ SERVER_URL: Not set")
+        print(f"❌ BACKEND_URL: Not set")
         return False
 
     try:
         result = urlparse(url)
         if not all([result.scheme, result.netloc]):
-            print(f"❌ SERVER_URL: Invalid URL format")
+            print(f"❌ BACKEND_URL: Invalid URL format")
             return False
 
         if result.scheme not in ['http', 'https']:
-            print(f"❌ SERVER_URL: Invalid scheme (expected http or https)")
+            print(f"❌ BACKEND_URL: Invalid scheme (expected http or https)")
             return False
 
-        print(f"✓ SERVER_URL: {url}")
+        print(f"✓ BACKEND_URL: {url}")
         return True
     except Exception as e:
-        print(f"❌ SERVER_URL: Error parsing URL - {e}")
+        print(f"❌ BACKEND_URL: Error parsing URL - {e}")
         return False
 
 
@@ -119,7 +119,7 @@ def validate_env():
     print("Required Variables:")
     print("-" * 60)
 
-    server_url = os.getenv('SERVER_URL')
+    server_url = os.getenv('BACKEND_URL')
     all_valid &= validate_server_url(server_url)
 
     print()
@@ -136,11 +136,11 @@ def validate_env():
         all_valid = False
 
     try:
-        frame_width = int(os.getenv('FRAME_WIDTH', '640'))
-        frame_height = int(os.getenv('FRAME_HEIGHT', '480'))
-        print(f"✓ Frame size: {frame_width}x{frame_height}")
+        frame_width = int(os.getenv('CAMERA_WIDTH', '640'))
+        frame_height = int(os.getenv('CAMERA_HEIGHT', '480'))
+        print(f"✓ Camera size: {frame_width}x{frame_height}")
     except ValueError:
-        print(f"❌ FRAME_WIDTH/FRAME_HEIGHT: Invalid integers")
+        print(f"❌ CAMERA_WIDTH/CAMERA_HEIGHT: Invalid integers")
         all_valid = False
 
     try:

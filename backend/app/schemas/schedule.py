@@ -20,6 +20,8 @@ class ScheduleBase(BaseModel):
     end_time: time
     semester: str = Field(..., max_length=20, description="e.g., '1st', '2nd', 'Summer'")
     academic_year: str = Field(..., max_length=20, description="e.g., '2024-2025'")
+    target_course: Optional[str] = Field(None, max_length=100, description="Target course for auto-enrollment, e.g., 'BSCPE'")
+    target_year_level: Optional[int] = Field(None, ge=1, le=6, description="Target year level for auto-enrollment, e.g., 4")
 
 
 class ScheduleCreate(ScheduleBase):
@@ -39,6 +41,8 @@ class ScheduleUpdate(BaseModel):
     end_time: Optional[time] = None
     semester: Optional[str] = Field(None, max_length=20)
     academic_year: Optional[str] = Field(None, max_length=20)
+    target_course: Optional[str] = Field(None, max_length=100)
+    target_year_level: Optional[int] = Field(None, ge=1, le=6)
     is_active: Optional[bool] = None
 
 

@@ -27,7 +27,6 @@ RPi (Camera + MediaPipe) → HTTP POST → FastAPI Backend (FaceNet + FAISS + De
 ### Backend
 ```bash
 cd backend
-python -m venv venv
 venv\Scripts\activate          # Windows
 source venv/bin/activate       # Linux/Mac
 pip install -r requirements.txt
