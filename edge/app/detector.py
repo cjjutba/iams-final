@@ -152,6 +152,9 @@ class FaceDetector:
             self.is_initialized = False
             return False
 
+    # Max dimension for MediaPipe input (avoids tensor overflow on large frames)
+    MAX_DETECT_DIM = 1920
+
     def detect(self, frame: np.ndarray) -> List[FaceBox]:
         """
         Detect faces in a frame.
@@ -163,17 +166,30 @@ class FaceDetector:
             List of FaceBox objects for detected faces
 
         Notes:
+            - Automatically downscales frames larger than MAX_DETECT_DIM
+            - Coordinates are mapped back to original frame resolution
             - Returns empty list if no faces detected
-            - Filters by confidence threshold automatically
-            - Converts coordinates to absolute pixel values
         """
         if not self.is_initialized or self.detector is None:
             logger.error("Detector not initialized - call initialize() first")
             return []
 
         try:
+            frame_height, frame_width = frame.shape[:2]
+
+            # Downscale large frames to avoid MediaPipe tensor overflow
+            scale = 1.0
+            detect_frame = frame
+            max_dim = max(frame_width, frame_height)
+            if max_dim > self.MAX_DETECT_DIM:
+                scale = self.MAX_DETECT_DIM / max_dim
+                new_w = int(frame_width * scale)
+                new_h = int(frame_height * scale)
+                detect_frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                logger.debug(f"Downscaled {frame_width}x{frame_height} -> {new_w}x{new_h} for detection")
+
             # Convert BGR to RGB for MediaPipe
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame_rgb = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2RGB)
 
             # Create MediaPipe Image
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
@@ -184,24 +200,22 @@ class FaceDetector:
             if not detection_result.detections:
                 return []
 
-            # Extract bounding boxes
+            # Extract bounding boxes and map back to original resolution
             face_boxes = []
-            frame_height, frame_width = frame.shape[:2]
+            inv_scale = 1.0 / scale
 
             for detection in detection_result.detections:
-                # Get bounding box (normalized coordinates 0.0-1.0)
                 bbox = detection.bounding_box
 
-                # Convert to absolute pixel coordinates
-                x = int(bbox.origin_x)
-                y = int(bbox.origin_y)
-                width = int(bbox.width)
-                height = int(bbox.height)
+                # Scale coordinates back to original frame size
+                x = int(bbox.origin_x * inv_scale)
+                y = int(bbox.origin_y * inv_scale)
+                width = int(bbox.width * inv_scale)
+                height = int(bbox.height * inv_scale)
 
                 # Get confidence score
                 confidence = detection.categories[0].score if detection.categories else 0.0
 
-                # Create FaceBox
                 face_box = FaceBox(x, y, width, height, confidence)
                 face_boxes.append(face_box)
 
