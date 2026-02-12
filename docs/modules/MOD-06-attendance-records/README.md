@@ -1,8 +1,18 @@
-﻿# MOD-06 Attendance Records Documentation Pack
+# MOD-06 Attendance Records Documentation Pack
 
 ## Purpose
 This folder is the full implementation reference for Module 6.
 When implementing attendance record features, use this folder as the primary source of truth.
+
+## Auth Context
+All MOD-06 endpoints require **Supabase JWT** (`Authorization: Bearer <token>`). Role-based access:
+- **GET /attendance/today** — faculty or admin (view class attendance for a schedule).
+- **GET /attendance/me** — any authenticated user (students see own, faculty see own classes).
+- **POST /attendance/mark** — internal/system only (triggered by recognition pipeline, not user-facing).
+- **POST /attendance/manual** — faculty or admin only (manual override with audit trail).
+- **GET /attendance/history** — faculty or admin (filtered attendance history by schedule/date range).
+- **GET /attendance/live** — faculty or admin (real-time roster for active class).
+- No API key auth (that pattern is for MOD-03/MOD-04 edge devices).
 
 ## Coverage
 This pack documents:
@@ -39,13 +49,11 @@ This pack documents:
 - `10-traceability/`: mapping from functions to API/data/screens/tests
 
 ## Canonical Sources
-- `docs/main/master-blueprint.md`
+- `docs/main/architecture.md`
 - `docs/main/api-reference.md`
 - `docs/main/database-schema.md`
 - `docs/main/implementation.md`
-- `docs/main/technical-specification.md`
-- `docs/main/testing.md`
-- `docs/screens/screen-list.md`
+- `docs/main/prd.md`
 
 ## Module IDs
 - Module: `MOD-06`
@@ -58,3 +66,6 @@ Module 6 documentation is considered complete when:
 - Every function has test cases and acceptance criteria.
 - API docs and screen docs reference the same behavior.
 - Traceability matrix has no missing mappings.
+- Auth rules (Supabase JWT, role requirements, 401/403 responses) are documented per endpoint.
+- Timezone handling (TIMEZONE env var, Asia/Manila default) is documented for all date/time fields.
+- Response envelope format (`success`, `data`, `message` for success; `success`, `error` for failure) is consistent across all endpoint contracts.

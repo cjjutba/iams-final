@@ -2,25 +2,35 @@
  * Register Review Screen - Final Review and Submit
  *
  * Fourth step of student registration.
+ *
+ * IMPORTANT: This screen calls authService.register() directly (NOT through
+ * authStore) to prevent navigation state changes during registration.
+ * The auth state is only updated AFTER both account creation and face
+ * registration are complete, preventing the component from unmounting
+ * mid-flow.
  */
 
 import React, { useState } from 'react';
 import { View, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
-import { useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import type { StackNavigationProp } from '@react-navigation/stack';
 import type { RouteProp } from '@react-navigation/native';
 import { CheckSquare, Square, CheckCircle } from 'lucide-react-native';
-import { useAuth } from '../../hooks';
-import { faceService } from '../../services';
+import { useToast } from '../../hooks';
+import { authService, faceService } from '../../services';
+import { useAuthStore } from '../../stores';
 import { theme, strings, config } from '../../constants';
 import type { AuthStackParamList } from '../../types';
 import { AuthLayout } from '../../components/layouts';
 import { Text, Button } from '../../components/ui';
 
+type RegisterReviewNavigationProp = StackNavigationProp<AuthStackParamList, 'RegisterReview'>;
 type RegisterReviewRouteProp = RouteProp<AuthStackParamList, 'RegisterReview'>;
 
 export const RegisterReviewScreen: React.FC = () => {
+  const navigation = useNavigation<RegisterReviewNavigationProp>();
   const route = useRoute<RegisterReviewRouteProp>();
-  const { register } = useAuth();
+  const { showSuccess, showError, showWarning } = useToast();
 
   const { studentInfo, accountInfo, faceImages } = route.params;
 
@@ -35,31 +45,68 @@ export const RegisterReviewScreen: React.FC = () => {
       setIsSubmitting(true);
       setError(null);
 
-      // Step 1: Create the account
-      await register({
+      // Step 1: Create the account via authService directly.
+      // We bypass authStore.register() to avoid setting isLoading/isAuthenticated
+      // which would trigger RootNavigator to unmount this screen mid-flow.
+      const result = await authService.register({
+        student_id: studentInfo.studentId,
         email: accountInfo.email,
         password: accountInfo.password,
         first_name: studentInfo.first_name,
         last_name: studentInfo.last_name,
-        role: 'student' as any,
-        student_id: studentInfo.studentId,
         phone: accountInfo.phone,
       });
 
-      // Step 2: Upload face images (user is now authenticated after register)
-      if (faceImages.length > 0) {
+      showSuccess('Account created successfully!', 'Welcome to IAMS');
+
+      // Step 2: Upload face images if tokens are available.
+      // In Supabase mode: no tokens returned (email verification required first),
+      // so face registration will happen after the user verifies email and logs in.
+      // In legacy mode: tokens are stored by authService.register(), so face
+      // registration can proceed immediately.
+      if (faceImages.length > 0 && result.tokens) {
         try {
           await faceService.registerFace(faceImages);
+          showSuccess('Face registered successfully!', 'Face Recognition Active');
         } catch (faceErr: any) {
           console.error('Face registration failed:', faceErr);
-          // Account was created successfully but face registration failed.
-          // The user can re-register their face later from their profile.
+          showWarning(
+            'Account created but face registration failed. You can register your face later from your profile.',
+            'Face Registration Incomplete',
+          );
         }
       }
 
-      // Navigation happens automatically via RootNavigator auth state change
+      // Step 3: NOW update auth state to trigger navigation.
+      if (config.USE_SUPABASE_AUTH) {
+        // Supabase mode: email verification required before login.
+        // Update auth store and navigate to email verification screen.
+        useAuthStore.setState({
+          user: result.user || null,
+          isAuthenticated: false,
+          isLoading: false,
+          emailVerificationPending: true,
+          pendingVerificationEmail: accountInfo.email,
+        });
+        navigation.navigate('EmailVerification');
+      } else {
+        // Legacy mode: user is authenticated immediately.
+        // Setting isAuthenticated triggers RootNavigator to switch to Student stack.
+        useAuthStore.setState({
+          user: result.user || null,
+          isAuthenticated: true,
+          isLoading: false,
+          emailVerificationPending: false,
+        });
+      }
     } catch (err: any) {
-      setError(err.response?.data?.message || strings.errors.generic);
+      const errorMsg =
+        err.response?.data?.detail ||
+        err.response?.data?.message ||
+        err.message ||
+        strings.errors.generic;
+      setError(errorMsg);
+      showError(errorMsg, 'Registration Failed');
       setIsSubmitting(false);
     }
   };

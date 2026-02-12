@@ -155,19 +155,26 @@ class TestVerifyStudentIDRequest:
     """Tests for VerifyStudentIDRequest schema."""
 
     def test_verify_student_id_request_valid(self):
-        """A non-empty student_id up to 50 chars should parse."""
-        req = VerifyStudentIDRequest(student_id="STU-2024-001")
+        """A non-empty student_id with birthdate should parse."""
+        req = VerifyStudentIDRequest(student_id="STU-2024-001", birthdate="2003-05-15")
         assert req.student_id == "STU-2024-001"
+        from datetime import date
+        assert req.birthdate == date(2003, 5, 15)
 
     def test_verify_student_id_request_empty(self):
         """Empty student_id should fail min_length=1."""
         with pytest.raises(PydanticValidationError):
-            VerifyStudentIDRequest(student_id="")
+            VerifyStudentIDRequest(student_id="", birthdate="2003-05-15")
 
     def test_verify_student_id_request_too_long(self):
         """Student ID exceeding 50 characters should fail."""
         with pytest.raises(PydanticValidationError):
-            VerifyStudentIDRequest(student_id="X" * 51)
+            VerifyStudentIDRequest(student_id="X" * 51, birthdate="2003-05-15")
+
+    def test_verify_student_id_request_missing_birthdate(self):
+        """Missing birthdate should fail validation."""
+        with pytest.raises(PydanticValidationError):
+            VerifyStudentIDRequest(student_id="STU-2024-001")
 
 
 # ===================================================================

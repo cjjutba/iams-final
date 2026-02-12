@@ -54,11 +54,12 @@ def verify_student_id(
     """
     **Step 1 of Student Registration: Verify Student ID**
 
-    Validates the student ID against university records and returns student information.
+    Validates the student ID and birthdate against university records.
+    Two-factor verification prevents unauthorized access to student information.
     Rate limited to 10 requests/minute.
     """
     auth_service = AuthService(db)
-    result = auth_service.verify_student_id(body.student_id)
+    result = auth_service.verify_student_id(body.student_id, body.birthdate)
     return VerifyStudentIDResponse(**result)
 
 
@@ -107,6 +108,41 @@ def register(
         user=UserResponse.model_validate(user),
         tokens=tokens,
     )
+
+
+# ===================================================================
+# Resolve Student ID to Email (for Supabase login)
+# ===================================================================
+
+@router.post("/resolve-email", status_code=status.HTTP_200_OK)
+@limiter.limit(settings.RATE_LIMIT_AUTH)
+def resolve_student_email(
+    request: Request,
+    body: LoginRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    **Resolve a student ID to their registered email.**
+
+    Used by the mobile app in Supabase Auth mode when a student logs in
+    with their student ID instead of email. Accepts the same LoginRequest
+    (identifier + password) but only uses the identifier field.
+
+    The actual password verification happens via Supabase SDK on the client.
+    This endpoint only resolves the student ID to an email.
+    Rate limited to 10 requests/minute.
+    """
+    auth_service = AuthService(db)
+    normalized = body.identifier.strip().upper()
+    user = auth_service.user_repo.get_by_student_id(normalized)
+
+    if not user:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": "No account found for this student ID"},
+        )
+
+    return {"email": user.email}
 
 
 # ===================================================================

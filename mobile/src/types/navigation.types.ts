@@ -37,6 +37,7 @@ export interface StudentInfo {
   year: string;
   section: string;
   email?: string;
+  phone?: string; // contact_number from student_records
   valid?: boolean;
 }
 

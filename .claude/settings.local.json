@@ -42,5 +42,9 @@
       "Bash(\"venv/Scripts/python.exe\":*)",
       "Bash(pytest:*)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "supabase"
+  ],
+  "enableAllProjectMcpServers": true
 }

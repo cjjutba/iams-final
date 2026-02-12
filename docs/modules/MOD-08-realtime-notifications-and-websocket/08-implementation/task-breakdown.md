@@ -1,25 +1,24 @@
-﻿# Task Breakdown
+# Task Breakdown
 
-## Task Group A: Connection Auth (`FUN-08-01`)
-1. Define handshake auth extraction/validation.
-2. Validate path `user_id` against auth subject.
-3. Add connection registration and cleanup hooks.
+## Task List
+| Task ID | Function | Task | Owner/Agent |
+|---|---|---|---|
+| MOD8-T00 | Setup | Verify JWT auth middleware, MOD-06/07 event triggers, env var config | backend-core-specialist |
+| MOD8-T01 | FUN-08-01 | Implement WebSocket endpoint with JWT auth (query param `token`, close codes 4001/4003) | websocket-specialist |
+| MOD8-T02 | FUN-08-01 | Implement connection manager (register, evict, idempotent reconnect) | websocket-specialist |
+| MOD8-T03 | FUN-08-02 | Implement `attendance_update` event builder and publisher | websocket-specialist |
+| MOD8-T04 | FUN-08-03 | Implement `early_leave` event builder and publisher | websocket-specialist |
+| MOD8-T05 | FUN-08-04 | Implement `session_end` event builder and publisher | websocket-specialist |
+| MOD8-T06 | FUN-08-05 | Implement heartbeat/ping-pong, stale detection, cleanup | websocket-specialist |
+| MOD8-T07 | SCR set | Integrate mobile screens with WebSocket service and Zustand store | websocket-mobile-specialist |
+| MOD8-T08 | QA | Add WebSocket tests (unit + integration + scenario, including auth) | test-automation-specialist |
+| MOD8-T09 | QA | Verify auth enforcement for all close code scenarios (4001/4003) | test-automation-specialist |
+| MOD8-T10 | Docs | Update traceability and changelog | docs-writer |
 
-## Task Group B: Event Publication (`FUN-08-02`, `FUN-08-03`, `FUN-08-04`)
-1. Implement event builders with strict schema checks.
-2. Integrate publisher calls in attendance and presence flows.
-3. Add optional delivery logging and error handling.
-
-## Task Group C: Reliability (`FUN-08-05`)
-1. Implement heartbeat/ping-pong handling.
-2. Implement stale socket pruning.
-3. Validate reconnect behavior with repeated network drops.
-
-## Task Group D: Mobile Wiring
-1. Subscribe screens to websocket service.
-2. Map event types to UI updates.
-3. Add connection-state indicators and fallback UI.
-
-## Task Group E: Verification
-1. Execute `T08-U*`, `T08-I*`, `T08-S*` tests.
-2. Capture demo evidence and update checklist.
+## Done Definition per Task
+- Code merged.
+- Tests pass.
+- Traceability row updated.
+- Auth enforcement verified (close codes 4001/4003 for appropriate scenarios).
+- Event payloads match documented schemas with timezone offsets.
+- Related docs updated when behavior changes.

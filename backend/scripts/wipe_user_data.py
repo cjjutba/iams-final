@@ -71,7 +71,50 @@ def wipe_user_data(confirm: bool = False):
         print("=" * 60)
         print("\nThis will DELETE all registered users and transactional data.")
 
+        # STEP 1: Get or create the new default faculty account FIRST
+        # (We need this to reassign schedules before deleting old users)
+        print("\n[1/3] Preparing new default faculty account...")
+        existing_faculty = db.query(User).filter(User.email == "faculty@gmail.com").first()
+
+        if existing_faculty:
+            # Use the existing faculty account and update its password
+            new_faculty = existing_faculty
+            new_faculty.password_hash = hash_password("password123")
+            new_faculty.is_active = True
+            new_faculty.email_verified = True
+            db.flush()
+            print(f"  Using existing: faculty@gmail.com (ID: {new_faculty.id})")
+        else:
+            # Create a brand new faculty account
+            new_faculty = User(
+                email="faculty@gmail.com",
+                password_hash=hash_password("password123"),
+                role=UserRole.FACULTY,
+                first_name="Faculty",
+                last_name="User",
+                phone="09000000000",
+                is_active=True,
+                email_verified=True,
+            )
+            db.add(new_faculty)
+            db.flush()
+            print(f"  Created: faculty@gmail.com (ID: {new_faculty.id})")
+
+        # STEP 2: Reassign all schedules to the new faculty
+        # (This removes the FK dependency on old faculty users)
+        from app.models.schedule import Schedule
+        schedule_count = db.query(Schedule).count()
+        if schedule_count > 0:
+            db.query(Schedule).update(
+                {"faculty_id": new_faculty.id},
+                synchronize_session=False
+            )
+            print(f"  Reassigned {schedule_count:>4} schedules to new faculty")
+        db.flush()
+
+        # STEP 3: Delete all transactional data and old users
         # Order matters — delete children before parents to respect FK constraints
+        print("\n[2/3] Deleting transactional data and old users...")
         tables = [
             (PresenceLog,        "presence_logs"),
             (EarlyLeaveEvent,    "early_leave_events"),
@@ -82,30 +125,19 @@ def wipe_user_data(confirm: bool = False):
             (User,               "users"),
         ]
 
-        print()
         total_deleted = 0
         for model, table_name in tables:
-            count = db.query(model).delete(synchronize_session=False)
+            if model == User:
+                # Only delete users that are NOT the new faculty we just created
+                count = db.query(model).filter(model.id != new_faculty.id).delete(synchronize_session=False)
+            else:
+                count = db.query(model).delete(synchronize_session=False)
             total_deleted += count
             print(f"  Deleted {count:>4} rows from {table_name}")
 
         db.flush()
 
-        # Re-create the default faculty account
-        print("\n  Recreating default faculty account...")
-        faculty = User(
-            email="faculty@gmail.com",
-            password_hash=hash_password("password123"),
-            role=UserRole.FACULTY,
-            first_name="Faculty",
-            last_name="User",
-            phone="09000000000",
-            is_active=True,
-        )
-        db.add(faculty)
-        db.flush()
-        print(f"  Created: faculty@gmail.com (ID: {faculty.id})")
-
+        print(f"\n[3/3] Finalizing changes...")
         db.commit()
         logger.info("User data wiped successfully")
 
@@ -114,10 +146,11 @@ def wipe_user_data(confirm: bool = False):
         print("=" * 60)
         print(f"\nTotal rows deleted: {total_deleted}")
         print("\nReference data (student_records, faculty_records, rooms, schedules) preserved.")
+        print(f"All {schedule_count} schedules have been reassigned to the new faculty account.")
         print("\nDefault Faculty Account:")
         print("  Email:    faculty@gmail.com")
         print("  Password: password123")
-        print("\nStudents can now re-register using their student IDs.")
+        print("\nStudents can now re-register using their student IDs from student_records.")
 
     except Exception as e:
         db.rollback()

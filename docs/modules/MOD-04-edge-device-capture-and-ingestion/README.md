@@ -1,8 +1,11 @@
-﻿# MOD-04 Edge Device Capture and Ingestion Documentation Pack
+# MOD-04 Edge Device Capture and Ingestion Documentation Pack
 
 ## Purpose
 This folder is the full implementation reference for Module 4.
 When implementing edge capture and ingestion features, use this folder as the primary source of truth.
+
+## Auth Context
+MOD-04 is an **edge-device module** — it runs on the Raspberry Pi, not in a browser or mobile app. Edge devices do **not** hold Supabase JWTs. Instead, the edge→backend connection is authenticated via a **shared API key** sent in the `X-API-Key` header, validated against the `EDGE_API_KEY` environment variable on the backend. This pattern was established in MOD-03 for the recognition endpoint and applies equally to `POST /face/process`.
 
 ## Coverage
 This pack documents:
@@ -39,13 +42,11 @@ This pack documents:
 - `10-traceability/`: mapping from functions to API/data/tests
 
 ## Canonical Sources
-- `docs/main/master-blueprint.md`
-- `docs/main/implementation.md`
-- `docs/main/technical-specification.md`
-- `docs/main/api-reference.md`
 - `docs/main/architecture.md`
+- `docs/main/implementation.md`
+- `docs/main/database-schema.md`
+- `docs/main/api-reference.md`
 - `docs/main/deployment.md`
-- `docs/main/testing.md`
 
 ## Module IDs
 - Module: `MOD-04`
@@ -57,4 +58,6 @@ Module 4 documentation is considered complete when:
 - All files in this folder are populated and internally consistent.
 - Every function has test cases and acceptance criteria.
 - API docs and queue/retry docs reference the same behavior.
+- Edge→backend authentication uses shared API key (`X-API-Key` header).
+- Crop size boundary is documented (edge crops ~112x112, backend resizes to 160x160 for FaceNet).
 - Traceability matrix has no missing mappings.

@@ -1,8 +1,15 @@
-﻿# MOD-09 Student Mobile App Documentation Pack
+# MOD-09 Student Mobile App Documentation Pack
 
 ## Purpose
 This folder is the full implementation reference for Module 9.
 When implementing student mobile features, use this folder as the primary source of truth.
+
+## Auth Context
+MOD-09 spans both **pre-auth** and **post-auth** flows:
+- **Pre-auth screens** (no JWT required): SCR-001, SCR-002, SCR-003, SCR-004, SCR-006, SCR-007, SCR-008, SCR-009, SCR-010
+- **Post-auth screens** (JWT required): SCR-011, SCR-012, SCR-013, SCR-014, SCR-015, SCR-016, SCR-017, SCR-018
+
+Registration (FUN-09-03) is a special case: Steps 1-2 are pre-auth, Step 3 (face registration) and Step 4 (review/submit) complete the account creation. After registration completes, the user receives tokens and transitions to post-auth.
 
 ## Coverage
 This pack documents:
@@ -39,12 +46,11 @@ This pack documents:
 - `10-traceability/`: mapping from functions to APIs/data/screens/tests
 
 ## Canonical Sources
-- `docs/main/master-blueprint.md`
+- `docs/main/architecture.md`
 - `docs/main/api-reference.md`
 - `docs/main/implementation.md`
-- `docs/main/technical-specification.md`
+- `docs/main/database-schema.md`
 - `docs/main/prd.md`
-- `docs/screens/screen-list.md`
 
 ## Module IDs
 - Module: `MOD-09`
@@ -56,4 +62,6 @@ Module 9 documentation is considered complete when:
 - All files in this folder are populated and internally consistent.
 - All six functions have acceptance criteria and test cases.
 - Screen flows, consumed API docs, and state docs are aligned.
+- Auth context (pre-auth vs post-auth) is documented per screen and endpoint.
+- Timezone display rules are documented.
 - Traceability matrix has no missing mappings.

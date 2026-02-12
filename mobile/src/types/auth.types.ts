@@ -47,6 +47,7 @@ export interface RegisterRequest {
 // Verify student ID request (POST /auth/verify-student-id)
 export interface VerifyStudentIdRequest {
   student_id: string;
+  birthdate: string; // ISO 8601 date format (YYYY-MM-DD) for identity verification
 }
 
 // Verify student ID response
@@ -60,7 +61,9 @@ export interface VerifyStudentIdResponse {
     year?: string;
     section?: string;
     email?: string;
+    phone?: string; // contact_number from student_records
   };
+  message?: string; // Backend error/success message
 }
 
 // Auth response (POST /auth/login or /auth/register)

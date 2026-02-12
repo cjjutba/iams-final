@@ -1,8 +1,15 @@
-﻿# MOD-10 Faculty Mobile App Documentation Pack
+# MOD-10 Faculty Mobile App Documentation Pack
 
 ## Purpose
 This folder is the full implementation reference for Module 10.
 When implementing faculty mobile features, use this folder as the primary source of truth.
+
+## Auth Context
+MOD-10 spans pre-auth and post-auth screens within one mobile application:
+- **Pre-auth screens** (SCR-005, SCR-006): Faculty login and forgot password — no JWT required.
+- **Post-auth screens** (SCR-019 to SCR-029): All faculty portal screens — require backend-issued JWT via `Authorization: Bearer <token>` header.
+- **WebSocket**: JWT passed via `token` query parameter (not header). Close codes 4001 (unauthorized → login redirect) and 4003 (forbidden → error message).
+- Faculty accounts are **pre-seeded only** — no self-registration in MVP.
 
 ## Coverage
 This pack documents:
@@ -39,12 +46,11 @@ This pack documents:
 - `10-traceability/`: mapping from functions to APIs/data/screens/tests
 
 ## Canonical Sources
-- `docs/main/master-blueprint.md`
+- `docs/main/architecture.md`
 - `docs/main/api-reference.md`
 - `docs/main/implementation.md`
-- `docs/main/technical-specification.md`
+- `docs/main/database-schema.md`
 - `docs/main/prd.md`
-- `docs/screens/screen-list.md`
 
 ## Module IDs
 - Module: `MOD-10`
@@ -56,4 +62,8 @@ Module 10 documentation is considered complete when:
 - All files in this folder are populated and internally consistent.
 - All six functions have acceptance criteria and test cases.
 - Screen flows, consumed API docs, and state docs are aligned.
+- Pre-auth vs post-auth behavior is documented for every screen and endpoint.
+- Timestamps display in Asia/Manila timezone (+08:00).
+- Error envelope format documented (no `details` array).
+- Design system constraints followed.
 - Traceability matrix has no missing mappings.

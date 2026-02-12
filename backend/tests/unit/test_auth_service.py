@@ -7,7 +7,7 @@ failures are easy to diagnose.
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, date
 from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
@@ -57,6 +57,9 @@ def _make_user(
     return user
 
 
+_TEST_BIRTHDATE = date(2003, 5, 15)
+
+
 def _make_student_record(student_id):
     """Build a mock StudentRecord for a given student_id."""
     record = MagicMock()
@@ -68,6 +71,8 @@ def _make_student_record(student_id):
     record.year_level = 1
     record.section = "A"
     record.is_active = True
+    record.birthdate = _TEST_BIRTHDATE
+    record.contact_number = "09171234567"
     return record
 
 
@@ -106,9 +111,9 @@ class TestVerifyStudentId:
     """Tests for AuthService.verify_student_id()."""
 
     def test_verify_student_id_valid(self):
-        """A student ID with >= 3 non-whitespace chars should be valid."""
+        """A student ID with matching birthdate should be valid."""
         service, _ = _make_auth_service()
-        result = service.verify_student_id("STU-2024-001")
+        result = service.verify_student_id("STU-2024-001", _TEST_BIRTHDATE)
 
         assert result["valid"] is True
         assert result["student_info"]["student_id"] == "STU-2024-001"
@@ -117,7 +122,7 @@ class TestVerifyStudentId:
     def test_verify_student_id_valid_with_whitespace_padding(self):
         """Leading/trailing whitespace should be stripped and ID accepted."""
         service, _ = _make_auth_service()
-        result = service.verify_student_id("  STU-001  ")
+        result = service.verify_student_id("  STU-001  ", _TEST_BIRTHDATE)
 
         assert result["valid"] is True
         assert result["student_info"]["student_id"] == "STU-001"
@@ -125,7 +130,7 @@ class TestVerifyStudentId:
     def test_verify_student_id_empty(self):
         """An empty string should be invalid."""
         service, _ = _make_auth_service()
-        result = service.verify_student_id("")
+        result = service.verify_student_id("", _TEST_BIRTHDATE)
 
         assert result["valid"] is False
         assert result["student_info"] is None
@@ -133,15 +138,14 @@ class TestVerifyStudentId:
     def test_verify_student_id_none(self):
         """None should be treated as invalid (falsy)."""
         service, _ = _make_auth_service()
-        # The code checks ``not student_id`` which is True for None.
-        result = service.verify_student_id(None)
+        result = service.verify_student_id(None, _TEST_BIRTHDATE)
 
         assert result["valid"] is False
 
     def test_verify_student_id_too_short(self):
         """A student ID shorter than 3 characters (after stripping) should fail."""
         service, _ = _make_auth_service()
-        result = service.verify_student_id("AB")
+        result = service.verify_student_id("AB", _TEST_BIRTHDATE)
 
         assert result["valid"] is False
         assert "invalid" in result["message"].lower()
@@ -149,16 +153,25 @@ class TestVerifyStudentId:
     def test_verify_student_id_whitespace_only(self):
         """An ID consisting only of whitespace should fail."""
         service, _ = _make_auth_service()
-        result = service.verify_student_id("   ")
+        result = service.verify_student_id("   ", _TEST_BIRTHDATE)
 
         assert result["valid"] is False
 
     def test_verify_student_id_exactly_three_chars(self):
         """A 3-character student ID should be accepted."""
         service, _ = _make_auth_service()
-        result = service.verify_student_id("ABC")
+        result = service.verify_student_id("ABC", _TEST_BIRTHDATE)
 
         assert result["valid"] is True
+
+    def test_verify_student_id_wrong_birthdate(self):
+        """A valid student ID with wrong birthdate should fail."""
+        service, _ = _make_auth_service()
+        wrong_date = date(2000, 1, 1)
+        result = service.verify_student_id("STU-2024-001", wrong_date)
+
+        assert result["valid"] is False
+        assert "verification failed" in result["message"].lower() or "birthdate" in result["message"].lower()
 
 
 # ===================================================================
@@ -269,18 +282,21 @@ class TestRegisterStudent:
         repo.create.assert_called_once()
 
     def test_register_student_invalid_student_id(self):
-        """Registration with an invalid (too short) student ID should raise."""
+        """Registration with a student ID not in school records should raise."""
         service, _ = _make_auth_service()
+        # Override mock: clear side_effect and return None (ID not found)
+        service.student_record_repo.get_by_student_id.side_effect = None
+        service.student_record_repo.get_by_student_id.return_value = None
 
         reg_data = {
-            "student_id": "AB",
+            "student_id": "UNKNOWN-ID",
             "email": "new@test.edu",
             "password": "StrongPass1",
             "first_name": "New",
             "last_name": "Student",
         }
 
-        with pytest.raises(ValidationError, match="Invalid student ID"):
+        with pytest.raises(ValidationError, match="not found"):
             service.register_student(reg_data)
 
     def test_register_student_weak_password(self):

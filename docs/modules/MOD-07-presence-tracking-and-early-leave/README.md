@@ -1,8 +1,20 @@
-﻿# MOD-07 Presence Tracking and Early Leave Documentation Pack
+# MOD-07 Presence Tracking and Early Leave Documentation Pack
 
 ## Purpose
 This folder is the full implementation reference for Module 7.
 When implementing continuous presence and early-leave logic, use this folder as the primary source of truth.
+
+## Auth Context
+MOD-07 has two categories of functions:
+- **System-Internal (FUN-07-01 to FUN-07-05):** Invoked by the presence service scan loop — no HTTP endpoints, no JWT required.
+- **User-Facing API (FUN-07-06):** Requires **Supabase JWT** (`Authorization: Bearer <token>`).
+
+Role-based access for FUN-07-06 endpoints:
+- **GET /api/v1/presence/{attendance_id}/logs** — faculty or admin (view presence detail for an attendance record).
+- **GET /api/v1/presence/early-leaves** — faculty or admin (view early-leave events for a schedule/date).
+- 401 for missing/invalid JWT.
+- 403 for insufficient role (students cannot access presence endpoints directly).
+- No API key auth (that pattern is for MOD-03/MOD-04 edge devices only).
 
 ## Coverage
 This pack documents:
@@ -39,13 +51,11 @@ This pack documents:
 - `10-traceability/`: mapping from functions to API/data/screens/tests
 
 ## Canonical Sources
-- `docs/main/master-blueprint.md`
+- `docs/main/architecture.md`
 - `docs/main/api-reference.md`
 - `docs/main/database-schema.md`
 - `docs/main/implementation.md`
-- `docs/main/technical-specification.md`
-- `docs/main/testing.md`
-- `docs/screens/screen-list.md`
+- `docs/main/prd.md`
 
 ## Module IDs
 - Module: `MOD-07`
@@ -58,3 +68,7 @@ Module 7 documentation is considered complete when:
 - Every function has test cases and acceptance criteria.
 - API docs and screen docs reference the same behavior.
 - Traceability matrix has no missing mappings.
+- Auth rules (Supabase JWT, role requirements, 401/403 responses) are documented per endpoint.
+- Timezone handling (`TIMEZONE` env var, Asia/Manila default) is documented for session boundaries and date queries.
+- Response envelope format (`success`, `data`, `message` for success; `success`, `error` for failure) is consistent across all endpoint contracts.
+- System-internal functions (FUN-07-01 to FUN-07-05) are clearly distinguished from user-facing API functions (FUN-07-06).

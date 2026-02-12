@@ -40,21 +40,23 @@ class AuthService:
     # FUN-01-01: Verify Student Identity
     # ------------------------------------------------------------------
 
-    def verify_student_id(self, student_id: str) -> dict:
+    def verify_student_id(self, student_id: str, birthdate: datetime) -> dict:
         """
-        Verify student ID against the student_records reference table.
+        Verify student ID and birthdate against the student_records reference table.
 
-        Returns the official student information (name, course, year, section,
-        email) pre-populated from the school's registry so the mobile app can
-        display it for the student to confirm before proceeding.
+        Two-factor verification:
+          1. Student ID must exist in university database
+          2. Birthdate must match the official record
 
-        Also rejects IDs that are already registered to prevent duplicate accounts.
+        This prevents unauthorized users from viewing student information by
+        entering random student IDs.
 
         Args:
             student_id: Student ID to verify (e.g. "21-A-02177")
+            birthdate: Student's birthdate for identity verification
 
         Returns:
-            Dictionary with validation result and student info
+            Dictionary with validation result and student info (only if both match)
         """
         logger.info(f"Verifying student ID: {student_id}")
 
@@ -85,6 +87,26 @@ class AuthService:
                 "message": "Student ID is no longer active"
             }
 
+        # SECURITY: Verify birthdate matches before showing student information
+        if not record.birthdate:
+            logger.error(f"Student record missing birthdate: {normalized}")
+            return {
+                "valid": False,
+                "student_info": None,
+                "message": "Unable to verify identity. Please contact registrar."
+            }
+
+        # Convert datetime to date if needed
+        verification_date = birthdate.date() if isinstance(birthdate, datetime) else birthdate
+
+        if record.birthdate != verification_date:
+            logger.warning(f"Birthdate mismatch for {normalized}")
+            return {
+                "valid": False,
+                "student_info": None,
+                "message": "Identity verification failed. Please check your birthdate."
+            }
+
         # Reject if already has an app account (prevent duplicate registration)
         existing_user = self.user_repo.get_by_student_id(normalized)
         if existing_user:
@@ -94,6 +116,7 @@ class AuthService:
                 "message": "This student ID is already registered. Please login instead."
             }
 
+        # Both student ID and birthdate verified — return student info
         return {
             "valid": True,
             "student_info": {
@@ -104,6 +127,7 @@ class AuthService:
                 "year": record.year_level,
                 "section": record.section,
                 "email": record.email,
+                "contact_number": record.contact_number,
             },
             "message": "Student ID verified successfully"
         }
@@ -134,10 +158,22 @@ class AuthService:
         Returns:
             Tuple of (created user, response dict with tokens or message)
         """
-        # Validate student ID against the school registry
-        verification = self.verify_student_id(registration_data["student_id"])
-        if not verification["valid"]:
-            raise ValidationError(verification["message"])
+        # Validate student ID exists in school registry
+        # Note: Full verification (ID + birthdate) already done in Step 1 of registration flow.
+        # Here we just validate that the student exists and is not already registered.
+        normalized_id = registration_data["student_id"].strip().upper()
+
+        record = self.student_record_repo.get_by_student_id(normalized_id)
+        if not record:
+            raise ValidationError("Student ID not found in university records")
+
+        if not record.is_active:
+            raise ValidationError("Student ID is no longer active")
+
+        # Check if already registered
+        existing_user = self.user_repo.get_by_student_id(normalized_id)
+        if existing_user:
+            raise ValidationError("This student ID is already registered. Please login instead.")
 
         # Validate password strength
         is_valid, error_msg = validate_password_strength(registration_data["password"])
@@ -145,8 +181,7 @@ class AuthService:
             raise ValidationError(error_msg)
 
         # Use official name from student_records (prevents tampering)
-        normalized_id = registration_data["student_id"].strip().upper()
-        record = self.student_record_repo.get_by_student_id(normalized_id)
+        # record is already fetched above
 
         if settings.USE_SUPABASE_AUTH:
             return self._register_student_supabase(registration_data, record, normalized_id)

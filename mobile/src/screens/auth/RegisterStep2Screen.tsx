@@ -48,7 +48,7 @@ export const RegisterStep2Screen: React.FC = () => {
     resolver: zodResolver(accountDetailsSchema),
     defaultValues: {
       email: studentInfo.email || '',
-      phone: '',
+      phone: studentInfo.phone || '',
       password: '',
       confirmPassword: '',
     },

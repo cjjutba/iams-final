@@ -1,4 +1,4 @@
-﻿# Change Control
+# Change Control
 
 ## Changes Requiring Documentation Update First
 - Faculty login/session behavior changes.
@@ -6,6 +6,9 @@
 - Manual attendance payload or flow changes.
 - Early-leave/summary display logic changes.
 - Faculty screen additions/removals/renames.
+- Auth flow changes (token storage, interceptor behavior, WebSocket auth).
+- Response envelope format changes.
+- Timezone display logic changes.
 
 ## Required Update Targets
 - `02-specification/` for behavior changes

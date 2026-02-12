@@ -36,7 +36,7 @@ interface AuthState {
   login: (data: LoginRequest) => Promise<void>;
   register: (data: RegisterRequest) => Promise<void>;
   logout: () => Promise<void>;
-  verifyStudentId: (data: VerifyStudentIdRequest) => Promise<VerifyStudentIdResponse>;
+  verifyStudentId: (studentId: string, birthdate: string) => Promise<VerifyStudentIdResponse>;
   changePassword: (oldPassword: string, newPassword: string) => Promise<void>;
   updateProfile: (data: Partial<User>) => Promise<void>;
   forgotPassword: (email: string) => Promise<void>;
@@ -218,19 +218,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  // Verify student ID (Step 1 of registration)
-  verifyStudentId: async (data: VerifyStudentIdRequest): Promise<VerifyStudentIdResponse> => {
-    set({ isLoading: true, error: null });
+  // Verify student ID (Step 1 of registration - with birthdate verification)
+  // Note: This doesn't change auth state, so we don't set isLoading to avoid
+  // triggering RootNavigator re-renders that could reset navigation.
+  verifyStudentId: async (studentId: string, birthdate: string): Promise<VerifyStudentIdResponse> => {
+    set({ error: null });
 
     try {
-      const result = await authService.verifyStudentId(data.student_id);
-      set({ isLoading: false });
+      const result = await authService.verifyStudentId(studentId, birthdate);
       return result;
     } catch (error) {
       console.error('Student ID verification failed:', error);
       set({
         error: getErrorMessage(error),
-        isLoading: false,
       });
       throw error;
     }

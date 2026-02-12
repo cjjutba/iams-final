@@ -5,6 +5,7 @@ Request and response models for authentication flows.
 """
 
 from typing import Optional
+from datetime import date
 from pydantic import BaseModel, EmailStr, Field
 from app.schemas.user import UserResponse
 
@@ -31,6 +32,7 @@ class RefreshRequest(BaseModel):
 class VerifyStudentIDRequest(BaseModel):
     """Student ID verification request (Step 1 of registration)"""
     student_id: str = Field(..., min_length=1, max_length=50)
+    birthdate: date = Field(..., description="Birthdate for identity verification (YYYY-MM-DD)")
 
 
 class StudentInfo(BaseModel):
@@ -42,6 +44,7 @@ class StudentInfo(BaseModel):
     year: Optional[int] = None
     section: Optional[str] = None
     email: Optional[str] = None
+    contact_number: Optional[str] = None
 
 
 class VerifyStudentIDResponse(BaseModel):

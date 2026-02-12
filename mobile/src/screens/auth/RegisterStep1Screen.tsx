@@ -1,18 +1,24 @@
 /**
- * Register Step 1 Screen - Student ID Verification
+ * Register Step 1 Screen - Two-Factor Student ID Verification
  *
- * First step of student registration.
+ * Progressive verification flow (SECURE):
+ * 1. Enter Student ID → Client-side validation only
+ * 2. Enter Birthdate → API call verifies BOTH together
+ * 3. Confirm student info → Proceed to Step 2
+ *
+ * Security: No API call until both Student ID and Birthdate are provided.
+ * This prevents harvesting student IDs to check if they exist.
  */
 
 import React, { useState } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { View, StyleSheet, Animated } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { IdCard, CheckCircle } from 'lucide-react-native';
-import { useAuth } from '../../hooks';
+import { IdCard, CheckCircle, Calendar, ArrowRight } from 'lucide-react-native';
+import { useAuth, useToast } from '../../hooks';
 import { theme, strings } from '../../constants';
 import type { AuthStackParamList, StudentInfo } from '../../types';
 import { AuthLayout } from '../../components/layouts';
@@ -21,7 +27,11 @@ import { FormInput } from '../../components/forms';
 
 type RegisterStep1NavigationProp = StackNavigationProp<AuthStackParamList, 'RegisterStep1'>;
 
-const studentIdSchema = z.object({
+// Verification states for progressive disclosure
+type VerificationStep = 'student_id' | 'birthdate' | 'confirmed';
+
+// Student ID only schema (step 1a) - client-side validation
+const studentIdOnlySchema = z.object({
   studentId: z
     .string()
     .min(1, strings.errors.required)
@@ -29,53 +39,161 @@ const studentIdSchema = z.object({
     .transform((value) => value.trim().toUpperCase()),
 });
 
-type StudentIdData = z.infer<typeof studentIdSchema>;
+// Birthdate only schema (step 1b) - MMDDYYYY format
+const birthdateSchema = z.object({
+  birthdate: z
+    .string()
+    .min(1, 'Birthdate is required')
+    .regex(/^\d{8}$/, 'Use format: MMDDYYYY (e.g., 05152003 for May 15, 2003)')
+    .refine((val) => {
+      // Validate it's a real date
+      const month = parseInt(val.substring(0, 2), 10);
+      const day = parseInt(val.substring(2, 4), 10);
+      const year = parseInt(val.substring(4, 8), 10);
+
+      if (month < 1 || month > 12) return false;
+      if (day < 1 || day > 31) return false;
+      if (year < 1900 || year > new Date().getFullYear()) return false;
+
+      return true;
+    }, 'Invalid date'),
+});
+
+type StudentIdOnlyData = z.infer<typeof studentIdOnlySchema>;
+type BirthdateData = z.infer<typeof birthdateSchema>;
+
+/**
+ * Convert MMDDYYYY to YYYY-MM-DD for backend API
+ */
+const convertBirthdateToISO = (mmddyyyy: string): string => {
+  const month = mmddyyyy.substring(0, 2);
+  const day = mmddyyyy.substring(2, 4);
+  const year = mmddyyyy.substring(4, 8);
+  return `${year}-${month}-${day}`;
+};
 
 export const RegisterStep1Screen: React.FC = () => {
   const navigation = useNavigation<RegisterStep1NavigationProp>();
   const { verifyStudentId } = useAuth();
+  const { showSuccess, showError } = useToast();
 
+  const [verificationStep, setVerificationStep] = useState<VerificationStep>('student_id');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [validatedStudentId, setValidatedStudentId] = useState<string | null>(null);
   const [studentInfo, setStudentInfo] = useState<StudentInfo | null>(null);
+  const [slideAnim] = useState(new Animated.Value(0));
 
-  const { control, handleSubmit } = useForm<StudentIdData>({
-    resolver: zodResolver(studentIdSchema),
-    defaultValues: {
-      studentId: '',
-    },
+  // Student ID form
+  const studentIdForm = useForm<StudentIdOnlyData>({
+    resolver: zodResolver(studentIdOnlySchema),
+    defaultValues: { studentId: '' },
   });
 
-  const onSubmit = async (data: StudentIdData) => {
+  // Birthdate form
+  const birthdateForm = useForm<BirthdateData>({
+    resolver: zodResolver(birthdateSchema),
+    defaultValues: { birthdate: '' },
+  });
+
+  /**
+   * Step 1a: Validate Student ID format (client-side only)
+   * No API call to prevent ID harvesting
+   */
+  const handleStudentIdSubmit = async (data: StudentIdOnlyData) => {
+    // Student ID format is valid! Save it and show birthdate input
+    setValidatedStudentId(data.studentId);
+    setVerificationStep('birthdate');
+    setError(null);
+
+    // Slide in birthdate field with animation
+    Animated.spring(slideAnim, {
+      toValue: 1,
+      useNativeDriver: true,
+      tension: 50,
+      friction: 7,
+    }).start();
+  };
+
+  /**
+   * Step 1b: Validate BOTH Student ID and Birthdate with API
+   * This is where the actual 2FA verification happens
+   */
+  const handleBirthdateSubmit = async (data: BirthdateData) => {
+    if (!validatedStudentId) {
+      setError('Please enter Student ID first');
+      return;
+    }
+
     try {
       setIsSubmitting(true);
       setError(null);
 
-      const response = await verifyStudentId({ student_id: data.studentId });
+      // Convert MMDDYYYY to YYYY-MM-DD
+      const isoDate = convertBirthdateToISO(data.birthdate);
+
+      console.log('Verifying:', { studentId: validatedStudentId, birthdate: isoDate });
+
+      // Verify BOTH Student ID and birthdate together
+      const response = await verifyStudentId(validatedStudentId, isoDate);
+
+      console.log('Verification response:', response);
 
       if (response.success && response.data.valid) {
+        // Both Student ID and birthdate verified!
         setStudentInfo({
-          studentId: data.studentId,
+          studentId: validatedStudentId,
           first_name: response.data.first_name || '',
           last_name: response.data.last_name || '',
           course: response.data.course || '',
           year: response.data.year || '',
           section: response.data.section || '',
           email: response.data.email,
+          phone: response.data.phone,
         });
+        setVerificationStep('confirmed');
+        showSuccess('Identity verified successfully!', 'Student ID Verified');
       } else {
-        setError('Student ID not found in university database');
+        // Show the specific error message from backend
+        const errorMsg = response.message || 'Identity verification failed. Please check your Student ID and birthdate.';
+        console.error('Verification failed:', errorMsg);
+        setError(errorMsg);
+        showError(errorMsg, 'Verification Failed');
       }
     } catch (err: any) {
-      setError(err.response?.data?.message || strings.errors.generic);
+      console.error('Verification error:', err);
+      const errorMessage = err.response?.data?.message || err.message || 'Unable to verify identity. Please try again.';
+      setError(errorMessage);
+      showError(errorMessage, 'Verification Failed');
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  /**
+   * Step 1c: Navigate to Step 2 with verified student info
+   */
   const handleContinue = () => {
-    if (!studentInfo) return;
+    if (!studentInfo) {
+      console.error('No student info to navigate with');
+      return;
+    }
+
+    console.log('Navigating to RegisterStep2 with:', studentInfo);
     navigation.navigate('RegisterStep2', { studentInfo });
+  };
+
+  /**
+   * Reset verification flow
+   */
+  const handleReset = () => {
+    setVerificationStep('student_id');
+    setValidatedStudentId(null);
+    setStudentInfo(null);
+    setError(null);
+    studentIdForm.reset();
+    birthdateForm.reset();
+    slideAnim.setValue(0);
   };
 
   return (
@@ -89,21 +207,23 @@ export const RegisterStep1Screen: React.FC = () => {
         </View>
       </View>
 
-      {!studentInfo ? (
+      {/* Step 1a: Student ID Input */}
+      {verificationStep === 'student_id' && (
         <View style={styles.section}>
           <Text variant="caption" color={theme.colors.text.secondary} style={styles.helperText}>
-            Enter your official student ID to verify your identity.
+            Enter your official student ID to begin verification.
           </Text>
 
           <View style={styles.inputContainer}>
             <FormInput
               name="studentId"
-              control={control}
+              control={studentIdForm.control}
               label={strings.form.studentId}
               placeholder={strings.register.studentIdPlaceholder}
               leftIcon={<IdCard size={20} color={theme.colors.text.tertiary} />}
               autoCapitalize="characters"
               autoCorrect={false}
+              autoFocus
             />
           </View>
 
@@ -119,19 +239,98 @@ export const RegisterStep1Screen: React.FC = () => {
             variant="primary"
             size="lg"
             fullWidth
-            onPress={handleSubmit(onSubmit)}
-            loading={isSubmitting}
+            onPress={studentIdForm.handleSubmit(handleStudentIdSubmit)}
             style={styles.button}
           >
-            {strings.register.verifyStudentId}
+            Next
           </Button>
         </View>
-      ) : (
+      )}
+
+      {/* Step 1b: Birthdate Input (shown after Student ID entered) */}
+      {verificationStep === 'birthdate' && (
+        <Animated.View
+          style={[
+            styles.section,
+            {
+              opacity: slideAnim,
+              transform: [
+                {
+                  translateY: slideAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [20, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <View style={styles.infoBadge}>
+            <IdCard size={16} color={theme.colors.primary} />
+            <Text variant="bodySmall" color={theme.colors.primary} style={styles.badgeText}>
+              Student ID: {validatedStudentId}
+            </Text>
+          </View>
+
+          <Text variant="caption" color={theme.colors.text.secondary} style={styles.helperText}>
+            Enter your birthdate to verify your identity.
+          </Text>
+
+          <View style={styles.inputContainer}>
+            <FormInput
+              name="birthdate"
+              control={birthdateForm.control}
+              label="Birthdate"
+              placeholder="MMDDYYYY (e.g., 05152003)"
+              leftIcon={<Calendar size={20} color={theme.colors.text.tertiary} />}
+              keyboardType="number-pad"
+              maxLength={8}
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoFocus
+            />
+            <Text variant="caption" color={theme.colors.text.tertiary} style={styles.fieldHelp}>
+              Format: Month-Day-Year (e.g., 05152003 for May 15, 2003)
+            </Text>
+          </View>
+
+          {error ? (
+            <View style={styles.errorContainer}>
+              <Text variant="bodySmall" color={theme.colors.error}>
+                {error}
+              </Text>
+            </View>
+          ) : null}
+
+          <View style={styles.buttonRow}>
+            <Button
+              variant="secondary"
+              size="lg"
+              onPress={handleReset}
+              style={styles.halfButton}
+            >
+              Back
+            </Button>
+            <Button
+              variant="primary"
+              size="lg"
+              onPress={birthdateForm.handleSubmit(handleBirthdateSubmit)}
+              loading={isSubmitting}
+              style={styles.halfButton}
+            >
+              Verify Identity
+            </Button>
+          </View>
+        </Animated.View>
+      )}
+
+      {/* Step 1c: Confirmation (both verified) */}
+      {verificationStep === 'confirmed' && studentInfo && (
         <View style={styles.section}>
           <View style={styles.successHeader}>
             <CheckCircle size={22} color={theme.colors.success} />
             <Text variant="body" weight="600" style={styles.successHeaderText}>
-              {strings.register.studentFound}
+              Identity Verified
             </Text>
           </View>
 
@@ -145,9 +344,24 @@ export const RegisterStep1Screen: React.FC = () => {
             {strings.register.isThisYou}
           </Text>
 
-          <Button variant="primary" size="lg" fullWidth onPress={handleContinue}>
-            {strings.register.yesContinue}
-          </Button>
+          <View style={styles.buttonRow}>
+            <Button
+              variant="secondary"
+              size="lg"
+              onPress={handleReset}
+              style={styles.halfButton}
+            >
+              No, Go Back
+            </Button>
+            <Button
+              variant="primary"
+              size="lg"
+              onPress={handleContinue}
+              style={styles.halfButton}
+            >
+              Yes, Continue
+            </Button>
+          </View>
         </View>
       )}
     </AuthLayout>
@@ -191,6 +405,9 @@ const styles = StyleSheet.create({
   inputContainer: {
     marginBottom: theme.spacing[5],
   },
+  fieldHelp: {
+    marginTop: theme.spacing[1],
+  },
   errorContainer: {
     marginBottom: theme.spacing[5],
     padding: theme.spacing[4],
@@ -199,6 +416,27 @@ const styles = StyleSheet.create({
   },
   button: {
     marginTop: theme.spacing[2],
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: theme.spacing[3],
+    marginTop: theme.spacing[2],
+  },
+  halfButton: {
+    flex: 1,
+  },
+  infoBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.secondary,
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[2],
+    borderRadius: theme.borderRadius.md,
+    alignSelf: 'flex-start',
+    marginBottom: theme.spacing[4],
+  },
+  badgeText: {
+    marginLeft: theme.spacing[2],
   },
   successHeader: {
     flexDirection: 'row',

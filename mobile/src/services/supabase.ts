@@ -9,7 +9,7 @@
  * before accessing `supabase`.
  */
 
-import 'react-native-url-polyfill/dist/setup';
+import 'react-native-url-polyfill/auto';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import * as SecureStore from 'expo-secure-store';
 import { config } from '../constants/config';

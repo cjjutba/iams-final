@@ -47,6 +47,7 @@ interface RegisterPayload {
 /** POST /auth/verify-student-id -- mirrors backend VerifyStudentIDRequest */
 interface VerifyStudentIdPayload {
   student_id: string;
+  birthdate: string; // ISO 8601 date format (YYYY-MM-DD)
 }
 
 /** Backend TokenResponse shape (returned by POST /auth/login) */
@@ -105,12 +106,13 @@ interface ProfileUpdatePayload {
 
 export const authService = {
   /**
-   * Verify that a student ID exists in the university database.
-   * This is Step 1 of the student self-registration flow.
+   * Verify that a student ID exists in the university database and that
+   * the provided birthdate matches the official record.
+   * This is Step 1 of the student self-registration flow with 2FA verification.
    * Always uses the backend API (student records are server-side only).
    */
-  async verifyStudentId(studentId: string): Promise<VerifyStudentIdResponse> {
-    const payload: VerifyStudentIdPayload = { student_id: studentId };
+  async verifyStudentId(studentId: string, birthdate: string): Promise<VerifyStudentIdResponse> {
+    const payload: VerifyStudentIdPayload = { student_id: studentId, birthdate };
 
     interface BackendVerifyResponse {
       valid: boolean;
@@ -122,6 +124,7 @@ export const authService = {
         year?: number;
         section?: string;
         email?: string;
+        contact_number?: string;
       };
       message: string;
     }
@@ -142,7 +145,9 @@ export const authService = {
         year: backendData.student_info?.year?.toString(),
         section: backendData.student_info?.section,
         email: backendData.student_info?.email,
+        phone: backendData.student_info?.contact_number,
       },
+      message: backendData.message, // Pass through backend message
     };
   },
 
@@ -191,15 +196,14 @@ export const authService = {
 
     if (supabase && config.USE_SUPABASE_AUTH) {
       // Supabase requires an email. If identifier looks like a student ID
-      // (contains a dash), we need to resolve it to an email first via backend.
+      // (contains a dash), resolve it to an email via the backend resolve endpoint.
       let email = identifier;
       if (identifier.includes('-') && !identifier.includes('@')) {
-        // Looks like a student ID — resolve to email via verify endpoint
-        const verifyResult = await this.verifyStudentId(identifier);
-        if (!verifyResult.data.valid || !verifyResult.data.email) {
-          throw new Error('Student ID not found or has no associated email');
-        }
-        email = verifyResult.data.email;
+        const resolveResp = await api.post<{ email: string }>(
+          '/auth/resolve-email',
+          { identifier, password },
+        );
+        email = resolveResp.data.email;
       }
 
       const { data, error } = await supabase.auth.signInWithPassword({

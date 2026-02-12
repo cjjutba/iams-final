@@ -21,6 +21,7 @@ This script is idempotent -- skips records that already exist.
 
 import sys
 from pathlib import Path
+from datetime import date
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -32,32 +33,30 @@ from app.config import logger
 
 # ---------------------------------------------------------------------------
 # Mock student registry (10 students, BSCPE, JRMSU)
-# Format: (student_id, first_name, last_name, email, course, year_level, section)
+# Format: (student_id, first_name, last_name, email, course, year_level, section, birthdate, contact_number)
 # ---------------------------------------------------------------------------
 MOCK_STUDENTS = [
-    # 4th year students
-    ("21-A-02177", "Christian Jerald", "Jutba",      "cjjutbaofficial@gmail.com",        "BSCPE", 4, "A"),
-    ("21-A-12345", "Juan",             "Dela Cruz",  "juan.delacruz@jrmsu.edu.ph",        "BSCPE", 4, "A"),
-    ("21-B-55555", "Sofia",            "Torres",     "sofia.torres@jrmsu.edu.ph",         "BSCPE", 4, "B"),
-    # 3rd year students
-    ("22-A-54321", "Maria",            "Santos",     "maria.santos@jrmsu.edu.ph",         "BSCPE", 3, "A"),
-    ("22-A-67890", "Jose",             "Reyes",      "jose.reyes@jrmsu.edu.ph",           "BSCPE", 3, "A"),
-    ("22-B-66666", "Miguel",           "Flores",     "miguel.flores@jrmsu.edu.ph",        "BSCPE", 3, "B"),
-    # 2nd year students
-    ("23-A-11111", "Ana",              "Garcia",     "ana.garcia@jrmsu.edu.ph",           "BSCPE", 2, "A"),
-    ("23-A-22222", "Pedro",            "Gonzales",   "pedro.gonzales@jrmsu.edu.ph",       "BSCPE", 2, "A"),
-    # 1st year students
-    ("24-A-33333", "Maria",            "Rodriguez",  "maria.rodriguez@jrmsu.edu.ph",      "BSCPE", 1, "A"),
-    ("24-A-44444", "Carlo",            "Mendoza",    "carlo.mendoza@jrmsu.edu.ph",        "BSCPE", 1, "B"),
+    # 4th year students (born 2003)
+    ("21-A-02177", "Christian Jerald", "Jutba",      "cjjutbaofficial@gmail.com",        "BSCPE", 4, "A", date(2003, 5, 15), "09764556948"),
+    ("21-A-12345", "Juan",             "Dela Cruz",  "juan.delacruz@jrmsu.edu.ph",        "BSCPE", 4, "A", date(2003, 3, 22), "09171234567"),
+    ("21-B-55555", "Sofia",            "Torres",     "sofia.torres@jrmsu.edu.ph",         "BSCPE", 4, "B", date(2003, 7, 10), "09281234567"),
+    # 3rd year students (born 2004)
+    ("22-A-54321", "Maria",            "Santos",     "maria.santos@jrmsu.edu.ph",         "BSCPE", 3, "A", date(2004, 1, 18), "09391234567"),
+    ("22-A-67890", "Jose",             "Reyes",      "jose.reyes@jrmsu.edu.ph",           "BSCPE", 3, "A", date(2004, 11, 5), "09401234567"),
+    ("22-B-66666", "Miguel",           "Flores",     "miguel.flores@jrmsu.edu.ph",        "BSCPE", 3, "B", date(2004, 9, 30), "09511234567"),
+    # 2nd year students (born 2005)
+    ("23-A-11111", "Ana",              "Garcia",     "ana.garcia@jrmsu.edu.ph",           "BSCPE", 2, "A", date(2005, 4, 12), "09621234567"),
+    ("23-A-22222", "Pedro",            "Gonzales",   "pedro.gonzales@jrmsu.edu.ph",       "BSCPE", 2, "A", date(2005, 8, 25), "09731234567"),
+    # 1st year students (born 2006)
+    ("24-A-33333", "Maria",            "Rodriguez",  "maria.rodriguez@jrmsu.edu.ph",      "BSCPE", 1, "A", date(2006, 2, 14), "09841234567"),
+    ("24-A-44444", "Carlo",            "Mendoza",    "carlo.mendoza@jrmsu.edu.ph",        "BSCPE", 1, "B", date(2006, 6, 20), "09951234567"),
 ]
 
 # ---------------------------------------------------------------------------
-# Mock faculty registry
+# Mock faculty registry (only 1 for testing)
 # ---------------------------------------------------------------------------
 MOCK_FACULTY = [
     ("FAC-001", "Faculty",  "User",    "faculty@gmail.com",              "Computer Engineering"),
-    ("FAC-002", "Roberto",  "Aquino",  "roberto.aquino@jrmsu.edu.ph",    "Computer Engineering"),
-    ("FAC-003", "Lourdes",  "Bautista","lourdes.bautista@jrmsu.edu.ph",  "Computer Engineering"),
 ]
 
 
@@ -75,7 +74,7 @@ def seed_reference_data():
         added = 0
         skipped = 0
 
-        for student_id, first_name, last_name, email, course, year_level, section in MOCK_STUDENTS:
+        for student_id, first_name, last_name, email, course, year_level, section, birthdate, contact_number in MOCK_STUDENTS:
             existing = db.query(StudentRecord).filter(
                 StudentRecord.student_id == student_id
             ).first()
@@ -92,10 +91,12 @@ def seed_reference_data():
                     course=course,
                     year_level=year_level,
                     section=section,
+                    birthdate=birthdate,
+                    contact_number=contact_number,
                     is_active=True,
                 )
                 db.add(record)
-                print(f"  ADD   {student_id} — {first_name} {last_name} (Year {year_level}-{section})")
+                print(f"  ADD   {student_id} — {first_name} {last_name} (Year {year_level}-{section}) DOB: {birthdate}")
                 added += 1
 
         # ---- Faculty Records ----

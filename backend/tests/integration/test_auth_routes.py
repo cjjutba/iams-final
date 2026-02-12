@@ -313,19 +313,31 @@ class TestVerifyStudentIDRoute:
     """Tests for POST /api/v1/auth/verify-student-id."""
 
     def test_verify_student_id_valid(self, client):
-        """A valid student ID should return valid=True."""
+        """A valid student ID with matching birthdate should return valid=True."""
         response = client.post(f"{API}/auth/verify-student-id", json={
             "student_id": "STU-2024-001",
+            "birthdate": "2003-05-15",
         })
         assert response.status_code == 200
         data = response.json()
         assert data["valid"] is True
         assert data["student_info"]["student_id"] == "STU-2024-001"
 
+    def test_verify_student_id_wrong_birthdate(self, client):
+        """A valid student ID with wrong birthdate should return valid=False."""
+        response = client.post(f"{API}/auth/verify-student-id", json={
+            "student_id": "STU-2024-001",
+            "birthdate": "2000-01-01",
+        })
+        assert response.status_code == 200
+        data = response.json()
+        assert data["valid"] is False
+
     def test_verify_student_id_too_short(self, client):
         """A student ID < 3 chars should return valid=False."""
         response = client.post(f"{API}/auth/verify-student-id", json={
             "student_id": "AB",
+            "birthdate": "2003-05-15",
         })
         assert response.status_code == 200
         data = response.json()
@@ -335,6 +347,14 @@ class TestVerifyStudentIDRoute:
         """An empty student_id should be rejected at schema level (422)."""
         response = client.post(f"{API}/auth/verify-student-id", json={
             "student_id": "",
+            "birthdate": "2003-05-15",
+        })
+        assert response.status_code == 422
+
+    def test_verify_student_id_missing_birthdate(self, client):
+        """Missing birthdate should be rejected at schema level (422)."""
+        response = client.post(f"{API}/auth/verify-student-id", json={
+            "student_id": "STU-2024-001",
         })
         assert response.status_code == 422
 

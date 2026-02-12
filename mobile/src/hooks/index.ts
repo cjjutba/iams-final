@@ -8,3 +8,4 @@ export { useAuth } from './useAuth';
 export { useAttendance } from './useAttendance';
 export { useSchedule } from './useSchedule';
 export { useWebSocket } from './useWebSocket';
+export { useToast } from './useToast';

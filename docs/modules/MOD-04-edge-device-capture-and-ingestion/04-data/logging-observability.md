@@ -1,19 +1,22 @@
-﻿# Logging and Observability
+# Logging and Observability
 
 ## Required Log Events
-- camera init/reconnect attempts
-- send success/failure
-- queue enqueue/dequeue
-- queue drop due to overflow/TTL
-- retry cycle summary
+- Camera init/reconnect attempts
+- Send success/failure (with HTTP status code)
+- Auth failure (401 from backend)
+- Queue enqueue/dequeue
+- Queue drop due to overflow/TTL
+- Retry cycle summary
 
 ## Minimum Metrics
-- current queue depth
-- dropped payload count
-- send success rate
-- retry attempts per minute
+- Current queue depth
+- Dropped payload count
+- Send success rate
+- Retry attempts per minute
+- Auth failure count (401 responses)
 
 ## Logging Rules
-- avoid logging raw image content
-- include correlation/timestamp fields for diagnostics
-- keep logs rotation-friendly on constrained storage
+- Avoid logging raw image content (base64 payload).
+- Include correlation/timestamp fields for diagnostics.
+- Keep logs rotation-friendly on constrained storage (RPi SD card).
+- Log effective config summary on startup (non-secret values only; do NOT log `EDGE_API_KEY`).

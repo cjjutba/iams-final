@@ -11,7 +11,7 @@ For development/pilot testing, it is populated with mock data.
 """
 
 from datetime import datetime
-from sqlalchemy import Column, String, Integer, Boolean, DateTime
+from sqlalchemy import Column, String, Integer, Boolean, DateTime, Date
 from app.database import Base
 
 
@@ -33,6 +33,10 @@ class StudentRecord(Base):
     course = Column(String(100), nullable=True)   # e.g., "BSCPE"
     year_level = Column(Integer, nullable=True)   # 1–5
     section = Column(String(10), nullable=True)   # e.g., "A", "B"
+
+    # Personal info for identity verification
+    birthdate = Column(Date, nullable=True)       # Used for registration verification
+    contact_number = Column(String(20), nullable=True)  # Phone number (optional verification)
 
     # Whether this student is currently enrolled/active
     is_active = Column(Boolean, nullable=False, default=True)

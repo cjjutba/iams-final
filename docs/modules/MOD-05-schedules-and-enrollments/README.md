@@ -1,8 +1,15 @@
-﻿# MOD-05 Schedules and Enrollments Documentation Pack
+# MOD-05 Schedules and Enrollments Documentation Pack
 
 ## Purpose
 This folder is the full implementation reference for Module 5.
 When implementing schedule and enrollment features, use this folder as the primary source of truth.
+
+## Auth Context
+All MOD-05 endpoints are user-facing and require **Supabase JWT** (`Authorization: Bearer <token>`).
+- `POST /schedules` requires `role == "admin"`.
+- `GET /schedules/me` returns role-scoped data (faculty by `faculty_id`, student by enrollments).
+- `GET /schedules/{id}/students` requires faculty assigned to schedule, enrolled student, or admin.
+- No API key auth (that pattern is for edge devices in MOD-03/MOD-04).
 
 ## Coverage
 This pack documents:
@@ -39,14 +46,11 @@ This pack documents:
 - `10-traceability/`: mapping from functions to API/data/screens/tests
 
 ## Canonical Sources
-- `docs/main/master-blueprint.md`
+- `docs/main/prd.md`
+- `docs/main/architecture.md`
+- `docs/main/implementation.md`
 - `docs/main/api-reference.md`
 - `docs/main/database-schema.md`
-- `docs/main/implementation.md`
-- `docs/main/technical-specification.md`
-- `docs/main/prd.md`
-- `docs/main/testing.md`
-- `docs/screens/screen-list.md`
 
 ## Module IDs
 - Module: `MOD-05`
@@ -58,4 +62,7 @@ Module 5 documentation is considered complete when:
 - All files in this folder are populated and internally consistent.
 - Every function has test cases and acceptance criteria.
 - API docs and screen docs reference the same behavior.
+- Auth requirements (Supabase JWT, role checks) are documented per endpoint.
+- Timezone configuration is specified.
+- Enrollment lifecycle rules are documented.
 - Traceability matrix has no missing mappings.

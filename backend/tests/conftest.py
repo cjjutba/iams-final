@@ -73,6 +73,9 @@ _TEST_STUDENT_IDS = [
 ]
 
 
+_TEST_BIRTHDATE = date(2003, 5, 15)
+
+
 def _seed_test_student_records(session):
     """
     Seed student_records with all test IDs so verify_student_id() can
@@ -90,6 +93,8 @@ def _seed_test_student_records(session):
             year_level=1,
             section="A",
             is_active=True,
+            birthdate=_TEST_BIRTHDATE,
+            contact_number=f"0917123456{i}",
         ))
     session.commit()
 

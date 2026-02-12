@@ -12,3 +12,4 @@ export * from './Avatar';
 export * from './Badge';
 export * from './Divider';
 export * from './Loader';
+export * from './Toast';
