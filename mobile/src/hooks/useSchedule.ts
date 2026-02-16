@@ -31,7 +31,7 @@ export const useSchedule = (autoFetch = true) => {
     if (autoFetch && schedules.length === 0 && !isLoading) {
       fetchMySchedules();
     }
-  }, [autoFetch]);
+  }, [autoFetch, fetchMySchedules]);
 
   // Get current JS day (0=Sunday, 6=Saturday)
   const currentJsDay = useMemo(() => new Date().getDay(), []);

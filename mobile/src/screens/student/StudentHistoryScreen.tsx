@@ -21,6 +21,7 @@ import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react-native';
 import { useAttendance } from '../../hooks';
+import { useToast } from '../../hooks/useToast';
 import { theme, strings } from '../../constants';
 import { formatDate, formatTime, formatPercentage } from '../../utils';
 import type { StudentStackParamList, AttendanceRecord, AttendanceStatus } from '../../types';
@@ -39,6 +40,7 @@ const FILTERS: Array<{ label: string; value: AttendanceStatus | 'all' }> = [
 export const StudentHistoryScreen: React.FC = () => {
   const navigation = useNavigation<StudentHistoryNavigationProp>();
   const { history, isLoading, error, fetchMyAttendance, clearError } = useAttendance();
+  const { showError } = useToast();
 
   const [selectedMonth, setSelectedMonth] = useState(new Date());
   const [selectedFilter, setSelectedFilter] = useState<AttendanceStatus | 'all'>('all');
@@ -58,6 +60,10 @@ export const StudentHistoryScreen: React.FC = () => {
   useEffect(() => {
     loadHistory();
   }, [loadHistory]);
+
+  useEffect(() => {
+    if (error) showError(error, 'Load Failed');
+  }, [error]);
 
   const handleRefresh = useCallback(() => {
     clearError();
@@ -184,7 +190,7 @@ export const StudentHistoryScreen: React.FC = () => {
         <View style={styles.errorContainer}>
           <RefreshCw size={40} color={theme.colors.text.tertiary} style={styles.errorIcon} />
           <Text variant="body" color={theme.colors.text.secondary} align="center">
-            {error}
+            Unable to load attendance history. Please try again.
           </Text>
           <Button variant="secondary" size="md" onPress={handleRefresh} style={styles.retryButton}>
             {strings.common.retry}

@@ -8,7 +8,7 @@ email verification, password reset, and Supabase webhook handling.
 import hmac
 import hashlib
 from fastapi import APIRouter, Depends, Request, status, Header
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.config import settings, logger
@@ -250,6 +250,215 @@ def resend_verification(
     """
     auth_service = AuthService(db)
     return auth_service.resend_verification_email(body.email)
+
+
+@router.post("/check-email-verified", status_code=status.HTTP_200_OK)
+@limiter.limit("30/minute")
+def check_email_verified(
+    request: Request,
+    body: ResendVerificationRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    **Check Email Verification Status**
+
+    Public endpoint (no auth required) that checks whether a user's
+    email has been verified. Checks Supabase Auth directly and syncs
+    the result to the local database.
+
+    Used by the mobile app's EmailVerificationScreen to poll for
+    verification status after registration.
+    """
+    auth_service = AuthService(db)
+    return auth_service.check_email_verified(body.email)
+
+
+@router.get("/email-confirmed", response_class=HTMLResponse)
+def email_confirmed_page():
+    """
+    **Auth Callback Landing Page**
+
+    Supabase redirects here after email confirmation AND password recovery.
+    JavaScript detects `#type=recovery` in the URL hash to show either:
+    - Email Verified confirmation (default / type=signup)
+    - Password Reset form (type=recovery)
+    """
+    supabase_url = settings.SUPABASE_URL
+    supabase_anon_key = settings.SUPABASE_ANON_KEY
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IAMS</title>
+  <style>
+    * {{ margin:0; padding:0; box-sizing:border-box; }}
+    body {{ background:#fff; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif; color:#1a1a1a; }}
+    .page {{ max-width:480px; margin:0 auto; padding:80px 24px; text-align:center; }}
+    .logo {{ font-size:28px; font-weight:700; letter-spacing:2px; margin-bottom:48px; }}
+    .icon {{ width:64px; height:64px; margin:0 auto 24px; border-radius:50%; display:flex; align-items:center; justify-content:center; }}
+    .icon-success {{ background:#f0fdf4; }}
+    .icon-key {{ background:#f0f4ff; }}
+    h1 {{ font-size:22px; font-weight:600; margin-bottom:12px; }}
+    .subtitle {{ font-size:15px; color:#6b7280; line-height:1.6; margin-bottom:32px; }}
+    .footer {{ font-size:12px; color:#d1d5db; margin-top:48px; }}
+    .form-group {{ text-align:left; margin-bottom:16px; }}
+    label {{ display:block; font-size:13px; font-weight:500; color:#374151; margin-bottom:6px; }}
+    input {{ width:100%; padding:12px 16px; font-size:15px; border:1.5px solid #e5e7eb; border-radius:8px; outline:none; transition:border-color 0.15s; }}
+    input:focus {{ border-color:#1a1a1a; }}
+    .btn {{ display:inline-block; width:100%; padding:14px; font-size:15px; font-weight:600; border:none; border-radius:8px; cursor:pointer; transition:opacity 0.15s; }}
+    .btn-primary {{ background:#1a1a1a; color:#fff; }}
+    .btn-primary:hover {{ opacity:0.9; }}
+    .btn-primary:disabled {{ opacity:0.5; cursor:not-allowed; }}
+    .error-text {{ color:#dc2626; font-size:13px; margin-top:8px; }}
+    .success-msg {{ color:#16a34a; font-size:15px; }}
+    .hint {{ font-size:13px; color:#9ca3af; margin-top:8px; }}
+    .hidden {{ display:none; }}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="logo">IAMS</div>
+
+    <!-- Email Verified View -->
+    <div id="view-verified" class="hidden">
+      <div class="icon icon-success">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+      <h1>Email Verified</h1>
+      <p class="subtitle">Your email has been confirmed. Return to the IAMS app to sign in.</p>
+    </div>
+
+    <!-- Password Reset View -->
+    <div id="view-reset" class="hidden">
+      <div class="icon icon-key">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      </div>
+      <h1>Reset Your Password</h1>
+      <p class="subtitle">Enter your new password below.</p>
+
+      <form id="reset-form" onsubmit="return handleReset(event)">
+        <div class="form-group">
+          <label for="password">New Password</label>
+          <input type="password" id="password" placeholder="At least 8 characters" minlength="8" required />
+        </div>
+        <div class="form-group">
+          <label for="confirm">Confirm Password</label>
+          <input type="password" id="confirm" placeholder="Re-enter your password" minlength="8" required />
+        </div>
+        <div id="form-error" class="error-text hidden"></div>
+        <button type="submit" id="submit-btn" class="btn btn-primary" style="margin-top:24px;">Update Password</button>
+      </form>
+    </div>
+
+    <!-- Password Reset Success View -->
+    <div id="view-reset-success" class="hidden">
+      <div class="icon icon-success">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+      <h1>Password Updated</h1>
+      <p class="subtitle">Your password has been changed successfully. Return to the IAMS app to sign in.</p>
+    </div>
+
+    <!-- Loading View -->
+    <div id="view-loading">
+      <p class="subtitle">Loading...</p>
+    </div>
+
+    <p class="footer">&copy; 2026 IAMS. All rights reserved.</p>
+  </div>
+
+  <script>
+    const SUPABASE_URL = '{supabase_url}';
+    const SUPABASE_ANON_KEY = '{supabase_anon_key}';
+    let accessToken = null;
+
+    function parseHash() {{
+      const hash = window.location.hash.substring(1);
+      const params = new URLSearchParams(hash);
+      return {{
+        type: params.get('type'),
+        accessToken: params.get('access_token'),
+      }};
+    }}
+
+    function showView(id) {{
+      document.querySelectorAll('[id^="view-"]').forEach(el => el.classList.add('hidden'));
+      document.getElementById(id).classList.remove('hidden');
+    }}
+
+    function showError(msg) {{
+      const el = document.getElementById('form-error');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+    }}
+
+    function hideError() {{
+      document.getElementById('form-error').classList.add('hidden');
+    }}
+
+    async function handleReset(e) {{
+      e.preventDefault();
+      hideError();
+
+      const password = document.getElementById('password').value;
+      const confirm = document.getElementById('confirm').value;
+
+      if (password.length < 8) {{
+        showError('Password must be at least 8 characters.');
+        return false;
+      }}
+      if (password !== confirm) {{
+        showError('Passwords do not match.');
+        return false;
+      }}
+
+      const btn = document.getElementById('submit-btn');
+      btn.disabled = true;
+      btn.textContent = 'Updating...';
+
+      try {{
+        const res = await fetch(SUPABASE_URL + '/auth/v1/user', {{
+          method: 'PUT',
+          headers: {{
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + accessToken,
+            'apikey': SUPABASE_ANON_KEY,
+          }},
+          body: JSON.stringify({{ password: password }}),
+        }});
+
+        if (!res.ok) {{
+          const data = await res.json().catch(() => ({{}}));
+          throw new Error(data.msg || data.error_description || 'Failed to update password');
+        }}
+
+        showView('view-reset-success');
+      }} catch (err) {{
+        showError(err.message || 'Something went wrong. Please try again.');
+        btn.disabled = false;
+        btn.textContent = 'Update Password';
+      }}
+
+      return false;
+    }}
+
+    // Route to the correct view on page load
+    (function() {{
+      const {{ type, accessToken: token }} = parseHash();
+      accessToken = token;
+
+      if (type === 'recovery' && token) {{
+        showView('view-reset');
+      }} else {{
+        showView('view-verified');
+      }}
+    }})();
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
 
 
 # ===================================================================

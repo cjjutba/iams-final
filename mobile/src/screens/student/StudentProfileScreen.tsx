@@ -31,7 +31,7 @@ type StudentProfileNavigationProp = StackNavigationProp<StudentStackParamList, '
 
 export const StudentProfileScreen: React.FC = () => {
   const navigation = useNavigation<StudentProfileNavigationProp>();
-  const { user, logout, loadUser } = useAuth();
+  const { user, logout, refreshUser } = useAuth();
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   // ---------- refresh handler ----------
@@ -39,13 +39,13 @@ export const StudentProfileScreen: React.FC = () => {
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      await loadUser();
+      await refreshUser();
     } catch (error) {
       console.error('Failed to refresh user data:', error);
     } finally {
       setIsRefreshing(false);
     }
-  }, [loadUser]);
+  }, [refreshUser]);
 
   // ---------- navigation handlers ----------
 

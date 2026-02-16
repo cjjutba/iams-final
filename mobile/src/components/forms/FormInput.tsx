@@ -16,6 +16,7 @@ interface FormInputProps<T extends FieldValues> extends Omit<TextInputProps, 'va
   label: string;
   leftIcon?: React.ReactNode;
   rightIcon?: React.ReactNode;
+  isPassword?: boolean;
 }
 
 export function FormInput<T extends FieldValues>({
@@ -24,21 +25,22 @@ export function FormInput<T extends FieldValues>({
   label,
   leftIcon,
   rightIcon,
+  isPassword,
   ...inputProps
 }: FormInputProps<T>) {
   return (
     <Controller
       control={control}
       name={name}
-      render={({ field: { onChange, onBlur, value }, fieldState: { error } }) => (
+      render={({ field: { onChange, onBlur, value } }) => (
         <Input
           label={label}
           value={value}
           onChangeText={onChange}
           onBlur={onBlur}
-          error={error?.message}
           leftIcon={leftIcon}
           rightIcon={rightIcon}
+          isPassword={isPassword}
           {...inputProps}
         />
       )}

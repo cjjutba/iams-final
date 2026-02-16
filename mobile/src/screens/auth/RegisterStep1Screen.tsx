@@ -79,7 +79,6 @@ export const RegisterStep1Screen: React.FC = () => {
 
   const [verificationStep, setVerificationStep] = useState<VerificationStep>('student_id');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [validatedStudentId, setValidatedStudentId] = useState<string | null>(null);
   const [studentInfo, setStudentInfo] = useState<StudentInfo | null>(null);
   const [slideAnim] = useState(new Animated.Value(0));
@@ -104,7 +103,6 @@ export const RegisterStep1Screen: React.FC = () => {
     // Student ID format is valid! Save it and show birthdate input
     setValidatedStudentId(data.studentId);
     setVerificationStep('birthdate');
-    setError(null);
 
     // Slide in birthdate field with animation
     Animated.spring(slideAnim, {
@@ -121,13 +119,12 @@ export const RegisterStep1Screen: React.FC = () => {
    */
   const handleBirthdateSubmit = async (data: BirthdateData) => {
     if (!validatedStudentId) {
-      setError('Please enter Student ID first');
+      showError('Please enter Student ID first', 'Missing Information');
       return;
     }
 
     try {
       setIsSubmitting(true);
-      setError(null);
 
       // Convert MMDDYYYY to YYYY-MM-DD
       const isoDate = convertBirthdateToISO(data.birthdate);
@@ -157,13 +154,11 @@ export const RegisterStep1Screen: React.FC = () => {
         // Show the specific error message from backend
         const errorMsg = response.message || 'Identity verification failed. Please check your Student ID and birthdate.';
         console.error('Verification failed:', errorMsg);
-        setError(errorMsg);
         showError(errorMsg, 'Verification Failed');
       }
     } catch (err: any) {
       console.error('Verification error:', err);
       const errorMessage = err.response?.data?.message || err.message || 'Unable to verify identity. Please try again.';
-      setError(errorMessage);
       showError(errorMessage, 'Verification Failed');
     } finally {
       setIsSubmitting(false);
@@ -190,7 +185,6 @@ export const RegisterStep1Screen: React.FC = () => {
     setVerificationStep('student_id');
     setValidatedStudentId(null);
     setStudentInfo(null);
-    setError(null);
     studentIdForm.reset();
     birthdateForm.reset();
     slideAnim.setValue(0);
@@ -227,19 +221,14 @@ export const RegisterStep1Screen: React.FC = () => {
             />
           </View>
 
-          {error ? (
-            <View style={styles.errorContainer}>
-              <Text variant="bodySmall" color={theme.colors.error}>
-                {error}
-              </Text>
-            </View>
-          ) : null}
-
           <Button
             variant="primary"
             size="lg"
             fullWidth
-            onPress={studentIdForm.handleSubmit(handleStudentIdSubmit)}
+            onPress={studentIdForm.handleSubmit(handleStudentIdSubmit, (formErrors) => {
+              const firstError = Object.values(formErrors)[0]?.message;
+              if (firstError) showError(firstError, 'Validation Error');
+            })}
             style={styles.button}
           >
             Next
@@ -294,29 +283,24 @@ export const RegisterStep1Screen: React.FC = () => {
             </Text>
           </View>
 
-          {error ? (
-            <View style={styles.errorContainer}>
-              <Text variant="bodySmall" color={theme.colors.error}>
-                {error}
-              </Text>
-            </View>
-          ) : null}
-
           <View style={styles.buttonRow}>
             <Button
               variant="secondary"
               size="lg"
               onPress={handleReset}
-              style={styles.halfButton}
+              style={styles.narrowButton}
             >
               Back
             </Button>
             <Button
               variant="primary"
               size="lg"
-              onPress={birthdateForm.handleSubmit(handleBirthdateSubmit)}
+              onPress={birthdateForm.handleSubmit(handleBirthdateSubmit, (formErrors) => {
+                const firstError = Object.values(formErrors)[0]?.message;
+                if (firstError) showError(firstError, 'Validation Error');
+              })}
               loading={isSubmitting}
-              style={styles.halfButton}
+              style={styles.wideButton}
             >
               Verify Identity
             </Button>
@@ -408,12 +392,6 @@ const styles = StyleSheet.create({
   fieldHelp: {
     marginTop: theme.spacing[1],
   },
-  errorContainer: {
-    marginBottom: theme.spacing[5],
-    padding: theme.spacing[4],
-    backgroundColor: theme.colors.errorLight,
-    borderRadius: theme.borderRadius.md,
-  },
   button: {
     marginTop: theme.spacing[2],
   },
@@ -424,6 +402,12 @@ const styles = StyleSheet.create({
   },
   halfButton: {
     flex: 1,
+  },
+  narrowButton: {
+    flex: 1,
+  },
+  wideButton: {
+    flex: 2,
   },
   infoBadge: {
     flexDirection: 'row',

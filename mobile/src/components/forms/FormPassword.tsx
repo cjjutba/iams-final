@@ -28,15 +28,14 @@ export function FormPassword<T extends FieldValues>({
     <Controller
       control={control}
       name={name}
-      render={({ field: { onChange, onBlur, value }, fieldState: { error } }) => (
+      render={({ field: { onChange, onBlur, value } }) => (
         <Input
           label={label}
           value={value}
           onChangeText={onChange}
           onBlur={onBlur}
-          error={error?.message}
           leftIcon={leftIcon}
-          secureTextEntry
+          isPassword
           {...inputProps}
         />
       )}

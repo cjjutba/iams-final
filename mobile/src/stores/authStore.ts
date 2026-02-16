@@ -34,6 +34,8 @@ interface AuthState {
 
   // Actions
   loadUser: () => Promise<void>;
+  /** Refresh user data without affecting isLoading/isAuthenticated (safe for pull-to-refresh) */
+  refreshUser: () => Promise<void>;
   initializeAuthListener: () => () => void;
   login: (data: LoginRequest) => Promise<void>;
   register: (data: RegisterRequest) => Promise<void>;
@@ -140,6 +142,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         isAuthenticated: false,
         user: null,
       });
+    }
+  },
+
+  // Refresh user data without affecting navigation (safe for pull-to-refresh).
+  // Unlike loadUser(), this does NOT set isLoading or change isAuthenticated,
+  // so the RootNavigator won't unmount the current screen.
+  refreshUser: async () => {
+    try {
+      const user = await authService.getMe();
+      await storage.setUser(user);
+      set({ user });
+    } catch (error) {
+      console.error('Failed to refresh user:', error);
+      // Intentionally do NOT clear auth or set isAuthenticated=false.
+      // The user stays on their current screen; stale data is better than a redirect.
     }
   },
 
@@ -330,15 +347,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  // Check if email has been verified
+  // Check if email has been verified (uses public endpoint, no auth needed)
   checkVerificationStatus: async (): Promise<boolean> => {
     try {
-      const user = await authService.checkVerificationStatus();
-      if (user.email_verified) {
-        await storage.setUser(user);
+      const email = get().pendingVerificationEmail;
+      if (!email) return false;
+
+      const verified = await authService.checkEmailVerified(email);
+      if (verified) {
         set({
-          user,
-          isAuthenticated: true,
+          isAuthenticated: false,
           emailVerificationPending: false,
           pendingVerificationEmail: null,
         });

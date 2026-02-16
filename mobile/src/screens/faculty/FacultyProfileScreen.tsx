@@ -26,19 +26,19 @@ type FacultyProfileNavigationProp = StackNavigationProp<FacultyStackParamList, '
 
 export const FacultyProfileScreen: React.FC = () => {
   const navigation = useNavigation<FacultyProfileNavigationProp>();
-  const { user, logout, loadUser } = useAuth();
+  const { user, logout, refreshUser } = useAuth();
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      await loadUser();
+      await refreshUser();
     } catch (error) {
       console.error('Failed to refresh user data:', error);
     } finally {
       setIsRefreshing(false);
     }
-  }, [loadUser]);
+  }, [refreshUser]);
 
   const handleEditProfile = () => {
     navigation.navigate('EditProfile');

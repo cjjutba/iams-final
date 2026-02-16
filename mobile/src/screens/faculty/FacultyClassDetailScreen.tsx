@@ -19,6 +19,7 @@ import type { RouteProp } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { RefreshCw } from 'lucide-react-native';
 import { attendanceService } from '../../services';
+import { useToast } from '../../hooks/useToast';
 import { theme, strings } from '../../constants';
 import { formatDate, getErrorMessage } from '../../utils';
 import type {
@@ -37,6 +38,7 @@ export const FacultyClassDetailScreen: React.FC = () => {
   const navigation = useNavigation<ClassDetailNavigationProp>();
 
   const { scheduleId, date } = route.params;
+  const { showError } = useToast();
 
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -55,6 +57,7 @@ export const FacultyClassDetailScreen: React.FC = () => {
         setClassData(data);
       } catch (err) {
         setError(getErrorMessage(err));
+        showError(getErrorMessage(err), 'Load Failed');
       } finally {
         setIsLoading(false);
         setIsRefreshing(false);
@@ -85,7 +88,7 @@ export const FacultyClassDetailScreen: React.FC = () => {
         <View style={styles.errorContainer}>
           <RefreshCw size={40} color={theme.colors.text.tertiary} style={styles.errorIcon} />
           <Text variant="body" color={theme.colors.text.secondary} align="center">
-            {error}
+            Unable to load class details. Please try again.
           </Text>
           <Button
             variant="secondary"

@@ -9,12 +9,13 @@
  * - Loading, error, and empty states
  */
 
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, ActivityIndicator } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { RefreshCw } from 'lucide-react-native';
 import { useAuth, useSchedule } from '../../hooks';
+import { useToast } from '../../hooks/useToast';
 import { theme, strings } from '../../constants';
 import { formatDate, formatTime, formatTimeRange } from '../../utils';
 import type { StudentStackParamList, ScheduleWithAttendance } from '../../types';
@@ -35,7 +36,13 @@ export const StudentHomeScreen: React.FC = () => {
     clearError,
   } = useSchedule();
 
+  const { showError } = useToast();
+
   const currentClass = getCurrentClass();
+
+  useEffect(() => {
+    if (error) showError(error, 'Load Failed');
+  }, [error]);
 
   // Get greeting based on time of day
   const getGreeting = () => {
@@ -190,7 +197,7 @@ export const StudentHomeScreen: React.FC = () => {
         <View style={styles.errorContainer}>
           <RefreshCw size={40} color={theme.colors.text.tertiary} style={styles.errorIcon} />
           <Text variant="body" color={theme.colors.text.secondary} align="center">
-            {error}
+            Unable to load your schedule. Please try again.
           </Text>
           <Button variant="secondary" size="md" onPress={handleRefresh} style={styles.retryButton}>
             {strings.common.retry}

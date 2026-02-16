@@ -118,19 +118,14 @@ export const FacultyLoginScreen: React.FC = () => {
           />
         </View>
 
-        {authError ? (
-          <View style={styles.errorContainer}>
-            <Text variant="bodySmall" color={theme.colors.error}>
-              {authError}
-            </Text>
-          </View>
-        ) : null}
-
         <Button
           variant="primary"
           size="lg"
           fullWidth
-          onPress={handleSubmit(onSubmit)}
+          onPress={handleSubmit(onSubmit, (formErrors) => {
+            const firstError = Object.values(formErrors)[0]?.message;
+            if (firstError) showError(firstError, 'Validation Error');
+          })}
           loading={isSubmitting}
           style={styles.loginButton}
         >
@@ -153,12 +148,6 @@ const styles = StyleSheet.create({
   },
   inputContainer: {
     marginBottom: theme.spacing[5],
-  },
-  errorContainer: {
-    marginBottom: theme.spacing[5],
-    padding: theme.spacing[4],
-    backgroundColor: theme.colors.errorLight,
-    borderRadius: theme.borderRadius.md,
   },
   loginButton: {
     marginTop: theme.spacing[2],

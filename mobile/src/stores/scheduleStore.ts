@@ -7,7 +7,7 @@
 
 import { create } from 'zustand';
 import { api, getErrorMessage } from '../utils';
-import type { Schedule, ScheduleWithAttendance, ApiResponse } from '../types';
+import type { Schedule, ScheduleWithAttendance } from '../types';
 
 interface ScheduleState {
   // State
@@ -34,16 +34,12 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const response = await api.get<ApiResponse<Schedule[]>>('/schedules/me');
+      const response = await api.get<Schedule[]>('/schedules/me');
 
-      if (response.data && response.data.data) {
-        set({
-          schedules: response.data.data,
-          isLoading: false,
-        });
-      } else {
-        set({ isLoading: false });
-      }
+      set({
+        schedules: response.data ?? [],
+        isLoading: false,
+      });
     } catch (error) {
       console.error('Failed to fetch schedules:', error);
       set({

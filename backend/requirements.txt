@@ -22,7 +22,8 @@ cryptography==46.0.4
 passlib==1.7.4
 python-jose==3.5.0
 email-validator==2.3.0
-supabase>=2.0.0
+# supabase SDK replaced by direct httpx calls to GoTrue Admin API
+# (avoids storage3 → pyiceberg → Rust compiler dependency on Windows)
 slowapi>=0.1.9
 
 # ===== ML / Face Recognition =====

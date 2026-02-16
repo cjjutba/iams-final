@@ -36,14 +36,12 @@ export const RegisterReviewScreen: React.FC = () => {
 
   const [isAgreed, setIsAgreed] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async () => {
     if (!isAgreed) return;
 
     try {
       setIsSubmitting(true);
-      setError(null);
 
       // Step 1: Create the account via authService directly.
       // We bypass authStore.register() to avoid setting isLoading/isAuthenticated
@@ -105,7 +103,6 @@ export const RegisterReviewScreen: React.FC = () => {
         err.response?.data?.message ||
         err.message ||
         strings.errors.generic;
-      setError(errorMsg);
       showError(errorMsg, 'Registration Failed');
       setIsSubmitting(false);
     }
@@ -172,14 +169,6 @@ export const RegisterReviewScreen: React.FC = () => {
             </Text>
           </TouchableOpacity>
         </View>
-
-        {error ? (
-          <View style={styles.errorContainer}>
-            <Text variant="bodySmall" color={theme.colors.error}>
-              {error}
-            </Text>
-          </View>
-        ) : null}
 
         <Button
           variant="primary"
@@ -264,12 +253,6 @@ const styles = StyleSheet.create({
     flex: 1,
     marginLeft: theme.spacing[3],
     lineHeight: 20,
-  },
-  errorContainer: {
-    marginBottom: theme.spacing[5],
-    padding: theme.spacing[4],
-    backgroundColor: theme.colors.errorLight,
-    borderRadius: theme.borderRadius.md,
   },
   submitButton: {
     marginTop: theme.spacing[2],

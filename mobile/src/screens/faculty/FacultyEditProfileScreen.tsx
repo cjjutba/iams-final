@@ -45,7 +45,7 @@ type ProfileData = z.infer<typeof profileSchema>;
 type PasswordData = z.infer<typeof passwordSchema>;
 
 export const FacultyEditProfileScreen: React.FC = () => {
-  const { user, loadUser } = useAuth();
+  const { user, refreshUser } = useAuth();
 
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -54,13 +54,13 @@ export const FacultyEditProfileScreen: React.FC = () => {
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      await loadUser();
+      await refreshUser();
     } catch (error) {
       console.error('Failed to refresh user data:', error);
     } finally {
       setIsRefreshing(false);
     }
-  }, [loadUser]);
+  }, [refreshUser]);
 
   const {
     control: profileControl,

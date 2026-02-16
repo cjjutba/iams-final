@@ -15,6 +15,7 @@ import { View, StyleSheet, ScrollView, RefreshControl } from 'react-native';
 import { useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import { Clock, TrendingUp, RefreshCw } from 'lucide-react-native';
+import { useToast } from '../../hooks/useToast';
 import { attendanceService } from '../../services';
 import { theme, strings } from '../../constants';
 import { formatDate, formatTime, formatPercentage, getErrorMessage } from '../../utils';
@@ -33,6 +34,7 @@ export const StudentAttendanceDetailScreen: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { showError } = useToast();
 
   // ---------- data fetching ----------
 
@@ -51,12 +53,13 @@ export const StudentAttendanceDetailScreen: React.FC = () => {
           setAttendance(attendanceData);
           setLogs(logsData);
         } else if (scheduleId) {
-          // Fetch today's attendance for this schedule (API returns an array)
-          const attendanceArr = await attendanceService.getTodayAttendance(scheduleId);
-          const firstRecord = attendanceArr?.[0] ?? null;
-          if (firstRecord) {
-            setAttendance(firstRecord);
-            const logsData = await attendanceService.getPresenceLogs(firstRecord.id);
+          // Fetch student's own attendance for today, filter by schedule
+          const today = date || new Date().toISOString().split('T')[0];
+          const myRecords = await attendanceService.getMyAttendance(today, today);
+          const matchingRecord = myRecords?.find(r => r.schedule_id === scheduleId) ?? null;
+          if (matchingRecord) {
+            setAttendance(matchingRecord);
+            const logsData = await attendanceService.getPresenceLogs(matchingRecord.id);
             setLogs(logsData);
           } else {
             // No attendance record yet for today
@@ -67,6 +70,7 @@ export const StudentAttendanceDetailScreen: React.FC = () => {
       } catch (err) {
         console.error('Failed to load attendance details:', err);
         setError(getErrorMessage(err));
+        showError(getErrorMessage(err), 'Load Failed');
       } finally {
         setIsLoading(false);
         setIsRefreshing(false);
@@ -104,7 +108,7 @@ export const StudentAttendanceDetailScreen: React.FC = () => {
         <View style={styles.errorContainer}>
           <RefreshCw size={40} color={theme.colors.text.tertiary} style={styles.errorIcon} />
           <Text variant="body" color={theme.colors.text.secondary} align="center">
-            {error}
+            Unable to load attendance details. Please try again.
           </Text>
           <Button
             variant="secondary"

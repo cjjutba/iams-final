@@ -31,6 +31,12 @@ const Stack = createStackNavigator<RootStackParamList>();
 export const RootNavigator: React.FC = () => {
   const { isAuthenticated, isLoading, user, loadUser, initializeAuthListener } = useAuthStore();
 
+  // Track whether the initial auth check has completed.
+  // Only show the splash screen on the very first load — never again.
+  // This prevents pull-to-refresh or other actions that happen to set
+  // isLoading=true from unmounting the entire navigation tree.
+  const hasInitialized = useRef(false);
+
   // Load user on app start and initialize auth listener
   useEffect(() => {
     loadUser();
@@ -44,12 +50,21 @@ export const RootNavigator: React.FC = () => {
     };
   }, []);
 
+  // Mark initialization complete once the first load finishes
+  useEffect(() => {
+    if (!isLoading && !hasInitialized.current) {
+      hasInitialized.current = true;
+    }
+  }, [isLoading]);
+
   // Breathing animation for loading state
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const opacityAnim = useRef(new Animated.Value(0.85)).current;
 
+  const showSplash = isLoading && !hasInitialized.current;
+
   useEffect(() => {
-    if (!isLoading) return;
+    if (!showSplash) return;
     const breathing = Animated.loop(
       Animated.sequence([
         Animated.parallel([
@@ -64,10 +79,10 @@ export const RootNavigator: React.FC = () => {
     );
     breathing.start();
     return () => breathing.stop();
-  }, [isLoading, scaleAnim, opacityAnim]);
+  }, [showSplash, scaleAnim, opacityAnim]);
 
-  // Show loading screen while checking auth status
-  if (isLoading) {
+  // Show splash screen ONLY during initial app load
+  if (showSplash) {
     return (
       <View style={loadingStyles.container}>
         <Animated.Image

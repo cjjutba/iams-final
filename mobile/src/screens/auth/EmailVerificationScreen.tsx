@@ -8,9 +8,10 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, StyleSheet } from 'react-native';
-import { Mail, CheckCircle, RefreshCw } from 'lucide-react-native';
+import { Mail, RefreshCw } from 'lucide-react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useAuthStore } from '../../stores';
+import { useToast } from '../../hooks';
 import { theme, strings } from '../../constants';
 import { AuthLayout } from '../../components/layouts';
 import { Text, Button } from '../../components/ui';
@@ -25,10 +26,9 @@ export const EmailVerificationScreen: React.FC = () => {
     isAuthenticated,
   } = useAuthStore();
 
+  const { showError, showSuccess } = useToast();
   const [isChecking, setIsChecking] = useState(false);
   const [isResending, setIsResending] = useState(false);
-  const [resendSuccess, setResendSuccess] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   // Auto-check verification status every 5 seconds
   useEffect(() => {
@@ -36,52 +36,46 @@ export const EmailVerificationScreen: React.FC = () => {
       const verified = await checkVerificationStatus();
       if (verified) {
         clearInterval(interval);
+        showSuccess('Email verified! You can now sign in.', 'Verified');
+        navigation.navigate('Welcome' as never);
       }
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [checkVerificationStatus]);
-
-  // Navigate away when authenticated (email verified)
-  useEffect(() => {
-    if (isAuthenticated) {
-      // Navigation will be handled by the root navigator
-      // which switches from Auth to Student/Faculty stack
-    }
-  }, [isAuthenticated]);
+  }, [checkVerificationStatus, showSuccess, navigation]);
 
   const handleCheckStatus = useCallback(async () => {
     setIsChecking(true);
-    setError(null);
 
     try {
       const verified = await checkVerificationStatus();
-      if (!verified) {
-        setError('Email not yet verified. Please check your inbox.');
+      if (verified) {
+        showSuccess('Email verified! You can now sign in.', 'Verified');
+        navigation.navigate('Welcome' as never);
+      } else {
+        showError('Email not yet verified. Please check your inbox.', 'Not Verified');
       }
     } catch {
-      setError('Unable to check verification status. Please try again.');
+      showError('Unable to check verification status. Please try again.', 'Check Failed');
     } finally {
       setIsChecking(false);
     }
-  }, [checkVerificationStatus]);
+  }, [checkVerificationStatus, showSuccess, showError, navigation]);
 
   const handleResend = useCallback(async () => {
     if (!pendingVerificationEmail) return;
 
     setIsResending(true);
-    setError(null);
-    setResendSuccess(false);
 
     try {
       await resendVerification(pendingVerificationEmail);
-      setResendSuccess(true);
+      showSuccess('Verification email resent successfully', 'Email Sent');
     } catch {
-      setError('Failed to resend verification email. Please try again.');
+      showError('Failed to resend verification email. Please try again.', 'Resend Failed');
     } finally {
       setIsResending(false);
     }
-  }, [pendingVerificationEmail, resendVerification]);
+  }, [pendingVerificationEmail, resendVerification, showSuccess, showError]);
 
   const handleBackToLogin = useCallback(() => {
     clearVerificationPending();
@@ -118,23 +112,6 @@ export const EmailVerificationScreen: React.FC = () => {
             If you do not see the email, check your spam or junk folder.
           </Text>
         </View>
-
-        {resendSuccess ? (
-          <View style={styles.successContainer}>
-            <CheckCircle size={18} color={theme.colors.success} />
-            <Text variant="bodySmall" color={theme.colors.success} style={styles.successText}>
-              Verification email resent successfully
-            </Text>
-          </View>
-        ) : null}
-
-        {error ? (
-          <View style={styles.errorContainer}>
-            <Text variant="bodySmall" color={theme.colors.error}>
-              {error}
-            </Text>
-          </View>
-        ) : null}
 
         <View style={styles.actionsSection}>
           <Button
@@ -214,25 +191,6 @@ const styles = StyleSheet.create({
   },
   hint: {
     lineHeight: 20,
-  },
-  successContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: theme.spacing[4],
-    padding: theme.spacing[3],
-    backgroundColor: theme.colors.successLight,
-    borderRadius: theme.borderRadius.md,
-    width: '100%',
-  },
-  successText: {
-    marginLeft: theme.spacing[2],
-  },
-  errorContainer: {
-    marginBottom: theme.spacing[4],
-    padding: theme.spacing[4],
-    backgroundColor: theme.colors.errorLight,
-    borderRadius: theme.borderRadius.md,
-    width: '100%',
   },
   actionsSection: {
     width: '100%',

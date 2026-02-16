@@ -21,7 +21,6 @@ import { formatPercentage, getErrorMessage } from '../../utils';
 import type {
   FacultyStackParamList,
   AttendanceSummary,
-  ApiResponse,
   Schedule,
 } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
@@ -95,7 +94,7 @@ export const FacultyReportsScreen: React.FC = () => {
     setReportSummary(null);
 
     try {
-      const response = await api.get<ApiResponse<AttendanceSummary>>(
+      const response = await api.get<AttendanceSummary>(
         '/attendance/summary',
         {
           params: {
@@ -104,20 +103,16 @@ export const FacultyReportsScreen: React.FC = () => {
         }
       );
 
-      if (response.data?.data) {
-        setReportSummary(response.data.data);
-      } else {
-        setReportSummary({
-          total: 0,
-          present: 0,
-          late: 0,
-          absent: 0,
-          early_leave: 0,
-          attendance_rate: 0,
-          start_date: '',
-          end_date: '',
-        });
-      }
+      setReportSummary(response.data ?? {
+        total: 0,
+        present: 0,
+        late: 0,
+        absent: 0,
+        early_leave: 0,
+        attendance_rate: 0,
+        start_date: '',
+        end_date: '',
+      });
     } catch (err) {
       setError(getErrorMessage(err));
       Alert.alert('Error', getErrorMessage(err));

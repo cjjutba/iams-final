@@ -22,6 +22,7 @@ import type { RouteProp } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { Search, Edit, RefreshCw, Wifi, WifiOff } from 'lucide-react-native';
 import { useAttendance, useWebSocket } from '../../hooks';
+import { useToast } from '../../hooks/useToast';
 import { theme, strings } from '../../constants';
 import { getErrorMessage } from '../../utils';
 import type {
@@ -40,6 +41,7 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
   const navigation = useNavigation<LiveAttendanceNavigationProp>();
 
   const { scheduleId } = route.params;
+  const { showError } = useToast();
 
   const {
     liveAttendance,
@@ -65,6 +67,10 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
       }
     },
   });
+
+  useEffect(() => {
+    if (error) showError(error, 'Load Failed');
+  }, [error]);
 
   useEffect(() => {
     fetchLiveAttendance(scheduleId);
@@ -117,7 +123,7 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
         <View style={styles.errorContainer}>
           <RefreshCw size={40} color={theme.colors.text.tertiary} style={styles.errorIcon} />
           <Text variant="body" color={theme.colors.text.secondary} align="center">
-            {error}
+            Unable to load live attendance. Please try again.
           </Text>
           <Button
             variant="secondary"

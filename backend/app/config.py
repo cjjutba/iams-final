@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_KEY: str = ""  # Service role key for admin operations
     SUPABASE_JWT_SECRET: str = ""  # Supabase JWT secret for token verification
     SUPABASE_WEBHOOK_SECRET: str = ""  # Webhook signature verification
+    SUPABASE_ACCESS_TOKEN: str = ""  # Personal access token for Management API
     DATABASE_URL: str  # PostgreSQL connection string
 
     # JWT Settings (Custom JWT — kept for dual-auth migration)

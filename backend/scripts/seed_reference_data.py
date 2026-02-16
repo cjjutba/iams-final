@@ -32,25 +32,11 @@ from app.config import logger
 
 
 # ---------------------------------------------------------------------------
-# Mock student registry (10 students, BSCPE, JRMSU)
-# Simple repeating-digit IDs and easy-to-type birthdates for testing.
+# Student registry for testing (single real user for thesis demo)
 # Format: (student_id, first_name, last_name, email, course, year_level, section, birthdate, contact_number)
 # ---------------------------------------------------------------------------
 MOCK_STUDENTS = [
-    # 4th year students (enrolled 2021, born 2003)
-    ("21-A-11111", "Christian Jerald", "Jutba",      "cjjutbaofficial@gmail.com",        "BSCPE", 4, "A", date(2003, 1, 1), "09171111111"),
-    ("21-A-22222", "Juan",             "Dela Cruz",  "juan.delacruz@jrmsu.edu.ph",        "BSCPE", 4, "A", date(2003, 2, 2), "09172222222"),
-    ("21-A-33333", "Sofia",            "Torres",     "sofia.torres@jrmsu.edu.ph",         "BSCPE", 4, "B", date(2003, 3, 3), "09173333333"),
-    # 3rd year students (enrolled 2022, born 2004)
-    ("22-A-44444", "Maria",            "Santos",     "maria.santos@jrmsu.edu.ph",         "BSCPE", 3, "A", date(2004, 4, 4), "09174444444"),
-    ("22-A-55555", "Jose",             "Reyes",      "jose.reyes@jrmsu.edu.ph",           "BSCPE", 3, "A", date(2004, 5, 5), "09175555555"),
-    ("22-A-66666", "Miguel",           "Flores",     "miguel.flores@jrmsu.edu.ph",        "BSCPE", 3, "B", date(2004, 6, 6), "09176666666"),
-    # 2nd year students (enrolled 2023, born 2005)
-    ("23-A-77777", "Ana",              "Garcia",     "ana.garcia@jrmsu.edu.ph",           "BSCPE", 2, "A", date(2005, 7, 7), "09177777777"),
-    ("23-A-88888", "Pedro",            "Gonzales",   "pedro.gonzales@jrmsu.edu.ph",       "BSCPE", 2, "A", date(2005, 8, 8), "09178888888"),
-    # 1st year students (enrolled 2024, born 2006)
-    ("24-A-99999", "Maria",            "Rodriguez",  "maria.rodriguez@jrmsu.edu.ph",      "BSCPE", 1, "A", date(2006, 9, 9), "09179999999"),
-    ("24-A-00000", "Carlo",            "Mendoza",    "carlo.mendoza@jrmsu.edu.ph",        "BSCPE", 1, "B", date(2006, 10, 10), "09170000000"),
+    ("21-A-02177", "Christian Jerald", "Jutba", "cjjutbaofficial@gmail.com", "BSCPE", 4, "A", date(2003, 1, 13), "09764556948"),
 ]
 
 # ---------------------------------------------------------------------------
