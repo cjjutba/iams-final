@@ -16,6 +16,8 @@ Environment variables:
 - FACE_CROP_SIZE: Face crop size in pixels (default: 112)
 - JPEG_QUALITY: JPEG compression quality (default: 70)
 - SCAN_INTERVAL: Interval between scans in seconds (default: 60)
+- SESSION_AWARE: Enable session-aware scanning (default: True)
+- SESSION_POLL_INTERVAL: How often to poll for active sessions when idle, in seconds (default: 10)
 - LOG_LEVEL: Logging level (default: INFO)
 """
 
@@ -69,6 +71,10 @@ class Config:
 
     # ===== Processing Configuration =====
     SCAN_INTERVAL: int = int(os.getenv("SCAN_INTERVAL", "60"))  # 60 seconds
+
+    # ===== Session Awareness Configuration =====
+    SESSION_AWARE: bool = os.getenv("SESSION_AWARE", "true").lower() in ("true", "1", "yes")
+    SESSION_POLL_INTERVAL: int = int(os.getenv("SESSION_POLL_INTERVAL", "10"))  # seconds
 
     # ===== Logging Configuration =====
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
@@ -142,6 +148,10 @@ class Config:
         # Detection model (0 or 1)
         if cls.DETECTION_MODEL not in [0, 1]:
             errors.append(f"Invalid detection model: {cls.DETECTION_MODEL} (must be 0 or 1)")
+
+        # Session poll interval validation
+        if cls.SESSION_POLL_INTERVAL <= 0:
+            errors.append(f"Invalid session poll interval: {cls.SESSION_POLL_INTERVAL} (must be > 0)")
 
         if errors:
             raise ValueError(f"Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in errors))

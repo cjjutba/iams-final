@@ -54,9 +54,15 @@ class EdgeDevice:
         self.total_faces_detected = 0
         self.total_faces_sent = 0
 
+        # Session awareness state
+        self._session_active = False
+        self._current_schedule_id: Optional[str] = None
+
         # Configuration
         self.room_id = config.ROOM_ID
         self.scan_interval = config.SCAN_INTERVAL
+        self.session_aware = config.SESSION_AWARE
+        self.session_poll_interval = config.SESSION_POLL_INTERVAL
 
     def initialize(self) -> bool:
         """
@@ -69,6 +75,9 @@ class EdgeDevice:
         logger.info(f"Room ID: {self.room_id}")
         logger.info(f"Backend URL: {config.BACKEND_URL}")
         logger.info(f"Scan interval: {self.scan_interval}s")
+        logger.info(f"Session-aware: {self.session_aware}")
+        if self.session_aware:
+            logger.info(f"Session poll interval: {self.session_poll_interval}s")
 
         # Validate configuration
         try:
@@ -121,16 +130,62 @@ class EdgeDevice:
 
         logger.info("Edge device shutdown complete")
 
-    def run_single_scan(self) -> None:
+    def _check_session(self) -> bool:
+        """
+        Check if there is an active session for this room.
+
+        Updates internal session state. When session awareness is disabled,
+        always returns True (scan proceeds unconditionally).
+
+        Returns:
+            True if scanning should proceed, False if no active session
+        """
+        if not self.session_aware:
+            return True
+
+        try:
+            active, schedule_id = self.sender.check_session_status(self.room_id)
+        except Exception as e:
+            logger.warning(f"Failed to check session status: {e}")
+            # On error, fall back to previous known state.
+            # If we have never had a session, skip. If we had one, keep scanning
+            # to avoid missing attendance during transient network issues.
+            if self._session_active:
+                logger.info("Continuing with previously active session due to check failure")
+                return True
+            return False
+
+        prev_active = self._session_active
+        self._session_active = active
+        self._current_schedule_id = schedule_id
+
+        # Log transitions
+        if active and not prev_active:
+            logger.info(f"Session became active (schedule_id={schedule_id}), starting scans")
+        elif not active and prev_active:
+            logger.info("Session ended, pausing scans")
+
+        return active
+
+    def run_single_scan(self) -> bool:
         """
         Execute a single scan cycle.
 
         Pipeline:
-        1. Capture frame from camera
-        2. Detect faces in frame
-        3. Crop and process each face
-        4. Send to backend (or queue if offline)
+        1. Check for active session (if session-aware)
+        2. Capture frame from camera
+        3. Detect faces in frame
+        4. Crop and process each face
+        5. Send to backend (or queue if offline)
+
+        Returns:
+            True if a scan was performed, False if skipped (no active session)
         """
+        # Check session status before scanning
+        if not self._check_session():
+            logger.debug("No active session for this room, skipping scan")
+            return False
+
         scan_start = time.time()
         scan_timestamp = datetime.utcnow()
 
@@ -140,7 +195,7 @@ class EdgeDevice:
         frame = self.camera.capture_frame()
         if frame is None:
             logger.warning("Failed to capture frame, skipping scan")
-            return
+            return True
 
         # Detect faces
         face_boxes = self.detector.detect(frame)
@@ -153,7 +208,7 @@ class EdgeDevice:
         if face_count == 0:
             logger.info("No faces detected, skipping transmission")
             self.scan_count += 1
-            return
+            return True
 
         # Process faces
         face_data_list = self.processor.process_batch(frame, face_boxes)
@@ -161,7 +216,7 @@ class EdgeDevice:
         if not face_data_list:
             logger.warning("No faces successfully processed")
             self.scan_count += 1
-            return
+            return True
 
         logger.info(f"Processed {len(face_data_list)}/{face_count} faces")
 
@@ -207,30 +262,47 @@ class EdgeDevice:
         scan_duration = time.time() - scan_start
         logger.info(f"Scan completed in {scan_duration:.2f}s")
 
+        return True
+
     def run_continuous(self) -> None:
         """
         Run continuous scanning loop.
 
         Executes scans at configured interval until stopped.
+        When session-aware mode is enabled:
+        - Polls for active sessions at SESSION_POLL_INTERVAL when idle
+        - Scans at SCAN_INTERVAL when a session is active
         """
         logger.info("Starting continuous scanning loop...")
         logger.info(f"Scan interval: {self.scan_interval}s")
+        if self.session_aware:
+            logger.info(f"Session-aware mode enabled, poll interval: {self.session_poll_interval}s")
 
         self.is_running = True
 
         while self.is_running:
             try:
-                # Run single scan
-                self.run_single_scan()
+                # Run single scan (returns False if no active session)
+                scan_performed = self.run_single_scan()
 
                 # Log statistics every 10 scans
-                if self.scan_count % 10 == 0:
+                if self.scan_count > 0 and self.scan_count % 10 == 0:
                     self._log_statistics()
 
-                # Wait for next scan interval
+                # Choose sleep interval based on session state
                 if self.is_running:
-                    logger.debug(f"Waiting {self.scan_interval}s until next scan...")
-                    time.sleep(self.scan_interval)
+                    if self.session_aware and not scan_performed:
+                        # No active session -- use shorter poll interval
+                        sleep_interval = self.session_poll_interval
+                        logger.debug(
+                            f"No active session, polling again in {sleep_interval}s"
+                        )
+                    else:
+                        # Active session or session-aware disabled -- use scan interval
+                        sleep_interval = self.scan_interval
+                        logger.debug(f"Waiting {sleep_interval}s until next scan...")
+
+                    time.sleep(sleep_interval)
 
             except KeyboardInterrupt:
                 logger.info("Keyboard interrupt received")

@@ -24,7 +24,7 @@ from app.utils.exceptions import (
 )
 
 # Import routers
-from app.routers import auth, users, face, schedules, attendance, websocket, notifications, presence
+from app.routers import auth, users, face, schedules, attendance, websocket, notifications, presence, live_stream
 
 # Global scheduler instance for background tasks
 scheduler = AsyncIOScheduler()
@@ -145,9 +145,22 @@ async def startup_event():
             max_instances=1  # Prevent overlapping runs
         )
 
+        # Auto-session scheduler: starts/ends sessions based on schedule times
+        from app.services.session_scheduler import auto_manage_sessions
+
+        scheduler.add_job(
+            auto_manage_sessions,
+            'interval',
+            seconds=60,
+            id='auto_session_manager',
+            replace_existing=True,
+            max_instances=1
+        )
+
         # Start the scheduler
         scheduler.start()
         logger.info(f"Presence tracking scheduler started (scan interval: {settings.SCAN_INTERVAL_SECONDS}s)")
+        logger.info("Auto-session scheduler started (checks every 60s)")
 
     except Exception as e:
         logger.error(f"Failed to initialize presence tracking scheduler: {e}")
@@ -268,6 +281,13 @@ app.include_router(
     presence.router,
     prefix=f"{settings.API_PREFIX}/presence",
     tags=["Presence Tracking"]
+)
+
+# Live Stream routes (WebSocket-based camera streaming)
+app.include_router(
+    live_stream.router,
+    prefix=f"{settings.API_PREFIX}/stream",
+    tags=["Live Stream"]
 )
 
 # WebSocket routes

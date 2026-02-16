@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     GRACE_PERIOD_MINUTES: int = 15  # Late grace period after class starts
     SESSION_BUFFER_MINUTES: int = 5  # Buffer before/after class for session
 
+    # Live Stream
+    STREAM_FPS: int = 3  # Target frames per second for live stream
+    STREAM_QUALITY: int = 65  # JPEG quality (0-100) for streamed frames
+    STREAM_WIDTH: int = 1280  # Stream output width in pixels
+    STREAM_HEIGHT: int = 720  # Stream output height in pixels
+    DEFAULT_RTSP_URL: str = ""  # Fallback RTSP URL (set via env var)
+
     # File Storage
     UPLOAD_DIR: str = "data/uploads/faces"
     MAX_UPLOAD_SIZE_MB: int = 10

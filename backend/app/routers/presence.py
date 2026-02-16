@@ -15,10 +15,13 @@ from datetime import date, datetime
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.config import logger
 from app.database import get_db
 from app.repositories.attendance_repository import AttendanceRepository
+from app.repositories.schedule_repository import ScheduleRepository
 from app.services.presence_service import PresenceService
 from app.services.tracking_service import get_tracking_service
+from app.services.session_scheduler import mark_manually_ended
 from app.utils.dependencies import get_current_user
 from app.utils.exceptions import NotFoundError
 from app.models.user import User, UserRole
@@ -61,6 +64,11 @@ class TrackingStatsResponse(BaseModel):
 class ActiveSessionsResponse(BaseModel):
     active_sessions: List[str]
     count: int
+
+
+class RoomStatusResponse(BaseModel):
+    active: bool
+    schedule_id: Optional[str] = None
 
 
 # ===== Session Management Endpoints =====
@@ -150,6 +158,9 @@ async def end_session(
         # End session
         await presence_service.end_session(schedule_id)
 
+        # Mark as manually ended so auto-scheduler won't restart
+        mark_manually_ended(schedule_id)
+
         # Build summary
         return SessionEndResponse(
             schedule_id=schedule_id,
@@ -211,6 +222,43 @@ async def get_active_sessions(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get active sessions: {str(e)}"
         )
+
+
+# ===== Room Status Endpoint (for Edge Device) =====
+
+@router.get(
+    "/sessions/room-status",
+    response_model=RoomStatusResponse,
+    summary="Check Room Session Status",
+    description="Check if there is an active session for a given room. Used by edge devices."
+)
+async def get_room_session_status(
+    room_id: str = Query(..., description="Room UUID"),
+    db: Session = Depends(get_db)
+):
+    """
+    Check if a room has an active attendance session.
+
+    Used by the Raspberry Pi edge device to decide whether to scan.
+    No authentication required (edge devices use this on trusted network).
+    """
+    try:
+        presence_service = PresenceService(db)
+        schedule_repo = ScheduleRepository(db)
+
+        # Check all active sessions and find one matching this room
+        active_session_ids = presence_service.get_active_sessions()
+
+        for schedule_id in active_session_ids:
+            schedule = schedule_repo.get_by_id(schedule_id)
+            if schedule and str(schedule.room_id) == room_id:
+                return RoomStatusResponse(active=True, schedule_id=schedule_id)
+
+        return RoomStatusResponse(active=False, schedule_id=None)
+
+    except Exception as e:
+        logger.error(f"Failed to check room status: {e}")
+        return RoomStatusResponse(active=False, schedule_id=None)
 
 
 # ===== Presence Log Endpoints =====

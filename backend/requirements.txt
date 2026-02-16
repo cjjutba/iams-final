@@ -34,6 +34,7 @@ faiss-cpu==1.13.2
 numpy==2.4.2
 pillow==12.1.0
 opencv-python-headless==4.13.0.90
+mediapipe>=0.10.14
 
 # ===== HTTP / Networking =====
 httpcore==1.0.9

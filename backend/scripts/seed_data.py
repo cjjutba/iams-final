@@ -100,10 +100,11 @@ SCHEDULE_DEFS = [
 ]
 
 # Room definitions: (name, building, capacity, camera_endpoint)
+# camera_endpoint must be an RTSP URL for live streaming to work
 ROOM_DEFS = [
-    ("Room 301", "Engineering Building", 40, "http://192.168.1.100:8000"),
-    ("Room 202", "Engineering Building", 35, "http://192.168.1.101:8000"),
-    ("Room 103", "Engineering Building", 45, "http://192.168.1.102:8000"),
+    ("Room 301", "Engineering Building", 40, "rtsp://admin:Iams2026THESIS@192.168.1.100:554/h264Preview_01_main"),
+    ("Room 202", "Engineering Building", 35, ""),
+    ("Room 103", "Engineering Building", 45, ""),
 ]
 
 # Map subject to room by index: CPE 301 → Room 301, CPE 201 → Room 202, CPE 101 → Room 103, GE 101 → Room 103

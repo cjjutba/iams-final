@@ -9,6 +9,7 @@ Features:
 - Configurable confidence threshold
 - Bounding box extraction
 - Handles multiple faces per frame
+- Auto-recovery on graph errors (re-creates detector)
 """
 
 import os
@@ -21,15 +22,16 @@ from mediapipe.tasks.python import vision
 
 from app.config import config, logger
 
-# MediaPipe model URLs
+# MediaPipe model URLs — only the short-range model is compatible with the
+# Tasks API. The legacy full-range sparse model from mediapipe-assets uses
+# a different anchor configuration (2304 boxes vs 896) and will fail with:
+#   "RET_CHECK failure raw_box_tensor->shape().dims[1] == num_boxes_"
 _MODEL_URLS = {
     0: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite",
-    1: "https://storage.googleapis.com/mediapipe-assets/face_detection_full_range_sparse.tflite",
 }
 
 _MODEL_FILENAMES = {
     0: "blaze_face_short_range.tflite",
-    1: "face_detection_full_range_sparse.tflite",
 }
 
 
@@ -38,21 +40,30 @@ def _get_model_path(model_selection: int = 0) -> str:
     Get path to MediaPipe face detection model, downloading if not cached.
 
     Args:
-        model_selection: 0 = short-range (up to 2m), 1 = full-range (up to 5m)
+        model_selection: 0 = short-range (only supported model for Tasks API)
 
     Returns:
         Path to the .tflite model file
     """
     import urllib.request
 
+    # Force short-range — the full-range sparse model is NOT compatible with
+    # the MediaPipe Tasks API and will produce tensor dimension mismatches.
+    if model_selection != 0:
+        logger.warning(
+            f"DETECTION_MODEL={model_selection} requested, but only short-range (0) "
+            "is compatible with the MediaPipe Tasks API. Falling back to short-range."
+        )
+        model_selection = 0
+
     cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".models")
     os.makedirs(cache_dir, exist_ok=True)
 
-    filename = _MODEL_FILENAMES.get(model_selection, _MODEL_FILENAMES[0])
+    filename = _MODEL_FILENAMES[0]
     model_path = os.path.join(cache_dir, filename)
 
     if not os.path.exists(model_path):
-        url = _MODEL_URLS.get(model_selection, _MODEL_URLS[0])
+        url = _MODEL_URLS[0]
         logger.info(f"Downloading MediaPipe face detection model ({filename})...")
         urllib.request.urlretrieve(url, model_path)
         logger.info(f"Model saved to {model_path}")
@@ -105,11 +116,17 @@ class FaceDetector:
 
     Uses MediaPipe Face Detection with TFLite runtime for efficient execution on ARM.
     Configured for short-range detection suitable for indoor classroom monitoring.
+
+    Includes automatic error recovery: if the MediaPipe graph enters an error
+    state (e.g. from tensor dimension mismatches), the detector is re-created
+    transparently on the next call to detect().
     """
 
     def __init__(self):
         self.detector: Optional[vision.FaceDetector] = None
         self.is_initialized = False
+        self._consecutive_errors = 0
+        self._max_consecutive_errors = 3
 
     def initialize(self) -> bool:
         """
@@ -123,7 +140,7 @@ class FaceDetector:
         try:
             logger.info("Initializing MediaPipe Face Detector...")
 
-            # Download/cache model file
+            # Download/cache model file (always short-range for Tasks API compat)
             model_path = _get_model_path(config.DETECTION_MODEL)
 
             # Create face detector options
@@ -138,11 +155,12 @@ class FaceDetector:
 
             self.detector = vision.FaceDetector.create_from_options(options)
             self.is_initialized = True
+            self._consecutive_errors = 0
 
             logger.info(
                 f"MediaPipe Face Detector initialized - "
                 f"confidence={config.DETECTION_CONFIDENCE}, "
-                f"model={'short-range' if config.DETECTION_MODEL == 0 else 'full-range'}"
+                f"model=short-range"
             )
             return True
 
@@ -152,8 +170,22 @@ class FaceDetector:
             self.is_initialized = False
             return False
 
-    # Max dimension for MediaPipe input (avoids tensor overflow on large frames)
-    MAX_DETECT_DIM = 1920
+    def _try_recover(self) -> bool:
+        """
+        Attempt to recover from a graph error by closing the current
+        detector and re-creating it from scratch.
+
+        Returns:
+            True if recovery succeeded
+        """
+        logger.warning("Attempting to recover MediaPipe detector from error state...")
+        self.close()
+        return self.initialize()
+
+    # Max dimension for MediaPipe input (avoids tensor overflow on large frames).
+    # Short-range model works reliably at 1280. Higher values increase detection
+    # range but risk tensor overflow on some platforms.
+    MAX_DETECT_DIM = 1280
 
     def detect(self, frame: np.ndarray) -> List[FaceBox]:
         """
@@ -169,6 +201,7 @@ class FaceDetector:
             - Automatically downscales frames larger than MAX_DETECT_DIM
             - Coordinates are mapped back to original frame resolution
             - Returns empty list if no faces detected
+            - Auto-recovers if the MediaPipe graph enters an error state
         """
         if not self.is_initialized or self.detector is None:
             logger.error("Detector not initialized - call initialize() first")
@@ -197,6 +230,9 @@ class FaceDetector:
             # Detect faces
             detection_result = self.detector.detect(mp_image)
 
+            # Reset error counter on success
+            self._consecutive_errors = 0
+
             if not detection_result.detections:
                 return []
 
@@ -223,7 +259,21 @@ class FaceDetector:
             return face_boxes
 
         except Exception as e:
+            self._consecutive_errors += 1
             logger.error(f"Face detection error: {e}")
+
+            # If we've had multiple consecutive errors, the graph is likely
+            # in a broken state. Try to recover by re-creating the detector.
+            if self._consecutive_errors >= self._max_consecutive_errors:
+                logger.warning(
+                    f"{self._consecutive_errors} consecutive detection errors — "
+                    "attempting graph recovery"
+                )
+                if self._try_recover():
+                    logger.info("MediaPipe detector recovered successfully")
+                else:
+                    logger.error("MediaPipe detector recovery failed")
+
             return []
 
     def detect_and_visualize(self, frame: np.ndarray, draw_boxes: bool = True) -> Tuple[List[FaceBox], np.ndarray]:
@@ -236,9 +286,6 @@ class FaceDetector:
 
         Returns:
             Tuple of (face_boxes, annotated_frame)
-
-        Notes:
-            Useful for debugging and visualization
         """
         face_boxes = self.detect(frame)
 
@@ -306,5 +353,6 @@ class FaceDetector:
         return {
             "is_initialized": self.is_initialized,
             "confidence_threshold": config.DETECTION_CONFIDENCE,
-            "model_type": "short-range" if config.DETECTION_MODEL == 0 else "full-range"
+            "model_type": "short-range",
+            "consecutive_errors": self._consecutive_errors,
         }

@@ -12,6 +12,7 @@ import type { FacultyStackParamList } from '../types';
 import { FacultyTabNavigator } from './FacultyTabNavigator';
 import {
   FacultyLiveAttendanceScreen,
+  FacultyLiveFeedScreen,
   FacultyClassDetailScreen,
   FacultyStudentDetailScreen,
   FacultyManualEntryScreen,
@@ -38,6 +39,7 @@ export const FacultyNavigator: React.FC = () => {
           presentation: 'modal',
         }}
       />
+      <Stack.Screen name="LiveFeed" component={FacultyLiveFeedScreen} />
       <Stack.Screen name="ClassDetail" component={FacultyClassDetailScreen} />
       <Stack.Screen name="StudentDetail" component={FacultyStudentDetailScreen} />
       <Stack.Screen name="ManualEntry" component={FacultyManualEntryScreen} />

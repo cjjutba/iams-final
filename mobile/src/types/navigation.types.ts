@@ -113,6 +113,11 @@ export type FacultyStackParamList = {
     subjectCode: string;
     subjectName: string;
   };
+  LiveFeed: {
+    scheduleId: string;
+    roomId: string;
+    subjectName: string;
+  };
   ClassDetail: {
     scheduleId: string;
     date: string;
