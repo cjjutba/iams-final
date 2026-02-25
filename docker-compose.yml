@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: iams-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: iams
+    ports:
+      - "5433:5432"
+    volumes:
+      - iams_pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  iams_pgdata:

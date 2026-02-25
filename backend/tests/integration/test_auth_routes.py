@@ -435,16 +435,17 @@ class TestSupabaseWebhookRoute:
     """Tests for POST /api/v1/auth/webhook/supabase."""
 
     def test_webhook_missing_secret(self, client):
-        """Request without webhook secret header should return 401."""
+        """Request without webhook secret header should return 200 (ignored) when Supabase Auth disabled."""
         response = client.post(f"{API}/auth/webhook/supabase", json={
             "type": "UPDATE",
             "table": "users",
             "record": {"id": str(uuid.uuid4()), "email_confirmed_at": "2024-01-01T00:00:00"},
         })
-        assert response.status_code == 401
+        # When USE_SUPABASE_AUTH=false (default in tests), webhook is ignored with 200
+        assert response.status_code == 200
 
     def test_webhook_invalid_secret(self, client):
-        """Request with wrong webhook secret should return 401."""
+        """Request with wrong webhook secret should return 200 (ignored) when Supabase Auth disabled."""
         response = client.post(
             f"{API}/auth/webhook/supabase",
             json={
@@ -454,7 +455,8 @@ class TestSupabaseWebhookRoute:
             },
             headers={"x-webhook-secret": "wrong-secret"},
         )
-        assert response.status_code == 401
+        # When USE_SUPABASE_AUTH=false (default in tests), webhook is ignored with 200
+        assert response.status_code == 200
 
 
 # ===================================================================

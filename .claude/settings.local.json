@@ -47,7 +47,8 @@
       "Bash(venvScriptspython -m scripts.seed_simulation)",
       "Bash(venvScriptspython.exe:*)",
       "Bash(cmd /c \"cd /d c:\\\\.cjjutba\\\\.thesis\\\\iams\\\\backend && venv\\\\Scripts\\\\python.exe -c \"\"from app.database import SessionLocal; from app.models.room import Room; db = SessionLocal\\(\\); rooms = db.query\\(Room\\).all\\(\\); [print\\(f''{r.name}: {r.id}''\\) for r in rooms]; db.close\\(\\)\"\"\")",
-      "Bash(powershell -Command \"Set-Location ''c:\\\\.cjjutba\\\\.thesis\\\\iams\\\\backend''; & venv\\\\Scripts\\\\python.exe -c ''from app.database import SessionLocal; from app.models.room import Room; db = SessionLocal\\(\\); rooms = db.query\\(Room\\).all\\(\\); [print\\(f\"\"{r.name}: {r.id}\"\"\\) for r in rooms]; db.close\\(\\)''\")"
+      "Bash(powershell -Command \"Set-Location ''c:\\\\.cjjutba\\\\.thesis\\\\iams\\\\backend''; & venv\\\\Scripts\\\\python.exe -c ''from app.database import SessionLocal; from app.models.room import Room; db = SessionLocal\\(\\); rooms = db.query\\(Room\\).all\\(\\); [print\\(f\"\"{r.name}: {r.id}\"\"\\) for r in rooms]; db.close\\(\\)''\")",
+      "Bash(docker run -d --name iams-postgres -e POSTGRES_DB=iams -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -p 5432:5432 -v iams_pgdata:/var/lib/postgresql/data postgres:16)"
     ]
   },
   "enableAllProjectMcpServers": true,

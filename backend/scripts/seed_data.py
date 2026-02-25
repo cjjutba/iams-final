@@ -40,6 +40,10 @@ def _sync_supabase_auth_user(email: str, password: str, metadata: dict) -> str |
 
     Returns the Supabase Auth user ID (UUID string) or None.
     """
+    if not settings.USE_SUPABASE_AUTH:
+        print("  [Supabase Auth] Skipped — USE_SUPABASE_AUTH is disabled")
+        return None
+
     if not settings.SUPABASE_URL or not settings.SUPABASE_SERVICE_KEY:
         print("  [Supabase Auth] Skipped — SUPABASE_URL or SUPABASE_SERVICE_KEY not set")
         return None

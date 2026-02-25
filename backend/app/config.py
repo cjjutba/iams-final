@@ -20,9 +20,9 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     API_PREFIX: str = "/api/v1"
 
-    # Supabase
-    SUPABASE_URL: str
-    SUPABASE_ANON_KEY: str
+    # Supabase (optional — only needed when USE_SUPABASE_AUTH=true)
+    SUPABASE_URL: str = ""
+    SUPABASE_ANON_KEY: str = ""
     SUPABASE_SERVICE_KEY: str = ""  # Service role key for admin operations
     SUPABASE_JWT_SECRET: str = ""  # Supabase JWT secret for token verification
     SUPABASE_WEBHOOK_SECRET: str = ""  # Webhook signature verification

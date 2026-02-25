@@ -1,0 +1,358 @@
+PS C:\.cjjutba\.thesis\iams\mobile> $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+>> pnpm android
+>> 
+
+> mobile@1.0.0 android C:\.cjjutba\.thesis\iams\mobile
+> expo run:android
+
+env: load .env
+env: export EXPO_NO_DEPENDENCY_VALIDATION
+› Building app...
+Downloading https://services.gradle.org/distributions/gradle-8.14.3-bin.zip
+.............10%.............20%.............30%.............40%.............50%.............60%.............70%.............80%.............90%..............100%
+
+Welcome to Gradle 8.14.3!
+
+Here are the highlights of this release:
+ - Java 24 support
+ - GraalVM Native Image toolchain selection
+ - Enhancements to test reporting
+ - Build Authoring improvements
+
+For more details see https://docs.gradle.org/8.14.3/release-notes.html
+
+Starting a Gradle Daemon (subsequent builds will be faster)
+Configuration on demand is an incubating feature.
+
+> Configure project :expo-gradle-plugin:expo-autolinking-plugin
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-autolinking@3.0.24/node_modules/expo-modules-autolinking/android/expo-gradle-plugin/expo-autolinking-plugin/build.gradle.kts:25:3: 'kotlinOptions(KotlinJvmOptionsDeprecated /* = KotlinJvmOptions */.() -> Unit): Unit' is deprecated. Please migrate to the compilerOptions DSL. More details are here: https://kotl.in/u1r8ln
+
+> Configure project :expo-gradle-plugin:expo-autolinking-settings-plugin
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-autolinking@3.0.24/node_modules/expo-modules-autolinking/android/expo-gradle-plugin/expo-autolinking-settings-plugin/build.gradle.kts:30:3: 'kotlinOptions(KotlinJvmOptionsDeprecated /* = KotlinJvmOptions */.() -> Unit): Unit' is deprecated. Please migrate to the compilerOptions DSL. More details are here: https://kotl.in/u1r8ln
+
+> Configure project :expo-dev-launcher-gradle-plugin
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-dev-launcher@6.0.20_ex_140ddea37b44155ef791db379dc4a204/node_modules/expo-dev-launcher/expo-dev-launcher-gradle-plugin/build.gradle.kts:25:3: 'kotlinOptions(KotlinJvmOptionsDeprecated /* = KotlinJvmOptions */.() -> Unit): Unit' is deprecated. Please migrate to the compilerOptions DSL. More details are here: https://kotl.in/u1r8ln
+
+> Configure project :expo-module-gradle-plugin                        
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/expo-module-gradle-plugin/build.gradle.kts:58:3: 'kotlinOptions(KotlinJvmOptionsDeprecated /* = KotlinJvmOptions */.() -> Unit): Unit' is deprecated. Please migrate to the compilerOptions DSL. More details are here: https://kotl.in/u1r8ln
+
+> Task :expo-module-gradle-plugin:compileKotlin
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/expo-module-gradle-plugin/src/main/kotlin/expo/modules/plugin/android/AndroidLibraryExtension.kt:9:24 'var targetSdk: Int?' is deprecated. Will be removed from library DSL in v9.0. Use testOptions.targetSdk or/and lint.targetSdk instead.
+
+> Configure project :
+[ExpoRootProject] Using the following versions:
+  - buildTools:  36.0.0
+  - minSdk:      24
+  - compileSdk:  36
+  - targetSdk:   36
+  - ndk:         27.1.12297006
+  - kotlin:      2.1.20
+  - ksp:         2.1.20-2.0.1
+
+> Configure project :app
+ Γä╣∩╕Å  Applying gradle plugin 'expo-dev-launcher-gradle-plugin'
+Checking the license for package NDK (Side by side) 27.1.12297006 in C:\Users\chris\AppData\Local\Android\Sdk\licenses
+License for package NDK (Side by side) 27.1.12297006 accepted.
+Preparing "Install NDK (Side by side) 27.1.12297006 v.27.1.12297006".
+"Install NDK (Side by side) 27.1.12297006 v.27.1.12297006" ready.
+Installing NDK (Side by side) 27.1.12297006 in C:\Users\chris\AppData\Local\Android\Sdk\ndk\27.1.12297006
+"Install NDK (Side by side) 27.1.12297006 v.27.1.12297006" complete.
+"Install NDK (Side by side) 27.1.12297006 v.27.1.12297006" finished.
+Checking the license for package Android SDK Build-Tools 36 in C:\Users\chris\AppData\Local\Android\Sdk\licenses
+License for package Android SDK Build-Tools 36 accepted.
+Preparing "Install Android SDK Build-Tools 36 v.36.0.0".              
+"Install Android SDK Build-Tools 36 v.36.0.0" ready.
+Installing Android SDK Build-Tools 36 in C:\Users\chris\AppData\Local\Android\Sdk\build-tools\36.0.0
+"Install Android SDK Build-Tools 36 v.36.0.0" complete.               
+"Install Android SDK Build-Tools 36 v.36.0.0" finished.
+[=========                              ] 25%                         [=========                              ] 25% Fetch remote repository.[=======================================] 100% Fetch remote repository...       
+
+> Configure project :expo
+
+Using expo modules
+  - expo-constants (18.0.13)
+  - expo-dev-client (6.0.20)
+  - expo-dev-launcher (6.0.20)G [3m 4s]
+  - expo-dev-menu (7.0.18)
+  - expo-dev-menu-interface (2.0.0) 5s]
+  - expo-json-utils (0.15.0)
+  - expo-manifests (1.0.10)
+  - expo-modules-core (3.0.29)G [3m 7s]
+  - expo-updates-interface (2.0.0)m 7s]
+  - expo-video (2.1.9)
+  - [≡ƒôª] expo-asset (12.0.12)                                       
+  - [≡ƒôª] expo-camera (17.0.10)                                      
+  - [≡ƒôª] expo-file-system (19.0.21)
+  - [≡ƒôª] expo-font (14.0.11)                                        
+  - [≡ƒôª] expo-image (3.0.11)                                        
+  - [≡ƒôª] expo-image-loader (6.0.0)                                  
+  - [≡ƒôª] expo-image-picker (17.0.10)                                
+  - [≡ƒôª] expo-keep-awake (15.0.8)
+  - [≡ƒôª] expo-secure-store (15.0.8)
+  - [≡ƒôª] expo-splash-screen (31.0.13)
+
+
+> Task :expo-modules-core:processDebugManifest
+C:\.cjjutba\.thesis\iams\mobile\node_modules\.pnpm\expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7\node_modules\expo-modules-core\android\src\main\AndroidManifest.xml:8:9-11:45 Warning:
+        meta-data#com.facebook.soloader.enabled@android:value was tagged at AndroidManifest.xml:8 to replace other declarations but no other declaration present
+
+> Task :react-native-async-storage_async-storage:processDebugManifest
+package="com.reactnativecommunity.asyncstorage" found in source AndroidManifest.xml: C:\.cjjutba\.thesis\iams\mobile\node_modules\.pnpm\@react-native-async-storage_088e8303e028f6e6ca5c16cc3d46621a\node_modules\@react-native-async-storage\async-storage\android\src\main\AndroidManifest.xml.
+Setting the namespace via the package attribute in the source AndroidManifest.xml is no longer supported, and the value is ignored.
+Recommendation: remove package="com.reactnativecommunity.asyncstorage" from the source AndroidManifest.xml: C:\.cjjutba\.thesis\iams\mobile\node_modules\.pnpm\@react-native-async-storage_088e8303e028f6e6ca5c16cc3d46621a\node_modules\@react-native-async-storage\async-storage\android\src\main\AndroidManifest.xml.
+
+> Task :react-native-safe-area-context:processDebugManifest
+package="com.th3rdwave.safeareacontext" found in source AndroidManifest.xml: C:\.cjjutba\.thesis\iams\mobile\node_modules\.pnpm\react-native-safe-area-cont_db7e84308fa9a28cdc0cc9a7b78f5e93\node_modules\react-native-safe-area-context\android\src\main\AndroidManifest.xml.
+Setting the namespace via the package attribute in the source AndroidManifest.xml is no longer supported, and the value is ignored.
+Recommendation: remove package="com.th3rdwave.safeareacontext" from the source AndroidManifest.xml: C:\.cjjutba\.thesis\iams\mobile\node_modules\.pnpm\react-native-safe-area-cont_db7e84308fa9a28cdc0cc9a7b78f5e93\node_modules\react-native-safe-area-context\android\src\main\AndroidManifest.xml.
+
+> Task :lottie-react-native:compileDebugKotlin
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/lottie-react-native@7.3.5_r_d71c219fb83f41fc5e64a25b7bc0c3bb/node_modules/lottie-react-native/android/src/main/java/com/airbnb/android/react/lottie/LottieAnimationViewManagerImpl.kt:12:8 'object MapBuilder : Any' is deprecated. Use Kotlin's built-in collections extensions.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/lottie-react-native@7.3.5_r_d71c219fb83f41fc5e64a25b7bc0c3bb/node_modules/lottie-react-native/android/src/main/java/com/airbnb/android/react/lottie/LottieAnimationViewManagerImpl.kt:21:17 'object MapBuilder : Any' is deprecated. Use Kotlin's built-in collections extensions.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/lottie-react-native@7.3.5_r_d71c219fb83f41fc5e64a25b7bc0c3bb/node_modules/lottie-react-native/android/src/main/java/com/airbnb/android/react/lottie/LottieAnimationViewManagerImpl.kt:72:16 'object MapBuilder : Any' is deprecated. Use Kotlin's built-in collections extensions.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/lottie-react-native@7.3.5_r_d71c219fb83f41fc5e64a25b7bc0c3bb/node_modules/lottie-react-native/android/src/main/java/com/airbnb/android/react/lottie/LottieAnimationViewManagerImpl.kt:74:13 'object MapBuilder : Any' is deprecated. Use Kotlin's built-in collections extensions.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/lottie-react-native@7.3.5_r_d71c219fb83f41fc5e64a25b7bc0c3bb/node_modules/lottie-react-native/android/src/main/java/com/airbnb/android/react/lottie/LottieAnimationViewManagerImpl.kt:76:13 'object MapBuilder : Any' is deprecated. Use Kotlin's built-in collections extensions.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/lottie-react-native@7.3.5_r_d71c219fb83f41fc5e64a25b7bc0c3bb/node_modules/lottie-react-native/android/src/main/java/com/airbnb/android/react/lottie/LottieAnimationViewManagerImpl.kt:78:13 'object MapBuilder : Any' is deprecated. Use Kotlin's built-in collections extensions.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/lottie-react-native@7.3.5_r_d71c219fb83f41fc5e64a25b7bc0c3bb/node_modules/lottie-react-native/android/src/main/java/com/airbnb/android/react/lottie/LottieAnimationViewManagerImpl.kt:108:28 'static fun isAttachedToWindow(p0: View): Boolean' is deprecated. Deprecated in Java.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/lottie-react-native@7.3.5_r_d71c219fb83f41fc5e64a25b7bc0c3bb/node_modules/lottie-react-native/android/src/main/java/com/airbnb/android/react/lottie/LottieAnimationViewManagerImpl.kt:138:28 'static fun isAttachedToWindow(p0: View): Boolean' is deprecated. Deprecated in Java.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/lottie-react-native@7.3.5_r_d71c219fb83f41fc5e64a25b7bc0c3bb/node_modules/lottie-react-native/android/src/main/java/com/airbnb/android/react/lottie/LottieAnimationViewManagerImpl.kt:148:28 'static fun isAttachedToWindow(p0: View): Boolean' is deprecated. Deprecated in Java.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/lottie-react-native@7.3.5_r_d71c219fb83f41fc5e64a25b7bc0c3bb/node_modules/lottie-react-native/android/src/main/java/com/airbnb/android/react/lottie/LottieAnimationViewManagerImpl.kt:157:28 'static fun isAttachedToWindow(p0: View): Boolean' is deprecated. Deprecated in Java.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/lottie-react-native@7.3.5_r_d71c219fb83f41fc5e64a25b7bc0c3bb/node_modules/lottie-react-native/android/src/main/java/com/airbnb/android/react/lottie/LottieAnimationViewPropertyManager.kt:22:8 'class ReactFontManager : Any' is deprecated. This class is deprecated and will be deleted in the near future. Please use [com.facebook.react.common.assets.ReactFontManager] instead.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/lottie-react-native@7.3.5_r_d71c219fb83f41fc5e64a25b7bc0c3bb/node_modules/lottie-react-native/android/src/main/java/com/airbnb/android/react/lottie/LottieAnimationViewPropertyManager.kt:76:24 'class ReactFontManager : Any' is deprecated. This class is deprecated and will be deleted in the near future. Please use [com.facebook.react.common.assets.ReactFontManager] instead.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/lottie-react-native@7.3.5_r_d71c219fb83f41fc5e64a25b7bc0c3bb/node_modules/lottie-react-native/android/src/main/java/com/airbnb/android/react/lottie/LottieAnimationViewPropertyManager.kt:90:24 'class ReactFontManager : Any' is deprecated. This class is deprecated and will be deleted in the near future. Please use [com.facebook.react.common.assets.ReactFontManager] instead.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/lottie-react-native@7.3.5_r_d71c219fb83f41fc5e64a25b7bc0c3bb/node_modules/lottie-react-native/android/src/main/java/com/airbnb/android/react/lottie/LottiePackage.kt:11:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/lottie-react-native@7.3.5_r_d71c219fb83f41fc5e64a25b7bc0c3bb/node_modules/lottie-react-native/android/src/newarch/com/airbnb/android/react/lottie/LottieAnimationViewManager.kt:107:18 'fun receiveCommand(view: LottieAnimationView, commandName: String, args: ReadableArray?): Unit' is deprecated. args is not nullable, please update your method signature.     
+
+> Task :react-native-async-storage_async-storage:compileDebugJavaWithJavac
+Note: Some input files use or override a deprecated API.
+Note: Recompile with -Xlint:deprecation for details.
+Note: C:\.cjjutba\.thesis\iams\mobile\node_modules\.pnpm\@react-native-async-storage_088e8303e028f6e6ca5c16cc3d46621a\node_modules\@react-native-async-storage\async-storage\android\src\javaPackage\java\com\reactnativecommunity\asyncstorage\AsyncStoragePackage.java uses unchecked or unsafe operations.
+Note: Recompile with -Xlint:unchecked for details.
+
+> Task :react-native-safe-area-context:compileDebugKotlin
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-safe-area-cont_db7e84308fa9a28cdc0cc9a7b78f5e93/node_modules/react-native-safe-area-context/android/src/main/java/com/th3rdwave/safeareacontext/SafeAreaView.kt:59:23 'val uiImplementation: UIImplementation!' is deprecated. Deprecated in Java.
+
+> Task :react-native-svg:compileDebugJavaWithJavac
+Note: Some input files use or override a deprecated API.
+Note: Recompile with -Xlint:deprecation for details.
+Note: Some input files use unchecked or unsafe operations.
+Note: Recompile with -Xlint:unchecked for details.
+
+> Task :react-native-screens:compileDebugKotlin
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/RNScreensPackage.kt:56:9 The corresponding parameter in the supertype 'BaseReactPackage' is named 'name'. This may cause problems when calling this function with named arguments.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/RNScreensPackage.kt:57:9 The corresponding parameter in the supertype 'BaseReactPackage' is named 'reactContext'. This may cause problems when calling this function with named arguments.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/RNScreensPackage.kt:70:17 'constructor(name: String, className: String, canOverrideExistingModule: Boolean, needsEagerInit: Boolean, hasConstants: Boolean, isCxxModule: Boolean, isTurboModule: Boolean): ReactModuleInfo' is deprecated. This constructor is deprecated and will be removed in the future. Use ReactModuleInfo(String, String, boolean, boolean, boolean, boolean)].
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/Screen.kt:48:77 Unchecked cast of '(CoordinatorLayout.Behavior<View!>?..CoordinatorLayout.Behavior<*>?)' to 'BottomSheetBehavior<Screen>'.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/Screen.kt:383:36 'fun setTranslucent(screen: Screen, activity: Activity?, context: ReactContext?): Unit' is deprecated. For apps targeting SDK 35 or above this prop has no effect because edge-to-edge is enabled by default and the status bar is always translucent.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/Screen.kt:402:36 'fun setColor(screen: Screen, activity: Activity?, context: ReactContext?): Unit' is deprecated. For apps targeting SDK 35 or above this prop has no effect because edge-to-edge is enabled by default and the status bar is always translucent.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/Screen.kt:420:36 'fun setNavigationBarColor(screen: Screen, activity: Activity?): Unit' is deprecated. For all apps targeting Android SDK 35 or above edge-to-edge is enabled by default.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/Screen.kt:437:36 'fun setNavigationBarTranslucent(screen: Screen, activity: Activity?): Unit' is deprecated. For all apps targeting Android SDK 35 or above edge-to-edge is enabled by default.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenStackFragment.kt:217:31 'var targetElevation: Float' is deprecated. Deprecated in Java.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenStackFragment.kt:220:13 'fun setHasOptionsMenu(p0: Boolean): Unit' is deprecated. Deprecated in Java.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenStackFragment.kt:397:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenStackFragment.kt:404:22 'fun onPrepareOptionsMenu(p0: Menu): Unit' is deprecated. Deprecated in Java.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenStackFragment.kt:407:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenStackFragment.kt:412:22 'fun onCreateOptionsMenu(p0: Menu, p1: MenuInflater): Unit' is deprecated. Deprecated in Java.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenStackHeaderConfig.kt:435:18 'val reactNativeHost: ReactNativeHost' is deprecated. You should not use ReactNativeHost directly in the New Architecture. Use ReactHost instead.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenViewManager.kt:203:14 'var statusBarColor: Int?' is deprecated. For apps targeting SDK 35 or above this prop has no effect because edge-to-edge is enabled by default and the status bar is always translucent.    
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenViewManager.kt:220:14 'var isStatusBarTranslucent: Boolean?' is deprecated. For apps targeting SDK 35 or above this prop has no effect because edge-to-edge is enabled by default and the status bar is always translucent.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenViewManager.kt:237:14 'var navigationBarColor: Int?' is deprecated. For all apps targeting Android SDK 35 or above edge-to-edge is enabled by default.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenViewManager.kt:246:14 'var isNavigationBarTranslucent: Boolean?' is deprecated. For all apps targeting Android SDK 35 or above edge-to-edge is enabled by default.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:55:42 'fun replaceSystemWindowInsets(p0: Int, p1: Int, p2: Int, p3: Int): WindowInsetsCompat' is deprecated. Deprecated in Java.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:56:39 'val systemWindowInsetLeft: Int' is deprecated. Deprecated in Java.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:58:39 'val systemWindowInsetRight: Int' is deprecated. Deprecated in Java.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:59:39 'val systemWindowInsetBottom: Int' is deprecated. Deprecated in Java.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:102:53 'var statusBarColor: Int' is deprecated. Deprecated in Java.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:106:37 'var statusBarColor: Int?' is deprecated. For apps targeting SDK 35 or above this prop has no effect because edge-to-edge is enabled by default and the status bar is always translucent.   
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:113:48 'var statusBarColor: Int' is deprecated. Deprecated in Java.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:116:32 'var statusBarColor: Int' is deprecated. Deprecated in Java.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:162:49 'var isStatusBarTranslucent: Boolean?' is deprecated. For apps targeting SDK 35 or above this prop has no effect because edge-to-edge is enabled by default and the status bar is always translucent.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:218:43 'var navigationBarColor: Int?' is deprecated. For all apps targeting Android SDK 35 or above edge-to-edge is enabled by default.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:218:72 'var navigationBarColor: Int' is deprecated. Deprecated in Java.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:224:16 'var navigationBarColor: Int' is deprecated. Deprecated in Java.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:241:55 'var isNavigationBarTranslucent: Boolean?' is deprecated. For all apps targeting Android SDK 35 or above edge-to-edge is enabled by default.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:283:13 'fun setColor(screen: Screen, activity: Activity?, context: ReactContext?): Unit' is deprecated. For apps targeting SDK 35 or above this prop has no effect because edge-to-edge is enabled by default and the status bar is always translucent.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:285:13 'fun setTranslucent(screen: Screen, activity: Activity?, context: ReactContext?): Unit' is deprecated. For apps targeting SDK 35 or above this prop has no effect because edge-to-edge is enabled by default and the status bar is always translucent.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:289:13 'fun setNavigationBarColor(screen: Screen, activity: Activity?): Unit' is deprecated. For all apps targeting Android SDK 35 or above edge-to-edge is enabled by default.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:290:13 'fun setNavigationBarTranslucent(screen: Screen, activity: Activity?): Unit' is deprecated. For all apps targeting Android SDK 35 or above edge-to-edge is enabled by default.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:354:42 'var statusBarColor: Int?' is deprecated. For apps targeting SDK 35 or above this prop has no effect because edge-to-edge is enabled by default and the status bar is always translucent.   
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:356:48 'var isStatusBarTranslucent: Boolean?' is deprecated. For apps targeting SDK 35 or above this prop has no effect because edge-to-edge is enabled by default and the status bar is always translucent.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:359:57 'var navigationBarColor: Int?' is deprecated. For all apps targeting Android SDK 35 or above edge-to-edge is enabled by default.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/ScreenWindowTraits.kt:360:63 'var isNavigationBarTranslucent: Boolean?' is deprecated. For all apps targeting Android SDK 35 or above edge-to-edge is enabled by default.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/bottomsheet/BottomSheetDialogRootView.kt:7:8 'object ReactFeatureFlags : Any' is deprecated. Use com.facebook.react.internal.featureflags.ReactNativeFeatureFlags instead.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/bottomsheet/BottomSheetDialogRootView.kt:25:13 'object ReactFeatureFlags : Any' is deprecated. Use com.facebook.react.internal.featureflags.ReactNativeFeatureFlags instead.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/bottomsheet/BottomSheetDialogRootView.kt:32:9 The corresponding parameter in the supertype 'ReactViewGroup' is named 'left'. This may cause problems when calling this function with named arguments.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/bottomsheet/BottomSheetDialogRootView.kt:33:9 The corresponding parameter in the supertype 'ReactViewGroup' is named 'top'. This may cause problems when calling this function with named arguments.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/bottomsheet/BottomSheetDialogRootView.kt:34:9 The corresponding parameter in the supertype 'ReactViewGroup' is named 'right'. This may cause problems when calling this function with named arguments.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/bottomsheet/BottomSheetDialogRootView.kt:35:9 The corresponding parameter in the supertype 'ReactViewGroup' is named 'bottom'. This may cause problems when calling this function with named arguments.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/bottomsheet/BottomSheetDialogRootView.kt:71:9 The corresponding parameter in the supertype 'RootView' is named 'childView'. This may cause problems when calling this function with named arguments.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/bottomsheet/BottomSheetDialogRootView.kt:72:9 The corresponding parameter in the supertype 'RootView' is named 'ev'. This may cause problems when calling this function with named arguments.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/bottomsheet/BottomSheetDialogRootView.kt:79:46 The corresponding parameter in the supertype 'RootView' is named 'ev'. This may cause problems when calling this function with named arguments.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/bottomsheet/BottomSheetDialogRootView.kt:83:9 The corresponding parameter in the supertype 'RootView' is named 'childView'. This may cause problems when calling this function with named arguments.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/bottomsheet/BottomSheetDialogRootView.kt:84:9 The corresponding parameter in the supertype 'RootView' is named 'ev'. This may cause problems when calling this function with named arguments.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/bottomsheet/BottomSheetDialogRootView.kt:95:34 The corresponding parameter in the supertype 'RootView' is named 't'. This may cause problems when calling this function with named arguments.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/bottomsheet/DimmingView.kt:63:9 The corresponding parameter in the supertype 'ReactCompoundView' is named 'touchX'. This may cause problems when calling this function with named arguments.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/bottomsheet/DimmingView.kt:64:9 The corresponding parameter in the supertype 'ReactCompoundView' is named 'touchY'. This may cause problems when calling this function with named arguments.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/bottomsheet/DimmingView.kt:68:9 The corresponding parameter in the supertype 'ReactCompoundViewGroup' is named 'touchX'. This may cause problems when calling this function with named arguments.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/bottomsheet/DimmingView.kt:69:9 The corresponding parameter in the supertype 'ReactCompoundViewGroup' is named 'touchY'. This may cause problems when calling this function with named arguments.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/gamma/tabs/TabsHostViewManager.kt:37:9 The corresponding parameter in the supertype 'TabsHostViewManager' is named 'view'. This may cause problems when calling this function with named arguments.
+
+> Task :expo-modules-core:compileDebugKotlin
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/android/src/main/java/expo/modules/adapters/react/apploader/RNHeadlessAppLoader.kt:48:87 'val reactNativeHost: ReactNativeHost' is deprecated. You should not use ReactNativeHost directly in the New Architecture. Use ReactHost instead.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/android/src/main/java/expo/modules/adapters/react/apploader/RNHeadlessAppLoader.kt:91:85 'val reactNativeHost: ReactNativeHost' is deprecated. You should not use ReactNativeHost directly in the New Architecture. Use ReactHost instead.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/android/src/main/java/expo/modules/adapters/react/apploader/RNHeadlessAppLoader.kt:120:83 'val reactNativeHost: ReactNativeHost' is deprecated. You should not use ReactNativeHost directly in the New Architecture. Use ReactHost instead.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/android/src/main/java/expo/modules/apploader/AppLoaderProvider.kt:34:52 Unchecked cast of 'Class<*>!' to 'Class<out HeadlessAppLoader>'.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/android/src/main/java/expo/modules/kotlin/AppContext.kt:30:8 'typealias ErrorManagerModule = JSLoggerModule' is deprecated. Use JSLoggerModule instead.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/android/src/main/java/expo/modules/kotlin/AppContext.kt:253:21 'typealias ErrorManagerModule = JSLoggerModule' is deprecated. Use JSLoggerModule instead.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/android/src/main/java/expo/modules/kotlin/AppContext.kt:343:21 'val DEFAULT: Int' is deprecated. UIManagerType.DEFAULT will be deleted in the next release of React Native. Use [LEGACY] instead.   
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/android/src/main/java/expo/modules/kotlin/defaultmodules/NativeModulesProxyModule.kt:16:5 'fun Constants(legacyConstantsProvider: () -> Map<String, Any?>): Unit' is deprecated. Use `Constant` or `Property` instead.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/android/src/main/java/expo/modules/kotlin/jni/PromiseImpl.kt:65:51 'val errorManager: JSLoggerModule?' is deprecated. Use AppContext.jsLogger instead.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/android/src/main/java/expo/modules/kotlin/jni/PromiseImpl.kt:69:22 'fun reportExceptionToLogBox(codedException: CodedException): Unit' is deprecated. Use appContext.jsLogger.error(...) instead.   
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/android/src/main/java/expo/modules/kotlin/views/ViewDefinitionBuilder.kt:464:16 'val errorManager: JSLoggerModule?' is deprecated. Use AppContext.jsLogger instead.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/android/src/main/java/expo/modules/kotlin/views/ViewDefinitionBuilder.kt:464:30 'fun reportExceptionToLogBox(codedException: CodedException): Unit' is deprecated. Use appContext.jsLogger.error(...) instead.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/android/src/main/java/expo/modules/kotlin/views/ViewManagerDefinition.kt:41:16 'val errorManager: JSLoggerModule?' is deprecated. Use AppContext.jsLogger instead.
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/android/src/main/java/expo/modules/kotlin/views/ViewManagerDefinition.kt:41:30 'fun reportExceptionToLogBox(codedException: CodedException): Unit' is deprecated. Use appContext.jsLogger.error(...) instead.
+
+> Task :expo-dev-launcher:generateServiceApolloSources
+w: C:\.cjjutba\.thesis\iams\mobile\node_modules\.pnpm\expo-dev-launcher@6.0.20_ex_140ddea37b44155ef791db379dc4a204\node_modules\expo-dev-launcher\android\src\main\graphql\GetBranches.graphql: (21, 11): Apollo: Use of deprecated field `runtimeVersion`
+w: C:\.cjjutba\.thesis\iams\mobile\node_modules\.pnpm\expo-dev-launcher@6.0.20_ex_140ddea37b44155ef791db379dc4a204\node_modules\expo-dev-launcher\android\src\main\graphql\GetBranches.graphql: (34, 3): Apollo: Variable `platform` is unused
+w: C:\.cjjutba\.thesis\iams\mobile\node_modules\.pnpm\expo-dev-launcher@6.0.20_ex_140ddea37b44155ef791db379dc4a204\node_modules\expo-dev-launcher\android\src\main\graphql\GetUpdates.graphql: (14, 11): Apollo: Use of deprecated field `runtimeVersion`
+
+> Task :app:processDebugMainManifest
+C:\.cjjutba\.thesis\iams\mobile\android\app\src\debug\AndroidManifest.xml:6:5-162 Warning:
+        application@android:usesCleartextTraffic was tagged at AndroidManifest.xml:6 to replace other declarations but no other declaration present
+C:\.cjjutba\.thesis\iams\mobile\android\app\src\debug\AndroidManifest.xml Warning:
+        provider#expo.modules.filesystem.FileSystemFileProvider@android:authorities was tagged at AndroidManifest.xml:0 to replace other declarations but no other declaration present
+C:\.cjjutba\.thesis\iams\mobile\android\app\src\debug\AndroidManifest.xml Warning:
+        activity#expo.modules.imagepicker.ExpoCropImageActivity@android:exported was tagged at AndroidManifest.xml:0 to replace other declarations but no other declaration present
+
+> Task :react-native-gesture-handler:configureCMakeDebug[arm64-v8a]
+C/C++: CMake Warning in C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-gesture-handle_18db092138149f473db19e5f912d822a/node_modules/react-native-gesture-handler/android/.cxx/Debug/1z4cg1j5/arm64-v8a/CMakeFiles/CMakeTmp/CMakeLists.txt:
+C/C++:   The object file directory
+C/C++:     C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-gesture-handle_18db092138149f473db19e5f912d822a/node_modules/react-native-gesture-handler/android/.cxx/Debug/1z4cg1j5/arm64-v8a/CMakeFiles/CMakeTmp/CMakeFiles/cmTC_9e20d.dir/./
+C/C++:   has 240 characters.  The maximum full path to an object file is 250
+C/C++:   characters (see CMAKE_OBJECT_PATH_MAX).  Object file
+C/C++:     CMakeCCompilerABI.c.o
+C/C++:   cannot be safely placed under this directory.  The build may not work
+C/C++:   correctly.
+
+> Task :react-native-screens:configureCMakeDebug[arm64-v8a]
+C/C++: CMake Warning in C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/.cxx/Debug/1p2f1j6z/arm64-v8a/CMakeFiles/CMakeTmp/CMakeLists.txt:
+C/C++:   The object file directory
+C/C++:     C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/.cxx/Debug/1p2f1j6z/arm64-v8a/CMakeFiles/CMakeTmp/CMakeFiles/cmTC_a5c83.dir/./
+C/C++:   has 232 characters.  The maximum full path to an object file is 250
+C/C++:   characters (see CMAKE_OBJECT_PATH_MAX).  Object file
+C/C++:     CMakeCCompilerABI.c.o
+C/C++:   cannot be safely placed under this directory.  The build may not work
+C/C++:   correctly.
+C/C++: CMake Warning in C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/.cxx/Debug/1p2f1j6z/arm64-v8a/CMakeFiles/CMakeTmp/CMakeLists.txt:
+C/C++:   The object file directory
+C/C++:     C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/.cxx/Debug/1p2f1j6z/arm64-v8a/CMakeFiles/CMakeTmp/CMakeFiles/cmTC_fb153.dir/./
+C/C++:   has 232 characters.  The maximum full path to an object file is 250
+C/C++:   characters (see CMAKE_OBJECT_PATH_MAX).  Object file
+C/C++:     CMakeCXXCompilerABI.cpp.o
+C/C++:   cannot be safely placed under this directory.  The build may not work
+C/C++:   correctly.
+
+> Task :expo-modules-core:configureCMakeDebug[arm64-v8a]
+C/C++: CMake Warning in C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/android/.cxx/Debug/6l3y3113/arm64-v8a/CMakeFiles/CMakeTmp/CMakeLists.txt:
+C/C++:   The object file directory
+C/C++:     C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/android/.cxx/Debug/6l3y3113/arm64-v8a/CMakeFiles/CMakeTmp/CMakeFiles/cmTC_1fafc.dir/./
+C/C++:   has 229 characters.  The maximum full path to an object file is 250
+C/C++:   characters (see CMAKE_OBJECT_PATH_MAX).  Object file
+C/C++:     CMakeCXXCompilerABI.cpp.o
+C/C++:   cannot be safely placed under this directory.  The build may not work
+C/C++:   correctly.
+C/C++: CMake Warning in CMakeLists.txt:
+C/C++:   The object file directory
+C/C++:     C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/android/.cxx/Debug/6l3y3113/arm64-v8a/CMakeFiles/expo-modules-core.dir/./
+C/C++:   has 216 characters.  The maximum full path to an object file is 250
+C/C++:   characters (see CMAKE_OBJECT_PATH_MAX).  Object file
+C/C++:     C_/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/common/cpp/EventEmitter.cpp.o
+C/C++:   cannot be safely placed under this directory.  The build may not work
+C/C++:   correctly.
+C/C++: CMake Warning in src/fabric/CMakeLists.txt:
+C/C++:   The object file directory
+C/C++:     C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/android/.cxx/Debug/6l3y3113/arm64-v8a/src/fabric/CMakeFiles/fabric.dir/./
+C/C++:   has 216 characters.  The maximum full path to an object file is 250
+C/C++:   characters (see CMAKE_OBJECT_PATH_MAX).  Object file
+C/C++:     C_/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/expo-modules-core@3.0.29_re_608eee6e418ac022011475ab34711ee7/node_modules/expo-modules-core/common/cpp/fabric/ExpoViewProps.cpp.o
+C/C++:   cannot be safely placed under this directory.  The build may not work
+C/C++:   correctly.
+
+> Task :react-native-screens:configureCMakeDebug[arm64-v8a]
+C/C++: CMake Warning in CMakeLists.txt:
+C/C++:   The object file directory
+C/C++:     C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/android/.cxx/Debug/1p2f1j6z/arm64-v8a/CMakeFiles/rnscreens.dir/./
+C/C++:   has 211 characters.  The maximum full path to an object file is 250
+C/C++:   characters (see CMAKE_OBJECT_PATH_MAX).  Object file
+C/C++:     C_/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-screens@4.16.0_b8e1d3cca370dcdbbdf08944ff9ffe9a/node_modules/react-native-screens/cpp/RNSScreenRemovalListener.cpp.o
+C/C++:   cannot be safely placed under this directory.  The build may not work
+C/C++:   correctly.
+
+> Task :react-native-gesture-handler:configureCMakeDebug[arm64-v8a]   
+C/C++: CMake Warning in C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-gesture-handle_18db092138149f473db19e5f912d822a/node_modules/react-native-gesture-handler/android/.cxx/Debug/1z4cg1j5/arm64-v8a/CMakeFiles/CMakeTmp/CMakeLists.txt:
+C/C++:   The object file directory
+C/C++:     C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-gesture-handle_18db092138149f473db19e5f912d822a/node_modules/react-native-gesture-handler/android/.cxx/Debug/1z4cg1j5/arm64-v8a/CMakeFiles/CMakeTmp/CMakeFiles/cmTC_6da0c.dir/./
+C/C++:   has 240 characters.  The maximum full path to an object file is 250
+C/C++:   characters (see CMAKE_OBJECT_PATH_MAX).  Object file
+C/C++:     CMakeCXXCompilerABI.cpp.o
+C/C++:   cannot be safely placed under this directory.  The build may not work
+C/C++:   correctly.
+
+> Task :react-native-gesture-handler:buildCMakeDebug[arm64-v8a] FAILE 
+C/C++: ninja: error: rebuilding 'build.ninja': Stat(C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-gesture-handle_18db092138149f473db19e5f912d822a/node_modules/react-native-gesture-handler/android/.cxx/Debug/1z4cg1j5/prefab/arm64-v8a/prefab/lib/aarch64-linux-android/cmake/ReactAndroid/ReactAndroidConfig.cmake): Filename longer than 260 characters
+
+> Task :react-native-gesture-handler:compileDebugKotlin
+w: file:///C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-gesture-handle_18db092138149f473db19e5f912d822a/node_modules/react-native-gesture-handler/android/src/main/java/com/swmansion/gesturehandler/react/RNGestureHandlerRootView.kt:41:43 The corresponding parameter in the supertype 'ReactViewGroup' is named 'ev'. This may cause problems when calling this function with named arguments.
+
+> Task :expo-modules-core:compileDebugJavaWithJavac                   
+Note: Some input files use or override a deprecated API.
+Note: Recompile with -Xlint:deprecation for details.
+
+[Incubating] Problems report is available at: file:///C:/.cjjutba/.thesis/iams/mobile/android/build/reports/problems/problems-report.html   
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':react-native-gesture-handler:buildCMakeDebug[arm64-v8a]'.
+> com.android.ide.common.process.ProcessException: ninja: Entering directory `C:\.cjjutba\.thesis\iams\mobile\node_modules\.pnpm\react-native-gesture-handle_18db092138149f473db19e5f912d822a\node_modules\react-native-gesture-handler\android\.cxx\Debug\1z4cg1j5\arm64-v8a'
+
+  C++ build system [build] failed while executing:
+      @echo off
+      "C:\\Users\\chris\\AppData\\Local\\Android\\Sdk\\cmake\\3.22.1\\bin\\ninja.exe" ^
+        -C ^
+        "C:\\.cjjutba\\.thesis\\iams\\mobile\\node_modules\\.pnpm\\react-native-gesture-handle_18db092138149f473db19e5f912d822a\\node_modules\\react-native-gesture-handler\\android\\.cxx\\Debug\\1z4cg1j5\\arm64-v8a" ^
+        gesturehandler
+    from C:\.cjjutba\.thesis\iams\mobile\node_modules\.pnpm\react-native-gesture-handle_18db092138149f473db19e5f912d822a\node_modules\react-native-gesture-handler\android
+  ninja: error: rebuilding 'build.ninja': Stat(C:/.cjjutba/.thesis/iams/mobile/node_modules/.pnpm/react-native-gesture-handle_18db092138149f473db19e5f912d822a/node_modules/react-native-gesture-handler/android/.cxx/Debug/1z4cg1j5/prefab/arm64-v8a/prefab/lib/aarch64-linux-android/cmake/ReactAndroid/ReactAndroidConfig.cmake): Filename longer than 260 characters
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 9.0.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.   
+
+For more on this, please refer to https://docs.gradle.org/8.14.3/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD FAILED in 7m 52s
+340 actionable tasks: 268 executed, 72 from cache
+Error: C:\.cjjutba\.thesis\iams\mobile\android\gradlew.bat app:assembleDebug -x lint -x test --configure-on-demand --build-cache -PreactNativeDevServerPort=8081 -PreactNativeArchitectures=x86_64,arm64-v8a exited with non-zero code: 1
+Error: C:\.cjjutba\.thesis\iams\mobile\android\gradlew.bat app:assembleDebug -x lint -x test --configure-on-demand --build-cache -PreactNativeDevServerPort=8081 -PreactNativeArchitectures=x86_64,arm64-v8a exited with non-zero code: 1
+    at ChildProcess.completionListener (C:\.cjjutba\.thesis\iams\mobile\node_modules\.pnpm\@expo+spawn-async@1.7.2\node_modules\@expo\spawn-async\src\spawnAsync.ts:67:13)
+    at Object.onceWrapper (node:events:634:26)
+    at ChildProcess.emit (node:events:519:28)
+    at ChildProcess.cp.emit (C:\.cjjutba\.thesis\iams\mobile\node_modules\.pnpm\cross-spawn@7.0.6\node_modules\cross-spawn\lib\enoent.js:34:29)
+    at maybeClose (node:internal/child_process:1101:16)
+    at Process.ChildProcess._handle.onexit (node:internal/child_process:304:5)
+    ...
+    at spawnAsync (C:\.cjjutba\.thesis\iams\mobile\node_modules\.pnpm\@expo+spawn-async@1.7.2\node_modules\@expo\spawn-async\src\spawnAsync.ts:28:21)
+    at spawnGradleAsync (C:\.cjjutba\.thesis\iams\mobile\node_modules\.pnpm\@expo+cli@54.0.23_expo@54.0_3a3e8e541299220c467dc39d5e22350c\node_modules\@expo\cli\src\start\platforms\android\gradle.ts:134:28)     
+    at assembleAsync (C:\.cjjutba\.thesis\iams\mobile\node_modules\.pnpm\@expo+cli@54.0.23_expo@54.0_3a3e8e541299220c467dc39d5e22350c\node_modules\@expo\cli\src\start\platforms\android\gradle.ts:83:16)
+    at runAndroidAsync (C:\.cjjutba\.thesis\iams\mobile\node_modules\.pnpm\@expo+cli@54.0.23_expo@54.0_3a3e8e541299220c467dc39d5e22350c\node_modules\@expo\cli\src\run\android\runAndroidAsync.ts:62:24)
+ ELIFECYCLE  Command failed with exit code 1.
+PS C:\.cjjutba\.thesis\iams\mobile> 

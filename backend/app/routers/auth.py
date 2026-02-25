@@ -278,11 +278,21 @@ def email_confirmed_page():
     """
     **Auth Callback Landing Page**
 
+    Only available when USE_SUPABASE_AUTH is enabled.
+
     Supabase redirects here after email confirmation AND password recovery.
     JavaScript detects `#type=recovery` in the URL hash to show either:
     - Email Verified confirmation (default / type=signup)
     - Password Reset form (type=recovery)
     """
+    if not settings.USE_SUPABASE_AUTH:
+        return HTMLResponse(
+            content="<html><body><h1>Not Available</h1>"
+            "<p>Email confirmation is handled locally in this deployment.</p>"
+            "</body></html>",
+            status_code=200,
+        )
+
     supabase_url = settings.SUPABASE_URL
     supabase_anon_key = settings.SUPABASE_ANON_KEY
 
@@ -478,6 +488,9 @@ async def supabase_webhook(
     Receives events from Supabase Auth (e.g. email verified).
     Verifies the webhook secret before processing.
     """
+    if not settings.USE_SUPABASE_AUTH:
+        return {"success": True, "message": "Supabase Auth disabled; webhook ignored"}
+
     # Verify webhook secret
     expected_secret = settings.SUPABASE_WEBHOOK_SECRET
     if expected_secret:

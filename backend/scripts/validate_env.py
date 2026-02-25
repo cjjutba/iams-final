@@ -80,11 +80,15 @@ def validate_env():
 
     # Required variables
     required_vars = {
-        'SUPABASE_URL': 'Supabase project URL',
-        'SUPABASE_ANON_KEY': 'Supabase anonymous key',
         'DATABASE_URL': 'PostgreSQL connection string',
         'SECRET_KEY': 'JWT secret key',
     }
+
+    # Supabase keys only required when Supabase Auth is enabled
+    use_supabase = os.getenv('USE_SUPABASE_AUTH', 'false').lower() == 'true'
+    if use_supabase:
+        required_vars['SUPABASE_URL'] = 'Supabase project URL'
+        required_vars['SUPABASE_ANON_KEY'] = 'Supabase anonymous key'
 
     print("Required Variables:")
     print("-" * 60)
