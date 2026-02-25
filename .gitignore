@@ -32,6 +32,12 @@ build/
 # FAISS
 data/faiss/*.index
 
+# FFmpeg binary (downloaded via winget, ~200MB)
+backend/bin/
+
+# HLS segments (generated at runtime)
+backend/data/hls/
+
 # MediaPipe models (downloaded at runtime)
 edge/app/.models/
 edge/tools/.cache/

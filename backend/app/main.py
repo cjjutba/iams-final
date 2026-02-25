@@ -24,7 +24,7 @@ from app.utils.exceptions import (
 )
 
 # Import routers
-from app.routers import auth, users, face, schedules, attendance, websocket, notifications, presence, live_stream
+from app.routers import auth, users, face, schedules, attendance, websocket, notifications, presence, live_stream, hls
 
 # Global scheduler instance for background tasks
 scheduler = AsyncIOScheduler()
@@ -165,6 +165,12 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to initialize presence tracking scheduler: {e}")
 
+    # Create HLS segment directory (if HLS streaming enabled)
+    if settings.USE_HLS_STREAMING:
+        import os
+        os.makedirs(settings.HLS_SEGMENT_DIR, exist_ok=True)
+        logger.info(f"HLS streaming enabled (segment dir: {settings.HLS_SEGMENT_DIR})")
+
     logger.info(f"{settings.APP_NAME} startup complete")
 
 
@@ -187,6 +193,17 @@ async def shutdown_event():
             logger.info("Scheduler stopped")
     except Exception as e:
         logger.error(f"Failed to stop scheduler: {e}")
+
+    # Stop HLS and recognition services
+    if settings.USE_HLS_STREAMING:
+        try:
+            from app.services.hls_service import hls_service
+            from app.services.recognition_service import recognition_service
+            logger.info("Stopping HLS and recognition services...")
+            await hls_service.cleanup_all()
+            await recognition_service.cleanup_all()
+        except Exception as e:
+            logger.error(f"Failed to stop HLS/recognition services: {e}")
 
     # Save FAISS index
     try:
@@ -289,6 +306,14 @@ app.include_router(
     prefix=f"{settings.API_PREFIX}/stream",
     tags=["Live Stream"]
 )
+
+# HLS routes (serve .m3u8 playlists and .ts segments)
+if settings.USE_HLS_STREAMING:
+    app.include_router(
+        hls.router,
+        prefix=f"{settings.API_PREFIX}/hls",
+        tags=["HLS Streaming"]
+    )
 
 # WebSocket routes
 app.include_router(

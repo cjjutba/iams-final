@@ -68,6 +68,16 @@ export const config = {
   WS_RECONNECT_INTERVAL: 5000, // 5 seconds
   WS_MAX_RECONNECT_ATTEMPTS: 5,
 
+  // HLS streaming
+  /** Build the HLS playlist URL for a given room. */
+  getHlsUrl: (roomId: string) =>
+    `${
+      API_BASE_URL_ENV
+        ?? (isDev
+          ? `http://${devHostIp}:8000/api/v1`
+          : 'https://api.iams.com/api/v1')
+    }/hls/${roomId}/playlist.m3u8`,
+
   // App info
   APP_VERSION: Constants.manifest?.version || '1.0.0',
   APP_NAME: 'IAMS',

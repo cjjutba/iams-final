@@ -1,47 +1,49 @@
 /**
  * Faculty Live Feed Screen
  *
- * Displays a live camera feed from the backend via WebSocket with face
- * recognition overlays. Frames arrive as base64-encoded JPEGs alongside
- * detection metadata (bounding boxes, names, confidence).
+ * Displays a live camera feed using two independent layers:
+ *
+ * 1. **Video Layer** — HLS stream via `expo-video` (hardware-decoded, 30 FPS)
+ *    The backend runs FFmpeg to remux the RTSP H.264 stream into HLS segments.
+ *    `expo-video`'s native `VideoView` plays HLS with hardware decoding.
+ *
+ * 2. **Recognition Layer** — WebSocket detection metadata (~200 bytes/msg)
+ *    The backend samples frames at ~1.5 FPS, runs face detection + FaceNet
+ *    recognition, and pushes only detection coordinates + names via WebSocket.
+ *    A transparent `DetectionOverlay` renders bounding boxes on top of the video.
  *
  * WebSocket endpoint: ws://<host>/api/v1/stream/{scheduleId}
  *
  * Features:
- * - Real-time camera frame rendering
- * - Connection status indicator (Connected / Reconnecting)
- * - FPS counter
+ * - 30 FPS smooth hardware-decoded video
+ * - Real-time face recognition overlay (bounding boxes + names)
+ * - Connection status indicator
  * - Detected-students panel with confidence percentages
  * - Auto-reconnect with 3-second delay
  * - Navigation to the list-based LiveAttendance screen
- *
- * Performance optimisations:
- * - Frame URI stored in a ref — only the Image re-renders, not the whole tree
- * - Detection list updates are batched and debounced
- * - Student list component is memoised
  */
 
-import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
-  Image,
   StyleSheet,
   FlatList,
   ActivityIndicator,
-  AppState,
-  AppStateStatus,
+  LayoutChangeEvent,
 } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import { Wifi, WifiOff, Video, Users, RefreshCw } from 'lucide-react-native';
 import { theme, strings } from '../../constants';
-import { config } from '../../constants/config';
-import { storage } from '../../utils/storage';
 import { formatPercentage } from '../../utils/formatters';
 import type { FacultyStackParamList } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
 import { Text, Card, Button } from '../../components/ui';
+import { DetectionOverlay } from '../../components/video/DetectionOverlay';
+import { useDetectionWebSocket } from '../../hooks/useDetectionWebSocket';
+import type { DetectedStudent } from '../../hooks/useDetectionWebSocket';
 
 // ---------------------------------------------------------------------------
 // Route typing
@@ -51,57 +53,7 @@ type LiveFeedRouteProp = RouteProp<FacultyStackParamList, 'LiveFeed'>;
 type LiveFeedNavigationProp = StackNavigationProp<FacultyStackParamList, 'LiveFeed'>;
 
 // ---------------------------------------------------------------------------
-// Types for incoming WebSocket messages
-// ---------------------------------------------------------------------------
-
-interface Detection {
-  user_id: string;
-  name: string;
-  student_id: string;
-  confidence: number;
-  bbox: [number, number, number, number]; // [x, y, w, h]
-}
-
-interface FrameMessage {
-  type: 'frame';
-  data: string; // base64 JPEG
-  timestamp: string;
-  detections: Detection[];
-}
-
-/** Tracks a detected student with recency information. */
-interface DetectedStudent {
-  user_id: string;
-  name: string;
-  student_id: string;
-  confidence: number;
-  /** True when the student was in the most recent frame. */
-  currentlyDetected: boolean;
-  /** ISO timestamp of the last frame where this student appeared. */
-  lastSeen: string;
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Build the WebSocket URL for the camera stream.
- *
- * Derives the ws:// host from the REST API base URL so the stream
- * endpoint stays in sync regardless of environment.
- */
-const getStreamWsUrl = (scheduleId: string): string => {
-  // config.API_BASE_URL is e.g. "http://192.168.1.9:8000/api/v1"
-  const baseUrl = config.API_BASE_URL;
-  const wsBase = baseUrl.replace(/^http/, 'ws');
-  // Replace trailing /api/v1 path with /api/v1/stream/{scheduleId}
-  const streamUrl = wsBase.replace(/\/api\/v1$/, `/api/v1/stream/${scheduleId}`);
-  return streamUrl;
-};
-
-// ---------------------------------------------------------------------------
-// Memoised sub-components (prevent re-render of list when frame changes)
+// Memoised sub-components
 // ---------------------------------------------------------------------------
 
 const StudentRow = React.memo(({ item }: { item: DetectedStudent }) => (
@@ -149,197 +101,35 @@ export const FacultyLiveFeedScreen: React.FC = () => {
   const navigation = useNavigation<LiveFeedNavigationProp>();
   const { scheduleId, subjectName } = route.params;
 
-  // Connection state
-  const [isConnected, setIsConnected] = useState(false);
-  const [isConnecting, setIsConnecting] = useState(true);
-  const [connectionError, setConnectionError] = useState<string | null>(null);
+  // Detection WebSocket (also extracts HLS URL from connected message)
+  const {
+    detections,
+    isConnected,
+    isConnecting,
+    hlsUrl,
+    studentMap,
+    connectionError,
+    reconnect,
+    detectionWidth,
+    detectionHeight,
+  } = useDetectionWebSocket(scheduleId);
 
-  // Frame state — separate from detection list to avoid re-rendering
-  // the entire tree on every frame.
-  const [frameUri, setFrameUri] = useState<string | null>(null);
-
-  // FPS tracking
-  const [fps, setFps] = useState(0);
-  const frameCountRef = useRef(0);
-  const fpsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Detected students map keyed by user_id for O(1) updates.
-  // Updated only when the detection list actually changes (not every frame).
-  const [detectedStudents, setDetectedStudents] = useState<Map<string, DetectedStudent>>(
-    new Map(),
-  );
-
-  // WebSocket ref for cleanup
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isMountedRef = useRef(true);
-
-  // --------------------------------------------------
-  // FPS counter: measure frames received per second
-  // --------------------------------------------------
-
-  useEffect(() => {
-    fpsIntervalRef.current = setInterval(() => {
-      setFps(frameCountRef.current);
-      frameCountRef.current = 0;
-    }, 1000);
-
-    return () => {
-      if (fpsIntervalRef.current) clearInterval(fpsIntervalRef.current);
-    };
-  }, []);
-
-  // --------------------------------------------------
-  // WebSocket connection
-  // --------------------------------------------------
-
-  const connectWebSocket = useCallback(async () => {
-    if (!isMountedRef.current) return;
-
-    // Clean up any previous socket
-    if (wsRef.current) {
-      wsRef.current.onopen = null;
-      wsRef.current.onmessage = null;
-      wsRef.current.onerror = null;
-      wsRef.current.onclose = null;
-      wsRef.current.close();
-      wsRef.current = null;
+  // Video player — source updates when hlsUrl arrives.
+  // Only call play() when there is actually a source to play.
+  const player = useVideoPlayer(hlsUrl, (p) => {
+    p.loop = false;
+    if (hlsUrl) {
+      p.play();
     }
+  });
 
-    setIsConnecting(true);
-    setConnectionError(null);
+  // Track container dimensions for overlay coordinate scaling
+  const [containerLayout, setContainerLayout] = useState({ width: 0, height: 0 });
 
-    const url = getStreamWsUrl(scheduleId);
-
-    // Attach auth token as query param so the backend can authenticate
-    const token = await storage.getAccessToken();
-    const wsUrl = token ? `${url}?token=${encodeURIComponent(token)}` : url;
-
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      if (!isMountedRef.current) return;
-      setIsConnected(true);
-      setIsConnecting(false);
-      setConnectionError(null);
-    };
-
-    ws.onmessage = (event: WebSocketMessageEvent) => {
-      if (!isMountedRef.current) return;
-
-      try {
-        const message: FrameMessage = JSON.parse(event.data);
-
-        if (message.type === 'frame') {
-          // Update frame image — this only causes the Image to re-render
-          setFrameUri(`data:image/jpeg;base64,${message.data}`);
-          frameCountRef.current += 1;
-
-          // Only update detection list if there are actual detections
-          // (avoids churning the student list on every empty frame)
-          const dets = message.detections;
-          if (dets && dets.length > 0) {
-            setDetectedStudents((prev) => {
-              const next = new Map(prev);
-
-              // Mark all existing students as not currently detected
-              next.forEach((student, key) => {
-                if (student.currentlyDetected) {
-                  next.set(key, { ...student, currentlyDetected: false });
-                }
-              });
-
-              // Update / insert students from this frame
-              for (const detection of dets) {
-                if (!detection.user_id) continue;
-                next.set(detection.user_id, {
-                  user_id: detection.user_id,
-                  name: detection.name || 'Unknown',
-                  student_id: detection.student_id || '',
-                  confidence: detection.confidence,
-                  currentlyDetected: true,
-                  lastSeen: message.timestamp,
-                });
-              }
-
-              return next;
-            });
-          } else if (detectedStudents.size > 0) {
-            // No detections — mark all as not currently detected (but keep in list)
-            setDetectedStudents((prev) => {
-              let changed = false;
-              const next = new Map(prev);
-              next.forEach((student, key) => {
-                if (student.currentlyDetected) {
-                  next.set(key, { ...student, currentlyDetected: false });
-                  changed = true;
-                }
-              });
-              return changed ? next : prev;
-            });
-          }
-        }
-      } catch {
-        // Ignore malformed messages
-      }
-    };
-
-    ws.onerror = () => {
-      if (!isMountedRef.current) return;
-      setIsConnected(false);
-      setIsConnecting(false);
-    };
-
-    ws.onclose = () => {
-      if (!isMountedRef.current) return;
-      setIsConnected(false);
-      setIsConnecting(false);
-
-      // Auto-reconnect after 3 seconds
-      reconnectTimeoutRef.current = setTimeout(() => {
-        if (isMountedRef.current) {
-          connectWebSocket();
-        }
-      }, 3000);
-    };
-  }, [scheduleId]);
-
-  // Establish connection on mount, tear down on unmount
-  useEffect(() => {
-    isMountedRef.current = true;
-    connectWebSocket();
-
-    return () => {
-      isMountedRef.current = false;
-
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
-      }
-
-      if (wsRef.current) {
-        wsRef.current.onopen = null;
-        wsRef.current.onmessage = null;
-        wsRef.current.onerror = null;
-        wsRef.current.onclose = null;
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-    };
-  }, [connectWebSocket]);
-
-  // Reconnect when the app comes back to foreground
-  useEffect(() => {
-    const handleAppState = (nextState: AppStateStatus) => {
-      if (nextState === 'active' && !isConnected && !isConnecting) {
-        connectWebSocket();
-      }
-    };
-
-    const subscription = AppState.addEventListener('change', handleAppState);
-    return () => subscription.remove();
-  }, [isConnected, isConnecting, connectWebSocket]);
+  const handleVideoLayout = useCallback((event: LayoutChangeEvent) => {
+    const { width, height } = event.nativeEvent.layout;
+    setContainerLayout({ width, height });
+  }, []);
 
   // --------------------------------------------------
   // Navigation helpers
@@ -359,13 +149,13 @@ export const FacultyLiveFeedScreen: React.FC = () => {
 
   const studentsList = useMemo(
     () =>
-      Array.from(detectedStudents.values()).sort((a, b) => {
+      Array.from(studentMap.values()).sort((a, b) => {
         if (a.currentlyDetected !== b.currentlyDetected) {
           return a.currentlyDetected ? -1 : 1;
         }
         return a.name.localeCompare(b.name);
       }),
-    [detectedStudents],
+    [studentMap],
   );
 
   const currentlyDetectedCount = useMemo(
@@ -415,7 +205,7 @@ export const FacultyLiveFeedScreen: React.FC = () => {
   const itemSeparator = useCallback(() => <View style={styles.separator} />, []);
 
   // --------------------------------------------------
-  // Error state (failed to connect at all)
+  // Error state
   // --------------------------------------------------
 
   if (connectionError) {
@@ -430,7 +220,7 @@ export const FacultyLiveFeedScreen: React.FC = () => {
           <Button
             variant="secondary"
             size="md"
-            onPress={connectWebSocket}
+            onPress={reconnect}
             style={styles.retryButton}
           >
             {strings.common.retry}
@@ -441,10 +231,10 @@ export const FacultyLiveFeedScreen: React.FC = () => {
   }
 
   // --------------------------------------------------
-  // Loading state (initial connection)
+  // Loading state (waiting for HLS URL)
   // --------------------------------------------------
 
-  if (isConnecting && !frameUri) {
+  if (isConnecting && !hlsUrl) {
     return (
       <ScreenLayout safeArea padded={false}>
         <Header showBack title={subjectName} />
@@ -503,23 +293,32 @@ export const FacultyLiveFeedScreen: React.FC = () => {
             </Text>
           </View>
 
-          {/* FPS counter */}
           <View style={styles.fpsContainer}>
             <Video size={12} color={theme.colors.text.secondary} />
             <Text variant="caption" weight="500" color={theme.colors.text.secondary} style={styles.fpsText}>
-              {fps} FPS
+              HLS Live
             </Text>
           </View>
         </View>
 
-        {/* Camera feed */}
-        <View style={styles.feedContainer}>
-          {frameUri ? (
-            <Image
-              source={{ uri: frameUri }}
-              style={styles.feedImage}
-              resizeMode="contain"
-            />
+        {/* Camera feed: native HLS video + detection overlay */}
+        <View style={styles.feedContainer} onLayout={handleVideoLayout}>
+          {hlsUrl ? (
+            <>
+              <VideoView
+                player={player}
+                style={styles.video}
+                contentFit="contain"
+                nativeControls={false}
+              />
+              <DetectionOverlay
+                detections={detections}
+                videoWidth={detectionWidth}
+                videoHeight={detectionHeight}
+                containerWidth={containerLayout.width}
+                containerHeight={containerLayout.height}
+              />
+            </>
           ) : (
             <View style={styles.noFeedPlaceholder}>
               <Video size={48} color={theme.colors.text.disabled} />
@@ -529,7 +328,7 @@ export const FacultyLiveFeedScreen: React.FC = () => {
                 align="center"
                 style={styles.noFeedText}
               >
-                Waiting for frames...
+                Waiting for stream...
               </Text>
             </View>
           )}
@@ -571,7 +370,7 @@ export const FacultyLiveFeedScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: theme.colors.primary, // dark background behind the feed
+    backgroundColor: theme.colors.primary,
   },
 
   // Status bar
@@ -601,14 +400,12 @@ const styles = StyleSheet.create({
   feedContainer: {
     flex: 1,
     backgroundColor: '#000000',
-    justifyContent: 'center',
-    alignItems: 'center',
   },
-  feedImage: {
-    width: '100%',
-    height: '100%',
+  video: {
+    ...StyleSheet.absoluteFillObject,
   },
   noFeedPlaceholder: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -674,7 +471,7 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing[3],
   },
 
-  // Centered states (loading, error)
+  // Centered states
   centeredContainer: {
     flex: 1,
     justifyContent: 'center',

@@ -147,7 +147,11 @@ class FaceNetModel:
 
     def generate_embeddings_batch(self, images: list) -> np.ndarray:
         """
-        Generate embeddings for multiple images
+        Generate embeddings for multiple images in a single forward pass.
+
+        Uses torch.cat to batch all preprocessed tensors and runs them
+        through the model in one GPU/CPU call — much faster than sequential
+        generate_embedding() calls for large batches (e.g. 40+ faces).
 
         Args:
             images: List of PIL Images, numpy arrays, or bytes
@@ -161,19 +165,33 @@ class FaceNetModel:
         if self.model is None:
             raise RuntimeError("Model not loaded. Call load_model() first.")
 
-        embeddings = []
+        tensors = []
         for img in images:
             try:
-                embedding = self.generate_embedding(img)
-                embeddings.append(embedding)
+                if isinstance(img, bytes):
+                    img = Image.open(io.BytesIO(img))
+                tensors.append(self.preprocess_image(img))  # [1, 3, 160, 160]
             except Exception as e:
-                logger.warning(f"Failed to process image in batch: {e}")
+                logger.warning(f"Failed to preprocess image in batch: {e}")
                 continue
 
-        if not embeddings:
+        if not tensors:
             raise ValueError("No valid embeddings generated from batch")
 
-        return np.array(embeddings)
+        # Single forward pass: [N, 3, 160, 160] → [N, 512]
+        batch = torch.cat(tensors, dim=0)
+
+        with torch.no_grad():
+            embeddings = self.model(batch)
+
+        embeddings_np = embeddings.cpu().numpy()
+
+        # L2 normalize each row (for cosine similarity via inner product)
+        norms = np.linalg.norm(embeddings_np, axis=1, keepdims=True)
+        norms = np.maximum(norms, 1e-10)  # avoid division by zero
+        embeddings_np = embeddings_np / norms
+
+        return embeddings_np
 
     def decode_base64_image(self, base64_string: str, validate_size: bool = True) -> Image.Image:
         """

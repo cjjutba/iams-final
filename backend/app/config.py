@@ -59,12 +59,25 @@ class Settings(BaseSettings):
     GRACE_PERIOD_MINUTES: int = 15  # Late grace period after class starts
     SESSION_BUFFER_MINUTES: int = 5  # Buffer before/after class for session
 
-    # Live Stream
+    # Live Stream (legacy JPEG-over-WebSocket mode)
     STREAM_FPS: int = 3  # Target frames per second for live stream
     STREAM_QUALITY: int = 65  # JPEG quality (0-100) for streamed frames
     STREAM_WIDTH: int = 1280  # Stream output width in pixels
     STREAM_HEIGHT: int = 720  # Stream output height in pixels
     DEFAULT_RTSP_URL: str = ""  # Fallback RTSP URL (set via env var)
+
+    # HLS Streaming (hardware-decoded video via FFmpeg)
+    USE_HLS_STREAMING: bool = True  # Feature flag: True=HLS+WS metadata, False=legacy JPEG WS
+    HLS_SEGMENT_DURATION: int = 2  # Seconds per .ts segment
+    HLS_PLAYLIST_SIZE: int = 3  # Number of segments in sliding-window playlist
+    HLS_SEGMENT_DIR: str = "data/hls"  # Directory for .m3u8 and .ts files
+    HLS_FFMPEG_PATH: str = "bin/ffmpeg.exe"  # Path to FFmpeg binary (relative to backend/)
+
+    # Recognition (decoupled from video, runs at lower FPS)
+    RECOGNITION_FPS: float = 1.5  # Frames/sec to sample for face recognition
+    RECOGNITION_MAX_BATCH_SIZE: int = 20  # Max faces per batch forward pass
+    RECOGNITION_RTSP_URL: str = ""  # High-res RTSP URL for recognition (empty = use DEFAULT_RTSP_URL)
+    RECOGNITION_MAX_DIM: int = 1280  # Cap frame dimension for detection (balances accuracy vs speed)
 
     # File Storage
     UPLOAD_DIR: str = "data/uploads/faces"

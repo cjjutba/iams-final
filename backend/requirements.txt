@@ -37,6 +37,7 @@ opencv-python-headless==4.13.0.90
 mediapipe>=0.10.14
 
 # ===== HTTP / Networking =====
+aiofiles>=24.0.0
 httpcore==1.0.9
 httpx==0.28.1
 requests==2.32.5

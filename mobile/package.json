@@ -28,6 +28,7 @@
     "expo-secure-store": "~15.0.8",
     "expo-splash-screen": "~31.0.13",
     "expo-status-bar": "^3.0.0",
+    "expo-video": "~2.1.9",
     "lottie-react-native": "^7.3.5",
     "lucide-react-native": "^0.563.0",
     "react": "19.1.0",
