@@ -59,6 +59,8 @@ export const config = {
   // Face registration
   REQUIRED_FACE_IMAGES: 5,
   FACE_IMAGE_QUALITY: 0.8,
+  FACE_CAPTURE_COOLDOWN_MS: 600,  // Min time between ML-driven captures
+  FACE_SCAN_TIMEOUT_MS: 30000,    // Max time before showing error (30s for ML detection)
 
   // Session settings
   TOKEN_REFRESH_THRESHOLD: 5 * 60 * 1000, // 5 minutes before expiry

@@ -1,0 +1,1 @@
+export { FaceScanCamera } from './FaceScanCamera';
