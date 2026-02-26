@@ -40,6 +40,14 @@
       "expo-dev-client",
       "expo-secure-store",
       [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26
+          }
+        }
+      ],
+      [
         "expo-camera",
         {
           "cameraPermission": "Allow IAMS to access your camera for face registration."

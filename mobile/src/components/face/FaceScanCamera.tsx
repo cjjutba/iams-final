@@ -12,7 +12,7 @@
  * - A distinct head angle not yet captured
  */
 
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import {
   View,
   StyleSheet,
@@ -22,12 +22,18 @@ import {
   StatusBar,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useCameraDevice } from 'react-native-vision-camera';
 import {
   Camera,
+  useCameraDevice,
+  useFrameProcessor,
+} from 'react-native-vision-camera';
+import { Worklets } from 'react-native-worklets-core';
+// Import directly from FaceDetector submodule to avoid Camera.tsx which requires Skia
+import {
+  useFaceDetector,
   type Face,
-  type FaceDetectionOptions,
-} from 'react-native-vision-camera-face-detector';
+  type FrameFaceDetectionOptions,
+} from 'react-native-vision-camera-face-detector/lib/module/FaceDetector';
 import Svg, { Circle, Ellipse } from 'react-native-svg';
 import { Check } from 'lucide-react-native';
 import { config, strings } from '../../constants';
@@ -66,7 +72,7 @@ const MIN_EYE_OPEN_PROB = 0.5;
 const FACE_CENTER_TOLERANCE = 0.20; // 20% tolerance from frame center
 
 // Face detection options for ML Kit
-const FACE_DETECTION_OPTIONS: FaceDetectionOptions = {
+const FACE_DETECTION_OPTIONS: FrameFaceDetectionOptions = {
   performanceMode: 'accurate',
   landmarkMode: 'all',
   classificationMode: 'all',
@@ -162,11 +168,14 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
   const device = useCameraDevice('front');
   const cameraRef = useRef<any>(null);
 
+  // Face detector plugin (uses VisionCamera frame processor API directly)
+  const { detectFaces, stopListeners } = useFaceDetector(FACE_DETECTION_OPTIONS);
+
   // Phase & detection state
   const [phase, setPhase] = useState<ScanPhase>('scanning');
   const [capturedCount, setCapturedCount] = useState(0);
   const [detectionState, setDetectionState] = useState<DetectionState>('no_face');
-  const [instruction, setInstruction] = useState(strings.register.faceInstructions.noFace);
+  const [instruction, setInstruction] = useState<string>(strings.register.faceInstructions.noFace);
 
   // Refs for capture logic (avoids stale closures in callbacks)
   const imagesRef = useRef<string[]>([]);
@@ -174,7 +183,7 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
   const isCapturingRef = useRef(false);
   const completedRef = useRef(false);
   const lastCaptureTimeRef = useRef(0);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const timeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // Animations
   const progressAnim = useRef(new Animated.Value(0)).current;
@@ -193,8 +202,9 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
   useEffect(() => {
     return () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      stopListeners();
     };
-  }, []);
+  }, [stopListeners]);
 
   // ── Pulse animation ────────────────────────────────────────
 
@@ -304,7 +314,7 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
     isCapturingRef.current = false;
   }, [captureCount, onComplete, progressAnim, flashAnim, checkAnim]);
 
-  // ── Face detection callback ────────────────────────────────
+  // ── Face detection callback (runs on JS thread) ───────────
 
   const handleFacesDetected = useCallback((faces: Face[]) => {
     if (completedRef.current || isCapturingRef.current) return;
@@ -405,6 +415,19 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
     setPhase('scanning');
   }, [progressAnim, checkAnim]);
 
+  // ── Frame processor (worklet → JS bridge) ─────────────────
+
+  const runOnJs = useMemo(
+    () => Worklets.createRunOnJS(handleFacesDetected),
+    [handleFacesDetected],
+  );
+
+  const frameProcessor = useFrameProcessor((frame) => {
+    'worklet';
+    const faces = detectFaces(frame);
+    runOnJs(faces);
+  }, [detectFaces, runOnJs]);
+
   // ── Render ─────────────────────────────────────────────────
 
   const isComplete = phase === 'complete';
@@ -439,8 +462,8 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
         device={device}
         isActive={phase === 'scanning'}
         photo={true}
-        faceDetectionCallback={handleFacesDetected}
-        faceDetectionOptions={FACE_DETECTION_OPTIONS}
+        frameProcessor={frameProcessor}
+        pixelFormat="yuv"
       />
 
       <View style={s.overlay} pointerEvents="box-none">
