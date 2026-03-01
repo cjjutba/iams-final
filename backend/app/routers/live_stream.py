@@ -18,6 +18,7 @@ Supports two modes controlled by ``USE_HLS_STREAMING``:
 """
 
 import asyncio
+import threading as _threading
 import uuid as uuid_mod
 from datetime import datetime, timezone
 from typing import Dict, Optional
@@ -32,18 +33,50 @@ from app.services.camera_config import get_camera_url
 
 router = APIRouter()
 
-# Cache resolved student names so we don't hit the DB on every frame.
-_name_cache: Dict[str, tuple] = {}
+
+class NameCache:
+    """Thread-safe student name cache with per-entry TTL."""
+
+    def __init__(self, ttl_seconds: float = 300.0):
+        self._lock = _threading.Lock()
+        # uid → ((name, student_id), inserted_at_monotonic)
+        self._store: Dict[str, tuple] = {}
+        self._ttl = ttl_seconds
+
+    def get(self, user_id: str):
+        """Return (name, student_id) or None if missing/expired."""
+        import time
+        with self._lock:
+            entry = self._store.get(user_id)
+        if entry is None:
+            return None
+        value, inserted_at = entry
+        if time.monotonic() - inserted_at > self._ttl:
+            with self._lock:
+                self._store.pop(user_id, None)
+            return None
+        return value
+
+    def set(self, user_id: str, name: str, student_id: str) -> None:
+        """Store (name, student_id) with current timestamp."""
+        import time
+        with self._lock:
+            self._store[user_id] = ((name, student_id), time.monotonic())
+
+
+# 5-minute TTL — auto-refresh if student name changes in DB
+_name_cache = NameCache(ttl_seconds=300)
 
 
 def _enrich_and_cache(detections_dicts: list, detections_objects, db_session_factory) -> list:
     """
     Enrich detection dicts with cached student names.
-    Only hits the DB for user_ids not yet in the cache.
+    Only hits the DB for user_ids not yet in the cache or whose cache entry has expired.
+    Thread-safe via NameCache.
     """
     needs_lookup = [
         d for d in detections_dicts
-        if d.get("user_id") and not d.get("name") and d["user_id"] not in _name_cache
+        if d.get("user_id") and not d.get("name") and _name_cache.get(d["user_id"]) is None
     ]
 
     if needs_lookup:
@@ -51,10 +84,10 @@ def _enrich_and_cache(detections_dicts: list, detections_objects, db_session_fac
         try:
             from app.services.recognition_service import recognition_service
             recognition_service.enrich_detections(detections_objects, db)
-            # Refresh dicts and populate cache
+            # Populate cache from enriched objects
             for det in detections_objects:
                 if det.user_id and det.name:
-                    _name_cache[det.user_id] = (det.name, det.student_id)
+                    _name_cache.set(det.user_id, det.name, det.student_id or "")
             detections_dicts = [d.to_dict() for d in detections_objects]
         finally:
             db.close()
@@ -62,8 +95,10 @@ def _enrich_and_cache(detections_dicts: list, detections_objects, db_session_fac
     # Apply cache to any dicts that are missing names
     for d in detections_dicts:
         uid = d.get("user_id")
-        if uid and not d.get("name") and uid in _name_cache:
-            d["name"], d["student_id"] = _name_cache[uid]
+        if uid and not d.get("name"):
+            cached = _name_cache.get(uid)
+            if cached:
+                d["name"], d["student_id"] = cached
 
     return detections_dicts
 
@@ -199,7 +234,7 @@ async def _hls_mode(
     receive_task = asyncio.create_task(_receive_loop())
 
     # --- Push detection metadata ---
-    poll_interval = 0.125  # 125ms = 8Hz, matching RECOGNITION_FPS detection rate
+    poll_interval = 0.100  # 100ms = 10Hz, matching RECOGNITION_FPS
     last_seq = -1
     last_send_time = asyncio.get_event_loop().time()
     heartbeat_interval = 5.0  # send heartbeat every 5s even when no detections change
