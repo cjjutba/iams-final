@@ -199,7 +199,7 @@ async def _hls_mode(
     receive_task = asyncio.create_task(_receive_loop())
 
     # --- Push detection metadata ---
-    poll_interval = 0.15  # 150ms — recognition runs at 1.5 FPS so no need to poll fast
+    poll_interval = 0.125  # 125ms = 8Hz, matching RECOGNITION_FPS detection rate
     last_seq = -1
     last_send_time = asyncio.get_event_loop().time()
     heartbeat_interval = 5.0  # send heartbeat every 5s even when no detections change

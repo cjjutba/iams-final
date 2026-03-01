@@ -86,6 +86,10 @@ class HLSService:
             "-fflags", "+genpts",
             "-rtsp_transport", "tcp",
             "-i", rtsp_url,
+            # Output at 30fps.  If source RTSP stream is lower than 30fps,
+            # FFmpeg will duplicate frames to maintain 30fps output
+            # (acceptable for smooth playback).
+            "-r", "30",
             "-c:v", "copy",
             "-an",
             "-f", "hls",
