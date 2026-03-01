@@ -249,10 +249,22 @@ async def _hls_mode(
     last_send_time = asyncio.get_event_loop().time()
     heartbeat_interval = 5.0  # send heartbeat every 5s even when no detections change
     stale_count = 0
+    last_health_check = asyncio.get_event_loop().time()
+    health_check_interval = 10.0  # check FFmpeg liveness every 10 s
 
     try:
         while not stop_event.is_set():
             now = asyncio.get_event_loop().time()
+
+            # Periodically verify FFmpeg is still alive; restart if it died
+            if now - last_health_check >= health_check_interval:
+                last_health_check = now
+                if not hls_service.is_active(room_id):
+                    logger.info(
+                        f"HLS: health check detected dead FFmpeg for room {room_id}, restarting..."
+                    )
+                    await hls_service.ensure_healthy(room_id)
+
             result = recognition_service.get_latest_detections(room_id)
 
             if result is not None:

@@ -106,3 +106,76 @@ def test_segment_filename_uses_m4s_extension(hls, tmp_path):
     seg_pattern = cmd[idx + 1]
     assert seg_pattern.endswith(".m4s"), \
         f"fMP4 segments must use .m4s extension, got: {seg_pattern}"
+
+
+# ---------------------------------------------------------------------------
+# ensure_healthy tests
+# ---------------------------------------------------------------------------
+
+def _start_stream_with_mock_proc(hls_svc, tmp_path, room_id="room1", poll_return=None):
+    """Helper: start a stream and return the mock process."""
+    mock_proc = MagicMock()
+    mock_proc.poll.return_value = poll_return  # None = alive; int = exited
+
+    fake_dir = str(tmp_path / room_id)
+    import os
+    os.makedirs(fake_dir, exist_ok=True)
+
+    loop = asyncio.new_event_loop()
+    try:
+        with patch("subprocess.Popen", return_value=mock_proc), \
+             patch.object(hls_svc, "_ensure_segment_dir", return_value=fake_dir), \
+             patch.object(hls_svc, "_wait_for_playlist", return_value=True), \
+             patch("os.makedirs"):
+            loop.run_until_complete(
+                hls_svc.start_stream(room_id, "rtsp://cam/stream", "viewer1")
+            )
+    finally:
+        loop.close()
+
+    return mock_proc
+
+
+def test_ensure_healthy_returns_false_for_unknown_room(hls):
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(hls.ensure_healthy("nonexistent"))
+    finally:
+        loop.close()
+    assert result is False
+
+
+def test_ensure_healthy_returns_true_when_process_alive(hls, tmp_path):
+    _start_stream_with_mock_proc(hls, tmp_path, poll_return=None)  # None = still alive
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(hls.ensure_healthy("room1"))
+    finally:
+        loop.close()
+    assert result is True
+
+
+def test_ensure_healthy_restarts_dead_process(hls, tmp_path):
+    """When FFmpeg has exited (poll returns non-None), ensure_healthy restarts it."""
+    # Start the stream successfully with a healthy process
+    proc = _start_stream_with_mock_proc(hls, tmp_path, poll_return=None)  # alive
+
+    # Simulate the process dying after the stream was established
+    proc.poll.return_value = 1
+    proc.returncode = 1
+
+    new_proc = MagicMock()
+    new_proc.poll.return_value = None  # replacement is alive
+
+    loop = asyncio.new_event_loop()
+    try:
+        with patch("subprocess.Popen", return_value=new_proc), \
+             patch.object(hls, "_wait_for_playlist", return_value=True), \
+             patch("os.makedirs"):
+            result = loop.run_until_complete(hls.ensure_healthy("room1"))
+    finally:
+        loop.close()
+
+    assert result is True
+    # Stream entry should now reference the replacement process
+    assert hls._active["room1"].process is new_proc

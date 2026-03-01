@@ -78,23 +78,78 @@ class HLSService:
         self._cleanup_segments(segment_dir)
         # Re-create directory (cleanup removes it when empty)
         os.makedirs(segment_dir, exist_ok=True)
+
+        stream = HLSStream(
+            room_id=room_id,
+            rtsp_url=rtsp_url,
+            segment_dir=segment_dir,
+        )
+        stream.viewers.add(viewer_id)
+        self._active[room_id] = stream
+
+        ok = await self._launch_ffmpeg(room_id, stream)
+        if not ok:
+            self._active.pop(room_id, None)
+            return False
+
+        logger.info(f"HLS: stream started for room {room_id}")
+        return True
+
+    async def ensure_healthy(self, room_id: str) -> bool:
+        """
+        Check whether FFmpeg is still running for *room_id*.
+
+        If the process has died, clean up stale segments and restart it.
+        Returns True if the stream is healthy after the check.
+        Called periodically from the WebSocket loop to self-heal.
+        """
+        stream = self._active.get(room_id)
+        if stream is None:
+            return False
+
+        if stream.process and stream.process.poll() is None:
+            return True  # Process is alive
+
+        # Process died — log its return code and restart
+        rc = stream.process.returncode if stream.process else "N/A"
+        logger.warning(
+            f"HLS: FFmpeg died for room {room_id} (rc={rc}), restarting..."
+        )
+
+        # Clean up the dead process handle
+        if stream.process:
+            try:
+                stream.process.wait(timeout=1)
+            except Exception:
+                pass
+            stream.process = None
+
+        # Purge stale segments so the player gets a clean init.mp4
+        self._cleanup_segments(stream.segment_dir)
+        os.makedirs(stream.segment_dir, exist_ok=True)
+
+        return await self._launch_ffmpeg(room_id, stream)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _build_ffmpeg_cmd(self, rtsp_url: str, segment_dir: str) -> list:
+        """Return the FFmpeg argument list for an HLS mux of *rtsp_url*."""
         playlist_path = os.path.join(segment_dir, "playlist.m3u8")
         segment_pattern = os.path.join(segment_dir, "seg_%05d.m4s")
-
-        # Resolve FFmpeg path (handles relative paths like "bin/ffmpeg.exe")
         ffmpeg_path = os.path.abspath(settings.HLS_FFMPEG_PATH)
-
-        cmd = [
+        return [
             ffmpeg_path,
             # Low-latency input flags — minimize RTSP buffering
             "-fflags", "nobuffer+genpts",
             "-flags", "low_delay",
-            "-probesize", "512000",       # 500KB — enough to detect codec params
+            "-probesize", "512000",        # 500KB — enough to detect codec params
             "-analyzeduration", "500000",  # 500ms — fast probe but not zero
             "-rtsp_transport", "tcp",
             "-i", rtsp_url,
-            "-c:v", "copy",          # Remux without transcoding; zero CPU overhead
-            "-an",                    # No audio
+            "-c:v", "copy",   # Remux without transcoding; zero CPU overhead
+            "-an",             # No audio
             "-f", "hls",
             "-hls_time", str(settings.HLS_SEGMENT_DURATION),
             "-hls_list_size", str(settings.HLS_PLAYLIST_SIZE),
@@ -104,6 +159,15 @@ class HLSService:
             "-hls_segment_filename", segment_pattern,
             playlist_path,
         ]
+
+    async def _launch_ffmpeg(self, room_id: str, stream: "HLSStream") -> bool:
+        """
+        Start an FFmpeg process for *stream* and wait for the first playlist.
+
+        Updates ``stream.process`` in-place.  Returns True on success.
+        """
+        cmd = self._build_ffmpeg_cmd(stream.rtsp_url, stream.segment_dir)
+        playlist_path = os.path.join(stream.segment_dir, "playlist.m3u8")
 
         logger.info(f"HLS: starting FFmpeg for room {room_id}")
         logger.debug(f"HLS cmd: {' '.join(cmd)}")
@@ -125,35 +189,27 @@ class HLSService:
         except FileNotFoundError:
             logger.error(
                 "HLS: FFmpeg not found. Install FFmpeg and ensure it is on PATH "
-                f"(configured path: {settings.HLS_FFMPEG_PATH}, resolved: {ffmpeg_path})"
+                f"(configured path: {settings.HLS_FFMPEG_PATH})"
             )
             return False
         except Exception as exc:
             logger.error(f"HLS: failed to start FFmpeg for room {room_id}: {exc}")
             return False
 
-        stream = HLSStream(
-            room_id=room_id,
-            rtsp_url=rtsp_url,
-            process=process,
-            segment_dir=segment_dir,
-        )
-        stream.viewers.add(viewer_id)
-        self._active[room_id] = stream
+        stream.process = process
 
-        # Wait briefly for FFmpeg to create the first segment
+        # Wait for FFmpeg to write the first playlist file
         await self._wait_for_playlist(playlist_path, timeout=10.0)
 
-        # Check process is still alive
+        # Check that the process didn't exit immediately
         if process.poll() is not None:
             logger.error(
                 f"HLS: FFmpeg exited immediately for room {room_id} "
                 f"(rc={process.returncode})"
             )
-            self._active.pop(room_id, None)
+            stream.process = None
             return False
 
-        logger.info(f"HLS: stream started for room {room_id}")
         return True
 
     async def _wait_for_playlist(self, path: str, timeout: float = 10.0) -> bool:
@@ -220,10 +276,6 @@ class HLSService:
         for room_id in list(self._active.keys()):
             await self.stop_stream(room_id)
         logger.info("HLS: all streams stopped")
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _kill_process(stream: HLSStream) -> None:

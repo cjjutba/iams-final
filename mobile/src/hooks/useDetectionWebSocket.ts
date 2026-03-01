@@ -133,7 +133,8 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
       if (!isMountedRef.current) return;
       reconnectAttemptRef.current = 0;
       setIsConnected(true);
-      setIsConnecting(false);
+      // Keep isConnecting=true until the 'connected' message arrives so the
+      // loading spinner stays visible while streamMode/hlsUrl are still null.
       setConnectionError(null);
 
       // Start ping interval to keep connection alive
@@ -164,6 +165,8 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
             const httpBase = baseUrl.replace(/\/api\/v1$/, '');
             setHlsUrl(`${httpBase}${connMsg.hls_url}`);
           }
+          // Now we know the stream mode — stop showing loading spinner
+          setIsConnecting(false);
         } else if (message.type === 'detections') {
           const detMsg = message as DetectionsMessage;
           setDetections(detMsg.detections ?? []);
