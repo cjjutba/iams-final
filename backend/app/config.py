@@ -71,14 +71,14 @@ class Settings(BaseSettings):
 
     # HLS Streaming (hardware-decoded video via FFmpeg)
     USE_HLS_STREAMING: bool = True  # Feature flag: True=HLS+WS metadata, False=legacy JPEG WS
-    HLS_SEGMENT_DURATION: int = 1  # Seconds per .ts segment (lower = less latency)
-    HLS_PLAYLIST_SIZE: int = 2  # Number of segments in sliding-window playlist
+    HLS_SEGMENT_DURATION: float = 0.5  # Seconds per .ts segment (lower = less latency)
+    HLS_PLAYLIST_SIZE: int = 3  # Number of segments in sliding-window playlist
     HLS_SEGMENT_DIR: str = "data/hls"  # Directory for .m3u8 and .ts files
     HLS_FFMPEG_PATH: str = "bin/ffmpeg.exe"  # Path to FFmpeg binary (relative to backend/)
 
     # Recognition (decoupled from video, runs at lower FPS)
-    RECOGNITION_FPS: float = 8.0  # Frames/sec to sample for face recognition
-    RECOGNITION_MAX_BATCH_SIZE: int = 20  # Max faces per batch forward pass
+    RECOGNITION_FPS: float = 10.0  # Frames/sec to sample for face recognition
+    RECOGNITION_MAX_BATCH_SIZE: int = 50  # Max faces per batch forward pass
     RECOGNITION_RTSP_URL: str = ""  # High-res RTSP URL for recognition (empty = use DEFAULT_RTSP_URL)
     RECOGNITION_MAX_DIM: int = 1280  # Cap frame dimension for detection (balances accuracy vs speed)
 
