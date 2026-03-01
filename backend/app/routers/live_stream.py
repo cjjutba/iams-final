@@ -31,6 +31,8 @@ from app.config import settings, logger
 from app.database import SessionLocal
 from app.repositories.schedule_repository import ScheduleRepository
 from app.services.camera_config import get_camera_url
+from app.services.recognition_service import recognition_service
+from app.services.hls_service import hls_service
 
 router = APIRouter()
 
@@ -157,13 +159,21 @@ async def live_stream_ws(schedule_id: str, websocket: WebSocket):
 
     # --- Accept WebSocket ---
     await websocket.accept()
+    if settings.USE_WEBRTC_STREAMING:
+        _mode_label = "webrtc"
+    elif settings.USE_HLS_STREAMING:
+        _mode_label = "hls"
+    else:
+        _mode_label = "legacy"
     logger.info(
         f"Live stream WS connected: viewer={viewer_id}, "
         f"schedule={schedule_id}, room={room_id}, "
-        f"mode={'HLS' if settings.USE_HLS_STREAMING else 'legacy'}"
+        f"mode={_mode_label}"
     )
 
-    if settings.USE_HLS_STREAMING:
+    if settings.USE_WEBRTC_STREAMING:
+        await _webrtc_mode(websocket, viewer_id, schedule_id, room_id, rtsp_url)
+    elif settings.USE_HLS_STREAMING:
         await _hls_mode(websocket, viewer_id, schedule_id, room_id, rtsp_url)
     else:
         await _legacy_mode(websocket, viewer_id, schedule_id, room_id, rtsp_url)
@@ -184,9 +194,6 @@ async def _hls_mode(
     HLS mode: start FFmpeg HLS stream + recognition pipeline,
     then push only detection metadata over WebSocket.
     """
-    from app.services.hls_service import hls_service
-    from app.services.recognition_service import recognition_service
-
     # Start HLS stream
     hls_ok = await hls_service.start_stream(room_id, rtsp_url, viewer_id)
     if not hls_ok:
@@ -309,6 +316,138 @@ async def _hls_mode(
             pass
 
         await hls_service.stop_stream(room_id, viewer_id)
+        await recognition_service.stop(room_id, viewer_id)
+
+        if websocket.client_state == WebSocketState.CONNECTED:
+            try:
+                await websocket.close()
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# WebRTC mode: metadata-only WebSocket (no HLS, no JPEG frames)
+# ---------------------------------------------------------------------------
+
+async def _webrtc_mode(
+    websocket: WebSocket,
+    viewer_id: str,
+    schedule_id: str,
+    room_id: str,
+    rtsp_url: str,
+):
+    """
+    WebRTC mode: start only the recognition pipeline and push detection
+    metadata over WebSocket.  Video delivery is handled separately by the
+    WebRTC signalling layer — this socket never touches hls_service.
+    """
+    # Start recognition pipeline (use high-res stream if configured)
+    recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
+    recog_ok = await recognition_service.start(room_id, recog_url, viewer_id)
+    if not recog_ok:
+        logger.warning("Recognition service failed to start — WebRTC stream will have no overlays")
+
+    # Send initial connected message (no hls_url)
+    await websocket.send_json({
+        "type": "connected",
+        "schedule_id": schedule_id,
+        "room_id": room_id,
+        "mode": "webrtc",
+        "stream_fps": settings.STREAM_FPS,
+        "stream_resolution": f"{settings.STREAM_WIDTH}x{settings.STREAM_HEIGHT}",
+    })
+
+    # --- Receive task (handle pings/close) ---
+    stop_event = asyncio.Event()
+
+    async def _receive_loop():
+        try:
+            while not stop_event.is_set():
+                msg = await websocket.receive_json()
+                if isinstance(msg, dict) and msg.get("type") == "ping":
+                    await websocket.send_json({"type": "pong"})
+        except (WebSocketDisconnect, Exception):
+            stop_event.set()
+
+    receive_task = asyncio.create_task(_receive_loop())
+
+    # --- Push detection metadata ---
+    poll_interval = 0.100  # 100ms = 10Hz, matching RECOGNITION_FPS
+    last_seq = -1
+    last_send_time = asyncio.get_event_loop().time()
+    heartbeat_interval = 5.0  # send heartbeat every 5s even when no detections change
+    stale_count = 0
+
+    try:
+        while not stop_event.is_set():
+            now = asyncio.get_event_loop().time()
+            result = recognition_service.get_latest_detections(room_id)
+
+            if result is not None:
+                detections_dicts, update_seq, det_w, det_h = result
+                stale_count = 0
+
+                if update_seq != last_seq:
+                    last_seq = update_seq
+
+                    # Enrich with cached names
+                    if any(d.get("user_id") for d in detections_dicts):
+                        det_objects = recognition_service.get_detections_objects(room_id)
+                        detections_dicts = _enrich_and_cache(
+                            detections_dicts, det_objects, SessionLocal
+                        )
+
+                    ts = datetime.now(timezone.utc).isoformat()
+                    await websocket.send_json({
+                        "type": "detections",
+                        "timestamp": ts,
+                        "detections": detections_dicts,
+                        "detection_width": det_w,
+                        "detection_height": det_h,
+                    })
+                    last_send_time = now
+
+                elif (now - last_send_time) >= heartbeat_interval:
+                    # Heartbeat keeps client connection alive
+                    await websocket.send_json({
+                        "type": "heartbeat",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+                    last_send_time = now
+            else:
+                # Recognition service not running for this room
+                stale_count += 1
+                if stale_count >= 100:  # ~10s of no recognition service (100 × 100ms)
+                    logger.warning(
+                        f"Live stream: recognition service gone for room {room_id}, "
+                        "attempting restart"
+                    )
+                    recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
+                    await recognition_service.start(room_id, recog_url, viewer_id)
+                    stale_count = 0
+
+                # Still send heartbeat
+                if (now - last_send_time) >= heartbeat_interval:
+                    await websocket.send_json({
+                        "type": "heartbeat",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+                    last_send_time = now
+
+            await asyncio.sleep(poll_interval)
+
+    except WebSocketDisconnect:
+        logger.info(f"Live stream WS disconnected (WebRTC): viewer={viewer_id}")
+    except Exception as exc:
+        logger.error(f"Live stream WS error (WebRTC, viewer={viewer_id}): {exc}")
+    finally:
+        stop_event.set()
+        receive_task.cancel()
+        try:
+            await receive_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
         await recognition_service.stop(room_id, viewer_id)
 
         if websocket.client_state == WebSocketState.CONNECTED:
