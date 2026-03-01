@@ -5,8 +5,9 @@
 logLevel: warn        # suppress routine logs; FastAPI has its own logging
 
 # REST API — used by FastAPI's webrtc_service to create/delete paths
+# Bound to loopback: FastAPI is the only caller; never expose :9997 externally.
 api: yes
-apiAddress: :9997
+apiAddress: 127.0.0.1:9997
 
 # RTSP — mediamtx pulls from camera on demand when a viewer connects
 rtsp: yes
@@ -15,7 +16,7 @@ rtspsAddress: :8322
 
 # WebRTC (WHEP) — mobile clients negotiate here via FastAPI proxy
 webrtc: yes
-webrtcAddress: :8889
+webrtcAddress: 127.0.0.1:8889
 
 # No HLS or other protocols needed
 hls: no
