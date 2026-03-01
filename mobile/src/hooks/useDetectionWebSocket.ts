@@ -34,10 +34,10 @@ export interface DetectedStudent {
 
 interface ConnectedMessage {
   type: 'connected';
-  hls_url: string;
+  hls_url?: string;
   schedule_id: string;
   room_id: string;
-  mode: string;
+  mode: 'hls' | 'webrtc' | 'legacy';
   stream_fps: number;
   stream_resolution: string;
 }
@@ -57,6 +57,7 @@ export interface UseDetectionWebSocketReturn {
   isConnected: boolean;
   isConnecting: boolean;
   hlsUrl: string | null;
+  streamMode: 'hls' | 'webrtc' | 'legacy' | null;
   studentMap: Map<string, DetectedStudent>;
   connectionError: string | null;
   reconnect: () => void;
@@ -85,6 +86,7 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(true);
   const [hlsUrl, setHlsUrl] = useState<string | null>(null);
+  const [streamMode, setStreamMode] = useState<'hls' | 'webrtc' | 'legacy' | null>(null);
   const [studentMap, setStudentMap] = useState<Map<string, DetectedStudent>>(new Map());
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [detectionWidth, setDetectionWidth] = useState(1280);
@@ -155,6 +157,7 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
 
         if (message.type === 'connected') {
           const connMsg = message as ConnectedMessage;
+          setStreamMode(connMsg.mode ?? 'hls');
           if (connMsg.hls_url) {
             // Build full HLS URL from relative path
             const baseUrl = config.API_BASE_URL;
@@ -313,6 +316,7 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
     isConnected,
     isConnecting,
     hlsUrl,
+    streamMode,
     studentMap,
     connectionError,
     reconnect,
