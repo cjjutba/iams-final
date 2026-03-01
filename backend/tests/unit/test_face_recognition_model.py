@@ -289,3 +289,40 @@ class TestFaceNetModel:
         v2 = v2 / np.linalg.norm(v2)
 
         assert model.is_match(v1, v2, threshold=0.6) is False
+
+
+class TestFaceAlignment:
+    """Unit tests for MTCNN face alignment integration."""
+
+    def test_align_face_returns_none_for_blank_image(self):
+        """Blank image has no face landmarks, so align_face returns None."""
+        from app.services.ml.face_recognition import FaceNetModel
+        model = FaceNetModel()
+
+        blank = Image.new("RGB", (160, 160), color="white")
+        result = model.align_face(blank)
+
+        assert result is None
+
+    def test_generate_embedding_attempts_alignment(self):
+        """When USE_FACE_ALIGNMENT is True, align_face is called during
+        generate_embedding."""
+        from app.services.ml.face_recognition import FaceNetModel
+        model = FaceNetModel()
+
+        # Mock the torch model to return a known 512-dim tensor
+        mock_torch_model = MagicMock()
+        fake_output = torch.randn(1, 512)
+        mock_torch_model.return_value = fake_output
+        model.model = mock_torch_model
+
+        img = Image.new("RGB", (160, 160), color="blue")
+
+        with patch("app.services.ml.face_recognition.settings") as mock_settings, \
+             patch.object(model, "align_face", return_value=None) as mock_align:
+            mock_settings.USE_FACE_ALIGNMENT = True
+            mock_settings.FACE_IMAGE_SIZE = 160
+
+            model.generate_embedding(img)
+
+            mock_align.assert_called_once_with(img)

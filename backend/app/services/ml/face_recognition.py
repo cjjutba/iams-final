@@ -13,6 +13,8 @@ import io
 import base64
 from typing import Optional, Union
 
+from facenet_pytorch import MTCNN
+
 from app.config import settings, logger
 
 
@@ -46,6 +48,34 @@ class FaceNetModel:
             else:
                 logger.info("Using CPU for face recognition")
             return torch.device('cpu')
+
+    def _init_mtcnn(self):
+        """Initialize MTCNN for face alignment (lazy)."""
+        if not hasattr(self, '_mtcnn') or self._mtcnn is None:
+            self._mtcnn = MTCNN(
+                image_size=self.image_size,
+                margin=0,
+                min_face_size=20,
+                select_largest=True,
+                post_process=False,
+                device=self.device if self.device else torch.device('cpu')
+            )
+            logger.info("MTCNN initialized for face alignment")
+
+    def align_face(self, image: Image.Image) -> Optional[Image.Image]:
+        """Align face using MTCNN landmarks. Returns aligned PIL Image or None."""
+        try:
+            self._init_mtcnn()
+            aligned = self._mtcnn(image)
+            if aligned is None:
+                logger.debug("MTCNN found no face landmarks — skipping alignment")
+                return None
+            # MTCNN returns tensor in [0, 255] when post_process=False
+            aligned_np = aligned.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+            return Image.fromarray(aligned_np)
+        except Exception as e:
+            logger.warning(f"MTCNN alignment failed: {e} — falling back to raw crop")
+            return None
 
     def load_model(self):
         """
@@ -127,6 +157,12 @@ class FaceNetModel:
             # Handle bytes input (from API)
             if isinstance(image, bytes):
                 image = Image.open(io.BytesIO(image))
+
+            # Attempt MTCNN face alignment if enabled
+            if settings.USE_FACE_ALIGNMENT:
+                aligned = self.align_face(image)
+                if aligned is not None:
+                    image = aligned
 
             # Preprocess image
             img_tensor = self.preprocess_image(image)
