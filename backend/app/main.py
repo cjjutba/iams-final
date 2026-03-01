@@ -24,7 +24,7 @@ from app.utils.exceptions import (
 )
 
 # Import routers
-from app.routers import auth, users, face, schedules, attendance, websocket, notifications, presence, live_stream, hls
+from app.routers import auth, users, face, schedules, attendance, websocket, notifications, presence, live_stream, hls, webrtc
 
 # Global scheduler instance for background tasks
 scheduler = AsyncIOScheduler()
@@ -374,6 +374,14 @@ if settings.USE_HLS_STREAMING:
         hls.router,
         prefix=f"{settings.API_PREFIX}/hls",
         tags=["HLS Streaming"]
+    )
+
+# WebRTC routes (WHEP signaling proxy + ICE config)
+if settings.USE_WEBRTC_STREAMING:
+    app.include_router(
+        webrtc.router,
+        prefix=f"{settings.API_PREFIX}/webrtc",
+        tags=["WebRTC Streaming"]
     )
 
 # WebSocket routes
