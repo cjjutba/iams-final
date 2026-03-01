@@ -261,6 +261,52 @@ class FAISSManager:
 
         return batch_results
 
+    def search_with_margin(
+        self,
+        embedding: np.ndarray,
+        k: int = None,
+        threshold: float = None,
+        margin: float = None,
+    ) -> Dict:
+        """
+        Search with confidence margin check between top-1 and top-2.
+
+        Returns dict:
+          user_id: matched user or None
+          confidence: similarity score
+          is_ambiguous: True if gap between top-1 and top-2 is <= margin
+        """
+        if k is None:
+            k = settings.RECOGNITION_TOP_K
+        if threshold is None:
+            threshold = settings.RECOGNITION_THRESHOLD
+        if margin is None:
+            margin = settings.RECOGNITION_MARGIN
+
+        # Get all k results (unfiltered by threshold)
+        results = self.search(embedding, k=k, threshold=0.0)
+
+        if not results or results[0][1] < threshold:
+            return {"user_id": None, "confidence": 0.0, "is_ambiguous": False}
+
+        top_user, top_score = results[0]
+        second_score = results[1][1] if len(results) > 1 else 0.0
+        score_gap = top_score - second_score
+        is_ambiguous = score_gap <= margin
+
+        if is_ambiguous:
+            logger.warning(
+                f"Ambiguous match: top={top_user} ({top_score:.3f}), "
+                f"second={results[1][0] if len(results) > 1 else 'N/A'} ({second_score:.3f}), "
+                f"gap={score_gap:.3f} <= margin={margin}"
+            )
+
+        return {
+            "user_id": top_user,
+            "confidence": float(top_score),
+            "is_ambiguous": is_ambiguous,
+        }
+
     def remove(self, faiss_id: int) -> bool:
         """
         Remove embedding from index

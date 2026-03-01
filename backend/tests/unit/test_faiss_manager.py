@@ -351,3 +351,35 @@ class TestFAISSManager:
         assert stats["initialized"] is False
         assert stats["total_vectors"] == 0
         assert stats["index_type"] is None
+
+
+class TestConfidenceMarginSearch:
+    """Tests for search_with_margin (top-K with confidence margin check)."""
+
+    def test_confident_match(self, tmp_path):
+        """Top match with no close second is not ambiguous."""
+        mgr = FAISSManager(str(tmp_path / "test.index"))
+        mgr.load_or_create_index()
+        e1 = _make_embedding()
+        mgr.add(e1, "user-1")
+        result = mgr.search_with_margin(e1, k=3, threshold=0.55, margin=0.1)
+        assert result["user_id"] == "user-1"
+        assert result["confidence"] > 0.9
+        assert result["is_ambiguous"] is False
+
+    def test_no_match_below_threshold(self, tmp_path):
+        """No match when top similarity is below threshold."""
+        mgr = FAISSManager(str(tmp_path / "test.index"))
+        mgr.load_or_create_index()
+        e1, e2 = _make_orthogonal_pair()
+        mgr.add(e1, "user-1")
+        result = mgr.search_with_margin(e2, k=3, threshold=0.55, margin=0.1)
+        assert result["user_id"] is None
+
+    def test_empty_index_returns_no_match(self, tmp_path):
+        """Empty index returns no match."""
+        mgr = FAISSManager(str(tmp_path / "test.index"))
+        mgr.load_or_create_index()
+        e1 = _make_embedding()
+        result = mgr.search_with_margin(e1)
+        assert result["user_id"] is None
