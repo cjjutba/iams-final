@@ -187,13 +187,6 @@ export const FacultyLiveFeedScreen: React.FC = () => {
     },
   );
 
-  // Tracks whether we've already jumped to the live edge for the current URL.
-  // Reset whenever the URL changes so we re-seek on reconnect.
-  const didSeekToLiveEdge = useRef(false);
-  useEffect(() => {
-    didSeekToLiveEdge.current = false;
-  }, [hlsUrl]);
-
   // Start playback as soon as the HLS URL is available.
   useEffect(() => {
     if ((streamMode === 'hls' || streamMode === 'legacy') && hlsUrl) {
@@ -201,27 +194,31 @@ export const FacultyLiveFeedScreen: React.FC = () => {
     }
   }, [hlsUrl, streamMode, player]);
 
-  // On first readyToPlay: jump to the live edge.
-  // ExoPlayer defaults to sitting 3 × TARGETDURATION behind the live edge
-  // (3 s when TARGETDURATION=1 regardless of actual segment size).  Seeking
-  // to a very large position clips to the end of the seekable window, which
-  // is the live edge, overriding ExoPlayer's conservative default.
-  // On error: auto-reload after 3 s (FFmpeg health check restarts within 10 s).
+  // Auto-reload on player error.  A guard prevents multiple concurrent timers
+  // from being spawned if the player fires repeated error events.
+  // replaceAsync offloads asset loading off the main thread (avoids UI freeze).
+  const isRecovering = useRef(false);
+  useEffect(() => {
+    // Reset guard whenever the URL changes (new stream or WebSocket reconnect).
+    isRecovering.current = false;
+  }, [hlsUrl]);
+
   useEffect(() => {
     const subscription = player.addListener('statusChange', ({ status }) => {
       if (streamMode !== 'hls' && streamMode !== 'legacy') return;
       if (!hlsUrl) return;
 
-      if (status === 'readyToPlay' && !didSeekToLiveEdge.current) {
-        didSeekToLiveEdge.current = true;
-        // Set currentTime beyond any realistic VOD duration; expo-video clips
-        // it to the live edge (end of the current HLS sliding window).
-        player.currentTime = 999_999;
-      } else if (status === 'error') {
-        didSeekToLiveEdge.current = false;
-        setTimeout(() => {
-          player.replace(hlsUrl);
-          player.play();
+      if (status === 'readyToPlay') {
+        isRecovering.current = false;
+      } else if (status === 'error' && !isRecovering.current) {
+        isRecovering.current = true;
+        setTimeout(async () => {
+          try {
+            await player.replaceAsync(hlsUrl);
+            player.play();
+          } finally {
+            isRecovering.current = false;
+          }
         }, 3_000);
       }
     });
