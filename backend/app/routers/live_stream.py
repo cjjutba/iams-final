@@ -3,18 +3,23 @@ Live Stream Router
 
 WebSocket endpoint for live camera streaming to the mobile app.
 
-Supports two modes controlled by ``USE_HLS_STREAMING``:
+Supports three modes, selected in priority order:
 
-**HLS mode (default):**
-    Video is delivered via FFmpeg → HLS segments (see hls.py router).
+**WebRTC mode (USE_WEBRTC_STREAMING=true, default):**
+    Video is delivered via mediamtx → WebRTC (WHEP protocol) at <300ms latency.
     This WebSocket only pushes lightweight detection metadata (~200 bytes):
         { "type": "detections", "timestamp": "...", "detections": [...] }
-    The ``connected`` message includes ``hls_url`` so the client knows
-    where to point its native video player.
+    The ``connected`` message includes ``"mode": "webrtc"`` (no hls_url).
+    The mobile app simultaneously calls POST /api/v1/webrtc/{schedule_id}/offer
+    to establish the WebRTC peer connection for video.
 
-**Legacy mode (USE_HLS_STREAMING=false):**
+**HLS mode (USE_WEBRTC_STREAMING=false, USE_HLS_STREAMING=true):**
+    Video is delivered via FFmpeg → HLS segments (see hls.py router).
+    The ``connected`` message includes ``hls_url`` for the native video player.
+
+**Legacy mode (both streaming flags false):**
     Frames are JPEG-encoded, base64'd, and sent as ``type: "frame"``
-    messages (the original behaviour, ~50-100KB per frame).
+    messages (~50-100KB per frame).
 """
 
 import asyncio
@@ -566,8 +571,20 @@ async def _legacy_mode(
 
 @router.get("/status")
 async def stream_status():
-    """Get live stream system status (works for both modes)."""
-    if settings.USE_HLS_STREAMING:
+    """Get live stream system status (works for all modes)."""
+    if settings.USE_WEBRTC_STREAMING:
+        # WebRTC: video is peer-to-peer via mediamtx; no server-side room tracking
+        return {
+            "success": True,
+            "data": {
+                "mode": "webrtc",
+                "active_streams": 0,
+                "rooms": [],
+                "stream_fps": settings.STREAM_FPS,
+                "stream_resolution": f"{settings.STREAM_WIDTH}x{settings.STREAM_HEIGHT}",
+            },
+        }
+    elif settings.USE_HLS_STREAMING:
         from app.services.hls_service import hls_service
         active_rooms = hls_service.get_active_rooms()
         rooms = [

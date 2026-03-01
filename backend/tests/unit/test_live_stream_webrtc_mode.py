@@ -39,7 +39,7 @@ class TestLiveStreamWebRTCRouting:
 
     @pytest.mark.asyncio
     async def test_webrtc_mode_does_not_start_hls_service(self):
-        """_webrtc_mode must never call hls_service.start_stream."""
+        """_webrtc_mode must never call hls_service.start_stream or stop_stream."""
         from app.routers.live_stream import _webrtc_mode
         from starlette.websockets import WebSocketState
 
@@ -47,9 +47,10 @@ class TestLiveStreamWebRTCRouting:
         ws.client_state = WebSocketState.CONNECTED
         ws.send_json = AsyncMock()
 
+        mock_hls = MagicMock()
         with patch("app.routers.live_stream.recognition_service") as mock_recog, \
              patch("app.routers.live_stream.settings") as mock_settings, \
-             patch("app.routers.live_stream.hls_service", None) as mock_hls:
+             patch("app.routers.live_stream.hls_service", mock_hls):
             mock_settings.RECOGNITION_RTSP_URL = ""
             mock_settings.STREAM_FPS = 10
             mock_settings.STREAM_WIDTH = 1280
@@ -66,5 +67,5 @@ class TestLiveStreamWebRTCRouting:
             except Exception:
                 pass
 
-        # hls_service was not imported inside _webrtc_mode
-        assert mock_hls is None  # hls_service patch was never accessed
+        mock_hls.start_stream.assert_not_called()
+        mock_hls.stop_stream.assert_not_called()
