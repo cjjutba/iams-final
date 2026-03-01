@@ -264,52 +264,75 @@ class TestFaceServiceRecognize:
 # ===================================================================
 
 class TestFaceServiceRecognizeBatch:
-    """Tests for FaceService.recognize_batch"""
+    """Tests for FaceService.recognize_batch (batch embedding + batch FAISS search)"""
 
     @pytest.mark.asyncio
     async def test_recognize_batch_all_matched(self, db_session):
         """Batch recognition should return a result dict for every input image."""
-        service, _, mock_faiss = _make_face_service(db_session)
+        service, _, _ = _make_face_service(db_session)
         uid1 = str(uuid.uuid4())
         uid2 = str(uuid.uuid4())
-        mock_faiss.search.side_effect = [
-            [(uid1, 0.90)],
-            [(uid2, 0.75)],
-        ]
 
-        results = await service.recognize_batch([b"img1", b"img2"])
+        emb_batch = np.stack([_make_embedding(), _make_embedding()])
+
+        with patch("app.services.face_service.Image") as mock_pil, \
+             patch("app.services.face_service.facenet_model") as mock_fn, \
+             patch("app.services.face_service.faiss_manager") as mock_faiss:
+            # Phase 1: decoding returns mock PIL images
+            mock_pil.open.return_value.convert.return_value = MagicMock()
+            # Phase 2: batch embedding
+            mock_fn.generate_embeddings_batch.return_value = emb_batch
+            # Phase 3: batch FAISS search — one result list per query
+            mock_faiss.search_batch.return_value = [
+                [(uid1, 0.90)],
+                [(uid2, 0.75)],
+            ]
+
+            results = await service.recognize_batch([b"img1", b"img2"])
 
         assert len(results) == 2
-        assert results[0]["matched"] is True
         assert results[0]["user_id"] == uid1
-        assert results[1]["matched"] is True
+        assert results[0]["confidence"] == pytest.approx(0.90)
         assert results[1]["user_id"] == uid2
+        assert results[1]["confidence"] == pytest.approx(0.75)
 
     @pytest.mark.asyncio
     async def test_recognize_batch_partial_failure(self, db_session):
-        """If one image fails, the others should still be processed; failed entry gets error key."""
-        service, mock_fn, mock_faiss = _make_face_service(db_session)
-
-        # First call succeeds, second raises
+        """If one image fails to decode, the others should still be processed; failed entry gets error key."""
+        service, _, _ = _make_face_service(db_session)
         uid = str(uuid.uuid4())
-        call_count = 0
 
-        def _side_effect(img_bytes):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 2:
-                raise ValueError("Corrupt image")
-            return _make_embedding()
+        emb_batch = np.stack([_make_embedding()])
 
-        mock_fn.generate_embedding.side_effect = _side_effect
-        mock_faiss.search.return_value = [(uid, 0.80)]
+        with patch("app.services.face_service.Image") as mock_pil, \
+             patch("app.services.face_service.facenet_model") as mock_fn, \
+             patch("app.services.face_service.faiss_manager") as mock_faiss:
+            # First image decodes fine, second raises
+            good_img = MagicMock()
+            mock_convert = MagicMock()
 
-        results = await service.recognize_batch([b"good", b"bad"])
+            call_count = 0
+            def _open_side_effect(*args, **kwargs):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 2:
+                    raise ValueError("Corrupt image")
+                return mock_convert
+
+            mock_pil.open.side_effect = _open_side_effect
+            mock_convert.convert.return_value = good_img
+
+            mock_fn.generate_embeddings_batch.return_value = emb_batch
+            mock_faiss.search_batch.return_value = [[(uid, 0.80)]]
+
+            results = await service.recognize_batch([b"good", b"bad"])
 
         assert len(results) == 2
-        assert results[0]["matched"] is True
-        # Second result should indicate failure
-        assert results[1]["matched"] is False
+        # First result (index 0) should be a match
+        assert results[0]["user_id"] == uid
+        assert results[0]["confidence"] == pytest.approx(0.80)
+        # Second result (index 1) should indicate failure
+        assert results[1]["user_id"] is None
         assert "error" in results[1]
 
 

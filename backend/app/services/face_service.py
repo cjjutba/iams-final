@@ -181,40 +181,49 @@ class FaceService:
         images_bytes: List[bytes],
         threshold: Optional[float] = None
     ) -> List[dict]:
-        """
-        Recognize multiple faces
+        """Recognize multiple faces using batch embedding + batch FAISS search."""
+        if not images_bytes:
+            return []
 
-        Args:
-            images_bytes: List of image data
-            threshold: Optional similarity threshold
-
-        Returns:
-            List of recognition results
-        """
+        th = threshold or settings.RECOGNITION_THRESHOLD
         results = []
 
+        # Phase 1: Decode all images
+        decoded_images = []
+        index_map = []  # maps batch position -> original index
         for i, img_bytes in enumerate(images_bytes):
             try:
-                user_id, confidence = await self.recognize_face(img_bytes, threshold)
-
-                results.append({
-                    "index": i,
-                    "matched": user_id is not None,
-                    "user_id": user_id,
-                    "confidence": confidence
-                })
-
+                if isinstance(img_bytes, str):
+                    pil_img = facenet_model.decode_base64_image(img_bytes)
+                else:
+                    pil_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                decoded_images.append(pil_img)
+                index_map.append(i)
             except Exception as e:
-                logger.warning(f"Failed to recognize face {i}: {e}")
-                results.append({
-                    "index": i,
-                    "matched": False,
-                    "user_id": None,
-                    "confidence": None,
-                    "error": str(e)
-                })
+                results.append({"index": i, "user_id": None, "confidence": None, "error": str(e)})
 
-        return results
+        if not decoded_images:
+            return results
+
+        # Phase 2: Batch embedding (single forward pass)
+        try:
+            embeddings = facenet_model.generate_embeddings_batch(decoded_images)
+        except Exception as e:
+            for idx in index_map:
+                results.append({"index": idx, "user_id": None, "confidence": None, "error": str(e)})
+            return sorted(results, key=lambda r: r.get("index", 0))
+
+        # Phase 3: Batch FAISS search
+        search_results = faiss_manager.search_batch(embeddings, k=settings.RECOGNITION_TOP_K, threshold=th)
+
+        for batch_idx, (orig_idx, matches) in enumerate(zip(index_map, search_results)):
+            if matches:
+                user_id, confidence = matches[0]
+                results.append({"index": orig_idx, "user_id": user_id, "confidence": float(confidence)})
+            else:
+                results.append({"index": orig_idx, "user_id": None, "confidence": None})
+
+        return sorted(results, key=lambda r: r.get("index", 0))
 
     async def deregister_face(self, user_id: str):
         """
