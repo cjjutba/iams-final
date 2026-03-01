@@ -348,6 +348,7 @@ async def process_faces(
             img_bytes = img_bytes.getvalue()
 
             # Recognize face using margin-aware search
+            processed_count += 1
             try:
                 embedding = face_service.facenet.generate_embedding(img_bytes)
                 match_result = face_service.faiss.search_with_margin(
@@ -356,7 +357,6 @@ async def process_faces(
                     threshold=settings.RECOGNITION_THRESHOLD,
                     margin=settings.RECOGNITION_MARGIN,
                 )
-                processed_count += 1
 
                 if match_result["user_id"]:
                     # Face matched
@@ -386,7 +386,6 @@ async def process_faces(
                     "error": "RECOGNITION_FAILED",
                     "message": str(e)
                 })
-                processed_count += 1
                 unmatched_count += 1
 
         except Exception as e:
