@@ -1,0 +1,50 @@
+# backend/mediamtx.yml
+# mediamtx configuration for IAMS WebRTC live feed.
+# Run: ./bin/mediamtx mediamtx.yml  (from backend/ directory)
+# Docs: https://github.com/bluenviron/mediamtx
+
+###############################################################################
+# General
+###############################################################################
+logLevel: info
+logDestinations: [stdout]
+
+###############################################################################
+# RTSP server (mediamtx receives camera RTSP, re-serves internally)
+###############################################################################
+rtspAddress: :8554
+
+###############################################################################
+# WebRTC / WHEP endpoint
+# Mobile app connects here (via FastAPI proxy — never directly exposed)
+###############################################################################
+webrtcAddress: :8889
+webrtcEncryption: no          # TLS handled by nginx in production
+webrtcLocalUDPAddress: :8888  # ICE UDP port (open in firewall for production)
+webrtcIPsFromInterfaces: yes  # Auto-detect local IPs for ICE candidates
+webrtcIPsFromInterfacesList: []
+webrtcAdditionalHosts: []     # Add public IP here in production if needed
+webrtcICEServers2:
+  - urls: [stun:stun.l.google.com:19302]
+  # Uncomment and fill in for production TURN (needed for cellular clients):
+  # - urls: [turn:your-turn-server:3478]
+  #   username: your-username
+  #   credential: your-password
+
+###############################################################################
+# REST API (used by FastAPI webrtc_service to manage paths dynamically)
+###############################################################################
+api: yes
+apiAddress: :9997    # Internal only — do NOT expose this port to the internet
+apiEncryption: no
+
+###############################################################################
+# Path defaults
+# Paths are created dynamically by FastAPI via the REST API.
+# auth is handled by FastAPI before forwarding to WHEP — mediamtx trusts internal calls.
+###############################################################################
+paths:
+  all_others:
+    readAnyUser: yes   # FastAPI already validated JWT before calling WHEP
+    readAnyPass: ""
+    sourceOnDemand: yes
