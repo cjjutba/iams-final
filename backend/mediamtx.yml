@@ -15,8 +15,10 @@ rtspAddress: :8554
 rtspsAddress: :8322
 
 # WebRTC (WHEP) — mobile clients negotiate here via FastAPI proxy
+# webrtcLocalUDPAddress: explicit ICE UDP port (default :8000 collides with orphaned instances)
 webrtc: yes
 webrtcAddress: 127.0.0.1:8889
+webrtcLocalUDPAddress: :8887
 
 # No HLS or other protocols needed
 hls: no
