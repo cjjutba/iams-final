@@ -52,11 +52,16 @@ def _capture_cmd(hls_svc, tmp_path, room_id="room1", rtsp_url="rtsp://cam/stream
     return captured.get("cmd", [])
 
 
-def test_ffmpeg_uses_copy_codec(hls, tmp_path):
+def test_ffmpeg_video_codec_matches_transcode_flag(hls, tmp_path):
+    """libx264 when HLS_TRANSCODE=True, copy when False."""
+    from app.config import settings
     cmd = _capture_cmd(hls, tmp_path)
     assert "-c:v" in cmd
     idx = cmd.index("-c:v")
-    assert cmd[idx + 1] == "copy", "Must remux without transcoding (zero CPU)"
+    if settings.HLS_TRANSCODE:
+        assert cmd[idx + 1] == "libx264", "HLS_TRANSCODE=True must use libx264"
+    else:
+        assert cmd[idx + 1] == "copy", "HLS_TRANSCODE=False must use -c:v copy"
 
 
 def test_ffmpeg_uses_fmp4_segment_type(hls, tmp_path):

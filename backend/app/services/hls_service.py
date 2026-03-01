@@ -135,20 +135,49 @@ class HLSService:
     # ------------------------------------------------------------------
 
     def _build_ffmpeg_cmd(self, rtsp_url: str, segment_dir: str) -> list:
-        """Return the FFmpeg argument list for an HLS mux of *rtsp_url*."""
+        """Return the FFmpeg argument list for an HLS mux of *rtsp_url*.
+
+        When HLS_TRANSCODE=True (default) FFmpeg re-encodes with libx264
+        ultrafast and forces a keyframe every segment so that actual segment
+        duration matches HLS_SEGMENT_DURATION.  Without forced keyframes the
+        segment boundary can only land on the camera's own keyframe (typically
+        every 1-2 s), inflating latency regardless of the target segment size.
+
+        When HLS_TRANSCODE=False the stream is remuxed without decoding
+        (-c:v copy); zero CPU but latency is bounded by the camera's GOP.
+        """
         playlist_path = os.path.join(segment_dir, "playlist.m3u8")
         segment_pattern = os.path.join(segment_dir, "seg_%05d.m4s")
         ffmpeg_path = os.path.abspath(settings.HLS_FFMPEG_PATH)
+
+        # Compute keyframe interval in frames (segment_duration × fps).
+        # 15 fps is a safe lower bound for security-camera sub-streams.
+        fps = 15
+        gop = max(1, round(settings.HLS_SEGMENT_DURATION * fps))
+
+        if settings.HLS_TRANSCODE:
+            video_args = [
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-tune", "zerolatency",
+                # Force IDR every segment so split_by_time works exactly.
+                "-g", str(gop),
+                "-keyint_min", str(gop),
+                "-sc_threshold", "0",  # disable scene-change extra keyframes
+            ]
+        else:
+            video_args = ["-c:v", "copy"]
+
         return [
             ffmpeg_path,
             # Low-latency input flags — minimize RTSP buffering
             "-fflags", "nobuffer+genpts",
             "-flags", "low_delay",
-            "-probesize", "512000",        # 500KB — enough to detect codec params
-            "-analyzeduration", "500000",  # 500ms — fast probe but not zero
+            "-probesize", "131072",        # 128 KB — fast codec detection
+            "-analyzeduration", "100000",  # 100 ms — minimal probe window
             "-rtsp_transport", "tcp",
             "-i", rtsp_url,
-            "-c:v", "copy",   # Remux without transcoding; zero CPU overhead
+            *video_args,
             "-an",             # No audio
             "-f", "hls",
             "-hls_time", str(settings.HLS_SEGMENT_DURATION),

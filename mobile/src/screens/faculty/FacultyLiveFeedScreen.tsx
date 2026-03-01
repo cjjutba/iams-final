@@ -176,6 +176,14 @@ export const FacultyLiveFeedScreen: React.FC = () => {
     streamMode === 'hls' || streamMode === 'legacy' ? hlsUrl : null,
     (p) => {
       p.loop = false;
+      // Minimise buffering so the live edge stays as close to real-time as
+      // possible.  ExoPlayer defaults are 20 s forward / 2.5 s start; iOS
+      // AVFoundation waits to minimise stalling by default.
+      p.bufferOptions = {
+        preferredForwardBufferDuration: 1,   // 1 s look-ahead (was 20 s)
+        minBufferForPlayback: 0.5,            // start after 0.5 s buffered (was 2.5 s)
+        waitsToMinimizeStalling: false,       // iOS: start immediately, tolerate micro-stalls
+      };
     },
   );
 
