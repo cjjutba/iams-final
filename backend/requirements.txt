@@ -27,14 +27,12 @@ email-validator==2.3.0
 slowapi>=0.1.9
 
 # ===== ML / Face Recognition =====
-torch==2.10.0+cpu
-torchvision==0.25.0+cpu
-facenet-pytorch==2.6.0
+insightface>=0.7.3
+onnxruntime>=1.21.0
 faiss-cpu==1.13.2
 numpy==2.4.2
 pillow==12.1.0
 opencv-python-headless==4.13.0.90
-mediapipe>=0.10.14
 
 # ===== HTTP / Networking =====
 aiofiles>=24.0.0
