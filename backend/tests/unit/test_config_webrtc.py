@@ -1,5 +1,4 @@
 """Tests for WebRTC configuration defaults."""
-import pytest
 from app.config import Settings
 
 
