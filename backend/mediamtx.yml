@@ -1,50 +1,27 @@
-# backend/mediamtx.yml
-# mediamtx configuration for IAMS WebRTC live feed.
-# Run: ./bin/mediamtx mediamtx.yml  (from backend/ directory)
-# Docs: https://github.com/bluenviron/mediamtx
+# mediamtx configuration for IAMS
+# mediamtx bridges RTSP camera streams to WebRTC (WHEP) for mobile playback.
+# Paths are created dynamically at runtime via the REST API by webrtc_service.py.
 
-###############################################################################
-# General
-###############################################################################
-logLevel: info
-logDestinations: [stdout]
+logLevel: warn        # suppress routine logs; FastAPI has its own logging
 
-###############################################################################
-# RTSP server (mediamtx receives camera RTSP, re-serves internally)
-###############################################################################
-rtspAddress: :8554
-
-###############################################################################
-# WebRTC / WHEP endpoint
-# Mobile app connects here (via FastAPI proxy — never directly exposed)
-###############################################################################
-webrtcAddress: :8889
-webrtcEncryption: no          # TLS handled by nginx in production
-webrtcLocalUDPAddress: :8888  # ICE UDP port (open in firewall for production)
-webrtcIPsFromInterfaces: yes  # Auto-detect local IPs for ICE candidates
-webrtcIPsFromInterfacesList: []
-webrtcAdditionalHosts: []     # Add public IP here in production if needed
-webrtcICEServers2:
-  - urls: [stun:stun.l.google.com:19302]
-  # Uncomment and fill in for production TURN (needed for cellular clients):
-  # - urls: [turn:your-turn-server:3478]
-  #   username: your-username
-  #   credential: your-password
-
-###############################################################################
-# REST API (used by FastAPI webrtc_service to manage paths dynamically)
-###############################################################################
+# REST API — used by FastAPI's webrtc_service to create/delete paths
 api: yes
-apiAddress: :9997    # Internal only — do NOT expose this port to the internet
-apiEncryption: no
+apiAddress: :9997
 
-###############################################################################
-# Path defaults
-# Paths are created dynamically by FastAPI via the REST API.
-# auth is handled by FastAPI before forwarding to WHEP — mediamtx trusts internal calls.
-###############################################################################
-paths:
-  all_others:
-    readAnyUser: yes   # FastAPI already validated JWT before calling WHEP
-    readAnyPass: ""
-    sourceOnDemand: yes
+# RTSP — mediamtx pulls from camera on demand when a viewer connects
+rtsp: yes
+rtspAddress: :8554
+rtspsAddress: :8322
+
+# WebRTC (WHEP) — mobile clients negotiate here via FastAPI proxy
+webrtc: yes
+webrtcAddress: :8889
+
+# No HLS or other protocols needed
+hls: no
+srt: no
+rtmp: no
+
+# All paths are added dynamically via the API (sourceOnDemand=true)
+# FastAPI calls POST /v3/config/paths/add/{room_id} for each active room.
+paths: {}
