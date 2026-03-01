@@ -13,8 +13,8 @@ Environment variables:
 - CAMERA_WIDTH: Camera capture width (default: 640)
 - CAMERA_HEIGHT: Camera capture height (default: 480)
 - CAMERA_FPS: Camera frame rate (default: 15)
-- FACE_CROP_SIZE: Face crop size in pixels (default: 112)
-- JPEG_QUALITY: JPEG compression quality (default: 70)
+- FACE_CROP_SIZE: Face crop size in pixels (default: 160)
+- JPEG_QUALITY: JPEG compression quality (default: 85)
 - SCAN_INTERVAL: Interval between scans in seconds (default: 60)
 - SESSION_AWARE: Enable session-aware scanning (default: True)
 - SESSION_POLL_INTERVAL: How often to poll for active sessions when idle, in seconds (default: 10)
@@ -56,11 +56,11 @@ class Config:
     CAMERA_FPS: int = int(os.getenv("CAMERA_FPS", "15"))
 
     # ===== Face Detection Configuration =====
-    FACE_CROP_SIZE: int = int(os.getenv("FACE_CROP_SIZE", "112"))
-    JPEG_QUALITY: int = int(os.getenv("JPEG_QUALITY", "70"))
+    FACE_CROP_SIZE: int = int(os.getenv("FACE_CROP_SIZE", "160"))
+    JPEG_QUALITY: int = int(os.getenv("JPEG_QUALITY", "85"))
 
     # MediaPipe Face Detection settings
-    DETECTION_CONFIDENCE: float = float(os.getenv("DETECTION_CONFIDENCE", "0.5"))
+    DETECTION_CONFIDENCE: float = float(os.getenv("DETECTION_CONFIDENCE", "0.6"))
     DETECTION_MODEL: int = int(os.getenv("DETECTION_MODEL", "0"))  # 0 = short_range, 1 = full_range
 
     # ===== Queue Configuration =====
