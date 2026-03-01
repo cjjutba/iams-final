@@ -95,6 +95,9 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
   const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isMountedRef = useRef(true);
   const hasErrorRef = useRef(false);
+  const reconnectAttemptRef = useRef(0);
+  const MAX_RECONNECT_DELAY_MS = 30_000;
+  const BASE_RECONNECT_DELAY_MS = 1_000;
 
   // --------------------------------------------------
   // Connect
@@ -126,6 +129,7 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
 
     ws.onopen = () => {
       if (!isMountedRef.current) return;
+      reconnectAttemptRef.current = 0;
       setIsConnected(true);
       setIsConnecting(false);
       setConnectionError(null);
@@ -239,12 +243,19 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
       // Don't auto-reconnect if the server sent an error (permanent failure)
       if (hasErrorRef.current) return;
 
-      // Auto-reconnect after 3 seconds
+      // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s max
+      const attempt = reconnectAttemptRef.current;
+      const delay = Math.min(
+        BASE_RECONNECT_DELAY_MS * Math.pow(2, attempt),
+        MAX_RECONNECT_DELAY_MS,
+      );
+      reconnectAttemptRef.current = attempt + 1;
+
       reconnectTimeoutRef.current = setTimeout(() => {
         if (isMountedRef.current) {
           connectWebSocket();
         }
-      }, 3000);
+      }, delay);
     };
   }, [scheduleId]);
 
@@ -292,6 +303,11 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
     return () => subscription.remove();
   }, [isConnected, isConnecting, connectWebSocket]);
 
+  const reconnect = useCallback(() => {
+    reconnectAttemptRef.current = 0;
+    connectWebSocket();
+  }, [connectWebSocket]);
+
   return {
     detections,
     isConnected,
@@ -299,7 +315,7 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
     hlsUrl,
     studentMap,
     connectionError,
-    reconnect: connectWebSocket,
+    reconnect,
     detectionWidth,
     detectionHeight,
   };
