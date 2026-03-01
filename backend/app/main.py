@@ -112,6 +112,18 @@ async def startup_event():
         logger.info("Loading FAISS index...")
         faiss_manager.load_or_create_index()
 
+        # Reconcile FAISS index with database
+        try:
+            from app.services.face_service import FaceService
+            from app.database import SessionLocal
+            db = SessionLocal()
+            try:
+                FaceService.reconcile_faiss_index(db)
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"FAISS reconciliation failed: {e}")
+
         logger.info("Face recognition system initialized")
     except Exception as e:
         logger.error(f"Failed to initialize face recognition: {e}")

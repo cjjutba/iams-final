@@ -5,10 +5,12 @@ Business logic for face registration and recognition.
 Orchestrates FaceNet model, FAISS search, and database operations.
 """
 
+import io
 from typing import List, Tuple, Optional
 from fastapi import UploadFile
 from sqlalchemy.orm import Session
 import numpy as np
+from PIL import Image
 
 from app.repositories.face_repository import FaceRepository
 from app.services.ml.face_recognition import facenet_model
@@ -361,3 +363,40 @@ class FaceService:
         Save FAISS index (called during shutdown)
         """
         self.faiss.save()
+
+    @staticmethod
+    def reconcile_faiss_index(db: Session) -> bool:
+        """
+        Compare FAISS index count with DB and rebuild if mismatched.
+
+        This is called on startup to recover from crashes where FAISS index
+        and database went out of sync (e.g., server crash mid-operation).
+
+        Args:
+            db: SQLAlchemy database session
+
+        Returns:
+            True if index was rebuilt, False if already in sync
+        """
+        repo = FaceRepository(db)
+
+        # Count active registrations in DB
+        active_regs = repo.get_active_embeddings()
+        active_count = len(active_regs)
+        faiss_count = faiss_manager.index.ntotal if faiss_manager.index else 0
+
+        if active_count != faiss_count:
+            logger.warning(
+                f"FAISS/DB mismatch: FAISS has {faiss_count} vectors, "
+                f"DB has {active_count} active registrations. Rebuilding..."
+            )
+            embeddings_data = [
+                (np.frombuffer(r.embedding_vector, dtype=np.float32), str(r.user_id))
+                for r in active_regs
+            ]
+            faiss_manager.rebuild(embeddings_data)
+            logger.info(f"FAISS index rebuilt with {len(embeddings_data)} embeddings")
+            return True
+
+        logger.info(f"FAISS/DB in sync: {active_count} active registrations")
+        return False
