@@ -24,6 +24,13 @@ class TestGetIceServers:
         assert len(servers) == 1
         assert servers[0]["urls"] == ["stun:stun.l.google.com:19302"]
 
+    def test_empty_stun_urls_produces_no_stun_entry(self, mock_settings):
+        mock_settings.WEBRTC_STUN_URLS = ""
+        from app.services.webrtc_service import WebRTCService
+        svc = WebRTCService()
+        servers = svc.get_ice_servers()
+        assert all(len(s.get("urls", [])) > 0 for s in servers)
+
     def test_includes_turn_when_configured(self, mock_settings):
         mock_settings.WEBRTC_TURN_URL = "turn:my-turn.example.com:3478"
         mock_settings.WEBRTC_TURN_USERNAME = "user"
@@ -86,7 +93,40 @@ class TestEnsurePath:
 
             result = await svc.ensure_path("room-1", "rtsp://cam/stream")
             assert result is True
-            mock_client.patch.assert_called_once()
+            mock_client.patch.assert_called_once_with(
+                "http://localhost:9997/v3/config/paths/patch/room-1",
+                json={"source": "rtsp://cam/stream", "sourceOnDemand": True},
+            )
+
+    @pytest.mark.asyncio
+    async def test_returns_false_on_connect_error(self, mock_settings):
+        from app.services.webrtc_service import WebRTCService
+        svc = WebRTCService()
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
+            mock_client_cls.return_value = mock_client
+
+            result = await svc.ensure_path("room-1", "rtsp://cam/stream")
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_returns_false_on_unexpected_exception(self, mock_settings):
+        from app.services.webrtc_service import WebRTCService
+        svc = WebRTCService()
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("timed out"))
+            mock_client_cls.return_value = mock_client
+
+            result = await svc.ensure_path("room-1", "rtsp://cam/stream")
+            assert result is False
 
 
 class TestForwardWhepOffer:

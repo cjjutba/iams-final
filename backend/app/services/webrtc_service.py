@@ -31,7 +31,9 @@ class WebRTCService:
             for u in settings.WEBRTC_STUN_URLS.split(",")
             if u.strip()
         ]
-        servers: list[dict] = [{"urls": stun_urls}]
+        servers: list[dict] = []
+        if stun_urls:
+            servers.append({"urls": stun_urls})
 
         if settings.WEBRTC_TURN_URL:
             servers.append({
@@ -66,7 +68,12 @@ class WebRTCService:
                     json=payload,
                 )
                 if resp.status_code == 400:
-                    # Path already exists — patch it with the latest RTSP URL
+                    # 400 most commonly means the path already exists.
+                    # Log the body so operators can see if it's a different error.
+                    logger.debug(
+                        f"WebRTC: POST /add returned 400 for room {room_id} "
+                        f"(likely already exists), patching: {resp.text}"
+                    )
                     resp = await client.patch(
                         f"{settings.MEDIAMTX_API_URL}/v3/config/paths/patch/{room_id}",
                         json=payload,
@@ -108,6 +115,7 @@ class WebRTCService:
 
         Raises:
             httpx.HTTPStatusError: if mediamtx rejects the offer.
+            httpx.ConnectError: if mediamtx is unreachable.
         """
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
