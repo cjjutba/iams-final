@@ -208,6 +208,20 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to initialize presence tracking scheduler: {e}")
 
+    # Start mediamtx (WebRTC bridge: RTSP → WHEP)
+    if settings.USE_WEBRTC_STREAMING:
+        try:
+            from app.services.mediamtx_service import mediamtx_service
+            started = await mediamtx_service.start()
+            if started:
+                logger.info("WebRTC streaming ready (mediamtx running)")
+            else:
+                logger.warning(
+                    "mediamtx failed to start — WebRTC unavailable, falling back to HLS"
+                )
+        except Exception as e:
+            logger.error(f"Failed to start mediamtx: {e}")
+
     # Create HLS segment directory (if HLS streaming enabled)
     if settings.USE_HLS_STREAMING:
         import os
@@ -247,6 +261,15 @@ async def shutdown_event():
             await recognition_service.cleanup_all()
         except Exception as e:
             logger.error(f"Failed to stop HLS/recognition services: {e}")
+
+    # Stop mediamtx
+    if settings.USE_WEBRTC_STREAMING:
+        try:
+            from app.services.mediamtx_service import mediamtx_service
+            logger.info("Stopping mediamtx...")
+            mediamtx_service.stop()
+        except Exception as e:
+            logger.error(f"Failed to stop mediamtx: {e}")
 
     # Save FAISS index
     try:
