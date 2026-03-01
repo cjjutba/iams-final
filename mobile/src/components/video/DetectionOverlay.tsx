@@ -7,10 +7,10 @@
  * accounting for letterboxing when the video uses `contain` mode.
  */
 
-import React, { useMemo } from 'react';
-import { View, StyleSheet } from 'react-native';
-import { Text } from '../ui';
-import { theme } from '../../constants';
+import React, { useEffect, useRef, useMemo } from 'react';
+import { Animated, View, Text, StyleSheet } from 'react-native';
+
+const FADE_DURATION = 200;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -87,6 +87,42 @@ function computeScale(
 }
 
 // ---------------------------------------------------------------------------
+// DetectionBox (animated fade-in)
+// ---------------------------------------------------------------------------
+
+const DetectionBox: React.FC<{
+  detection: DetectionItem;
+  scaleInfo: ScaleInfo;
+}> = ({ detection, scaleInfo }) => {
+  const opacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(opacity, {
+      toValue: 1,
+      duration: FADE_DURATION,
+      useNativeDriver: true,
+    }).start();
+  }, []);
+
+  const { scale, offsetX, offsetY } = scaleInfo;
+  const left = detection.bbox.x * scale + offsetX;
+  const top = detection.bbox.y * scale + offsetY;
+  const width = detection.bbox.width * scale;
+  const height = detection.bbox.height * scale;
+  const borderColor = detection.user_id ? '#00C853' : '#FFD600';
+  const label = detection.name || detection.student_id || (detection.user_id?.slice(0, 8) ?? '');
+  const simText = detection.similarity != null ? ` ${(detection.similarity * 100).toFixed(0)}%` : '';
+
+  return (
+    <Animated.View style={[styles.box, { left, top, width, height, borderColor, opacity }]}>
+      <View style={[styles.labelContainer, { backgroundColor: borderColor }]}>
+        <Text style={styles.labelText}>{label}{simText}</Text>
+      </View>
+    </Animated.View>
+  );
+};
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -103,35 +139,13 @@ export const DetectionOverlay: React.FC<DetectionOverlayProps> = React.memo(
 
     return (
       <View style={StyleSheet.absoluteFill} pointerEvents="none">
-        {detections.map((det, idx) => {
-          const { scale, offsetX, offsetY } = scaleInfo;
-
-          const left = det.bbox.x * scale + offsetX;
-          const top = det.bbox.y * scale + offsetY;
-          const width = det.bbox.width * scale;
-          const height = det.bbox.height * scale;
-
-          const isRecognised = !!det.user_id;
-          const borderColor = isRecognised ? '#00C853' : '#FFD600';
-
-          // Build label
-          const label = det.name
-            ?? det.student_id
-            ?? (det.user_id ? det.user_id.slice(0, 8) : null);
-
-          return (
-            <View key={det.user_id ?? `det-${idx}`} style={[styles.box, { left, top, width, height, borderColor }]}>
-              {label && (
-                <View style={[styles.labelContainer, { backgroundColor: borderColor }]}>
-                  <Text variant="caption" weight="600" color="#000" numberOfLines={1}>
-                    {label}
-                    {det.similarity != null ? ` ${Math.round(det.similarity * 100)}%` : ''}
-                  </Text>
-                </View>
-              )}
-            </View>
-          );
-        })}
+        {detections.map((det, i) => (
+          <DetectionBox
+            key={det.user_id || `unknown-${i}`}
+            detection={det}
+            scaleInfo={scaleInfo}
+          />
+        ))}
       </View>
     );
   },
@@ -154,5 +168,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     paddingVertical: 1,
     borderRadius: 2,
+  },
+  labelText: {
+    color: '#000',
+    fontSize: 11,
+    fontWeight: '600',
   },
 });
