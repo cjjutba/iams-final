@@ -47,7 +47,10 @@ class Settings(BaseSettings):
 
     # Face Recognition
     FAISS_INDEX_PATH: str = "data/faiss/faces.index"
-    RECOGNITION_THRESHOLD: float = 0.6  # Cosine similarity threshold
+    RECOGNITION_THRESHOLD: float = 0.55  # Cosine similarity threshold (lowered with alignment)
+    RECOGNITION_MARGIN: float = 0.1  # Min gap between top-1 and top-2 scores
+    RECOGNITION_TOP_K: int = 3  # Number of neighbors to search in FAISS
+    USE_FACE_ALIGNMENT: bool = True  # Enable MTCNN face alignment before embedding
     USE_GPU: bool = True  # Use GPU if available, fallback to CPU
     FACE_IMAGE_SIZE: int = 160  # FaceNet input size (160x160)
     MIN_FACE_IMAGES: int = 3  # Minimum images for registration
@@ -74,7 +77,7 @@ class Settings(BaseSettings):
     HLS_FFMPEG_PATH: str = "bin/ffmpeg.exe"  # Path to FFmpeg binary (relative to backend/)
 
     # Recognition (decoupled from video, runs at lower FPS)
-    RECOGNITION_FPS: float = 1.5  # Frames/sec to sample for face recognition
+    RECOGNITION_FPS: float = 8.0  # Frames/sec to sample for face recognition
     RECOGNITION_MAX_BATCH_SIZE: int = 20  # Max faces per batch forward pass
     RECOGNITION_RTSP_URL: str = ""  # High-res RTSP URL for recognition (empty = use DEFAULT_RTSP_URL)
     RECOGNITION_MAX_DIM: int = 1280  # Cap frame dimension for detection (balances accuracy vs speed)
