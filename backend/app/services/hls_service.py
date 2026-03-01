@@ -79,7 +79,7 @@ class HLSService:
         # Re-create directory (cleanup removes it when empty)
         os.makedirs(segment_dir, exist_ok=True)
         playlist_path = os.path.join(segment_dir, "playlist.m3u8")
-        segment_pattern = os.path.join(segment_dir, "seg_%05d.ts")
+        segment_pattern = os.path.join(segment_dir, "seg_%05d.m4s")
 
         # Resolve FFmpeg path (handles relative paths like "bin/ffmpeg.exe")
         ffmpeg_path = os.path.abspath(settings.HLS_FFMPEG_PATH)
@@ -93,12 +93,14 @@ class HLSService:
             "-analyzeduration", "500000",  # 500ms — fast probe but not zero
             "-rtsp_transport", "tcp",
             "-i", rtsp_url,
-            "-c:v", "copy",  # Remux without transcoding; output FPS matches source
-            "-an",
+            "-c:v", "copy",          # Remux without transcoding; zero CPU overhead
+            "-an",                    # No audio
             "-f", "hls",
             "-hls_time", str(settings.HLS_SEGMENT_DURATION),
             "-hls_list_size", str(settings.HLS_PLAYLIST_SIZE),
             "-hls_flags", "delete_segments+append_list+split_by_time+omit_endlist",
+            "-hls_segment_type", "fmp4",            # fMP4 segments (better decoder compat)
+            "-hls_fmp4_init_filename", "init.mp4",  # Init segment for fMP4
             "-hls_segment_filename", segment_pattern,
             playlist_path,
         ]
@@ -245,11 +247,15 @@ class HLSService:
 
     @staticmethod
     def _cleanup_segments(segment_dir: str) -> None:
-        """Remove .m3u8 and .ts files from the segment directory."""
+        """Remove .m3u8, .ts, .m4s, and init.mp4 files from the segment directory."""
         try:
-            for pattern in ("*.m3u8", "*.ts"):
+            for pattern in ("*.m3u8", "*.ts", "*.m4s"):
                 for f in glob.glob(os.path.join(segment_dir, pattern)):
                     os.remove(f)
+            # Remove init segment if present
+            init_path = os.path.join(segment_dir, "init.mp4")
+            if os.path.exists(init_path):
+                os.remove(init_path)
             # Remove the directory if empty
             if os.path.isdir(segment_dir) and not os.listdir(segment_dir):
                 os.rmdir(segment_dir)

@@ -52,8 +52,10 @@ async def get_segment(room_id: str, filename: str):
         raise HTTPException(status_code=404, detail="Segment not found")
 
     # Determine media type
-    if filename.endswith(".ts"):
+    if filename.endswith(".ts") or filename.endswith(".m4s"):
         media_type = "video/mp2t"
+    elif filename.endswith(".mp4"):
+        media_type = "video/mp4"
     elif filename.endswith(".m3u8"):
         media_type = "application/vnd.apple.mpegurl"
     else:
