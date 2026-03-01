@@ -180,12 +180,19 @@ export const FacultyLiveFeedScreen: React.FC = () => {
       // possible.  ExoPlayer defaults are 20 s forward / 2.5 s start; iOS
       // AVFoundation waits to minimise stalling by default.
       p.bufferOptions = {
-        preferredForwardBufferDuration: 1,   // 1 s look-ahead (was 20 s)
-        minBufferForPlayback: 0.5,            // start after 0.5 s buffered (was 2.5 s)
+        preferredForwardBufferDuration: 0.5,  // iOS: look-ahead 0.5 s (was 1 s)
+        minBufferForPlayback: 0.2,            // start after 200 ms buffered (was 500 ms)
         waitsToMinimizeStalling: false,       // iOS: start immediately, tolerate micro-stalls
       };
     },
   );
+
+  // Tracks whether we've already jumped to the live edge for the current URL.
+  // Reset whenever the URL changes so we re-seek on reconnect.
+  const didSeekToLiveEdge = useRef(false);
+  useEffect(() => {
+    didSeekToLiveEdge.current = false;
+  }, [hlsUrl]);
 
   // Start playback as soon as the HLS URL is available.
   useEffect(() => {
@@ -194,16 +201,24 @@ export const FacultyLiveFeedScreen: React.FC = () => {
     }
   }, [hlsUrl, streamMode, player]);
 
-  // Auto-reload the player when it enters error state.
-  // The backend health check restarts FFmpeg within ~10 s; we retry every
-  // 3 s so playback resumes automatically without user intervention.
+  // On first readyToPlay: jump to the live edge.
+  // ExoPlayer defaults to sitting 3 × TARGETDURATION behind the live edge
+  // (3 s when TARGETDURATION=1 regardless of actual segment size).  Seeking
+  // to a very large position clips to the end of the seekable window, which
+  // is the live edge, overriding ExoPlayer's conservative default.
+  // On error: auto-reload after 3 s (FFmpeg health check restarts within 10 s).
   useEffect(() => {
     const subscription = player.addListener('statusChange', ({ status }) => {
-      if (
-        status === 'error' &&
-        hlsUrl &&
-        (streamMode === 'hls' || streamMode === 'legacy')
-      ) {
+      if (streamMode !== 'hls' && streamMode !== 'legacy') return;
+      if (!hlsUrl) return;
+
+      if (status === 'readyToPlay' && !didSeekToLiveEdge.current) {
+        didSeekToLiveEdge.current = true;
+        // Seek to a position beyond any realistic VOD duration; the player
+        // clips it to the live edge (end of the current HLS sliding window).
+        player.seek(999_999);
+      } else if (status === 'error') {
+        didSeekToLiveEdge.current = false;
         setTimeout(() => {
           player.replace(hlsUrl);
           player.play();

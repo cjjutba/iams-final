@@ -71,8 +71,8 @@ class Settings(BaseSettings):
 
     # HLS Streaming (hardware-decoded video via FFmpeg)
     USE_HLS_STREAMING: bool = True  # Feature flag: True=HLS+WS metadata, False=legacy JPEG WS
-    HLS_SEGMENT_DURATION: float = 0.5  # Seconds per HLS segment (lower = less latency)
-    HLS_PLAYLIST_SIZE: int = 2  # Number of segments in sliding-window playlist (2 = ~1 s window)
+    HLS_SEGMENT_DURATION: float = 0.2  # Seconds per HLS segment — 0.2 s forces keyframes at 0.2 s boundaries
+    HLS_PLAYLIST_SIZE: int = 3  # 3 × 0.2 s = 0.6 s window; ExoPlayer targets ~0.6 s behind live edge
     HLS_TRANSCODE: bool = True   # True = libx264 ultrafast with forced keyframes; False = copy
     HLS_SEGMENT_DIR: str = "data/hls"  # Directory for .m3u8 and .ts files
     HLS_FFMPEG_PATH: str = "bin/ffmpeg.exe"  # Path to FFmpeg binary (relative to backend/)

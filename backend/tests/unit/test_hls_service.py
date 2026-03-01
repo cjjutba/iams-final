@@ -113,6 +113,14 @@ def test_segment_filename_uses_m4s_extension(hls, tmp_path):
         f"fMP4 segments must use .m4s extension, got: {seg_pattern}"
 
 
+def test_ffmpeg_flush_packets_enabled(hls, tmp_path):
+    """flush_packets 1 must be present so segments reach disk immediately."""
+    cmd = _capture_cmd(hls, tmp_path)
+    assert "-flush_packets" in cmd, "-flush_packets flag must be present"
+    idx = cmd.index("-flush_packets")
+    assert cmd[idx + 1] == "1", "flush_packets must be set to 1"
+
+
 # ---------------------------------------------------------------------------
 # ensure_healthy tests
 # ---------------------------------------------------------------------------

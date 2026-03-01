@@ -179,6 +179,9 @@ class HLSService:
             "-i", rtsp_url,
             *video_args,
             "-an",             # No audio
+            # Flush every packet to disk immediately so segments are available
+            # the moment FFmpeg finishes writing them, not after an OS buffer flush.
+            "-flush_packets", "1",
             "-f", "hls",
             "-hls_time", str(settings.HLS_SEGMENT_DURATION),
             "-hls_list_size", str(settings.HLS_PLAYLIST_SIZE),
