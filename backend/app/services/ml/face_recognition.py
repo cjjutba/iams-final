@@ -206,6 +206,10 @@ class FaceNetModel:
             try:
                 if isinstance(img, bytes):
                     img = Image.open(io.BytesIO(img))
+                if settings.USE_FACE_ALIGNMENT:
+                    aligned = self.align_face(img)
+                    if aligned is not None:
+                        img = aligned
                 tensors.append(self.preprocess_image(img))  # [1, 3, 160, 160]
             except Exception as e:
                 logger.warning(f"Failed to preprocess image in batch: {e}")
