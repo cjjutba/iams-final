@@ -8,9 +8,14 @@ def test_recognition_batch_size_default():
 
 
 def test_recognition_fps_default():
-    """At least 10 FPS to sample frames for face recognition pipeline."""
+    """
+    Recognition FPS should be low (2–5) to avoid log spam and CPU pressure.
+
+    10 FPS generated a downscale debug log every 100ms which drowned out
+    meaningful events.  2 FPS is sufficient for continuous presence tracking.
+    """
     from app.config import settings
-    assert settings.RECOGNITION_FPS >= 10.0
+    assert 1.0 <= settings.RECOGNITION_FPS <= 5.0
 
 
 def test_hls_segment_duration_is_low_latency():

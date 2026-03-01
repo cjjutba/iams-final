@@ -19,7 +19,7 @@ from app.config import settings, logger
 engine = create_engine(
     settings.DATABASE_URL,
     pool_pre_ping=True,  # Verify connections before using
-    echo=settings.DEBUG,  # Log SQL statements in debug mode
+    echo=False,  # Never echo SQL — too noisy; use logger.debug in queries if needed
 )
 
 # Create session factory

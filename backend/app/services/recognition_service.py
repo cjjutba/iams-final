@@ -349,7 +349,6 @@ class RecognitionService:
             scale = cap / max_dim
             new_w, new_h = int(w * scale), int(h * scale)
             frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
-            logger.debug(f"Recognition: downscaled {w}x{h} → {new_w}x{new_h}")
 
         frame_h, frame_w = frame.shape[:2]
 

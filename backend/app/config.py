@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     WEBRTC_TURN_CREDENTIAL: str = ""                         # TURN credential
 
     # Recognition (decoupled from video, runs at lower FPS)
-    RECOGNITION_FPS: float = 10.0  # Frames/sec to sample for face recognition
+    RECOGNITION_FPS: float = 2.0  # Frames/sec to sample for face recognition
     RECOGNITION_MAX_BATCH_SIZE: int = 50  # Max faces per batch forward pass
     RECOGNITION_RTSP_URL: str = ""  # High-res RTSP URL for recognition (empty = use DEFAULT_RTSP_URL)
     RECOGNITION_MAX_DIM: int = 1280  # Cap frame dimension for detection (balances accuracy vs speed)
@@ -113,17 +113,21 @@ settings = Settings()
 
 class _HLSAccessFilter(logging.Filter):
     """
-    Drop uvicorn access-log records for HLS playlist polls.
+    Drop uvicorn access-log records for routine HLS media delivery.
 
-    The mobile player polls playlist.m3u8 several times per second during
-    live streaming.  Those lines add nothing actionable and drown out other
-    requests.  Segment fetches (.m4s / init.mp4) are kept so genuine
-    delivery issues remain visible.
+    The mobile player polls playlist.m3u8 several times per second and
+    fetches a new .m4s segment every ~0.5 s.  None of these lines carry
+    actionable information during normal operation and they drown out
+    everything else in the terminal.
     """
+
+    _HLS_NOISE = ("playlist.m3u8", ".m4s", "init.mp4")
 
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()
-        return "/hls/" not in msg or "playlist.m3u8" not in msg
+        if "/hls/" not in msg:
+            return True
+        return not any(token in msg for token in self._HLS_NOISE)
 
 
 def setup_logging() -> logging.Logger:
@@ -133,8 +137,13 @@ def setup_logging() -> logging.Logger:
     Returns:
         Configured logger instance
     """
-    # Suppress noisy HLS playlist polls from uvicorn's access log
+    # Suppress noisy HLS media delivery from uvicorn's access log
     logging.getLogger("uvicorn.access").addFilter(_HLSAccessFilter())
+
+    # SQLAlchemy echoes every BEGIN/COMMIT/query at INFO when echo=True.
+    # Silence it here regardless of the engine echo setting so it doesn't
+    # drown out application logs.
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
     logger = logging.getLogger("iams")
 
