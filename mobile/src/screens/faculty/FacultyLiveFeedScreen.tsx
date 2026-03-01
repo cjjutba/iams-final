@@ -35,7 +35,7 @@ import {
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
-import { useVideoPlayer, VideoView, useEvent } from 'expo-video';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import { RTCView } from 'react-native-webrtc';
 import { Wifi, WifiOff, Video, Users, RefreshCw } from 'lucide-react-native';
 import { theme, strings } from '../../constants';
@@ -189,18 +189,21 @@ export const FacultyLiveFeedScreen: React.FC = () => {
   // Auto-reload the player when it enters error state.
   // The backend health check restarts FFmpeg within ~10 s; we retry every
   // 3 s so playback resumes automatically without user intervention.
-  useEvent(player, 'statusChange', ({ status }) => {
-    if (
-      status === 'error' &&
-      hlsUrl &&
-      (streamMode === 'hls' || streamMode === 'legacy')
-    ) {
-      setTimeout(() => {
-        player.replace(hlsUrl);
-        player.play();
-      }, 3_000);
-    }
-  });
+  useEffect(() => {
+    const subscription = player.addListener('statusChange', ({ status }) => {
+      if (
+        status === 'error' &&
+        hlsUrl &&
+        (streamMode === 'hls' || streamMode === 'legacy')
+      ) {
+        setTimeout(() => {
+          player.replace(hlsUrl);
+          player.play();
+        }, 3_000);
+      }
+    });
+    return () => subscription.remove();
+  }, [player, hlsUrl, streamMode]);
 
   // Combined reconnect: resets both WS and WebRTC connections
   const handleReconnect = useCallback(() => {
