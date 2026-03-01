@@ -59,6 +59,7 @@ class RecognitionState:
     update_seq: int = 0
     frame_width: int = 0
     frame_height: int = 0
+    reconnect_backoff: float = 0.0    # seconds to sleep before next reconnect (exponential)
 
 
 class RecognitionService:
@@ -71,6 +72,8 @@ class RecognitionService:
 
     _active: Dict[str, RecognitionState] = {}
     _lock = threading.Lock()
+    _BACKOFF_BASE: float = 2.0
+    _BACKOFF_MAX: float = 30.0
 
     def __init__(self):
         self._face_detector = None
@@ -300,7 +303,7 @@ class RecognitionService:
             return False, None
 
     def _reconnect(self, state: RecognitionState) -> bool:
-        """Attempt to reconnect to the RTSP stream."""
+        """Attempt to reconnect using exponential backoff."""
         if state.capture is not None:
             try:
                 state.capture.release()
@@ -308,9 +311,25 @@ class RecognitionService:
                 pass
             state.capture = None
 
-        logger.warning(f"Recognition: reconnecting for room {state.room_id}")
-        time.sleep(2.0)
-        return self._open_capture(state)
+        # Determine delay for this attempt
+        delay = state.reconnect_backoff if state.reconnect_backoff > 0 else self._BACKOFF_BASE
+        delay = min(delay, self._BACKOFF_MAX)
+
+        logger.warning(
+            f"Recognition: reconnecting for room {state.room_id} "
+            f"(backoff={delay:.1f}s)"
+        )
+        time.sleep(delay)
+
+        success = self._open_capture(state)
+        if success:
+            state.reconnect_backoff = 0.0
+            logger.info(f"Recognition: reconnected for room {state.room_id}")
+        else:
+            # Double backoff for next attempt, capped at max
+            next_backoff = delay * 2.0 if state.reconnect_backoff > 0 else delay
+            state.reconnect_backoff = min(next_backoff, self._BACKOFF_MAX)
+        return success
 
     def _process_frame(self, frame: np.ndarray) -> tuple:
         """
