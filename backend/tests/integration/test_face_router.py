@@ -84,6 +84,7 @@ def _patch_ml_singletons(
     generate_embedding=None,
     decode_base64_image=None,
     faiss_search=None,
+    faiss_search_with_margin=None,
     faiss_add_return=0,
 ):
     """
@@ -92,6 +93,11 @@ def _patch_ml_singletons(
 
     Parameters let callers customise per-test behaviour without repeating
     boilerplate.
+
+    ``faiss_search`` controls the legacy ``.search()`` return value.
+    ``faiss_search_with_margin`` controls ``.search_with_margin()`` used by
+    the Edge API (POST /face/process).  When not supplied it defaults to a
+    no-match result ``{"user_id": None, "confidence": None, "is_ambiguous": False}``.
     """
     mock_fn = MagicMock()
     mock_fn.generate_embedding = MagicMock(
@@ -107,6 +113,10 @@ def _patch_ml_singletons(
     mock_faiss.index = MagicMock()  # Not None -> index "loaded"
     mock_faiss.add = MagicMock(return_value=faiss_add_return)
     mock_faiss.search = MagicMock(return_value=faiss_search or [])
+    mock_faiss.search_with_margin = MagicMock(
+        return_value=faiss_search_with_margin
+        or {"user_id": None, "confidence": None, "is_ambiguous": False}
+    )
     mock_faiss.save = MagicMock()
     mock_faiss.rebuild = MagicMock()
     mock_faiss._create_index = MagicMock()
@@ -365,7 +375,9 @@ class TestEdgeProcess:
         """One face that matches a user returns processed=1, matched=[user]."""
         user_id = str(uuid.uuid4())
         p_fn, p_faiss, _, _ = _patch_ml_singletons(
-            faiss_search=[(user_id, 0.88)]
+            faiss_search_with_margin={
+                "user_id": user_id, "confidence": 0.88, "is_ambiguous": False,
+            }
         )
         with p_fn, p_faiss:
             response = client.post(f"{PREFIX}/process", json=self._payload())
@@ -395,23 +407,23 @@ class TestEdgeProcess:
         uid1 = str(uuid.uuid4())
         uid2 = str(uuid.uuid4())
 
-        # We need the search to return different results per call.
+        # search_with_margin returns different results per call.
         call_count = {"n": 0}
         results_per_call = [
-            [(uid1, 0.90)],
-            [(uid2, 0.82)],
-            [],  # third face: no match
+            {"user_id": uid1, "confidence": 0.90, "is_ambiguous": False},
+            {"user_id": uid2, "confidence": 0.82, "is_ambiguous": False},
+            {"user_id": None, "confidence": None, "is_ambiguous": False},
         ]
 
-        def _search(embedding, k=1, threshold=None):
+        def _search_with_margin(embedding, k=1, threshold=None, margin=None):
             idx = call_count["n"]
             call_count["n"] += 1
             if idx < len(results_per_call):
                 return results_per_call[idx]
-            return []
+            return {"user_id": None, "confidence": None, "is_ambiguous": False}
 
         p_fn, p_faiss, _, mock_faiss = _patch_ml_singletons()
-        mock_faiss.search = MagicMock(side_effect=_search)
+        mock_faiss.search_with_margin = MagicMock(side_effect=_search_with_margin)
         with p_fn, p_faiss:
             response = client.post(
                 f"{PREFIX}/process", json=self._payload(faces=3)

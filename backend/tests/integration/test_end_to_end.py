@@ -387,19 +387,23 @@ class TestEdgeToEndSystemIntegration:
         with patch('app.routers.face.FaceService') as mock_face_service, \
              patch('app.routers.face.PresenceService') as mock_presence_service:
 
-            # Mock face recognition
+            # Mock face recognition (edge API uses facenet + faiss directly)
             face_instance = MagicMock()
             face_instance.facenet.decode_base64_image = MagicMock(return_value=MagicMock())
-
-            async def mock_recognize(img_bytes, threshold=None):
-                return str(test_student.id), 0.88
-
-            face_instance.recognize_face = AsyncMock(side_effect=mock_recognize)
+            mock_embedding = np.random.randn(512).astype(np.float32)
+            mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
+            face_instance.facenet.generate_embedding = MagicMock(return_value=mock_embedding)
+            face_instance.faiss.search_with_margin = MagicMock(return_value={
+                "user_id": str(test_student.id),
+                "confidence": 0.88,
+                "is_ambiguous": False,
+            })
+            face_instance.recognize_face = AsyncMock(return_value=(str(test_student.id), 0.88))
             mock_face_service.return_value = face_instance
 
-            # Mock presence logging
+            # Mock presence logging (edge API calls feed_detection)
             presence_instance = MagicMock()
-            presence_instance.log_detection = AsyncMock()
+            presence_instance.feed_detection = AsyncMock()
             mock_presence_service.return_value = presence_instance
 
             # Mock schedule repository
@@ -428,8 +432,8 @@ class TestEdgeToEndSystemIntegration:
         assert len(data["data"]["matched"]) == 1
         assert data["data"]["matched"][0]["user_id"] == str(test_student.id)
 
-        # Verify presence was logged
-        presence_instance.log_detection.assert_called_once()
+        # Verify presence was logged via feed_detection
+        presence_instance.feed_detection.assert_called_once()
 
 
 class TestSystemErrorRecovery:

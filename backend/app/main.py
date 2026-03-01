@@ -157,6 +157,37 @@ async def startup_event():
             max_instances=1  # Prevent overlapping runs
         )
 
+        # Periodic FAISS health check (every 30 minutes)
+        async def run_faiss_health_check():
+            """Compare FAISS vector count with DB active registrations."""
+            db = SessionLocal()
+            try:
+                from app.repositories.face_repository import FaceRepository
+                from app.services.ml.faiss_manager import faiss_manager as fm
+                repo = FaceRepository(db)
+                active_count = len(repo.get_active_embeddings())
+                faiss_count = fm.index.ntotal if fm.index else 0
+                if active_count != faiss_count:
+                    logger.warning(
+                        f"FAISS health check: mismatch detected — "
+                        f"FAISS has {faiss_count} vectors, DB has {active_count} active registrations"
+                    )
+                else:
+                    logger.debug(f"FAISS health check: in sync ({active_count} vectors)")
+            except Exception as e:
+                logger.error(f"FAISS health check failed: {e}")
+            finally:
+                db.close()
+
+        scheduler.add_job(
+            run_faiss_health_check,
+            'interval',
+            minutes=30,
+            id='faiss_health_check',
+            replace_existing=True,
+            max_instances=1
+        )
+
         # Auto-session scheduler: starts/ends sessions based on schedule times
         from app.services.session_scheduler import auto_manage_sessions
 

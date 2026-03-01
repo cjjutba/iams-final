@@ -92,14 +92,18 @@ RPi Camera → MediaPipe (detect) → Crop faces → Base64 encode → POST to b
 - Max size: 10MB (encoded)
 
 **Dimensions:**
-- Minimum: 10x10 pixels
+- Minimum: 160x160 pixels (required by FaceNet input)
 - Maximum: 4096x4096 pixels
-- Recommended: 112x112 pixels (MediaPipe face crop size)
+- Recommended: 160x160 pixels (matches backend FaceNet input size)
 
 **Quality:**
-- JPEG quality: 70-85%
+- JPEG quality: 85% (default, configurable via `JPEG_QUALITY`)
 - Clear face visible
 - Good lighting
+- Detection confidence >= 0.6
+- Minimum face size in frame: 80x80 pixels
+
+> **See also:** [ML Pipeline Specification](docs/main/ml-pipeline-spec.md) for the authoritative preprocessing chain and image requirements.
 
 ### Bounding Box (Optional)
 
@@ -191,7 +195,7 @@ Format: `[x, y, width, height]`
 |------|------|--------|-------------|
 | `INVALID_IMAGE_FORMAT` | 200 | No | Image format not supported (BMP, TIFF, etc.) |
 | `IMAGE_TOO_LARGE` | 200 | No | Image exceeds 10MB limit |
-| `IMAGE_TOO_SMALL` | 200 | No | Image smaller than 10x10 pixels |
+| `IMAGE_TOO_SMALL` | 200 | No | Image smaller than 160x160 pixels |
 | `INVALID_BASE64` | 200 | No | Base64 decoding failed |
 | `RECOGNITION_FAILED` | 200 | Yes | Face recognition service error |
 | `DATABASE_UNAVAILABLE` | 200 | Yes | Database connection lost |
@@ -325,9 +329,9 @@ def send_with_retry(payload, max_retries=3):
 ```python
 from PIL import Image
 
-# Resize to 112x112 (MediaPipe default crop size)
+# Resize to 160x160 (FaceNet input size)
 face_img = Image.fromarray(face_crop)
-face_img = face_img.resize((112, 112), Image.BILINEAR)
+face_img = face_img.resize((160, 160), Image.BILINEAR)
 
 # Compress JPEG
 img_bytes = io.BytesIO()
@@ -472,8 +476,8 @@ def encode_face_image(face_crop):
     # Convert to PIL Image
     img = Image.fromarray(face_crop)
 
-    # Resize to 112x112 (optimal size)
-    img = img.resize((112, 112), Image.BILINEAR)
+    # Resize to 160x160 (FaceNet input size)
+    img = img.resize((160, 160), Image.BILINEAR)
 
     # Compress to JPEG
     img_bytes = io.BytesIO()
@@ -688,7 +692,7 @@ except Exception as e:
 ```python
 # Resize and compress
 img = img.resize((112, 112), Image.BILINEAR)
-img.save(buffer, format='JPEG', quality=70)  # Lower quality
+img.save(buffer, format='JPEG', quality=85)
 ```
 
 #### 3. "Validation error: faces min_length 1"
@@ -719,7 +723,7 @@ for i in range(0, len(faces), 10):
 **Cause:** Large images or CPU overload
 
 **Solution:**
-- Resize images to 112x112
+- Resize images to 160x160
 - Reduce JPEG quality
 - Check backend CPU usage
 - Consider GPU acceleration

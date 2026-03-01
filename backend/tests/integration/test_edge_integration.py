@@ -21,7 +21,11 @@ class TestEdgeProcessEndpoint:
 
     @pytest.fixture()
     def mock_face_service(self):
-        """Mock FaceService for edge tests"""
+        """Mock FaceService for edge tests.
+
+        The edge API uses face_service.facenet.generate_embedding() and
+        face_service.faiss.search_with_margin() directly (not recognize_face).
+        """
         with patch('app.routers.face.FaceService') as mock:
             service_instance = MagicMock()
 
@@ -29,8 +33,22 @@ class TestEdgeProcessEndpoint:
             service_instance.facenet.decode_base64_image = MagicMock(
                 return_value=MagicMock()  # PIL Image mock
             )
+            mock_embedding = np.random.randn(512).astype(np.float32)
+            mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
+            service_instance.facenet.generate_embedding = MagicMock(
+                return_value=mock_embedding
+            )
 
-            # Mock recognize_face to return successful recognition
+            # Mock FAISS search_with_margin to return a confident match
+            service_instance.faiss.search_with_margin = MagicMock(
+                return_value={
+                    "user_id": "test-user-id-123",
+                    "confidence": 0.85,
+                    "is_ambiguous": False,
+                }
+            )
+
+            # Keep recognize_face for any code that still uses it
             async def mock_recognize(img_bytes, threshold=None):
                 return "test-user-id-123", 0.85
 
@@ -121,11 +139,19 @@ class TestEdgeProcessEndpoint:
                 return_value=MagicMock()
             )
 
-            # Mock recognize to return no match
-            async def mock_recognize(img_bytes, threshold=None):
-                return None, None
-
-            service_instance.recognize_face = AsyncMock(side_effect=mock_recognize)
+            # Mock embedding generation + no match via search_with_margin
+            mock_embedding = np.random.randn(512).astype(np.float32)
+            mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
+            service_instance.facenet.generate_embedding = MagicMock(
+                return_value=mock_embedding
+            )
+            service_instance.faiss.search_with_margin = MagicMock(
+                return_value={
+                    "user_id": None,
+                    "confidence": None,
+                    "is_ambiguous": False,
+                }
+            )
             mock_service.return_value = service_instance
 
             payload = {
@@ -153,18 +179,35 @@ class TestEdgeProcessEndpoint:
                 return_value=MagicMock()
             )
 
-            # Mock recognize to alternate between match and no match
+            # Mock generate_embedding
+            mock_embedding = np.random.randn(512).astype(np.float32)
+            mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
+            service_instance.facenet.generate_embedding = MagicMock(
+                return_value=mock_embedding
+            )
+
+            # Mock search_with_margin to alternate match/no match
             call_count = 0
 
-            async def mock_recognize(img_bytes, threshold=None):
+            def mock_search_with_margin(embedding, k=3, threshold=None, margin=None):
                 nonlocal call_count
                 call_count += 1
                 if call_count % 2 == 1:
-                    return f"user-{call_count}", 0.85
+                    return {
+                        "user_id": f"user-{call_count}",
+                        "confidence": 0.85,
+                        "is_ambiguous": False,
+                    }
                 else:
-                    return None, None
+                    return {
+                        "user_id": None,
+                        "confidence": None,
+                        "is_ambiguous": False,
+                    }
 
-            service_instance.recognize_face = AsyncMock(side_effect=mock_recognize)
+            service_instance.faiss.search_with_margin = MagicMock(
+                side_effect=mock_search_with_margin
+            )
             mock_service.return_value = service_instance
 
             payload = {
@@ -299,10 +342,18 @@ class TestEdgeDeviceConcurrency:
                 return_value=MagicMock()
             )
 
-            async def mock_recognize(img_bytes, threshold=None):
-                return "concurrent-user-123", 0.80
-
-            service_instance.recognize_face = AsyncMock(side_effect=mock_recognize)
+            mock_embedding = np.random.randn(512).astype(np.float32)
+            mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
+            service_instance.facenet.generate_embedding = MagicMock(
+                return_value=mock_embedding
+            )
+            service_instance.faiss.search_with_margin = MagicMock(
+                return_value={
+                    "user_id": "concurrent-user-123",
+                    "confidence": 0.80,
+                    "is_ambiguous": False,
+                }
+            )
             mock_service.return_value = service_instance
 
             with patch('app.routers.face.PresenceService'):
@@ -344,10 +395,18 @@ class TestEdgeQueueSimulation:
                 return_value=MagicMock()
             )
 
-            async def mock_recognize(img_bytes, threshold=None):
-                return "offline-user-456", 0.88
-
-            service_instance.recognize_face = AsyncMock(side_effect=mock_recognize)
+            mock_embedding = np.random.randn(512).astype(np.float32)
+            mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
+            service_instance.facenet.generate_embedding = MagicMock(
+                return_value=mock_embedding
+            )
+            service_instance.faiss.search_with_margin = MagicMock(
+                return_value={
+                    "user_id": "offline-user-456",
+                    "confidence": 0.88,
+                    "is_ambiguous": False,
+                }
+            )
             mock_service.return_value = service_instance
 
             with patch('app.routers.face.PresenceService'):
@@ -386,11 +445,17 @@ class TestEdgeErrorHandling:
                 return_value=MagicMock()
             )
 
-            # Mock recognize to raise exception
-            async def mock_recognize(img_bytes, threshold=None):
-                raise Exception("FAISS index error")
+            # Mock embedding generation to succeed
+            mock_embedding = np.random.randn(512).astype(np.float32)
+            mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
+            service_instance.facenet.generate_embedding = MagicMock(
+                return_value=mock_embedding
+            )
 
-            service_instance.recognize_face = AsyncMock(side_effect=mock_recognize)
+            # Mock search_with_margin to raise exception
+            service_instance.faiss.search_with_margin = MagicMock(
+                side_effect=Exception("FAISS index error")
+            )
             mock_service.return_value = service_instance
 
             payload = {
@@ -419,24 +484,32 @@ class TestEdgeErrorHandling:
         Face recognition succeeds but presence logging fails.
         Should still return successful recognition result.
         """
-        # Mock FaceService to return a successful match
+        # Mock FaceService with margin-aware search
         with patch('app.routers.face.FaceService') as mock_face_svc:
             face_instance = MagicMock()
             face_instance.facenet.decode_base64_image = MagicMock(
                 return_value=MagicMock()
             )
 
-            # Mock successful recognition
-            async def mock_recognize(img_bytes, threshold=None):
-                return (str(test_student.id), 0.85)
-
-            face_instance.recognize_face = AsyncMock(side_effect=mock_recognize)
+            # Mock embedding generation + margin-aware search
+            mock_embedding = np.random.randn(512).astype(np.float32)
+            mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
+            face_instance.facenet.generate_embedding = MagicMock(
+                return_value=mock_embedding
+            )
+            face_instance.faiss.search_with_margin = MagicMock(
+                return_value={
+                    "user_id": str(test_student.id),
+                    "confidence": 0.85,
+                    "is_ambiguous": False,
+                }
+            )
             mock_face_svc.return_value = face_instance
 
-            # Mock PresenceService to raise exception on logging
+            # Mock PresenceService to raise exception on feed_detection
             with patch('app.routers.face.PresenceService') as mock_presence:
                 presence_instance = MagicMock()
-                presence_instance.log_detection = AsyncMock(
+                presence_instance.feed_detection = AsyncMock(
                     side_effect=Exception("Database error")
                 )
                 mock_presence.return_value = presence_instance

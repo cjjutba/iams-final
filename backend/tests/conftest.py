@@ -18,6 +18,14 @@ from PIL import Image
 # imports, because app.config.Settings reads from env at import
 # time and app.database creates the SQLAlchemy engine eagerly.
 # ============================================================
+
+# PyTorch and FAISS both bundle libomp on macOS ARM64. Importing both
+# in the same process causes a duplicate-library SIGABRT or deadlock.
+# Setting KMP_DUPLICATE_LIB_OK prevents the abort, and OMP_NUM_THREADS=1
+# prevents the OpenMP thread-pool deadlock that occurs with two runtimes.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 os.environ.setdefault("SUPABASE_URL", "https://test-project.supabase.co")
 os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key-for-testing-only")
 os.environ.setdefault("SUPABASE_SERVICE_KEY", "test-service-key-for-testing-only")
@@ -378,8 +386,8 @@ def test_face_image_base64():
     import base64
     import io
 
-    # Create a simple 112x112 test image
-    img = Image.new('RGB', (112, 112), color='blue')
+    # Create a simple 160x160 test image (matches FaceNet input size)
+    img = Image.new('RGB', (160, 160), color='blue')
 
     # Convert to Base64
     img_bytes = io.BytesIO()
@@ -404,7 +412,7 @@ def mock_facenet():
         return embedding
 
     mock.generate_embedding = mock_generate_embedding
-    mock.decode_base64_image = MagicMock(return_value=Image.new('RGB', (112, 112)))
+    mock.decode_base64_image = MagicMock(return_value=Image.new('RGB', (160, 160)))
 
     return mock
 

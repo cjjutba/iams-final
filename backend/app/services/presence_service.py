@@ -187,9 +187,10 @@ class PresenceService:
     ):
         """Feed a detection into the tracking service without updating attendance.
         Attendance updates happen solely in run_scan_cycle()."""
-        if schedule_id not in self.active_sessions:
-            logger.debug(f"No active session for {schedule_id}, skipping detection feed")
-            return
+        async with self._lock:
+            if schedule_id not in self.active_sessions:
+                logger.debug(f"No active session for {schedule_id}, skipping detection feed")
+                return
 
         detection = Detection(
             bbox=bbox or [0, 0, 0, 0],
@@ -348,26 +349,37 @@ class PresenceService:
         Args:
             schedule_id: Schedule UUID
         """
-        if schedule_id not in self.active_sessions:
-            return
+        # Snapshot session state under lock
+        async with self._lock:
+            if schedule_id not in self.active_sessions:
+                return
 
-        session = self.active_sessions[schedule_id]
-        session.scan_count += 1
+            session = self.active_sessions[schedule_id]
+            session.scan_count += 1
+            scan_count = session.scan_count
+            student_snapshot = {
+                sid: {
+                    "attendance_id": s["attendance_id"],
+                    "early_leave_flagged": s["early_leave_flagged"],
+                }
+                for sid, s in session.student_states.items()
+            }
 
-        logger.debug(f"Processing scan #{session.scan_count} for schedule {schedule_id}")
+        logger.debug(f"Processing scan #{scan_count} for schedule {schedule_id}")
 
-        # Get currently identified users from tracking service
+        # Get currently identified users from tracking service (no lock needed)
         identified_users = self.tracking_service.get_identified_users(schedule_id)
         present_user_ids = set(identified_users.keys())
 
         logger.debug(
-            f"Scan #{session.scan_count}: {len(present_user_ids)} students detected "
+            f"Scan #{scan_count}: {len(present_user_ids)} students detected "
             f"(tracking stats: {self.tracking_service.get_session_stats(schedule_id)})"
         )
 
         # Check each enrolled student
-        for student_id, student_state in session.student_states.items():
-            attendance_id = student_state["attendance_id"]
+        early_leave_candidates = []
+        for student_id, snap in student_snapshot.items():
+            attendance_id = snap["attendance_id"]
 
             # Get attendance record
             attendance = self.attendance_repo.get_by_id(attendance_id)
@@ -379,23 +391,20 @@ class PresenceService:
                 continue
 
             # Skip if already flagged for early leave
-            if student_state["early_leave_flagged"]:
+            if snap["early_leave_flagged"]:
                 continue
 
             # Check if student is currently present (detected by tracker)
             is_present = student_id in present_user_ids
 
             if is_present:
-                # Student detected - reset miss counter
-                session.update_student(student_id, detected=True)
-
                 # Get recognition confidence from track
                 track = identified_users[student_id]
                 confidence = track.recognition_confidence
 
                 # Log presence
                 self.attendance_repo.log_presence(attendance_id, {
-                    "scan_number": session.scan_count,
+                    "scan_number": scan_count,
                     "scan_time": datetime.now(),
                     "detected": True,
                     "confidence": confidence
@@ -413,12 +422,9 @@ class PresenceService:
                 })
 
             else:
-                # Student not detected - increment miss counter
-                session.update_student(student_id, detected=False)
-
                 # Log as not detected
                 self.attendance_repo.log_presence(attendance_id, {
-                    "scan_number": session.scan_count,
+                    "scan_number": scan_count,
                     "scan_time": datetime.now(),
                     "detected": False,
                     "confidence": None
@@ -433,11 +439,19 @@ class PresenceService:
                     "presence_score": presence_score
                 })
 
-                # Check if should flag early leave
-                consecutive_misses = student_state["consecutive_misses"]
-                if consecutive_misses >= settings.EARLY_LEAVE_THRESHOLD:
-                    await self.flag_early_leave(attendance_id, student_id, consecutive_misses)
-                    student_state["early_leave_flagged"] = True
+            # Update session state under lock after DB ops
+            async with self._lock:
+                if schedule_id in self.active_sessions:
+                    self.active_sessions[schedule_id].update_student(student_id, detected=is_present)
+                    if not is_present:
+                        consecutive_misses = self.active_sessions[schedule_id].student_states[student_id]["consecutive_misses"]
+                        if consecutive_misses >= settings.EARLY_LEAVE_THRESHOLD:
+                            early_leave_candidates.append((attendance_id, student_id, consecutive_misses))
+                            self.active_sessions[schedule_id].student_states[student_id]["early_leave_flagged"] = True
+
+        # Handle early leave flagging outside per-student loop (WebSocket calls inside)
+        for attendance_id, student_id, consecutive_misses in early_leave_candidates:
+            await self.flag_early_leave(attendance_id, student_id, consecutive_misses)
 
     async def flag_early_leave(
         self,

@@ -236,7 +236,7 @@ async def process_faces(
     - **room_id**: Room UUID or identifier
     - **timestamp**: Scan timestamp (ISO format)
     - **faces**: Array of face data:
-      - **image**: Base64-encoded JPEG (112x112 or larger)
+      - **image**: Base64-encoded JPEG (160x160 or larger)
       - **bbox**: Bounding box [x, y, w, h] (optional, for tracking)
 
     **Response:**

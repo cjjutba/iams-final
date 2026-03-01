@@ -253,7 +253,8 @@ class FaceService:
         """
         Re-register user's face (update)
 
-        Deletes old face registration and registers new one.
+        Deletes old face registration, registers new one, and rebuilds
+        FAISS index to remove orphaned vectors from the old registration.
 
         Args:
             user_id: User UUID
@@ -273,6 +274,9 @@ class FaceService:
 
         # Register new face
         faiss_id, message = await self.register_face(user_id, images)
+
+        # Rebuild FAISS to remove orphaned vectors from old registration
+        await self.rebuild_faiss_index()
 
         return faiss_id, "Face re-registered successfully"
 
