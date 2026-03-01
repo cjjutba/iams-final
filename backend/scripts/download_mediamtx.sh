@@ -15,11 +15,11 @@ fi
 
 # Fetch latest release tag from GitHub API
 echo "Fetching latest mediamtx release..."
-VERSION=$(curl -s https://api.github.com/repos/bluenviron/mediamtx/releases/latest \
+VERSION=$(curl -fsSL https://api.github.com/repos/bluenviron/mediamtx/releases/latest \
   | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": "\(.*\)".*/\1/')
 
 if [[ -z "$VERSION" ]]; then
-  echo "ERROR: Could not determine latest mediamtx version" >&2
+  echo "ERROR: Could not determine latest mediamtx version (possible GitHub API rate limit)" >&2
   exit 1
 fi
 
@@ -47,11 +47,11 @@ URL="https://github.com/bluenviron/mediamtx/releases/download/${VERSION}/${FILEN
 echo "Downloading $URL ..."
 mkdir -p "$BIN_DIR"
 TMP=$(mktemp -d)
-curl -L -o "$TMP/$FILENAME" "$URL"
+trap 'rm -rf "$TMP"' EXIT
+curl -fL -o "$TMP/$FILENAME" "$URL"
 tar -xzf "$TMP/$FILENAME" -C "$TMP"
 mv "$TMP/mediamtx" "$BINARY"
 chmod +x "$BINARY"
-rm -rf "$TMP"
 
 echo "mediamtx installed at $BINARY"
 echo "Version: $($BINARY --version 2>&1 | head -1)"
