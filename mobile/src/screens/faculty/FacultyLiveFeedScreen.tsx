@@ -23,13 +23,14 @@
  * - Navigation to the list-based LiveAttendance screen
  */
 
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import {
   View,
   StyleSheet,
   FlatList,
   ActivityIndicator,
   LayoutChangeEvent,
+  Animated,
 } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
@@ -51,6 +52,49 @@ import type { DetectedStudent } from '../../hooks/useDetectionWebSocket';
 
 type LiveFeedRouteProp = RouteProp<FacultyStackParamList, 'LiveFeed'>;
 type LiveFeedNavigationProp = StackNavigationProp<FacultyStackParamList, 'LiveFeed'>;
+
+// ---------------------------------------------------------------------------
+// LivePulse — animated red dot + LIVE label
+// ---------------------------------------------------------------------------
+
+const LivePulse: React.FC = () => {
+  const scale = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(scale, { toValue: 1.5, duration: 600, useNativeDriver: true }),
+        Animated.timing(scale, { toValue: 1.0, duration: 600, useNativeDriver: true }),
+      ]),
+    );
+    anim.start();
+    return () => anim.stop();
+  }, []);
+
+  return (
+    <View style={livePulseStyles.container}>
+      <Animated.View style={[livePulseStyles.dot, { transform: [{ scale }] }]} />
+      <Text style={livePulseStyles.text}>LIVE</Text>
+    </View>
+  );
+};
+
+const livePulseStyles = StyleSheet.create({
+  container: { flexDirection: 'row', alignItems: 'center' },
+  dot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#F44336',
+    marginRight: 5,
+  },
+  text: {
+    color: '#F44336',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1,
+  },
+});
 
 // ---------------------------------------------------------------------------
 // Memoised sub-components
@@ -161,6 +205,12 @@ export const FacultyLiveFeedScreen: React.FC = () => {
   const currentlyDetectedCount = useMemo(
     () => studentsList.filter((s) => s.currentlyDetected).length,
     [studentsList],
+  );
+
+  const detectedCount = useMemo(() => detections.length, [detections]);
+  const unknownCount = useMemo(
+    () => detections.filter(d => !d.user_id).length,
+    [detections],
   );
 
   // --------------------------------------------------
@@ -293,11 +343,18 @@ export const FacultyLiveFeedScreen: React.FC = () => {
             </Text>
           </View>
 
-          <View style={styles.fpsContainer}>
-            <Video size={12} color={theme.colors.text.secondary} />
-            <Text variant="caption" weight="500" color={theme.colors.text.secondary} style={styles.fpsText}>
-              HLS Live
-            </Text>
+          <View style={styles.statusRight}>
+            {isConnected && <LivePulse />}
+            {detectedCount > 0 && (
+              <Text
+                variant="caption"
+                weight="600"
+                color={theme.colors.text.secondary}
+                style={styles.detectionCountText}
+              >
+                {detectedCount} detected{unknownCount > 0 ? ` · ${unknownCount} unknown` : ''}
+              </Text>
+            )}
           </View>
         </View>
 
@@ -388,11 +445,12 @@ const styles = StyleSheet.create({
   statusText: {
     marginLeft: theme.spacing[1],
   },
-  fpsContainer: {
+  statusRight: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: theme.spacing[2],
   },
-  fpsText: {
+  detectionCountText: {
     marginLeft: theme.spacing[1],
   },
 
