@@ -32,7 +32,7 @@ from app.services.presence_service import PresenceService
 from app.repositories.schedule_repository import ScheduleRepository
 from app.utils.dependencies import get_current_user, get_current_student
 from app.utils.exceptions import EdgeAPIError, ValidationError
-from app.config import logger
+from app.config import settings, logger
 
 
 router = APIRouter()
@@ -347,18 +347,31 @@ async def process_faces(
             image.save(img_bytes, format='JPEG')
             img_bytes = img_bytes.getvalue()
 
-            # Recognize face
+            # Recognize face using margin-aware search
             try:
-                user_id, confidence = await face_service.recognize_face(img_bytes)
+                embedding = face_service.facenet.generate_embedding(img_bytes)
+                match_result = face_service.faiss.search_with_margin(
+                    embedding,
+                    k=settings.RECOGNITION_TOP_K,
+                    threshold=settings.RECOGNITION_THRESHOLD,
+                    margin=settings.RECOGNITION_MARGIN,
+                )
                 processed_count += 1
 
-                if user_id:
+                if match_result["user_id"]:
                     # Face matched
                     matched_users.append(MatchedUser(
-                        user_id=user_id,
-                        confidence=confidence
+                        user_id=match_result["user_id"],
+                        confidence=match_result["confidence"],
                     ))
-                    logger.debug(f"Face {i+1} matched: user {user_id}, confidence {confidence:.3f}")
+                    if match_result["is_ambiguous"]:
+                        logger.warning(
+                            f"Ambiguous match for face {i+1} in room {request.room_id}"
+                        )
+                    logger.debug(
+                        f"Face {i+1} matched: user {match_result['user_id']}, "
+                        f"confidence {match_result['confidence']:.3f}"
+                    )
                 else:
                     # Face not matched
                     unmatched_count += 1
