@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     WEBRTC_TURN_USERNAME: str = ""                           # TURN username (empty = no TURN)
     WEBRTC_TURN_CREDENTIAL: str = ""                         # TURN credential
 
+    # mediamtx subprocess settings
+    MEDIAMTX_BIN_PATH: str = "bin/mediamtx"       # Path to mediamtx binary (relative to backend/)
+    MEDIAMTX_CONFIG_PATH: str = "mediamtx.yml"    # Path to mediamtx config (relative to backend/)
+
     # Recognition (decoupled from video, runs at lower FPS)
     RECOGNITION_FPS: float = 2.0  # Frames/sec to sample for face recognition
     RECOGNITION_MAX_BATCH_SIZE: int = 50  # Max faces per batch forward pass

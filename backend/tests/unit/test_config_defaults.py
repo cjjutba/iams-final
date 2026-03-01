@@ -28,3 +28,13 @@ def test_hls_playlist_window():
     """At least 3 segments in playlist for smooth playback."""
     from app.config import settings
     assert settings.HLS_PLAYLIST_SIZE >= 3
+
+
+def test_mediamtx_bin_path_default():
+    from app.config import settings
+    assert "mediamtx" in settings.MEDIAMTX_BIN_PATH.lower()
+
+
+def test_mediamtx_config_path_default():
+    from app.config import settings
+    assert settings.MEDIAMTX_CONFIG_PATH.endswith(".yml")
