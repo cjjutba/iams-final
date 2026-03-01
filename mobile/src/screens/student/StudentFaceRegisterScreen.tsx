@@ -9,7 +9,7 @@ import React, { useState, useCallback } from 'react';
 import { View, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
-import { useCameraPermissions } from 'expo-camera';
+import { Camera as VisionCamera } from 'react-native-vision-camera';
 import { Camera } from 'lucide-react-native';
 import { faceService } from '../../services';
 import { theme, strings } from '../../constants';
@@ -26,8 +26,19 @@ export const StudentFaceRegisterScreen: React.FC = () => {
   const route = useRoute<FaceRegisterRouteProp>();
   const mode = route.params?.mode || 'reregister';
 
-  const [permission, requestPermission] = useCameraPermissions();
+  const [permissionGranted, setPermissionGranted] = useState<boolean | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Check vision-camera permission on mount
+  React.useEffect(() => {
+    const status = VisionCamera.getCameraPermissionStatus();
+    setPermissionGranted(status === 'granted');
+  }, []);
+
+  const handleRequestPermission = useCallback(async () => {
+    const status = await VisionCamera.requestCameraPermission();
+    setPermissionGranted(status === 'granted');
+  }, []);
 
   // ── Handle scan complete ───────────────────────────────────
 
@@ -60,7 +71,7 @@ export const StudentFaceRegisterScreen: React.FC = () => {
 
   // ── Permission loading ─────────────────────────────────────
 
-  if (!permission) {
+  if (permissionGranted === null) {
     return (
       <ScreenLayout safeArea>
         <Header showBack title={strings.student.reregisterFace} />
@@ -81,7 +92,7 @@ export const StudentFaceRegisterScreen: React.FC = () => {
 
   // ── Permission denied ──────────────────────────────────────
 
-  if (!permission.granted) {
+  if (!permissionGranted) {
     return (
       <ScreenLayout safeArea>
         <Header showBack title={strings.student.reregisterFace} />
@@ -98,7 +109,7 @@ export const StudentFaceRegisterScreen: React.FC = () => {
           >
             We need access to your camera to capture face photos for attendance recognition
           </Text>
-          <Button variant="primary" onPress={requestPermission}>
+          <Button variant="primary" onPress={handleRequestPermission}>
             Grant Camera Permission
           </Button>
         </View>

@@ -108,13 +108,13 @@ export const useWebSocket = ({
     });
     unsubscribers.push(unsubSessionEnd);
 
-    // Connect to WebSocket server
-    websocketService.connect(user.id);
+    // Acquire a ref-counted connection (only the last release disconnects)
+    websocketService.acquire(user.id);
 
     // Cleanup on unmount or when dependencies change
     return () => {
       unsubscribers.forEach((unsub) => unsub());
-      websocketService.disconnect();
+      websocketService.release();
     };
   }, [isAuthenticated, user?.id, autoConnect]);
 

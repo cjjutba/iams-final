@@ -1,11 +1,12 @@
 /**
- * Storage Utilities - SecureStore Wrapper
+ * Storage Utilities
  *
- * Secure storage for sensitive data (tokens, user info).
- * Uses Expo SecureStore for encrypted storage.
+ * Uses AsyncStorage for large values (tokens, user profile) to avoid
+ * SecureStore's 2048-byte limit. SecureStore is kept for small, sensitive items.
  */
 
 import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { User } from '../types';
 
 // Storage keys
@@ -21,10 +22,10 @@ const STORAGE_KEYS = {
  * Storage object with async methods
  */
 export const storage = {
-  // Access token
+  // Access token (AsyncStorage — Supabase JWTs can exceed SecureStore's 2048-byte limit)
   async getAccessToken(): Promise<string | null> {
     try {
-      return await SecureStore.getItemAsync(STORAGE_KEYS.ACCESS_TOKEN);
+      return await AsyncStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
     } catch (error) {
       console.error('Failed to get access token:', error);
       return null;
@@ -33,7 +34,7 @@ export const storage = {
 
   async setAccessToken(token: string): Promise<boolean> {
     try {
-      await SecureStore.setItemAsync(STORAGE_KEYS.ACCESS_TOKEN, token);
+      await AsyncStorage.setItem(STORAGE_KEYS.ACCESS_TOKEN, token);
       return true;
     } catch (error) {
       console.error('Failed to set access token:', error);
@@ -41,10 +42,10 @@ export const storage = {
     }
   },
 
-  // Refresh token
+  // Refresh token (AsyncStorage — same reason as access token)
   async getRefreshToken(): Promise<string | null> {
     try {
-      return await SecureStore.getItemAsync(STORAGE_KEYS.REFRESH_TOKEN);
+      return await AsyncStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
     } catch (error) {
       console.error('Failed to get refresh token:', error);
       return null;
@@ -53,7 +54,7 @@ export const storage = {
 
   async setRefreshToken(token: string): Promise<boolean> {
     try {
-      await SecureStore.setItemAsync(STORAGE_KEYS.REFRESH_TOKEN, token);
+      await AsyncStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, token);
       return true;
     } catch (error) {
       console.error('Failed to set refresh token:', error);
@@ -61,10 +62,10 @@ export const storage = {
     }
   },
 
-  // User object
+  // User object (AsyncStorage — not sensitive, just display data)
   async getUser(): Promise<User | null> {
     try {
-      const userJson = await SecureStore.getItemAsync(STORAGE_KEYS.USER);
+      const userJson = await AsyncStorage.getItem(STORAGE_KEYS.USER);
       return userJson ? JSON.parse(userJson) : null;
     } catch (error) {
       console.error('Failed to get user:', error);
@@ -74,7 +75,7 @@ export const storage = {
 
   async setUser(user: User): Promise<boolean> {
     try {
-      await SecureStore.setItemAsync(STORAGE_KEYS.USER, JSON.stringify(user));
+      await AsyncStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
       return true;
     } catch (error) {
       console.error('Failed to set user:', error);
@@ -127,9 +128,9 @@ export const storage = {
   async clearAuth(): Promise<boolean> {
     try {
       await Promise.all([
-        SecureStore.deleteItemAsync(STORAGE_KEYS.ACCESS_TOKEN),
-        SecureStore.deleteItemAsync(STORAGE_KEYS.REFRESH_TOKEN),
-        SecureStore.deleteItemAsync(STORAGE_KEYS.USER),
+        AsyncStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN),
+        AsyncStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN),
+        AsyncStorage.removeItem(STORAGE_KEYS.USER),
       ]);
       return true;
     } catch (error) {
@@ -142,9 +143,9 @@ export const storage = {
   async clearAll(): Promise<boolean> {
     try {
       await Promise.all([
-        SecureStore.deleteItemAsync(STORAGE_KEYS.ACCESS_TOKEN),
-        SecureStore.deleteItemAsync(STORAGE_KEYS.REFRESH_TOKEN),
-        SecureStore.deleteItemAsync(STORAGE_KEYS.USER),
+        AsyncStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN),
+        AsyncStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN),
+        AsyncStorage.removeItem(STORAGE_KEYS.USER),
         SecureStore.deleteItemAsync(STORAGE_KEYS.ONBOARDING_COMPLETE),
       ]);
       return true;

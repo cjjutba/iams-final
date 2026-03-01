@@ -25,6 +25,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Camera,
   useCameraDevice,
+  useCameraPermission,
   useFrameProcessor,
 } from 'react-native-vision-camera';
 import { Worklets } from 'react-native-worklets-core';
@@ -121,6 +122,7 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
 }) => {
   const insets = useSafeAreaInsets();
   const device = useCameraDevice('front');
+  const { hasPermission, requestPermission } = useCameraPermission();
   const cameraRef = useRef<any>(null);
 
   const { detectFaces, stopListeners } = useFaceDetector(FACE_DETECTION_OPTIONS);
@@ -331,6 +333,27 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
   const isError = phase === 'error';
   const isScanning = phase === 'scanning';
   const isReview = phase === 'review';
+
+  if (!hasPermission) {
+    return (
+      <View style={s.root}>
+        <StatusBar barStyle="light-content" />
+        <View style={s.noCameraContainer}>
+          <Text variant="body" color="#FFFFFF" align="center">
+            Camera permission is required
+          </Text>
+          <TouchableOpacity
+            onPress={requestPermission}
+            style={s.retryButton}
+          >
+            <Text variant="body" weight="600" color="#FFFFFF" align="center">
+              Grant Permission
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
 
   if (!device) {
     return (

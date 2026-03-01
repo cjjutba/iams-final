@@ -17,7 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import type { RouteProp } from '@react-navigation/native';
-import { useCameraPermissions } from 'expo-camera';
+import { Camera } from 'react-native-vision-camera';
 import { theme } from '../../constants';
 import type { AuthStackParamList } from '../../types';
 import { Text, Button } from '../../components/ui';
@@ -61,19 +61,17 @@ export const RegisterStep3Screen: React.FC = () => {
   const insets = useSafeAreaInsets();
   const { studentInfo, accountInfo } = route.params;
 
-  const [permission, requestPermission] = useCameraPermissions();
   const [phase, setPhase] = useState<Phase>('intro');
 
   // ── Handlers ──────────────────────────────────────────────
 
   const handleStart = useCallback(async () => {
-    let granted = permission?.granted;
-    if (!granted) {
-      const res = await requestPermission();
-      granted = res.granted;
+    let status = Camera.getCameraPermissionStatus();
+    if (status !== 'granted') {
+      status = await Camera.requestCameraPermission();
     }
-    if (granted) setPhase('scanning');
-  }, [permission]);
+    if (status === 'granted') setPhase('scanning');
+  }, []);
 
   const handleSkip = useCallback(() => {
     navigation.navigate('RegisterReview', { studentInfo, accountInfo, faceImages: [] });

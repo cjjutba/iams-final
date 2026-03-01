@@ -73,8 +73,11 @@ class HLSService:
             )
             return True
 
-        # New stream
+        # New stream — purge any stale segments from previous sessions
         segment_dir = self._ensure_segment_dir(room_id)
+        self._cleanup_segments(segment_dir)
+        # Re-create directory (cleanup removes it when empty)
+        os.makedirs(segment_dir, exist_ok=True)
         playlist_path = os.path.join(segment_dir, "playlist.m3u8")
         segment_pattern = os.path.join(segment_dir, "seg_%05d.ts")
 
@@ -83,7 +86,11 @@ class HLSService:
 
         cmd = [
             ffmpeg_path,
-            "-fflags", "+genpts",
+            # Low-latency input flags — minimize RTSP buffering
+            "-fflags", "nobuffer+genpts",
+            "-flags", "low_delay",
+            "-probesize", "512000",       # 500KB — enough to detect codec params
+            "-analyzeduration", "500000",  # 500ms — fast probe but not zero
             "-rtsp_transport", "tcp",
             "-i", rtsp_url,
             "-c:v", "copy",  # Remux without transcoding; output FPS matches source
@@ -91,7 +98,7 @@ class HLSService:
             "-f", "hls",
             "-hls_time", str(settings.HLS_SEGMENT_DURATION),
             "-hls_list_size", str(settings.HLS_PLAYLIST_SIZE),
-            "-hls_flags", "delete_segments+append_list",
+            "-hls_flags", "delete_segments+append_list+split_by_time+omit_endlist",
             "-hls_segment_filename", segment_pattern,
             playlist_path,
         ]

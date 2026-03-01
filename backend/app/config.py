@@ -71,8 +71,8 @@ class Settings(BaseSettings):
 
     # HLS Streaming (hardware-decoded video via FFmpeg)
     USE_HLS_STREAMING: bool = True  # Feature flag: True=HLS+WS metadata, False=legacy JPEG WS
-    HLS_SEGMENT_DURATION: int = 2  # Seconds per .ts segment
-    HLS_PLAYLIST_SIZE: int = 3  # Number of segments in sliding-window playlist
+    HLS_SEGMENT_DURATION: int = 1  # Seconds per .ts segment (lower = less latency)
+    HLS_PLAYLIST_SIZE: int = 2  # Number of segments in sliding-window playlist
     HLS_SEGMENT_DIR: str = "data/hls"  # Directory for .m3u8 and .ts files
     HLS_FFMPEG_PATH: str = "bin/ffmpeg.exe"  # Path to FFmpeg binary (relative to backend/)
 

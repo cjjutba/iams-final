@@ -93,14 +93,16 @@ def _sync_supabase_auth_user(email: str, password: str, metadata: dict) -> str |
 # Schedule definitions: (subject_code, subject_name, year_level, days, start, end)
 # ---------------------------------------------------------------------------
 SCHEDULE_DEFS = [
-    # Year 4: CPE 301 Mon-Fri (full-day for demo — Pi camera runs all day)
-    ("CPE 301", "Microprocessors and Microcontrollers", 4, [0, 1, 2, 3, 4], time(7, 0), time(22, 0)),
-    # Year 3: CPE 201 Mon, Wed, Fri
-    ("CPE 201", "Digital Logic Design", 3, [0, 2, 4], time(8, 0), time(10, 0)),
-    # Year 2: CPE 101 Tue, Thu
-    ("CPE 101", "Introduction to Computing", 2, [1, 3], time(9, 0), time(11, 0)),
-    # Year 1: GE 101 Mon, Wed, Fri
-    ("GE 101", "Mathematics in the Modern World", 1, [0, 2, 4], time(13, 0), time(15, 0)),
+    # Year 4: CPE 401 — 24/7 lab for testing (always an active class)
+    ("CPE 401", "Capstone Project Laboratory", 4, [0, 1, 2, 3, 4, 5, 6], time(0, 0), time(23, 59)),
+    # Year 4: CPE 301 — every day 07:00-22:00 (main demo subject)
+    ("CPE 301", "Microprocessors and Microcontrollers", 4, [0, 1, 2, 3, 4, 5, 6], time(7, 0), time(22, 0)),
+    # Year 3: CPE 201 Mon-Fri + Sat
+    ("CPE 201", "Digital Logic Design", 3, [0, 1, 2, 3, 4, 5], time(8, 0), time(10, 0)),
+    # Year 2: CPE 101 Mon-Fri + Sat
+    ("CPE 101", "Introduction to Computing", 2, [0, 1, 2, 3, 4, 5], time(9, 0), time(11, 0)),
+    # Year 1: GE 101 Mon-Fri + Sat
+    ("GE 101", "Mathematics in the Modern World", 1, [0, 1, 2, 3, 4, 5], time(13, 0), time(15, 0)),
 ]
 
 # Room definitions: (name, building, capacity, camera_endpoint)
@@ -113,6 +115,7 @@ ROOM_DEFS = [
 
 # Map subject to room by index: CPE 301 → Room 301, CPE 201 → Room 202, CPE 101 → Room 103, GE 101 → Room 103
 SUBJECT_ROOM_MAP = {
+    "CPE 401": 0,  # Room 301
     "CPE 301": 0,  # Room 301
     "CPE 201": 1,  # Room 202
     "CPE 101": 2,  # Room 103
@@ -127,7 +130,7 @@ def seed():
     Creates the following test data in a single transaction:
       1. Faculty user (faculty@gmail.com / password123)
       2. Rooms (Room 301, Room 202, Room 103)
-      3. Schedules (4 subjects across all year levels, Mon-Fri patterns)
+      3. Schedules (5 subjects across all year levels, including weekends)
 
     All schedules are tagged with target_course="BSCPE" and appropriate
     target_year_level for auto-enrollment.
@@ -258,10 +261,11 @@ def seed():
         for r in rooms:
             print(f"  {r.name} ({r.building}) — ID: {r.id}")
         print(f"\nSchedules: {total_schedules} total")
-        print(f"  CPE 301 (Year 4): Mon-Fri 07:00-22:00 in Room 301")
-        print(f"  CPE 201 (Year 3): Mon/Wed/Fri 08:00-10:00 in Room 202")
-        print(f"  CPE 101 (Year 2): Tue/Thu 09:00-11:00 in Room 103")
-        print(f"  GE 101  (Year 1): Mon/Wed/Fri 13:00-15:00 in Room 103")
+        print(f"  CPE 401 (Year 4): Every day 00:00-23:59 in Room 301 (24/7 test)")
+        print(f"  CPE 301 (Year 4): Every day 07:00-22:00 in Room 301")
+        print(f"  CPE 201 (Year 3): Mon-Sat 08:00-10:00 in Room 202")
+        print(f"  CPE 101 (Year 2): Mon-Sat 09:00-11:00 in Room 103")
+        print(f"  GE 101  (Year 1): Mon-Sat 13:00-15:00 in Room 103")
         print(f"\nStudents: Use mobile app to self-register with Student ID from student_records")
         print(f"  Upon registration, students are auto-enrolled in matching schedules")
 

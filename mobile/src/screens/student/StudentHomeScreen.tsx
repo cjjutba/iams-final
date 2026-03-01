@@ -17,8 +17,8 @@ import { RefreshCw } from 'lucide-react-native';
 import { useAuth, useSchedule } from '../../hooks';
 import { useToast } from '../../hooks/useToast';
 import { theme, strings } from '../../constants';
-import { formatDate, formatTime, formatTimeRange } from '../../utils';
-import type { StudentStackParamList, ScheduleWithAttendance } from '../../types';
+import { formatDate, formatTime, formatTimeRange, getDayName } from '../../utils';
+import type { StudentStackParamList, Schedule, ScheduleWithAttendance } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
 import { Text, Card, Badge, Button } from '../../components/ui';
 
@@ -33,6 +33,8 @@ export const StudentHomeScreen: React.FC = () => {
     error,
     fetchMySchedules,
     getCurrentClass,
+    getNextDayWithClasses,
+    totalSchedules,
     clearError,
   } = useSchedule();
 
@@ -164,22 +166,68 @@ export const StudentHomeScreen: React.FC = () => {
 
   // ---------- empty state ----------
 
+  const nextDay = getNextDayWithClasses();
+
   const renderEmpty = () => {
     if (isLoading) return null;
 
     return (
       <View style={styles.emptyContainer}>
         <Text variant="body" color={theme.colors.text.secondary} align="center">
-          {strings.empty.noClasses}
-        </Text>
-        <Text
-          variant="bodySmall"
-          color={theme.colors.text.tertiary}
-          align="center"
-          style={styles.emptySubtext}
-        >
           {strings.schedule.noClassesToday}
         </Text>
+
+        {/* Show next day with classes */}
+        {nextDay && (
+          <View style={styles.nextDaySection}>
+            <Text
+              variant="bodySmall"
+              color={theme.colors.text.tertiary}
+              align="center"
+              style={styles.emptySubtext}
+            >
+              Next classes on {getDayName(nextDay.backendDay)}
+            </Text>
+
+            {nextDay.schedules
+              .sort((a, b) => a.start_time.localeCompare(b.start_time))
+              .slice(0, 3)
+              .map((s) => (
+                <View key={s.id} style={styles.nextDayCard}>
+                  <Text variant="bodySmall" weight="600" numberOfLines={1}>
+                    {s.subject_name}
+                  </Text>
+                  <Text variant="caption" color={theme.colors.text.secondary}>
+                    {formatTime(s.start_time)} - {formatTime(s.end_time)}
+                    {s.room_name ? ` \u2022 ${s.room_name}` : ''}
+                  </Text>
+                </View>
+              ))}
+
+            {nextDay.schedules.length > 3 && (
+              <Text
+                variant="caption"
+                color={theme.colors.text.tertiary}
+                align="center"
+                style={styles.emptySubtext}
+              >
+                +{nextDay.schedules.length - 3} more
+              </Text>
+            )}
+          </View>
+        )}
+
+        {/* No schedules at all */}
+        {!nextDay && totalSchedules === 0 && (
+          <Text
+            variant="bodySmall"
+            color={theme.colors.text.tertiary}
+            align="center"
+            style={styles.emptySubtext}
+          >
+            {strings.empty.noClasses}
+          </Text>
+        )}
       </View>
     );
   };
@@ -300,10 +348,22 @@ const styles = StyleSheet.create({
     marginLeft: theme.spacing[2],
   },
   emptyContainer: {
-    paddingVertical: theme.spacing[12],
+    paddingVertical: theme.spacing[8],
   },
   emptySubtext: {
     marginTop: theme.spacing[2],
+  },
+  nextDaySection: {
+    marginTop: theme.spacing[4],
+    alignItems: 'center',
+  },
+  nextDayCard: {
+    backgroundColor: theme.colors.secondary,
+    paddingVertical: theme.spacing[3],
+    paddingHorizontal: theme.spacing[4],
+    borderRadius: theme.borderRadius.md,
+    marginTop: theme.spacing[2],
+    width: '100%',
   },
   errorContainer: {
     flex: 1,

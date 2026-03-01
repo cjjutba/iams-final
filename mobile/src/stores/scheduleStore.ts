@@ -9,6 +9,21 @@ import { create } from 'zustand';
 import { api, getErrorMessage } from '../utils';
 import type { Schedule, ScheduleWithAttendance } from '../types';
 
+/**
+ * Normalize a backend schedule response into the mobile Schedule shape.
+ * The backend returns nested `faculty` and `room` objects; the mobile UI
+ * expects flat `faculty_name` and `room_name` strings for display.
+ */
+const normalizeSchedule = (raw: any): Schedule => ({
+  ...raw,
+  faculty_name:
+    raw.faculty_name ??
+    (raw.faculty
+      ? `${raw.faculty.first_name} ${raw.faculty.last_name}`
+      : undefined),
+  room_name: raw.room_name ?? raw.room?.name,
+});
+
 interface ScheduleState {
   // State
   schedules: Schedule[];
@@ -34,12 +49,15 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const response = await api.get<Schedule[]>('/schedules/me');
+      const response = await api.get<any[]>('/schedules/me');
+      const raw = response.data ?? [];
+      const schedules = raw.map(normalizeSchedule);
 
-      set({
-        schedules: response.data ?? [],
-        isLoading: false,
-      });
+      if (__DEV__) {
+        console.log(`[scheduleStore] fetched ${schedules.length} schedule(s)`);
+      }
+
+      set({ schedules, isLoading: false });
     } catch (error) {
       console.error('Failed to fetch schedules:', error);
       set({

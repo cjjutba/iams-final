@@ -116,12 +116,48 @@ def verify_token(token: str) -> Dict:
 
 # ===== Supabase Auth Token Verification =====
 
+# Cached JWKS keys from Supabase (fetched once, refreshed on kid miss)
+_jwks_cache: Dict = {}
+_jwks_cache_time: float = 0
+
+
+def _fetch_supabase_jwks() -> Dict:
+    """Fetch and cache the Supabase JWKS public keys."""
+    import time
+    global _jwks_cache, _jwks_cache_time
+
+    now = time.time()
+    # Return cached keys if fresh (cache for 1 hour)
+    if _jwks_cache and (now - _jwks_cache_time) < 3600:
+        return _jwks_cache
+
+    try:
+        import httpx
+        resp = httpx.get(
+            f"{settings.SUPABASE_URL}/auth/v1/.well-known/jwks.json",
+            headers={"apikey": settings.SUPABASE_ANON_KEY},
+            timeout=10.0,
+        )
+        if resp.status_code == 200:
+            jwks = resp.json()
+            # Index by kid for quick lookup
+            _jwks_cache = {k["kid"]: k for k in jwks.get("keys", [])}
+            _jwks_cache_time = now
+            logger.debug(f"Fetched JWKS: {len(_jwks_cache)} key(s)")
+            return _jwks_cache
+    except Exception as e:
+        logger.warning(f"Failed to fetch JWKS: {e}")
+
+    return _jwks_cache  # Return stale cache on failure
+
+
 def verify_supabase_token(token: str) -> Dict:
     """
     Verify a Supabase Auth JWT token.
 
-    When SUPABASE_JWT_SECRET is configured, the token signature is verified
-    using HS256. Otherwise falls back to unverified decode for development.
+    Supports both:
+    - ES256 (asymmetric, JWKS) — current Supabase default
+    - HS256 (symmetric, JWT secret) — legacy Supabase projects
 
     Args:
         token: Supabase JWT token from Authorization header
@@ -133,32 +169,53 @@ def verify_supabase_token(token: str) -> Dict:
         AuthenticationError: If token is invalid
     """
     try:
-        jwt_secret = settings.SUPABASE_JWT_SECRET
+        # Peek at the token header to determine algorithm
+        header = jwt.get_unverified_header(token)
+        alg = header.get("alg", "HS256")
+        kid = header.get("kid")
 
-        if jwt_secret:
-            # Production: verify signature with the Supabase JWT secret
+        if alg == "ES256" and kid:
+            # Asymmetric (JWKS) — fetch public key from Supabase
+            jwks = _fetch_supabase_jwks()
+            jwk = jwks.get(kid)
+            if not jwk:
+                # Key not in cache — force refresh and retry
+                global _jwks_cache_time
+                _jwks_cache_time = 0
+                jwks = _fetch_supabase_jwks()
+                jwk = jwks.get(kid)
+            if not jwk:
+                raise AuthenticationError(f"Unknown signing key: {kid}")
+
             payload = jwt.decode(
                 token,
-                jwt_secret,
-                algorithms=["HS256"],
+                jwk,
+                algorithms=["ES256"],
                 audience="authenticated",
                 options={"verify_aud": True},
             )
+        elif alg in ("HS256", "HS384", "HS512"):
+            # Symmetric (HMAC) — use JWT secret
+            jwt_secret = settings.SUPABASE_JWT_SECRET
+            if not jwt_secret:
+                logger.warning("SUPABASE_JWT_SECRET not set — skipping signature verification")
+                payload = jwt.decode(
+                    token,
+                    settings.SUPABASE_ANON_KEY,
+                    algorithms=[alg],
+                    audience="authenticated",
+                    options={"verify_signature": False, "verify_aud": True},
+                )
+            else:
+                payload = jwt.decode(
+                    token,
+                    jwt_secret,
+                    algorithms=[alg],
+                    audience="authenticated",
+                    options={"verify_aud": True},
+                )
         else:
-            # Development fallback: decode without signature verification
-            logger.warning("SUPABASE_JWT_SECRET not set — skipping signature verification")
-            payload = jwt.decode(
-                token,
-                settings.SUPABASE_ANON_KEY,
-                algorithms=["HS256"],
-                audience="authenticated",
-                options={"verify_signature": False, "verify_aud": True},
-            )
-
-        # Validate token hasn't expired (belt-and-suspenders; jwt.decode checks too)
-        exp = payload.get("exp")
-        if exp and datetime.utcnow().timestamp() > exp:
-            raise AuthenticationError("Token has expired")
+            raise AuthenticationError(f"Unsupported JWT algorithm: {alg}")
 
         return payload
 

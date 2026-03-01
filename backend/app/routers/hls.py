@@ -62,7 +62,7 @@ async def get_segment(room_id: str, filename: str):
     return FileResponse(
         file_path,
         media_type=media_type,
-        headers={"Cache-Control": "max-age=2"},
+        headers={"Cache-Control": "max-age=1"},
     )
 
 
