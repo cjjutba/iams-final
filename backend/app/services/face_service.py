@@ -380,36 +380,49 @@ class FaceService:
     @staticmethod
     def reconcile_faiss_index(db: Session) -> bool:
         """
-        Compare FAISS index count with DB and rebuild if mismatched.
+        Rebuild FAISS user_map from DB on every startup.
 
-        This is called on startup to recover from crashes where FAISS index
-        and database went out of sync (e.g., server crash mid-operation).
+        ``faiss_manager.load_or_create_index()`` restores index vectors from
+        disk but cannot restore ``user_map`` (FAISS files store vectors only).
+        Without user_map every search returns None even when the correct vector
+        is found.  Rebuilding from the DB-stored embedding bytes is the only
+        reliable way to keep the in-memory map consistent after restarts,
+        deregistrations, or re-registrations.
 
         Args:
             db: SQLAlchemy database session
 
         Returns:
-            True if index was rebuilt, False if already in sync
+            True if a count mismatch was detected (index was stale), False if
+            counts were already in sync (normal restart).
         """
         repo = FaceRepository(db)
 
-        # Count active registrations in DB
         active_regs = repo.get_active_embeddings()
         active_count = len(active_regs)
         faiss_count = faiss_manager.index.ntotal if faiss_manager.index else 0
+        was_mismatched = active_count != faiss_count
 
-        if active_count != faiss_count:
+        if was_mismatched:
             logger.warning(
                 f"FAISS/DB mismatch: FAISS has {faiss_count} vectors, "
                 f"DB has {active_count} active registrations. Rebuilding..."
             )
-            embeddings_data = [
-                (np.frombuffer(r.embedding_vector, dtype=np.float32), str(r.user_id))
-                for r in active_regs
-            ]
-            faiss_manager.rebuild(embeddings_data)
-            logger.info(f"FAISS index rebuilt with {len(embeddings_data)} embeddings")
-            return True
 
-        logger.info(f"FAISS/DB in sync: {active_count} active registrations")
-        return False
+        if not active_regs:
+            # No registrations yet — leave the (possibly empty) index as-is.
+            logger.info("FAISS: no active registrations, skipping rebuild")
+            return was_mismatched
+
+        # Always rebuild from DB embedding bytes so that user_map is populated
+        # correctly regardless of whether a crash or deregistration occurred.
+        embeddings_data = [
+            (np.frombuffer(r.embedding_vector, dtype=np.float32), str(r.user_id))
+            for r in active_regs
+        ]
+        faiss_manager.rebuild(embeddings_data)
+        logger.info(
+            f"FAISS index loaded: {len(embeddings_data)} embeddings, "
+            f"user_map populated ({'mismatch fixed' if was_mismatched else 'in sync'})"
+        )
+        return was_mismatched

@@ -538,3 +538,65 @@ class TestFaceServiceLoadIndex:
 
         mock_faiss.load_or_create_index.assert_called_once()
         assert len(mock_faiss.user_map) == 0
+
+
+# ===================================================================
+# reconcile_faiss_index
+# ===================================================================
+
+class TestFaceServiceReconcileIndex:
+    """Tests for FaceService.reconcile_faiss_index (startup user_map restoration)"""
+
+    def test_reconcile_always_rebuilds_user_map_when_counts_match(
+        self, db_session, test_face_registration
+    ):
+        """
+        Even when FAISS vector count equals active DB registrations,
+        reconcile must call faiss_manager.rebuild to populate user_map.
+
+        Regression test: previously the 'counts match' branch did nothing,
+        leaving user_map empty after every normal server restart, which
+        caused all face matches to be silently dropped.
+        """
+        with patch("app.services.face_service.faiss_manager") as mock_faiss:
+            mock_index = MagicMock()
+            mock_index.ntotal = 1  # matches the 1 active DB registration
+            mock_faiss.index = mock_index
+            mock_faiss.rebuild = MagicMock()
+
+            result = FaceService.reconcile_faiss_index(db_session)
+
+        # No mismatch → should return False
+        assert result is False
+        # rebuild must still be called to populate user_map
+        mock_faiss.rebuild.assert_called_once()
+        embeddings_data = mock_faiss.rebuild.call_args[0][0]
+        assert len(embeddings_data) == 1
+        _, uid = embeddings_data[0]
+        assert uid == str(test_face_registration.user_id)
+
+    def test_reconcile_rebuilds_on_mismatch(self, db_session, test_face_registration):
+        """When FAISS count differs from DB count, reconcile rebuilds and returns True."""
+        with patch("app.services.face_service.faiss_manager") as mock_faiss:
+            mock_index = MagicMock()
+            mock_index.ntotal = 0  # mismatch: DB has 1, FAISS has 0
+            mock_faiss.index = mock_index
+            mock_faiss.rebuild = MagicMock()
+
+            result = FaceService.reconcile_faiss_index(db_session)
+
+        assert result is True
+        mock_faiss.rebuild.assert_called_once()
+
+    def test_reconcile_skips_rebuild_when_no_registrations(self, db_session):
+        """With no active registrations, reconcile should not call rebuild."""
+        with patch("app.services.face_service.faiss_manager") as mock_faiss:
+            mock_index = MagicMock()
+            mock_index.ntotal = 0
+            mock_faiss.index = mock_index
+            mock_faiss.rebuild = MagicMock()
+
+            result = FaceService.reconcile_faiss_index(db_session)
+
+        assert result is False
+        mock_faiss.rebuild.assert_not_called()
