@@ -113,17 +113,27 @@ class FaceService:
         # Convert embedding to bytes for database storage
         embedding_bytes = avg_embedding.astype(np.float32).tobytes()
 
-        # Save to database
+        # Transaction: DB insert with FAISS rollback on failure
         try:
             self.face_repo.create(user_id, faiss_id, embedding_bytes)
+
+            # Persist FAISS index to disk only after DB commit succeeds
+            self.faiss.save()
+
             logger.info(f"Face registered successfully for user {user_id} (FAISS ID: {faiss_id})")
         except Exception as e:
-            logger.error(f"Failed to save face registration: {e}")
-            # Rollback FAISS addition (rebuild will be needed)
-            raise FaceRecognitionError("Failed to save face registration")
+            # Rollback DB transaction
+            self.db.rollback()
 
-        # Save FAISS index
-        self.faiss.save()
+            # Rollback FAISS addition since DB commit failed
+            try:
+                self.faiss.remove(faiss_id)
+                logger.info(f"Rolled back FAISS entry {faiss_id} for user {user_id}")
+            except Exception as remove_err:
+                logger.error(f"Failed to rollback FAISS entry {faiss_id}: {remove_err}")
+
+            logger.error(f"Failed to save face registration for user {user_id}: {e}")
+            raise FaceRecognitionError("Failed to save face registration")
 
         return faiss_id, "Face registered successfully"
 
