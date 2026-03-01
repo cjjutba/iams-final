@@ -214,9 +214,9 @@ export const FacultyLiveFeedScreen: React.FC = () => {
 
       if (status === 'readyToPlay' && !didSeekToLiveEdge.current) {
         didSeekToLiveEdge.current = true;
-        // Seek to a position beyond any realistic VOD duration; the player
-        // clips it to the live edge (end of the current HLS sliding window).
-        player.seek(999_999);
+        // Set currentTime beyond any realistic VOD duration; expo-video clips
+        // it to the live edge (end of the current HLS sliding window).
+        player.currentTime = 999_999;
       } else if (status === 'error') {
         didSeekToLiveEdge.current = false;
         setTimeout(() => {
