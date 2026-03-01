@@ -47,14 +47,17 @@ class Settings(BaseSettings):
 
     # Face Recognition
     FAISS_INDEX_PATH: str = "data/faiss/faces.index"
-    RECOGNITION_THRESHOLD: float = 0.55  # Cosine similarity threshold (lowered with alignment)
+    RECOGNITION_THRESHOLD: float = 0.45  # Cosine similarity threshold (lowered for cross-camera matching)
     RECOGNITION_MARGIN: float = 0.1  # Min gap between top-1 and top-2 scores
     RECOGNITION_TOP_K: int = 3  # Number of neighbors to search in FAISS
     USE_FACE_ALIGNMENT: bool = True  # Enable MTCNN face alignment before embedding
+    USE_FACE_ALIGNMENT_FOR_RECOGNITION: bool = True  # Run MTCNN on the 20%-padded MediaPipe crop (consistent with registration path)
     USE_GPU: bool = True  # Use GPU if available, fallback to CPU
     FACE_IMAGE_SIZE: int = 160  # FaceNet input size (160x160)
     MIN_FACE_IMAGES: int = 3  # Minimum images for registration
     MAX_FACE_IMAGES: int = 5  # Maximum images for registration
+    MEDIAPIPE_DETECTION_CONFIDENCE: float = 0.35  # Min confidence for face detection (lower = more detections at distance)
+    RECOGNITION_MIN_FACE_PX: int = 40  # Minimum face crop dimension (px) — smaller crops produce unreliable embeddings
 
     # Presence Tracking
     SCAN_INTERVAL_SECONDS: int = 60  # How often to run presence scans

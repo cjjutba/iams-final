@@ -417,14 +417,20 @@ class RecognitionService:
         face_crops = []
         crop_indices = []  # maps back to detection index
 
+        min_px = settings.RECOGNITION_MIN_FACE_PX
         for i, det in enumerate(detections):
-            x1 = max(0, det.x)
-            y1 = max(0, det.y)
-            x2 = min(w, det.x + det.width)
-            y2 = min(h, det.y + det.height)
+            if det.width < min_px or det.height < min_px:
+                continue  # face too small for reliable recognition
 
-            if x2 - x1 < 10 or y2 - y1 < 10:
-                continue
+            # Expand bbox by ~20% on each side so MTCNN has enough surrounding
+            # context to align the face consistently with how it was aligned
+            # during registration (full-selfie MTCNN path).
+            pad_x = int(det.width * 0.20)
+            pad_y = int(det.height * 0.20)
+            x1 = max(0, det.x - pad_x)
+            y1 = max(0, det.y - pad_y)
+            x2 = min(w, det.x + det.width + pad_x)
+            y2 = min(h, det.y + det.height + pad_y)
 
             face_crop = frame[y1:y2, x1:x2]
             face_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
@@ -440,8 +446,15 @@ class RecognitionService:
             face_crops = face_crops[:max_batch]
             crop_indices = crop_indices[:max_batch]
 
-            # Batch FaceNet embedding (single forward pass)
-            embeddings = self._facenet.generate_embeddings_batch(face_crops)
+            # Batch FaceNet embedding (single forward pass).
+            # Each crop is an expanded MediaPipe bbox (20% padding) so MTCNN
+            # has enough surrounding context to successfully align the face —
+            # producing embeddings consistent with the registration path
+            # (full-selfie → MTCNN → aligned face → FaceNet).
+            embeddings = self._facenet.generate_embeddings_batch(
+                face_crops,
+                use_alignment=settings.USE_FACE_ALIGNMENT_FOR_RECOGNITION,
+            )
 
             # Batch FAISS search
             batch_results = self._faiss.search_batch(embeddings, k=1)

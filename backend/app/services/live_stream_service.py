@@ -78,10 +78,13 @@ def _create_face_detector():
         base_options = mp_python.BaseOptions(model_asset_path=model_path)
         options = mp_vision.FaceDetectorOptions(
             base_options=base_options,
-            min_detection_confidence=0.5,
+            min_detection_confidence=settings.MEDIAPIPE_DETECTION_CONFIDENCE,
         )
         detector = mp_vision.FaceDetector.create_from_options(options)
-        logger.info("MediaPipe FaceDetector created for live stream service.")
+        logger.info(
+            f"MediaPipe FaceDetector created for live stream service "
+            f"(confidence={settings.MEDIAPIPE_DETECTION_CONFIDENCE})."
+        )
         return detector
     except Exception as exc:
         logger.warning(f"MediaPipe unavailable for live stream -- detection disabled: {exc}")
@@ -542,23 +545,31 @@ class LiveStreamService:
 
         h, w = frame.shape[:2]
 
+        min_px = settings.RECOGNITION_MIN_FACE_PX
         for det in detections:
             try:
-                # Clamp crop coordinates
-                x1 = max(0, det.x)
-                y1 = max(0, det.y)
-                x2 = min(w, det.x + det.width)
-                y2 = min(h, det.y + det.height)
+                if det.width < min_px or det.height < min_px:
+                    continue  # face crop too small for reliable recognition
 
-                if x2 - x1 < 10 or y2 - y1 < 10:
-                    continue  # face crop too small
+                # Expand MediaPipe bbox by 20% so MTCNN has enough context to
+                # locate landmarks consistently — matching the registration path
+                # where MTCNN ran on a full close-up selfie.
+                pad_x = int(det.width * 0.20)
+                pad_y = int(det.height * 0.20)
+                x1 = max(0, det.x - pad_x)
+                y1 = max(0, det.y - pad_y)
+                x2 = min(w, det.x + det.width + pad_x)
+                y2 = min(h, det.y + det.height + pad_y)
 
                 face_crop = frame[y1:y2, x1:x2]
 
-                # FaceNet expects RGB PIL-like input; convert BGR -> RGB
+                # FaceNet expects RGB input; convert BGR → RGB.
                 face_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
 
-                embedding = self._facenet.generate_embedding(face_rgb)
+                embedding = self._facenet.generate_embedding(
+                    face_rgb,
+                    use_alignment=settings.USE_FACE_ALIGNMENT_FOR_RECOGNITION,
+                )
                 matches = self._faiss.search(embedding, k=1)
 
                 if matches:

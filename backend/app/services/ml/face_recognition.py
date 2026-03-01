@@ -136,12 +136,19 @@ class FaceNetModel:
 
         return img_tensor.to(self.device)
 
-    def generate_embedding(self, image: Union[Image.Image, np.ndarray, bytes]) -> np.ndarray:
+    def generate_embedding(
+        self,
+        image: Union[Image.Image, np.ndarray, bytes],
+        use_alignment: bool = True,
+    ) -> np.ndarray:
         """
         Generate 512-dimensional face embedding
 
         Args:
             image: PIL Image, numpy array, or bytes (JPEG/PNG)
+            use_alignment: Whether to run MTCNN alignment. Set False when
+                the face has already been cropped by a detector (e.g. MediaPipe)
+                to avoid double-alignment and embedding inconsistency.
 
         Returns:
             512-dimensional embedding as numpy array
@@ -158,8 +165,8 @@ class FaceNetModel:
             if isinstance(image, bytes):
                 image = Image.open(io.BytesIO(image))
 
-            # Attempt MTCNN face alignment if enabled
-            if settings.USE_FACE_ALIGNMENT:
+            # Attempt MTCNN face alignment if enabled and requested
+            if use_alignment and settings.USE_FACE_ALIGNMENT:
                 aligned = self.align_face(image)
                 if aligned is not None:
                     image = aligned
@@ -181,7 +188,7 @@ class FaceNetModel:
             logger.error(f"Failed to generate embedding: {e}")
             raise ValueError(f"Image processing failed: {e}")
 
-    def generate_embeddings_batch(self, images: list) -> np.ndarray:
+    def generate_embeddings_batch(self, images: list, use_alignment: bool = True) -> np.ndarray:
         """
         Generate embeddings for multiple images in a single forward pass.
 
@@ -191,6 +198,10 @@ class FaceNetModel:
 
         Args:
             images: List of PIL Images, numpy arrays, or bytes
+            use_alignment: Whether to run MTCNN alignment. Set False for
+                live-stream recognition where MediaPipe has already cropped
+                the face region — double-alignment on a small crop produces
+                inconsistent embeddings vs registration (full-selfie MTCNN).
 
         Returns:
             Array of embeddings [N, 512]
@@ -206,7 +217,7 @@ class FaceNetModel:
             try:
                 if isinstance(img, bytes):
                     img = Image.open(io.BytesIO(img))
-                if settings.USE_FACE_ALIGNMENT:
+                if use_alignment and settings.USE_FACE_ALIGNMENT:
                     aligned = self.align_face(img)
                     if aligned is not None:
                         img = aligned
