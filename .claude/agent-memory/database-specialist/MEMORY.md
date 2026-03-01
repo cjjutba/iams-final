@@ -12,22 +12,30 @@
 ## Connection Notes
 - See [supabase-connection.md](supabase-connection.md) for detailed connection troubleshooting notes
 
-## Schema State (Updated 2026-02-07)
-- **Migration chain:** e49171084f7c (Initial 8 tables) -> 86d63351d3e9 (notifications table) [head]
-- **DB stamped at:** 86d63351d3e9 (ALL MIGRATIONS APPLIED, schema sync verified)
-- **Tables (9+1):** users, face_registrations, rooms, schedules, enrollments, attendance_records, presence_logs, early_leave_events, notifications, alembic_version
+## Schema State (Updated 2026-03-01)
+- **Migration chain:** e49171084f7c -> 86d63351d3e9 -> 64622432db30 -> 53db1ce6f3d0 -> 7bf7e45a61d8 -> a1b2c3d4e5f6 [head]
+- **DB stamped at:** a1b2c3d4e5f6 (ALL 6 MIGRATIONS APPLIED, verified 2026-03-01)
+- **Tables (11+1):** users, face_registrations, rooms, schedules, enrollments, attendance_records, presence_logs, early_leave_events, notifications, student_records, faculty_records, alembic_version
 - **Enums:** userrole (STUDENT, FACULTY, ADMIN), attendancestatus (PRESENT, LATE, ABSENT, EARLY_LEAVE)
 - All tables use UUID primary keys (no default gen_random_uuid -- UUIDs must be generated app-side)
 - presence_logs uses BIGSERIAL for id (auto-incrementing, high-volume table)
-- **Migration testing:** Rollback and re-apply tested successfully on 2026-02-07, data preserved
+- student_records PK is student_id (VARCHAR), faculty_records PK is faculty_id (VARCHAR) -- NOT FK'd to users
+- schedules has target_course and target_year_level columns (added in a1b2c3d4e5f6)
+- users has supabase_user_id, email_verified, email_verified_at columns (added in 53db1ce6f3d0)
+- **RLS:** DISABLED on all tables, no policies exist. Access control is application-layer only.
+- **Edge Functions:** None deployed
+- **Data:** 1 user, 5 enrollments, 5 notifications (minimal test data)
+- **Extensions:** uuid-ossp, pgcrypto, pg_stat_statements, pg_graphql, supabase_vault (all Supabase defaults)
 
-## Key Indexes
-- users: unique on email, unique on student_id, index on role
+## Key Indexes (35 total, verified 2026-03-01)
+- users: unique on email, student_id, supabase_user_id; index on role
 - face_registrations: unique on user_id, index on is_active
-- schedules: composite (day_of_week, start_time), faculty_id, room_id, subject_code
+- schedules: composite (day_of_week, start_time), composite (target_course, target_year_level), faculty_id, room_id, subject_code
 - attendance_records: unique constraint (student_id, schedule_id, date), date, schedule_id, student_id
-- enrollments: unique constraint (student_id, schedule_id)
+- enrollments: unique constraint (student_id, schedule_id), student_id, schedule_id
 - notifications: user_id, type, created_at
+- student_records: PK on student_id (unique email too)
+- faculty_records: PK on faculty_id (unique email too)
 
 ## Foreign Key Relationships
 - face_registrations.user_id -> users.id
@@ -56,11 +64,13 @@
 - `migrate_to_supabase.py`: migrates users without supabase_user_id, sets email_confirm=True, temp passwords
 
 ## Environment Setup
-- Backend venv: `C:\.cjjutba\.thesis\iams\backend\venv`
-- .env file: `C:\.cjjutba\.thesis\iams\backend\.env`
-- Alembic config: `C:\.cjjutba\.thesis\iams\backend\alembic.ini`
-- System python can run alembic via `python -m alembic` from backend dir
-- Venv python may not execute in sandbox -- use system python with packages installed
+- Backend venv (macOS): `/Users/cjjutba/Projects/iams/backend/venv`
+- Backend venv (Windows): `C:\.cjjutba\.thesis\iams\backend\venv`
+- .env file: `backend/.env` (relative to project root)
+- Alembic config: `backend/alembic.ini`
+- macOS: use `/Users/cjjutba/Projects/iams/backend/venv/bin/python3` for SQLAlchemy queries
+- macOS: no psql installed, but postgresql@17 brew prefix exists at /opt/homebrew/opt/postgresql@17 (bin missing)
+- Supabase MCP tools are authenticated to a DIFFERENT account (fiscplus projects) -- use Management API with SUPABASE_ACCESS_TOKEN or SQLAlchemy via pooler for IAMS project queries
 
 ## SQLite Test Compatibility (CRITICAL FIX - 2026-02-07)
 **Problem:** SQLAlchemy UUID columns fail on SQLite when comparing `Model.id == string_value`

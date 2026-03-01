@@ -197,6 +197,18 @@ class AuthService:
         import httpx
 
         try:
+            # Build the redirect URL for the confirmation email link.
+            # After the user clicks "Confirm Email" in the email, Supabase
+            # verifies the token and redirects the browser to this URL.
+            redirect_url = f"{settings.SUPABASE_URL.rstrip('/')}"
+            # Use the backend's email-confirmed landing page if we can
+            # construct it from the BACKEND_URL env var or fall back to
+            # letting Supabase handle it (site_url configured in dashboard).
+            import os
+            backend_url = os.environ.get("BACKEND_URL", "").rstrip("/")
+            if backend_url:
+                redirect_url = f"{backend_url}{settings.API_PREFIX}/auth/email-confirmed"
+
             response = httpx.post(
                 f"{settings.SUPABASE_URL}/auth/v1/signup",
                 json={
@@ -207,6 +219,9 @@ class AuthService:
                         "last_name": record.last_name,
                         "student_id": normalized_id,
                         "role": "student",
+                    },
+                    "options": {
+                        "emailRedirectTo": redirect_url,
                     },
                 },
                 headers={

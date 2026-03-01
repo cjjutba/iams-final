@@ -1,15 +1,13 @@
 /**
- * FaceScanCamera — ML-powered face registration with real-time detection.
+ * FaceScanCamera — Step-by-step guided face registration.
  *
- * Uses VisionCamera + Google ML Kit to detect faces in real-time.
- * Captures photos only when a valid face is detected at a distinct angle.
- * Guides the user through 5 angle buckets: center, left, right, up, down.
+ * 5-step flow: user follows an instruction per step and taps a capture button.
+ * Face detection enables/disables the button and colors the oval border green.
+ * Dark mask with oval cutout, progress dots, shutter button.
+ * After all captures, a review phase lets users preview and retake photos.
  *
- * Quality gates ensure every captured image has:
- * - A face present and large enough (>30% of frame)
- * - Both eyes open
- * - Face centered in the oval guide
- * - A distinct head angle not yet captured
+ * Key design: frameProcessor + runOnJs are completely STABLE (never recreated)
+ * to avoid gray camera flash on retakes. All mutable state is accessed via refs.
  */
 
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
@@ -20,6 +18,8 @@ import {
   Dimensions,
   Vibration,
   StatusBar,
+  TouchableOpacity,
+  Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -28,135 +28,90 @@ import {
   useFrameProcessor,
 } from 'react-native-vision-camera';
 import { Worklets } from 'react-native-worklets-core';
-// Import directly from FaceDetector submodule to avoid Camera.tsx which requires Skia
 import {
   useFaceDetector,
   type Face,
   type FrameFaceDetectionOptions,
 } from 'react-native-vision-camera-face-detector/lib/module/FaceDetector';
-import Svg, { Circle, Ellipse } from 'react-native-svg';
-import { Check } from 'lucide-react-native';
+import Svg, { Path, Ellipse } from 'react-native-svg';
+import { Check, RotateCcw } from 'lucide-react-native';
 import { config, strings } from '../../constants';
 import { Text } from '../ui';
 
 // ── Types ──────────────────────────────────────────────────────
 
 interface FaceScanCameraProps {
-  /** Called with array of captured image file:// URIs when scanning is complete. */
   onComplete: (images: string[]) => void;
-  /** Optional cancel handler (e.g. back button). */
   onCancel?: () => void;
-  /** Number of angle buckets to capture. Default: config.REQUIRED_FACE_IMAGES (5). */
   captureCount?: number;
 }
 
-type ScanPhase = 'scanning' | 'complete' | 'error';
-
-type AngleBucket = 'center' | 'left' | 'right' | 'up' | 'down';
-
-type DetectionState = 'no_face' | 'adjusting' | 'ready';
+type ScanPhase = 'scanning' | 'complete' | 'review' | 'error';
 
 // ── Constants ──────────────────────────────────────────────────
 
-const ANGLE_BUCKETS: AngleBucket[] = ['center', 'left', 'right', 'up', 'down'];
+const { width: SW, height: SH } = Dimensions.get('window');
 
-// Head pose thresholds (degrees)
-const CENTER_YAW_THRESHOLD = 10;
-const CENTER_PITCH_THRESHOLD = 10;
-const SIDE_YAW_THRESHOLD = 20;
-const VERTICAL_PITCH_THRESHOLD = 15;
+// Oval cutout
+const OVAL_RX = SW * 0.32;
+const OVAL_RY = SW * 0.44;
+const OVAL_CX = SW / 2;
+const OVAL_CY = SH * 0.35;
 
-// Quality gate thresholds
-const MIN_FACE_SIZE_RATIO = 0.30;  // Face width must be >30% of frame
-const MIN_EYE_OPEN_PROB = 0.5;
-const FACE_CENTER_TOLERANCE = 0.20; // 20% tolerance from frame center
+const MIN_FACE_SIZE_RATIO = 0.25;
 
-// Face detection options for ML Kit
+// Step instructions (maps to the 5 angle captures)
+const STEP_INSTRUCTIONS = [
+  strings.register.faceInstructions.center,
+  strings.register.faceInstructions.left,
+  strings.register.faceInstructions.right,
+  strings.register.faceInstructions.up,
+  strings.register.faceInstructions.down,
+];
+
+// Short labels for review thumbnails
+const STEP_LABELS = ['Center', 'Left', 'Right', 'Up', 'Down'];
+
+// Review layout — dynamic thumbnail sizing to fit screen without scrolling
+const REVIEW_H_PAD = 20;
+const THUMB_GAP = 10;
+const THUMB_COLS = 2;
+const THUMB_W = (SW - REVIEW_H_PAD * 2 - THUMB_GAP) / THUMB_COLS;
+
+// Face detection with classification for eyes-open check
 const FACE_DETECTION_OPTIONS: FrameFaceDetectionOptions = {
-  performanceMode: 'accurate',
-  landmarkMode: 'all',
+  performanceMode: 'fast',
+  landmarkMode: 'none',
   classificationMode: 'all',
   contourMode: 'none',
   minFaceSize: 0.15,
   trackingEnabled: false,
 };
 
-// ── Dimensions ─────────────────────────────────────────────────
+// ── Mask path ──────────────────────────────────────────────────
 
-const { width: SW, height: SH } = Dimensions.get('window');
+function buildMaskPath(): string {
+  const outer = `M0,0 L${SW},0 L${SW},${SH} L0,${SH} Z`;
 
-// SVG overlay sizing
-const RING_SIZE = SW * 0.72;
-const SVG_CENTER = RING_SIZE / 2;
-const RING_R = RING_SIZE / 2 - 8;
-const OVAL_RX = SW * 0.24;
-const OVAL_RY = SW * 0.34;
-const CIRCUMFERENCE = 2 * Math.PI * RING_R;
+  const k = 0.5522847498;
+  const kx = OVAL_RX * k;
+  const ky = OVAL_RY * k;
+  const cx = OVAL_CX;
+  const cy = OVAL_CY;
 
-// Oval colors by detection state
-const OVAL_COLORS: Record<DetectionState, string> = {
-  no_face: 'rgba(255,255,255,0.2)',
-  adjusting: 'rgba(255,255,255,0.6)',
-  ready: 'rgba(34,197,94,0.7)',
-};
+  const inner = [
+    `M${cx},${cy - OVAL_RY}`,
+    `C${cx + kx},${cy - OVAL_RY} ${cx + OVAL_RX},${cy - ky} ${cx + OVAL_RX},${cy}`,
+    `C${cx + OVAL_RX},${cy + ky} ${cx + kx},${cy + OVAL_RY} ${cx},${cy + OVAL_RY}`,
+    `C${cx - kx},${cy + OVAL_RY} ${cx - OVAL_RX},${cy + ky} ${cx - OVAL_RX},${cy}`,
+    `C${cx - OVAL_RX},${cy - ky} ${cx - kx},${cy - OVAL_RY} ${cx},${cy - OVAL_RY}`,
+    'Z',
+  ].join(' ');
 
-// ── Animated SVG ───────────────────────────────────────────────
-
-const AnimatedCircle = Animated.createAnimatedComponent(Circle);
-const AnimatedEllipse = Animated.createAnimatedComponent(Ellipse);
-
-// ── Helpers ────────────────────────────────────────────────────
-
-/**
- * Determine which angle bucket a face belongs to based on head pose.
- * Returns null if the face is in an ambiguous zone between buckets.
- */
-function classifyAngle(yaw: number, pitch: number): AngleBucket | null {
-  const absYaw = Math.abs(yaw);
-  const absPitch = Math.abs(pitch);
-
-  // Center: both yaw and pitch within threshold
-  if (absYaw <= CENTER_YAW_THRESHOLD && absPitch <= CENTER_PITCH_THRESHOLD) {
-    return 'center';
-  }
-
-  // Determine if yaw or pitch is the dominant deviation
-  if (absYaw > absPitch) {
-    // Horizontal is dominant
-    if (absYaw >= SIDE_YAW_THRESHOLD) {
-      return yaw > 0 ? 'left' : 'right';
-    }
-  } else {
-    // Vertical is dominant
-    if (absPitch >= VERTICAL_PITCH_THRESHOLD) {
-      return pitch < 0 ? 'up' : 'down';
-    }
-  }
-
-  // In a dead zone between thresholds
-  return null;
+  return `${outer} ${inner}`;
 }
 
-/**
- * Get the next uncaptured bucket instruction text.
- */
-function getInstruction(
-  captured: Set<AngleBucket>,
-  detectionState: DetectionState,
-): string {
-  if (detectionState === 'no_face') {
-    return strings.register.faceInstructions.noFace;
-  }
-
-  // Find next uncaptured bucket in order
-  for (const bucket of ANGLE_BUCKETS) {
-    if (!captured.has(bucket)) {
-      return strings.register.faceInstructions[bucket];
-    }
-  }
-
-  return strings.register.faceInstructions.adjusting;
-}
+const MASK_PATH = buildMaskPath();
 
 // ── Component ──────────────────────────────────────────────────
 
@@ -168,34 +123,27 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
   const device = useCameraDevice('front');
   const cameraRef = useRef<any>(null);
 
-  // Face detector plugin (uses VisionCamera frame processor API directly)
   const { detectFaces, stopListeners } = useFaceDetector(FACE_DETECTION_OPTIONS);
 
-  // Phase & detection state
+  // ── State (for UI rendering) ────────────────────────────────
   const [phase, setPhase] = useState<ScanPhase>('scanning');
-  const [capturedCount, setCapturedCount] = useState(0);
-  const [detectionState, setDetectionState] = useState<DetectionState>('no_face');
-  const [instruction, setInstruction] = useState<string>(strings.register.faceInstructions.noFace);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [faceDetected, setFaceDetected] = useState(false);
+  const [retakeIndex, setRetakeIndex] = useState<number | null>(null);
+  const [images, setImages] = useState<string[]>([]);
 
-  // Refs for capture logic (avoids stale closures in callbacks)
-  const imagesRef = useRef<string[]>([]);
-  const capturedBucketsRef = useRef<Set<AngleBucket>>(new Set());
+  // ── Refs (for stable callbacks — avoids frameProcessor recreation) ──
+  const phaseRef = useRef<ScanPhase>('scanning');
   const isCapturingRef = useRef(false);
   const completedRef = useRef(false);
-  const lastCaptureTimeRef = useRef(0);
   const timeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  // Animations
-  const progressAnim = useRef(new Animated.Value(0)).current;
-  const flashAnim = useRef(new Animated.Value(0)).current;
-  const pulseAnim = useRef(new Animated.Value(0.5)).current;
-  const checkAnim = useRef(new Animated.Value(0)).current;
+  // Keep phaseRef in sync
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
 
-  // Animated strokeDashoffset for the progress ring
-  const dashOffset = progressAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [CIRCUMFERENCE, 0],
-  });
+  // Animations
+  const flashAnim = useRef(new Animated.Value(0)).current;
+  const checkAnim = useRef(new Animated.Value(0)).current;
 
   // ── Cleanup ────────────────────────────────────────────────
 
@@ -206,216 +154,165 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
     };
   }, [stopListeners]);
 
-  // ── Pulse animation ────────────────────────────────────────
+  // ── Safety timeout (60s for manual capture) ────────────────
 
   useEffect(() => {
-    const pulse = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, { toValue: 0.8, duration: 1000, useNativeDriver: false }),
-        Animated.timing(pulseAnim, { toValue: 0.5, duration: 1000, useNativeDriver: false }),
-      ]),
-    );
-    pulse.start();
-    return () => pulse.stop();
-  }, [pulseAnim]);
+    if (phase !== 'scanning') return;
 
-  // ── Safety timeout ─────────────────────────────────────────
-
-  useEffect(() => {
     const safetyTimeout = setTimeout(() => {
-      if (completedRef.current) return;
+      if (completedRef.current || phaseRef.current !== 'scanning') return;
 
-      const count = imagesRef.current.length;
-      if (count >= 3) {
-        // We have at least the backend minimum (3), proceed
+      if (images.length >= 3) {
         completedRef.current = true;
-        setPhase('complete');
-
-        Animated.timing(progressAnim, {
-          toValue: 1,
-          duration: 300,
-          useNativeDriver: false,
-        }).start();
-
-        Animated.spring(checkAnim, {
-          toValue: 1,
-          friction: 6,
-          tension: 80,
-          useNativeDriver: true,
-        }).start();
-
-        timeoutRef.current = setTimeout(() => onComplete(imagesRef.current), 1200);
+        setPhase('review');
       } else {
         setPhase('error');
       }
-    }, config.FACE_SCAN_TIMEOUT_MS);
+    }, 60000);
 
     return () => clearTimeout(safetyTimeout);
-  }, [onComplete, progressAnim, checkAnim]);
+  }, [phase, images.length]);
 
-  // ── Capture a photo ────────────────────────────────────────
+  // ── Face detection — STABLE callback (no state deps) ───────
+  // Uses phaseRef so it never needs to be recreated. This keeps
+  // runOnJs and frameProcessor stable, preventing gray camera flash.
 
-  const capturePhoto = useCallback(async (bucket: AngleBucket) => {
-    if (!cameraRef.current || isCapturingRef.current || completedRef.current) return;
+  const handleFacesDetected = useCallback((faces: Face[]) => {
+    if (phaseRef.current !== 'scanning') return;
+
+    if (!faces || faces.length === 0) {
+      setFaceDetected(false);
+      return;
+    }
+
+    const face = faces[0];
+    const faceSizeRatio = face.bounds.width / SW;
+    const isBigEnough = faceSizeRatio >= MIN_FACE_SIZE_RATIO;
+
+    // Eyes-open gate (lenient threshold for angled captures)
+    const eyesOpen =
+      face.leftEyeOpenProbability > 0.25 &&
+      face.rightEyeOpenProbability > 0.25;
+
+    setFaceDetected(isBigEnough && eyesOpen);
+  }, []); // Empty deps → stable forever
+
+  // ── Capture (button press) ─────────────────────────────────
+
+  const handleCapture = useCallback(async () => {
+    if (!cameraRef.current || isCapturingRef.current) return;
 
     isCapturingRef.current = true;
     try {
       const photo = await cameraRef.current.takePhoto({ flash: 'off' });
 
-      if (photo?.path && !completedRef.current) {
+      if (photo?.path) {
         const uri = `file://${photo.path}`;
-        imagesRef.current.push(uri);
-        capturedBucketsRef.current.add(bucket);
-        lastCaptureTimeRef.current = Date.now();
 
-        const count = imagesRef.current.length;
-        const progress = count / captureCount;
-
-        setCapturedCount(count);
-
-        // Animate progress ring
-        Animated.timing(progressAnim, {
-          toValue: progress,
-          duration: 300,
-          useNativeDriver: false,
-        }).start();
-
-        // Flash effect
-        flashAnim.setValue(0.25);
+        // Flash + haptic
+        flashAnim.setValue(0.3);
         Animated.timing(flashAnim, {
           toValue: 0,
           duration: 250,
           useNativeDriver: false,
         }).start();
+        Vibration.vibrate(30);
 
-        // Haptic feedback
-        Vibration.vibrate(10);
-
-        // Check completion
-        if (count >= captureCount) {
+        if (retakeIndex !== null) {
+          // Retake: replace the specific image and go back to review
+          setImages(prev => {
+            const updated = [...prev];
+            updated[retakeIndex] = uri;
+            return updated;
+          });
+          setRetakeIndex(null);
+          setFaceDetected(false);
           completedRef.current = true;
-          setPhase('complete');
+          setPhase('review');
+        } else {
+          // Normal capture: add image
+          const newImages = [...images, uri];
+          setImages(newImages);
 
-          Animated.spring(checkAnim, {
-            toValue: 1,
-            friction: 6,
-            tension: 80,
-            useNativeDriver: true,
-          }).start();
+          if (newImages.length >= captureCount) {
+            // All steps done — show completion briefly then review
+            completedRef.current = true;
+            setPhase('complete');
 
-          timeoutRef.current = setTimeout(() => {
-            onComplete(imagesRef.current);
-          }, 1200);
+            Animated.spring(checkAnim, {
+              toValue: 1,
+              friction: 6,
+              tension: 80,
+              useNativeDriver: true,
+            }).start();
+
+            timeoutRef.current = setTimeout(() => {
+              setPhase('review');
+            }, 1000);
+          } else {
+            // Advance to next step
+            setCurrentStep(newImages.length);
+          }
         }
       }
     } catch {
-      // Silent fail — will retry on next detection frame
+      // Silent fail
     }
     isCapturingRef.current = false;
-  }, [captureCount, onComplete, progressAnim, flashAnim, checkAnim]);
+  }, [captureCount, flashAnim, checkAnim, retakeIndex, images]);
 
-  // ── Face detection callback (runs on JS thread) ───────────
+  // ── Retake a specific photo ─────────────────────────────────
 
-  const handleFacesDetected = useCallback((faces: Face[]) => {
-    if (completedRef.current || isCapturingRef.current) return;
-
-    // No face detected
-    if (!faces || faces.length === 0) {
-      setDetectionState('no_face');
-      setInstruction(strings.register.faceInstructions.noFace);
-      return;
-    }
-
-    const face = faces[0]; // Use first (largest) face
-    const bounds = face.bounds;
-
-    // Quality gate 1: Face size (bounding box width > 30% of frame)
-    const faceSizeRatio = bounds.width / SW;
-    if (faceSizeRatio < MIN_FACE_SIZE_RATIO) {
-      setDetectionState('adjusting');
-      setInstruction('Move closer');
-      return;
-    }
-
-    // Quality gate 2: Eyes open
-    const leftEyeOpen = face.leftEyeOpenProbability ?? 1;
-    const rightEyeOpen = face.rightEyeOpenProbability ?? 1;
-    if (leftEyeOpen < MIN_EYE_OPEN_PROB || rightEyeOpen < MIN_EYE_OPEN_PROB) {
-      setDetectionState('adjusting');
-      setInstruction('Open your eyes');
-      return;
-    }
-
-    // Quality gate 3: Face centered in frame
-    const faceCenterX = bounds.x + bounds.width / 2;
-    const faceCenterY = bounds.y + bounds.height / 2;
-    const frameCenterX = SW / 2;
-    const frameCenterY = SH / 2;
-    const offsetX = Math.abs(faceCenterX - frameCenterX) / SW;
-    const offsetY = Math.abs(faceCenterY - frameCenterY) / SH;
-
-    if (offsetX > FACE_CENTER_TOLERANCE || offsetY > FACE_CENTER_TOLERANCE) {
-      setDetectionState('adjusting');
-      setInstruction('Center your face');
-      return;
-    }
-
-    // Determine angle bucket from head pose
-    const yaw = face.yawAngle ?? 0;
-    const pitch = face.pitchAngle ?? 0;
-    const bucket = classifyAngle(yaw, pitch);
-
-    if (!bucket) {
-      // In dead zone between thresholds
-      setDetectionState('adjusting');
-      setInstruction(getInstruction(capturedBucketsRef.current, 'adjusting'));
-      return;
-    }
-
-    // Center must be captured first
-    if (bucket !== 'center' && !capturedBucketsRef.current.has('center')) {
-      setDetectionState('adjusting');
-      setInstruction(strings.register.faceInstructions.center);
-      return;
-    }
-
-    // Already captured this bucket
-    if (capturedBucketsRef.current.has(bucket)) {
-      setDetectionState('adjusting');
-      setInstruction(getInstruction(capturedBucketsRef.current, 'adjusting'));
-      return;
-    }
-
-    // Quality gate 4: Capture cooldown (prevents blur)
-    const now = Date.now();
-    if (now - lastCaptureTimeRef.current < config.FACE_CAPTURE_COOLDOWN_MS) {
-      setDetectionState('adjusting');
-      setInstruction(strings.register.faceInstructions.adjusting);
-      return;
-    }
-
-    // All gates passed — capture!
-    setDetectionState('ready');
-    capturePhoto(bucket);
-  }, [capturePhoto]);
-
-  // ── Retry from error ───────────────────────────────────────
-
-  const handleRetry = useCallback(() => {
-    imagesRef.current = [];
-    capturedBucketsRef.current.clear();
-    isCapturingRef.current = false;
+  const handleRetakePhoto = useCallback((index: number) => {
+    setRetakeIndex(index);
     completedRef.current = false;
-    lastCaptureTimeRef.current = 0;
-    setCapturedCount(0);
-    setDetectionState('no_face');
-    setInstruction(strings.register.faceInstructions.noFace);
-    progressAnim.setValue(0);
+    isCapturingRef.current = false;
+    setCurrentStep(index);
+    setFaceDetected(false);
+    flashAnim.setValue(0);
     checkAnim.setValue(0);
     setPhase('scanning');
-  }, [progressAnim, checkAnim]);
+  }, [flashAnim, checkAnim]);
 
-  // ── Frame processor (worklet → JS bridge) ─────────────────
+  // ── Retake all ──────────────────────────────────────────────
+
+  const handleRetakeAll = useCallback(() => {
+    setImages([]);
+    setRetakeIndex(null);
+    isCapturingRef.current = false;
+    completedRef.current = false;
+    setCurrentStep(0);
+    setFaceDetected(false);
+    flashAnim.setValue(0);
+    checkAnim.setValue(0);
+    setPhase('scanning');
+  }, [flashAnim, checkAnim]);
+
+  // ── Confirm (from review) ──────────────────────────────────
+
+  const handleConfirm = useCallback(() => {
+    onComplete(images);
+  }, [onComplete, images]);
+
+  // ── Retry from error ────────────────────────────────────────
+
+  const handleRetry = useCallback(() => {
+    setImages([]);
+    setRetakeIndex(null);
+    isCapturingRef.current = false;
+    completedRef.current = false;
+    setCurrentStep(0);
+    setFaceDetected(false);
+    flashAnim.setValue(0);
+    checkAnim.setValue(0);
+    setPhase('scanning');
+  }, [flashAnim, checkAnim]);
+
+  // ── Frame processor — STABLE (never recreated) ─────────────
+  // handleFacesDetected has [] deps so runOnJs is created once.
+  // frameProcessor depends only on detectFaces (from hook, stable)
+  // and runOnJs (stable). This means the camera never needs to
+  // detach/reattach the processor, eliminating the gray flash.
 
   const runOnJs = useMemo(
     () => Worklets.createRunOnJS(handleFacesDetected),
@@ -432,8 +329,9 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
 
   const isComplete = phase === 'complete';
   const isError = phase === 'error';
+  const isScanning = phase === 'scanning';
+  const isReview = phase === 'review';
 
-  // No camera device available
   if (!device) {
     return (
       <View style={s.root}>
@@ -447,126 +345,274 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
     );
   }
 
-  // Determine oval color based on detection state
-  const ovalColor = isComplete || isError
-    ? OVAL_COLORS.no_face
-    : OVAL_COLORS[detectionState];
+  const ovalStroke = isComplete
+    ? '#22C55E'
+    : faceDetected
+      ? '#22C55E'
+      : 'rgba(255,255,255,0.3)';
+
+  const stepLabel = retakeIndex !== null
+    ? `Retake: ${STEP_LABELS[retakeIndex]}`
+    : `Step ${currentStep + 1} of ${captureCount}`;
+
+  // Dynamic thumbnail height to fit screen without scrolling
+  // Layout: topPad + header(50) + grid(3 rows) + footer(88) + botPad
+  const topPad = insets.top + 12;
+  const botPad = Math.max(insets.bottom, 16) + 8;
+  const headerArea = 50;   // title + subtitle
+  const footerArea = 88;   // confirm + retake all
+  const gridGaps = THUMB_GAP * 2; // 2 gaps between 3 rows
+  const gridMargins = 12;  // spacing above/below grid
+  const availableGridH = SH - topPad - headerArea - gridGaps - gridMargins - footerArea - botPad;
+  const thumbH = Math.min(availableGridH / 3, THUMB_W * 1.35);
 
   return (
     <View style={s.root}>
       <StatusBar barStyle="light-content" />
 
+      {/* Camera — always mounted with stable frameProcessor */}
       <Camera
         ref={cameraRef}
         style={s.camera}
         device={device}
-        isActive={phase === 'scanning'}
+        isActive={!isError}
         photo={true}
         frameProcessor={frameProcessor}
         pixelFormat="yuv"
       />
 
-      <View style={s.overlay} pointerEvents="box-none">
-        {/* Top instruction */}
-        <View style={[s.topArea, { paddingTop: insets.top + 24 }]}>
-          <Text variant="h3" weight="600" color="#fff" align="center" style={s.instructionText}>
-            {isComplete
-              ? strings.register.faceInstructions.complete
-              : isError
-                ? strings.register.faceInstructions.failed
-                : instruction}
-          </Text>
-          {!isComplete && !isError && phase === 'scanning' && (
-            <Text variant="body" color="rgba(255,255,255,0.5)" align="center" style={s.subtext}>
-              Keep your face visible
-            </Text>
-          )}
-        </View>
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* REVIEW PHASE — opaque overlay, no scroll, fits screen     */}
+      {/* ═══════════════════════════════════════════════════════════ */}
 
-        {/* Center: SVG oval + progress ring OR success checkmark */}
-        <View style={s.centerArea}>
-          {isComplete ? (
-            <Animated.View
-              style={[
-                s.checkContainer,
-                {
-                  transform: [{ scale: checkAnim }],
-                  opacity: checkAnim,
-                },
-              ]}
+      {isReview && (
+        <View style={[s.reviewOverlay, { paddingTop: topPad, paddingBottom: botPad }]}>
+          {/* Header */}
+          <View style={s.reviewHeader}>
+            <Text variant="h3" weight="700" color="#FFFFFF" align="center">
+              {strings.register.faceInstructions.reviewTitle}
+            </Text>
+            <Text variant="caption" color="rgba(255,255,255,0.45)" align="center">
+              Tap any photo to retake it
+            </Text>
+          </View>
+
+          {/* Thumbnails grid — fills available space */}
+          <View style={s.thumbGrid}>
+            {images.map((uri, i) => (
+              <TouchableOpacity
+                key={`${i}-${uri}`}
+                style={[s.thumbCard, { width: THUMB_W, height: thumbH }]}
+                onPress={() => handleRetakePhoto(i)}
+                activeOpacity={0.7}
+              >
+                <Image source={{ uri }} style={s.thumbImage} />
+                <View style={s.thumbRetakeIcon}>
+                  <RotateCcw size={14} color="#FFFFFF" strokeWidth={2.5} />
+                </View>
+                <View style={s.thumbLabelWrap}>
+                  <Text variant="caption" weight="600" color="#FFFFFF">
+                    {STEP_LABELS[i] || `Photo ${i + 1}`}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* Actions */}
+          <View style={s.reviewFooter}>
+            <TouchableOpacity
+              style={s.confirmButton}
+              onPress={handleConfirm}
+              activeOpacity={0.7}
             >
-              <View style={s.checkCircle}>
-                <Check size={64} color="#FFFFFF" strokeWidth={3} />
-              </View>
-            </Animated.View>
-          ) : (
-            <Svg width={RING_SIZE} height={RING_SIZE}>
-              {/* Face oval guide — color changes based on detection state */}
-              <AnimatedEllipse
-                cx={SVG_CENTER}
-                cy={SVG_CENTER}
+              <Check size={20} color="#FFFFFF" strokeWidth={2.5} />
+              <Text variant="body" weight="700" color="#FFFFFF" style={s.confirmText}>
+                {strings.register.faceInstructions.looksGood}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={s.retakeAllButton}
+              onPress={handleRetakeAll}
+              activeOpacity={0.7}
+            >
+              <RotateCcw size={14} color="rgba(255,255,255,0.5)" strokeWidth={2} />
+              <Text variant="caption" color="rgba(255,255,255,0.5)" style={s.retakeAllText}>
+                Retake All
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* SCANNING / COMPLETE / ERROR — camera overlay UI            */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+
+      {!isReview && (
+        <>
+          {/* SVG: dark mask + oval border */}
+          <View style={s.svgLayer} pointerEvents="none">
+            <Svg width={SW} height={SH}>
+              <Path
+                d={MASK_PATH}
+                fill="rgba(0,0,0,0.75)"
+                fillRule="evenodd"
+              />
+              <Ellipse
+                cx={OVAL_CX}
+                cy={OVAL_CY}
                 rx={OVAL_RX}
                 ry={OVAL_RY}
-                stroke={ovalColor}
-                strokeWidth={2.5}
-                fill="none"
-                opacity={detectionState === 'no_face' ? pulseAnim : 1}
-              />
-              {/* Progress ring */}
-              <AnimatedCircle
-                cx={SVG_CENTER}
-                cy={SVG_CENTER}
-                r={RING_R}
-                stroke="#FFFFFF"
+                stroke={ovalStroke}
                 strokeWidth={3}
                 fill="none"
-                strokeDasharray={`${CIRCUMFERENCE}`}
-                strokeDashoffset={dashOffset}
-                strokeLinecap="round"
-                rotation={-90}
-                origin={`${SVG_CENTER}, ${SVG_CENTER}`}
               />
             </Svg>
-          )}
-        </View>
+          </View>
 
-        {/* Bottom info */}
-        <View style={[s.bottomArea, { paddingBottom: Math.max(insets.bottom, 24) + 16 }]}>
-          {isError ? (
-            <ErrorRetry onRetry={handleRetry} />
-          ) : (
-            !isComplete && (
-              <Text variant="caption" color="rgba(255,255,255,0.4)" align="center">
-                {capturedCount} of {captureCount}
+          {/* UI overlay */}
+          <View style={s.uiLayer} pointerEvents="box-none">
+            {/* Top section */}
+            <View style={[s.topSection, { paddingTop: insets.top + 12 }]}>
+              <Text variant="h3" weight="600" color="#FFFFFF" align="center">
+                {strings.register.faceInstructions.scanLabel}
               </Text>
-            )
-          )}
-        </View>
+              {isScanning && (
+                <Text
+                  variant="caption"
+                  color="rgba(255,255,255,0.5)"
+                  align="center"
+                  style={s.stepCounter}
+                >
+                  {stepLabel}
+                </Text>
+              )}
+            </View>
 
-        {/* Flash overlay */}
-        <Animated.View
-          style={[s.flash, { opacity: flashAnim }]}
-          pointerEvents="none"
-        />
-      </View>
-    </View>
-  );
-};
+            {/* Bottom section */}
+            <View style={[s.bottomSection, { paddingBottom: Math.max(insets.bottom, 16) + 16 }]}>
+              {isComplete ? (
+                <View style={s.completionContainer}>
+                  <Animated.View
+                    style={[
+                      s.checkWrapper,
+                      {
+                        transform: [{ scale: checkAnim }],
+                        opacity: checkAnim,
+                      },
+                    ]}
+                  >
+                    <View style={s.checkCircle}>
+                      <Check size={48} color="#FFFFFF" strokeWidth={3} />
+                    </View>
+                  </Animated.View>
+                  <Text
+                    variant="h3"
+                    weight="700"
+                    color="#22C55E"
+                    align="center"
+                    style={s.doneText}
+                  >
+                    {strings.register.faceInstructions.done}
+                  </Text>
+                </View>
+              ) : isError ? (
+                <View style={s.errorContainer}>
+                  <Text
+                    variant="body"
+                    color="rgba(255,255,255,0.6)"
+                    align="center"
+                    style={s.errorText}
+                  >
+                    {strings.register.faceInstructions.failed}
+                  </Text>
+                  <TouchableOpacity onPress={handleRetry} style={s.retryButton}>
+                    <Text variant="body" weight="600" color="#FFFFFF" align="center">
+                      {strings.register.faceInstructions.tapToRetry}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <>
+                  {/* Instruction */}
+                  <Text
+                    variant="h3"
+                    weight="600"
+                    color="#FFFFFF"
+                    align="center"
+                    style={s.instruction}
+                  >
+                    {STEP_INSTRUCTIONS[currentStep]}
+                  </Text>
 
-// ── Error Retry Sub-component ─────────────────────────────────
+                  {/* Progress dots */}
+                  <View style={s.dotsRow}>
+                    {Array.from({ length: captureCount }).map((_, i) => {
+                      const isDone = retakeIndex !== null
+                        ? i !== retakeIndex
+                        : i < currentStep;
+                      const isActive = retakeIndex !== null
+                        ? i === retakeIndex
+                        : i === currentStep;
 
-const ErrorRetry: React.FC<{ onRetry: () => void }> = ({ onRetry }) => {
-  return (
-    <View style={s.retryContainer}>
-      <Text
-        variant="body"
-        color="#FFFFFF"
-        align="center"
-        style={s.retryText}
-        onPress={onRetry}
-      >
-        Tap to retry
-      </Text>
+                      return (
+                        <View
+                          key={i}
+                          style={[
+                            s.dot,
+                            isDone
+                              ? s.dotDone
+                              : isActive
+                                ? s.dotActive
+                                : s.dotPending,
+                          ]}
+                        />
+                      );
+                    })}
+                  </View>
+
+                  {/* Shutter button */}
+                  <TouchableOpacity
+                    style={[
+                      s.shutterOuter,
+                      faceDetected ? s.shutterEnabled : s.shutterDisabled,
+                    ]}
+                    onPress={handleCapture}
+                    disabled={!faceDetected}
+                    activeOpacity={0.7}
+                  >
+                    <View
+                      style={[
+                        s.shutterInner,
+                        faceDetected ? s.shutterInnerEnabled : s.shutterInnerDisabled,
+                      ]}
+                    />
+                  </TouchableOpacity>
+
+                  {!faceDetected && (
+                    <Text
+                      variant="caption"
+                      color="rgba(255,255,255,0.4)"
+                      align="center"
+                      style={s.hint}
+                    >
+                      {strings.register.faceInstructions.noFace}
+                    </Text>
+                  )}
+                </>
+              )}
+            </View>
+          </View>
+
+          {/* Flash */}
+          <Animated.View
+            style={[s.flash, { opacity: flashAnim }]}
+            pointerEvents="none"
+          />
+        </>
+      )}
     </View>
   );
 };
@@ -579,69 +625,221 @@ const s = StyleSheet.create({
     backgroundColor: '#000',
   },
   camera: {
-    flex: 1,
+    ...StyleSheet.absoluteFillObject,
   },
-  overlay: {
+  svgLayer: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  uiLayer: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'space-between',
   },
-  topArea: {
+
+  // Top
+  topSection: {
     alignItems: 'center',
     paddingHorizontal: 24,
   },
-  instructionText: {
+  stepCounter: {
+    marginTop: 4,
+  },
+
+  // Bottom
+  bottomSection: {
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  instruction: {
+    marginBottom: 16,
     textShadowColor: 'rgba(0,0,0,0.8)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 6,
   },
-  subtext: {
-    marginTop: 6,
-    textShadowColor: 'rgba(0,0,0,0.6)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
-  },
-  centerArea: {
+
+  // Progress dots
+  dotsRow: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 10,
+    marginBottom: 28,
   },
-  checkContainer: {
-    width: RING_SIZE,
-    height: RING_SIZE,
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  dotDone: {
+    backgroundColor: '#22C55E',
+  },
+  dotActive: {
+    backgroundColor: '#FFFFFF',
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  dotPending: {
+    backgroundColor: 'rgba(255,255,255,0.25)',
+  },
+
+  // Shutter button
+  shutterOuter: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 4,
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: 8,
+  },
+  shutterEnabled: {
+    borderColor: '#FFFFFF',
+  },
+  shutterDisabled: {
+    borderColor: 'rgba(255,255,255,0.15)',
+  },
+  shutterInner: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+  },
+  shutterInnerEnabled: {
+    backgroundColor: '#FFFFFF',
+  },
+  shutterInnerDisabled: {
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+
+  hint: {
+    marginTop: 4,
+  },
+
+  // Completion
+  completionContainer: {
+    alignItems: 'center',
+  },
+  checkWrapper: {
+    marginBottom: 12,
   },
   checkCircle: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
+    width: 88,
+    height: 88,
+    borderRadius: 44,
     backgroundColor: 'rgba(34,197,94,0.85)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  bottomArea: {
-    alignItems: 'center',
-    paddingHorizontal: 24,
+  doneText: {
+    marginTop: 4,
   },
+
+  // Error
+  errorContainer: {
+    alignItems: 'center',
+  },
+  errorText: {
+    marginBottom: 16,
+  },
+  retryButton: {
+    paddingVertical: 14,
+    paddingHorizontal: 36,
+    borderRadius: 28,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.4)',
+  },
+
+  // Flash
   flash: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#FFFFFF',
   },
+
+  // No camera
   noCameraContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
   },
-  retryContainer: {
-    paddingVertical: 12,
-    paddingHorizontal: 32,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
+
+  // ── Review phase (no scroll, fits screen) ─────────────────
+
+  reviewOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000',
+    paddingHorizontal: REVIEW_H_PAD,
   },
-  retryText: {
-    textShadowColor: 'rgba(0,0,0,0.6)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
+  reviewHeader: {
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 6,
+  },
+
+  // Thumbnails — flex grid, centered
+  thumbGrid: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: THUMB_GAP,
+    justifyContent: 'center',
+    alignContent: 'center',
+  },
+  thumbCard: {
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  thumbImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  thumbRetakeIcon: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  thumbLabelWrap: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+  },
+
+  // Review footer
+  reviewFooter: {
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 6,
+  },
+  confirmButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    paddingVertical: 14,
+    borderRadius: 28,
+    backgroundColor: '#22C55E',
+  },
+  confirmText: {
+    marginLeft: 8,
+  },
+  retakeAllButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+  },
+  retakeAllText: {
+    marginLeft: 6,
   },
 });
