@@ -170,10 +170,15 @@ class AuthService:
         if not record.is_active:
             raise ValidationError("Student ID is no longer active")
 
-        # Check if already registered
-        existing_user = self.user_repo.get_by_student_id(normalized_id)
+        # Check if already registered (student ID or email) in a single query
+        existing_user = self.user_repo.get_by_student_id_or_email(
+            normalized_id, registration_data["email"]
+        )
         if existing_user:
-            raise ValidationError("This student ID is already registered. Please login instead.")
+            if existing_user.student_id == normalized_id:
+                raise ValidationError("This student ID is already registered. Please login instead.")
+            from app.utils.exceptions import DuplicateError
+            raise DuplicateError("An account with this email already exists")
 
         # Validate password strength
         is_valid, error_msg = validate_password_strength(registration_data["password"])
@@ -252,28 +257,43 @@ class AuthService:
             logger.error(f"Supabase signup request failed: {error_msg}")
             raise ValidationError(f"Failed to create account: {error_msg}")
 
-        # Create local user record
-        user_data = {
-            "email": registration_data["email"],
-            "password_hash": None,  # Managed by Supabase
-            "role": UserRole.STUDENT,
-            "first_name": record.first_name,
-            "last_name": record.last_name,
-            "student_id": normalized_id,
-            "phone": registration_data.get("phone"),
-            "is_active": True,
-            "email_verified": False,
-            "supabase_user_id": uuid_mod.UUID(supabase_user["id"]),
-        }
+        # Create local user record — skip duplicate checks (already validated
+        # by register_student() and Supabase signup above).  Use flush() to
+        # obtain user.id without an extra commit round-trip.
+        user = User(
+            email=registration_data["email"],
+            password_hash=None,  # Managed by Supabase
+            role=UserRole.STUDENT,
+            first_name=record.first_name,
+            last_name=record.last_name,
+            student_id=normalized_id,
+            phone=registration_data.get("phone"),
+            is_active=True,
+            email_verified=False,
+            supabase_user_id=uuid_mod.UUID(supabase_user["id"]),
+        )
+        self.db.add(user)
+        self.db.flush()  # Assigns user.id without committing
 
-        user = self.user_repo.create(user_data)
-
-        # Auto-enroll in matching schedules
+        # Auto-enroll in matching schedules.  Pass the already-fetched
+        # student record and skip enrollment duplicate checks (brand-new user
+        # can't have existing enrollments).
         from app.services.enrollment_service import EnrollmentService
         enrollment_service = EnrollmentService(self.db)
-        enrollments = enrollment_service.auto_enroll_student(user.id, normalized_id)
-        if enrollments:
-            self.db.commit()
+        enrollment_service.auto_enroll_student(
+            user.id, normalized_id,
+            record=record,
+            skip_duplicate_check=True,
+        )
+
+        # Single commit for user + enrollments.
+        # Temporarily disable expire_on_commit so that the user object's
+        # attributes stay loaded after commit — avoids a costly re-fetch
+        # query (~300-400ms to remote Supabase PostgreSQL) when the router
+        # serializes the user into a response.
+        self.db.expire_on_commit = False
+        self.db.commit()
+        self.db.expire_on_commit = True
 
         logger.info(f"Student registered via Supabase Auth: {user.email}")
         return user, {
@@ -282,26 +302,32 @@ class AuthService:
 
     def _register_student_legacy(self, registration_data: dict, record, normalized_id: str) -> Tuple[User, dict]:
         """Create student with local password hashing (legacy / custom JWT mode)."""
-        user_data = {
-            "email": registration_data["email"],
-            "password_hash": hash_password(registration_data["password"]),
-            "role": UserRole.STUDENT,
-            "first_name": record.first_name,
-            "last_name": record.last_name,
-            "student_id": normalized_id,
-            "phone": registration_data.get("phone"),
-            "is_active": True,
-            "email_verified": True,  # Legacy mode: skip email verification
-        }
-
-        user = self.user_repo.create(user_data)
+        user = User(
+            email=registration_data["email"],
+            password_hash=hash_password(registration_data["password"]),
+            role=UserRole.STUDENT,
+            first_name=record.first_name,
+            last_name=record.last_name,
+            student_id=normalized_id,
+            phone=registration_data.get("phone"),
+            is_active=True,
+            email_verified=True,  # Legacy mode: skip email verification
+        )
+        self.db.add(user)
+        self.db.flush()
 
         # Auto-enroll in matching schedules
         from app.services.enrollment_service import EnrollmentService
         enrollment_service = EnrollmentService(self.db)
-        enrollments = enrollment_service.auto_enroll_student(user.id, normalized_id)
-        if enrollments:
-            self.db.commit()
+        enrollment_service.auto_enroll_student(
+            user.id, normalized_id,
+            record=record,
+            skip_duplicate_check=True,
+        )
+
+        self.db.expire_on_commit = False
+        self.db.commit()
+        self.db.expire_on_commit = True
 
         tokens = self._generate_tokens(user)
 

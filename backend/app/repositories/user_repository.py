@@ -33,6 +33,12 @@ class UserRepository:
         """Get user by student ID"""
         return self.db.query(User).filter(User.student_id == student_id).first()
 
+    def get_by_student_id_or_email(self, student_id: str, email: str) -> Optional[User]:
+        """Check if a user exists with the given student_id or email (single query)."""
+        return self.db.query(User).filter(
+            or_(User.student_id == student_id, User.email == email)
+        ).first()
+
     def get_by_identifier(self, identifier: str) -> Optional[User]:
         """
         Get user by email or student ID

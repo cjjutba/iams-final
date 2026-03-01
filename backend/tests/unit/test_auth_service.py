@@ -91,8 +91,10 @@ def _make_auth_service(db_session=None):
 
     service = AuthService(db_session)
     service.user_repo = MagicMock()
-    # Default: student not yet registered
+    # Default: student not yet registered (neither student_id nor email)
     service.user_repo.get_by_student_id.return_value = None
+    service.user_repo.get_by_email.return_value = None
+    service.user_repo.get_by_student_id_or_email.return_value = None
 
     # Mock student_record_repo: returns a valid record for any ID by default
     mock_record_repo = MagicMock()
@@ -261,10 +263,8 @@ class TestRegisterStudent:
 
     def test_register_student_success(self):
         """Valid registration data should create user and return tokens."""
-        service, repo = _make_auth_service()
-
-        created_user = _make_user()
-        repo.create.return_value = created_user
+        db_session = MagicMock()
+        service, repo = _make_auth_service(db_session)
 
         reg_data = {
             "student_id": "STU-2024-001",
@@ -277,9 +277,10 @@ class TestRegisterStudent:
 
         user, tokens = service.register_student(reg_data)
 
-        assert user == created_user
+        assert user.email == "new@test.edu"
+        assert user.role == UserRole.STUDENT
         assert "access_token" in tokens
-        repo.create.assert_called_once()
+        db_session.add.assert_called()
 
     def test_register_student_invalid_student_id(self):
         """Registration with a student ID not in school records should raise."""
@@ -330,9 +331,9 @@ class TestRegisterStudent:
             service.register_student(reg_data)
 
     def test_register_student_calls_repo_with_hashed_password(self):
-        """The password stored via repo.create must be hashed, not plain."""
-        service, repo = _make_auth_service()
-        repo.create.return_value = _make_user()
+        """The password stored must be hashed, not plain."""
+        db_session = MagicMock()
+        service, repo = _make_auth_service(db_session)
 
         reg_data = {
             "student_id": "STU-2024-001",
@@ -342,16 +343,15 @@ class TestRegisterStudent:
             "last_name": "Student",
         }
 
-        service.register_student(reg_data)
+        user, _ = service.register_student(reg_data)
 
-        call_args = repo.create.call_args[0][0]
-        assert call_args["password_hash"] != "StrongPass1"
-        assert call_args["password_hash"].startswith("$2b$") or call_args["password_hash"].startswith("$2a$")
+        assert user.password_hash != "StrongPass1"
+        assert user.password_hash.startswith("$2b$") or user.password_hash.startswith("$2a$")
 
     def test_register_student_sets_role_to_student(self):
         """The created user must have role = STUDENT."""
-        service, repo = _make_auth_service()
-        repo.create.return_value = _make_user()
+        db_session = MagicMock()
+        service, repo = _make_auth_service(db_session)
 
         reg_data = {
             "student_id": "STU-2024-001",
@@ -361,10 +361,9 @@ class TestRegisterStudent:
             "last_name": "Student",
         }
 
-        service.register_student(reg_data)
+        user, _ = service.register_student(reg_data)
 
-        call_args = repo.create.call_args[0][0]
-        assert call_args["role"] == UserRole.STUDENT
+        assert user.role == UserRole.STUDENT
 
 
 # ===================================================================

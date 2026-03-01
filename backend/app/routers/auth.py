@@ -371,6 +371,15 @@ def email_confirmed_page():
       <p class="subtitle">Your password has been changed successfully. Return to the IAMS app to sign in.</p>
     </div>
 
+    <!-- Link Expired / Error View -->
+    <div id="view-error" class="hidden">
+      <div class="icon" style="background:#fef2f2;">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+      </div>
+      <h1 id="error-title">Link Expired</h1>
+      <p id="error-detail" class="subtitle">This verification link has expired or is invalid. Please return to the IAMS app and request a new verification email.</p>
+    </div>
+
     <!-- Loading View -->
     <div id="view-loading">
       <p class="subtitle">Loading...</p>
@@ -390,6 +399,9 @@ def email_confirmed_page():
       return {{
         type: params.get('type'),
         accessToken: params.get('access_token'),
+        error: params.get('error'),
+        errorCode: params.get('error_code'),
+        errorDescription: params.get('error_description'),
       }};
     }}
 
@@ -456,10 +468,23 @@ def email_confirmed_page():
 
     // Route to the correct view on page load
     (function() {{
-      const {{ type, accessToken: token }} = parseHash();
+      const {{ type, accessToken: token, error, errorCode, errorDescription }} = parseHash();
       accessToken = token;
 
-      if (type === 'recovery' && token) {{
+      if (error) {{
+        // Supabase returned an error (expired link, invalid OTP, etc.)
+        var title = 'Link Expired';
+        var detail = 'This verification link has expired or is invalid. Please return to the IAMS app and request a new verification email.';
+        if (errorCode === 'otp_expired') {{
+          title = 'Link Expired';
+          detail = 'This verification link has expired. Please return to the IAMS app and tap "Resend Verification Email" to get a new one.';
+        }} else if (error === 'access_denied') {{
+          title = 'Access Denied';
+        }}
+        document.getElementById('error-title').textContent = title;
+        document.getElementById('error-detail').textContent = detail;
+        showView('view-error');
+      }} else if (type === 'recovery' && token) {{
         showView('view-reset');
       }} else {{
         showView('view-verified');
