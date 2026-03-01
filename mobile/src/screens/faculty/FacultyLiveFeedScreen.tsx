@@ -36,6 +36,7 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { useVideoPlayer, VideoView } from 'expo-video';
+import { RTCView } from 'react-native-webrtc';
 import { Wifi, WifiOff, Video, Users, RefreshCw } from 'lucide-react-native';
 import { theme, strings } from '../../constants';
 import { formatPercentage } from '../../utils/formatters';
@@ -45,6 +46,7 @@ import { Text, Card, Button } from '../../components/ui';
 import { DetectionOverlay } from '../../components/video/DetectionOverlay';
 import { useDetectionWebSocket } from '../../hooks/useDetectionWebSocket';
 import type { DetectedStudent } from '../../hooks/useDetectionWebSocket';
+import { useWebRTC } from '../../hooks/useWebRTC';
 
 // ---------------------------------------------------------------------------
 // Route typing
@@ -151,6 +153,7 @@ export const FacultyLiveFeedScreen: React.FC = () => {
     isConnected,
     isConnecting,
     hlsUrl,
+    streamMode,
     studentMap,
     connectionError,
     reconnect,
@@ -158,14 +161,29 @@ export const FacultyLiveFeedScreen: React.FC = () => {
     detectionHeight,
   } = useDetectionWebSocket(scheduleId);
 
-  // Video player — source updates when hlsUrl arrives.
-  // Only call play() when there is actually a source to play.
-  const player = useVideoPlayer(hlsUrl, (p) => {
-    p.loop = false;
-    if (hlsUrl) {
-      p.play();
-    }
-  });
+  // WebRTC video (enabled only in webrtc mode)
+  const {
+    remoteStream,
+    connectionState: rtcConnectionState,
+    reconnect: rtcReconnect,
+  } = useWebRTC(scheduleId, streamMode === 'webrtc');
+
+  // HLS video player — pass null when in WebRTC mode to avoid starting HLS connection
+  const player = useVideoPlayer(
+    streamMode === 'hls' || streamMode === 'legacy' ? hlsUrl : null,
+    (p) => {
+      p.loop = false;
+      if (hlsUrl && (streamMode === 'hls' || streamMode === 'legacy')) {
+        p.play();
+      }
+    },
+  );
+
+  // Combined reconnect: resets both WS and WebRTC connections
+  const handleReconnect = useCallback(() => {
+    reconnect();
+    if (streamMode === 'webrtc') rtcReconnect();
+  }, [reconnect, rtcReconnect, streamMode]);
 
   // Track container dimensions for overlay coordinate scaling
   const [containerLayout, setContainerLayout] = useState({ width: 0, height: 0 });
@@ -270,7 +288,7 @@ export const FacultyLiveFeedScreen: React.FC = () => {
           <Button
             variant="secondary"
             size="md"
-            onPress={reconnect}
+            onPress={handleReconnect}
             style={styles.retryButton}
           >
             {strings.common.retry}
@@ -284,7 +302,11 @@ export const FacultyLiveFeedScreen: React.FC = () => {
   // Loading state (waiting for HLS URL)
   // --------------------------------------------------
 
-  if (isConnecting && !hlsUrl) {
+  const isVideoReady =
+    (streamMode === 'webrtc' && remoteStream !== null) ||
+    ((streamMode === 'hls' || streamMode === 'legacy') && hlsUrl !== null);
+
+  if (isConnecting && !isVideoReady) {
     return (
       <ScreenLayout safeArea padded={false}>
         <Header showBack title={subjectName} />
@@ -358,9 +380,26 @@ export const FacultyLiveFeedScreen: React.FC = () => {
           </View>
         </View>
 
-        {/* Camera feed: native HLS video + detection overlay */}
+        {/* Camera feed: WebRTC or HLS video + detection overlay */}
         <View style={styles.feedContainer} onLayout={handleVideoLayout}>
-          {hlsUrl ? (
+          {streamMode === 'webrtc' && remoteStream ? (
+            <>
+              <RTCView
+                streamURL={remoteStream.toURL()}
+                style={styles.video}
+                objectFit="cover"
+                mirror={false}
+                zOrder={0}
+              />
+              <DetectionOverlay
+                detections={detections}
+                videoWidth={detectionWidth}
+                videoHeight={detectionHeight}
+                containerWidth={containerLayout.width}
+                containerHeight={containerLayout.height}
+              />
+            </>
+          ) : (streamMode === 'hls' || streamMode === 'legacy') && hlsUrl ? (
             <>
               <VideoView
                 player={player}
@@ -385,7 +424,9 @@ export const FacultyLiveFeedScreen: React.FC = () => {
                 align="center"
                 style={styles.noFeedText}
               >
-                Waiting for stream...
+                {rtcConnectionState === 'failed'
+                  ? 'WebRTC connection failed — tap retry'
+                  : 'Connecting to camera...'}
               </Text>
             </View>
           )}
