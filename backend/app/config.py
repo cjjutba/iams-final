@@ -76,6 +76,15 @@ class Settings(BaseSettings):
     HLS_SEGMENT_DIR: str = "data/hls"  # Directory for .m3u8 and .ts files
     HLS_FFMPEG_PATH: str = "bin/ffmpeg.exe"  # Path to FFmpeg binary (relative to backend/)
 
+    # WebRTC Streaming (mediamtx + WHEP — replaces HLS for <300ms latency)
+    USE_WEBRTC_STREAMING: bool = True                        # True=WebRTC, False=fall back to HLS/legacy
+    MEDIAMTX_API_URL: str = "http://localhost:9997"          # mediamtx REST API (internal only)
+    MEDIAMTX_WEBRTC_URL: str = "http://localhost:8889"       # mediamtx WHEP endpoint (internal only)
+    WEBRTC_STUN_URLS: str = "stun:stun.l.google.com:19302"  # Comma-separated STUN URLs (free Google STUN)
+    WEBRTC_TURN_URL: str = ""                                # Optional: "turn:your-server:3478"
+    WEBRTC_TURN_USERNAME: str = ""                           # TURN username (empty = no TURN)
+    WEBRTC_TURN_CREDENTIAL: str = ""                         # TURN credential
+
     # Recognition (decoupled from video, runs at lower FPS)
     RECOGNITION_FPS: float = 10.0  # Frames/sec to sample for face recognition
     RECOGNITION_MAX_BATCH_SIZE: int = 50  # Max faces per batch forward pass
