@@ -78,3 +78,7 @@ backups/
 tmp/
 temp/
 *.tmp
+
+# mediamtx binary (downloaded locally, not committed)
+backend/bin/mediamtx
+backend/bin/mediamtx.exe
