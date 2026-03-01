@@ -38,6 +38,7 @@ from app.repositories.schedule_repository import ScheduleRepository
 from app.services.camera_config import get_camera_url
 from app.services.recognition_service import recognition_service
 from app.services.hls_service import hls_service
+from app.services.webrtc_service import webrtc_service
 
 router = APIRouter()
 
@@ -164,19 +165,36 @@ async def live_stream_ws(schedule_id: str, websocket: WebSocket):
 
     # --- Accept WebSocket ---
     await websocket.accept()
+
+    # Determine stream mode, with automatic fallback.
+    # If WebRTC is configured but mediamtx is unreachable, fall back to HLS
+    # so the client always gets video rather than an endless retry loop.
+    use_webrtc = False
     if settings.USE_WEBRTC_STREAMING:
+        mediamtx_ok = await webrtc_service.ensure_path(room_id, rtsp_url)
+        if mediamtx_ok:
+            use_webrtc = True
+        else:
+            logger.warning(
+                f"Live stream: mediamtx unreachable, falling back to "
+                f"{'HLS' if settings.USE_HLS_STREAMING else 'legacy'} "
+                f"for room {room_id}"
+            )
+
+    if use_webrtc:
         _mode_label = "webrtc"
     elif settings.USE_HLS_STREAMING:
         _mode_label = "hls"
     else:
         _mode_label = "legacy"
+
     logger.info(
         f"Live stream WS connected: viewer={viewer_id}, "
         f"schedule={schedule_id}, room={room_id}, "
         f"mode={_mode_label}"
     )
 
-    if settings.USE_WEBRTC_STREAMING:
+    if use_webrtc:
         await _webrtc_mode(websocket, viewer_id, schedule_id, room_id, rtsp_url)
     elif settings.USE_HLS_STREAMING:
         await _hls_mode(websocket, viewer_id, schedule_id, room_id, rtsp_url)
