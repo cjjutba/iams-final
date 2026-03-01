@@ -11,13 +11,15 @@ Endpoints:
     POST /api/v1/webrtc/{schedule_id}/offer   — WHEP signaling proxy
 """
 
+import uuid
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.config import logger
 from app.database import get_db
-from app.models.user import User
+from app.models.enrollment import Enrollment
+from app.models.user import User, UserRole
 from app.repositories.schedule_repository import ScheduleRepository
 from app.schemas.webrtc import WebRTCOfferRequest
 from app.services.camera_config import get_camera_url
@@ -45,7 +47,7 @@ async def get_webrtc_config():
 
 @router.post("/{schedule_id}/offer")
 async def create_webrtc_offer(
-    schedule_id: str,
+    schedule_id: uuid.UUID,
     body: WebRTCOfferRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -55,26 +57,50 @@ async def create_webrtc_offer(
 
     Flow:
       1. Validate schedule exists
-      2. Resolve room → RTSP camera URL
-      3. Ensure mediamtx path exists for this room
-      4. Forward SDP offer to mediamtx WHEP endpoint
-      5. Return SDP answer to mobile app
+      2. Authorize: students must be enrolled, faculty must own the schedule
+      3. Resolve room → RTSP camera URL
+      4. Ensure mediamtx path exists for this room
+      5. Forward SDP offer to mediamtx WHEP endpoint
+      6. Return SDP answer to mobile app
 
     The mobile app then calls setRemoteDescription(answer) to complete
     the WebRTC handshake and start streaming.
 
-    Requires: valid JWT token (any authenticated user)
+    Requires: valid JWT token; role-based access (student=enrolled, faculty=owns schedule)
     """
     # 1. Validate schedule
     schedule_repo = ScheduleRepository(db)
-    schedule = schedule_repo.get_by_id(schedule_id)
+    schedule = schedule_repo.get_by_id(str(schedule_id))
     if schedule is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Schedule not found: {schedule_id}",
         )
 
-    # 2. Resolve camera RTSP URL
+    # 2. Authorization
+    if current_user.role == UserRole.STUDENT:
+        enrollment = (
+            db.query(Enrollment)
+            .filter(
+                Enrollment.student_id == current_user.id,
+                Enrollment.schedule_id == schedule.id,
+            )
+            .first()
+        )
+        if not enrollment:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not enrolled in this schedule",
+            )
+    elif current_user.role == UserRole.FACULTY:
+        if str(schedule.faculty_id) != str(current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not own this schedule",
+            )
+    # ADMIN: no restriction
+
+    # 3. Resolve camera RTSP URL
     room_id = str(schedule.room_id)
     rtsp_url = get_camera_url(room_id, db)
     if rtsp_url is None:
@@ -83,7 +109,7 @@ async def create_webrtc_offer(
             detail="No camera configured for this room",
         )
 
-    # 3. Ensure mediamtx path exists (creates or updates)
+    # 4. Ensure mediamtx path exists (creates or updates)
     path_ok = await webrtc_service.ensure_path(room_id, rtsp_url)
     if not path_ok:
         raise HTTPException(
@@ -91,7 +117,7 @@ async def create_webrtc_offer(
             detail="WebRTC service unavailable — is mediamtx running?",
         )
 
-    # 4. Forward SDP offer to mediamtx WHEP
+    # 5. Forward SDP offer to mediamtx WHEP
     try:
         answer_sdp, _ = await webrtc_service.forward_whep_offer(room_id, body.sdp)
     except httpx.HTTPStatusError as exc:
@@ -107,7 +133,7 @@ async def create_webrtc_offer(
             detail="Internal error during WebRTC setup",
         )
 
-    # 5. Return SDP answer
+    # 6. Return SDP answer
     logger.info(
         f"WebRTC offer forwarded: schedule={schedule_id}, room={room_id}, "
         f"user={current_user.id}"
