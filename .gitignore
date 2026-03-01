@@ -32,13 +32,9 @@ build/
 # FAISS
 data/faiss/*.index
 
-# FFmpeg binary (downloaded via winget, ~200MB)
-backend/bin/ffmpeg
-backend/bin/ffmpeg.exe
-
-# mediamtx binary (downloaded separately — see backend/scripts/start_mediamtx.sh)
-backend/bin/mediamtx
-backend/bin/mediamtx.exe
+# Binaries — downloaded separately, never committed (see scripts/start_mediamtx.sh)
+backend/bin/*
+!backend/bin/.gitkeep
 
 # HLS segments (generated at runtime)
 backend/data/hls/
