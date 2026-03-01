@@ -31,12 +31,12 @@ def _make_jpeg_bytes(width: int = 160, height: int = 160, color="blue") -> bytes
     return buf.getvalue()
 
 
-def _make_base64_jpeg(width: int = 100, height: int = 100, color="green") -> str:
+def _make_base64_jpeg(width: int = 160, height: int = 160, color="green") -> str:
     """Create a Base64-encoded JPEG string."""
     return base64.b64encode(_make_jpeg_bytes(width, height, color)).decode()
 
 
-def _make_png_base64(width: int = 100, height: int = 100) -> str:
+def _make_png_base64(width: int = 160, height: int = 160) -> str:
     """Create a Base64-encoded PNG string."""
     img = Image.new("RGB", (width, height), color="red")
     buf = io.BytesIO()
@@ -225,14 +225,24 @@ class TestFaceNetModel:
             model.decode_base64_image(huge)
 
     def test_decode_base64_image_too_small(self):
-        """Image smaller than 10x10 pixels raises ValueError."""
+        """Image smaller than FACE_IMAGE_SIZE (160x160) raises ValueError."""
         from app.services.ml.face_recognition import FaceNetModel
         model = FaceNetModel()
 
-        # Create a tiny 5x5 JPEG
+        # Create a tiny 5x5 JPEG — well below the 160x160 minimum
         tiny_b64 = _make_base64_jpeg(width=5, height=5)
         with pytest.raises(ValueError, match="too small"):
             model.decode_base64_image(tiny_b64)
+
+    def test_decode_base64_image_below_facenet_size(self):
+        """Images smaller than FACE_IMAGE_SIZE (160x160) should be rejected."""
+        from app.services.ml.face_recognition import FaceNetModel
+        model = FaceNetModel()
+
+        # 100x100 is a reasonable photo size but below FaceNet's 160x160 requirement
+        small_b64 = _make_base64_jpeg(width=100, height=100)
+        with pytest.raises(ValueError, match="too small"):
+            model.decode_base64_image(small_b64)
 
     # -- Similarity computation --------------------------------------------
 

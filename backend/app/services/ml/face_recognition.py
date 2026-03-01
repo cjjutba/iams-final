@@ -279,8 +279,11 @@ class FaceNetModel:
 
             # Validate image dimensions (prevent extreme sizes)
             width, height = image.size
-            if width < 10 or height < 10:
-                raise ValueError(f"Image too small: {width}x{height} (minimum 10x10)")
+            min_dim = self.image_size  # 160 — matches FaceNet input requirement
+            if width < min_dim or height < min_dim:
+                raise ValueError(
+                    f"Image too small: {width}x{height}, minimum {min_dim}x{min_dim} required"
+                )
             if width > 4096 or height > 4096:
                 raise ValueError(f"Image too large: {width}x{height} (maximum 4096x4096)")
 
