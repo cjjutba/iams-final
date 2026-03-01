@@ -70,17 +70,19 @@ class MediamtxService:
             logger.error(f"Failed to start mediamtx: {exc}")
             return False
 
-        # Wait for the mediamtx REST API to become ready (max 5 s).
-        api_ready = await self._wait_for_api(timeout=5.0)
-
-        # If the process exited immediately, it was a bad config or port conflict.
+        # Fast-fail: if the process exited immediately it's a bad config or port conflict.
+        # Check before polling the API to avoid a 5-second wait on a dead process.
+        await asyncio.sleep(0.1)
         if self._process.poll() is not None:
             logger.error(
                 f"mediamtx exited immediately (rc={self._process.returncode}). "
-                "Check mediamtx.yml and that ports 9997/8889/8554 are free."
+                "Check mediamtx.yml and that ports 9997/8889/8554/8887 are free."
             )
             self._process = None
             return False
+
+        # Wait for the mediamtx REST API to become ready (max 5 s).
+        api_ready = await self._wait_for_api(timeout=5.0)
 
         if not api_ready:
             logger.error(
@@ -104,7 +106,10 @@ class MediamtxService:
             logger.info("mediamtx stopped")
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.wait()       # no timeout — SIGKILL always terminates on POSIX
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass  # kernel will reap the zombie when FastAPI exits
             logger.info("mediamtx killed (SIGTERM timeout)")
         except Exception as exc:
             logger.warning(f"Error stopping mediamtx: {exc}")

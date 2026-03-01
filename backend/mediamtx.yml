@@ -9,10 +9,12 @@ logLevel: warn        # suppress routine logs; FastAPI has its own logging
 api: yes
 apiAddress: 127.0.0.1:9997
 
-# RTSP — mediamtx pulls from camera on demand when a viewer connects
+# RTSP — mediamtx pulls from the camera outbound (sourceOnDemand).
+# Port 8554 is occupied by the QEMU RPi emulator; use 8556 to avoid conflict.
+# Bound to loopback: no external RTSP push ingest is needed in this setup.
 rtsp: yes
-rtspAddress: :8554
-rtspsAddress: :8322
+rtspAddress: 127.0.0.1:8556
+rtspsAddress: 127.0.0.1:8323
 
 # WebRTC (WHEP) — mobile clients negotiate here via FastAPI proxy
 # webrtcLocalUDPAddress: explicit ICE UDP port (default :8000 collides with orphaned instances)
