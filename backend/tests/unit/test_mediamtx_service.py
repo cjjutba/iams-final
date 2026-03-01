@@ -15,8 +15,8 @@ def svc():
     """Fresh MediamtxService with cleared state."""
     from app.services.mediamtx_service import MediamtxService
     s = MediamtxService()
-    s._process = None
-    return s
+    yield s
+    s.stop()  # no-op if _process is None
 
 
 # ---------------------------------------------------------------------------

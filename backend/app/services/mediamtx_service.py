@@ -27,7 +27,8 @@ from app.config import settings, logger
 class MediamtxService:
     """Lifecycle manager for the mediamtx subprocess."""
 
-    _process: Optional[subprocess.Popen] = None
+    def __init__(self) -> None:
+        self._process: Optional[subprocess.Popen] = None
 
     async def start(
         self,
@@ -100,14 +101,15 @@ class MediamtxService:
         try:
             proc.send_signal(signal.SIGTERM)
             proc.wait(timeout=5)
+            logger.info("mediamtx stopped")
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.wait(timeout=3)
+            proc.wait()       # no timeout — SIGKILL always terminates on POSIX
+            logger.info("mediamtx killed (SIGTERM timeout)")
         except Exception as exc:
             logger.warning(f"Error stopping mediamtx: {exc}")
         finally:
             self._process = None
-        logger.info("mediamtx stopped")
 
     def is_healthy(self) -> bool:
         """Return True if the mediamtx process is still running."""
@@ -118,16 +120,16 @@ class MediamtxService:
         url = f"{settings.MEDIAMTX_API_URL}/v3/config/global/get"
         elapsed = 0.0
         interval = 0.25
-        while elapsed < timeout:
-            try:
-                async with httpx.AsyncClient(timeout=1.0) as client:
+        async with httpx.AsyncClient(timeout=1.0) as client:
+            while elapsed < timeout:
+                try:
                     resp = await client.get(url)
                     if resp.status_code == 200:
                         return True
-            except Exception:
-                pass
-            await asyncio.sleep(interval)
-            elapsed += interval
+                except Exception:
+                    pass
+                await asyncio.sleep(interval)
+                elapsed += interval
         return False
 
 
