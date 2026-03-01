@@ -93,7 +93,7 @@ function computeScale(
 const DetectionBox: React.FC<{
   detection: DetectionItem;
   scaleInfo: ScaleInfo;
-}> = ({ detection, scaleInfo }) => {
+}> = React.memo(({ detection, scaleInfo }) => {
   const opacity = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -109,18 +109,49 @@ const DetectionBox: React.FC<{
   const top = detection.bbox.y * scale + offsetY;
   const width = detection.bbox.width * scale;
   const height = detection.bbox.height * scale;
-  const borderColor = detection.user_id ? '#00C853' : '#FFD600';
+
+  const isKnown = !!detection.user_id;
+  const borderColor = isKnown ? '#00E676' : '#FFD600';
+  const labelBg = isKnown ? 'rgba(0,0,0,0.72)' : 'rgba(60,40,0,0.80)';
+
   const label = detection.name || detection.student_id || (detection.user_id?.slice(0, 8) ?? '');
   const simText = detection.similarity != null ? ` ${(detection.similarity * 100).toFixed(0)}%` : '';
 
   return (
     <Animated.View style={[styles.box, { left, top, width, height, borderColor, opacity }]}>
-      <View style={[styles.labelContainer, { backgroundColor: borderColor }]}>
-        <Text style={styles.labelText}>{label}{simText}</Text>
+      <View style={[styles.labelContainer, { backgroundColor: labelBg }]}>
+        <Text style={[styles.labelText, { color: borderColor }]} numberOfLines={1}>
+          {label}{simText}
+        </Text>
       </View>
     </Animated.View>
   );
-};
+}, (prev, next) =>
+  prev.detection.bbox.x === next.detection.bbox.x &&
+  prev.detection.bbox.y === next.detection.bbox.y &&
+  prev.detection.bbox.width === next.detection.bbox.width &&
+  prev.detection.bbox.height === next.detection.bbox.height &&
+  prev.detection.name === next.detection.name &&
+  prev.detection.similarity === next.detection.similarity &&
+  prev.scaleInfo.scale === next.scaleInfo.scale &&
+  prev.scaleInfo.offsetX === next.scaleInfo.offsetX &&
+  prev.scaleInfo.offsetY === next.scaleInfo.offsetY,
+);
+
+// ---------------------------------------------------------------------------
+// UnknownBadge
+// ---------------------------------------------------------------------------
+
+const UnknownBadge: React.FC<{ count: number }> = React.memo(({ count }) => {
+  if (count === 0) return null;
+  return (
+    <View style={styles.unknownBadge}>
+      <Text style={styles.unknownBadgeText}>
+        {count} unrecognized
+      </Text>
+    </View>
+  );
+});
 
 // ---------------------------------------------------------------------------
 // Component
@@ -131,6 +162,11 @@ export const DetectionOverlay: React.FC<DetectionOverlayProps> = React.memo(
     const scaleInfo = useMemo(
       () => computeScale(videoWidth, videoHeight, containerWidth, containerHeight),
       [videoWidth, videoHeight, containerWidth, containerHeight],
+    );
+
+    const unknownCount = useMemo(
+      () => detections.filter(d => !d.user_id).length,
+      [detections],
     );
 
     if (!detections.length || containerWidth === 0 || containerHeight === 0) {
@@ -146,6 +182,7 @@ export const DetectionOverlay: React.FC<DetectionOverlayProps> = React.memo(
             scaleInfo={scaleInfo}
           />
         ))}
+        <UnknownBadge count={unknownCount} />
       </View>
     );
   },
@@ -158,19 +195,34 @@ export const DetectionOverlay: React.FC<DetectionOverlayProps> = React.memo(
 const styles = StyleSheet.create({
   box: {
     position: 'absolute',
-    borderWidth: 2,
-    borderRadius: 2,
+    borderWidth: 3,
+    borderRadius: 3,
   },
   labelContainer: {
     position: 'absolute',
-    top: -20,
+    top: -22,
     left: -1,
-    paddingHorizontal: 4,
+    paddingHorizontal: 6,
     paddingVertical: 1,
     borderRadius: 2,
   },
   labelText: {
-    color: '#000',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  unknownBadge: {
+    position: 'absolute',
+    bottom: 8,
+    right: 8,
+    backgroundColor: 'rgba(255,214,0,0.18)',
+    borderWidth: 1,
+    borderColor: '#FFD600',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  unknownBadgeText: {
+    color: '#FFD600',
     fontSize: 11,
     fontWeight: '600',
   },
