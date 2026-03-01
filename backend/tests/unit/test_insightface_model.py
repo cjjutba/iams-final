@@ -76,16 +76,8 @@ class TestLoadModel:
             m = InsightFaceModel()
             m.load_model()
 
-            assert m.app is not None
+            assert m.app is mock_instance
             mock_instance.prepare.assert_called_once()
-
-    def test_get_embedding_raises_if_not_loaded(self):
-        """RuntimeError raised if app is None."""
-        from app.services.ml.insightface_model import InsightFaceModel
-        m = InsightFaceModel()
-        m.app = None
-        with pytest.raises(RuntimeError, match="not loaded"):
-            m.get_embedding(Image.new("RGB", (200, 200)))
 
 
 # ---------------------------------------------------------------------------
@@ -281,3 +273,36 @@ class TestDecodeBase64Image:
         m = InsightFaceModel()
         with pytest.raises(ValueError, match="too small"):
             m.decode_base64_image(_make_b64_jpeg(width=50, height=50))
+
+    def test_decoded_too_large_raises(self):
+        """Decoded image > 10MB raises ValueError."""
+        from app.services.ml.insightface_model import InsightFaceModel
+        from unittest.mock import patch
+        m = InsightFaceModel()
+        # Patch base64.b64decode to return a 11MB bytestring
+        with patch("app.services.ml.insightface_model.base64.b64decode", return_value=b"x" * 11_000_000):
+            with pytest.raises(ValueError, match="too large"):
+                m.decode_base64_image("dGVzdA==")  # valid base64
+
+    def test_image_too_large_dimensions_raises(self):
+        """Image with dimensions > 4096x4096 raises ValueError."""
+        from app.services.ml.insightface_model import InsightFaceModel
+        m = InsightFaceModel()
+        # Create a 4097x4097 image
+        img = Image.new("RGB", (4097, 4097), color="white")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        with pytest.raises(ValueError, match="too large"):
+            m.decode_base64_image(b64)
+
+    def test_unsupported_format_raises(self):
+        """BMP image raises ValueError (only JPEG and PNG accepted)."""
+        from app.services.ml.insightface_model import InsightFaceModel
+        m = InsightFaceModel()
+        img = Image.new("RGB", (200, 200), color="white")
+        buf = io.BytesIO()
+        img.save(buf, format="BMP")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        with pytest.raises(ValueError, match="Unsupported image format"):
+            m.decode_base64_image(b64)

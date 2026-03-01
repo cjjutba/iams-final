@@ -188,12 +188,14 @@ class InsightFaceModel:
             result = []
             for face in insight_faces:
                 x1, y1, x2, y2 = face.bbox.astype(int)
+                cx1 = max(0, x1)
+                cy1 = max(0, y1)
                 result.append(
                     DetectedFace(
-                        x=max(0, x1),
-                        y=max(0, y1),
-                        width=max(1, x2 - x1),
-                        height=max(1, y2 - y1),
+                        x=cx1,
+                        y=cy1,
+                        width=max(1, x2 - cx1),
+                        height=max(1, y2 - cy1),
                         confidence=float(face.det_score),
                         embedding=face.normed_embedding.copy(),
                     )
