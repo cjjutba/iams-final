@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     CORS_ORIGINS: List[str] = ["*"]  # In production, specify exact origins
 
     # Face Recognition
+    INSIGHTFACE_MODEL: str = "buffalo_l"
+    INSIGHTFACE_DET_SIZE: int = 640
     FAISS_INDEX_PATH: str = "data/faiss/faces.index"
     RECOGNITION_THRESHOLD: float = 0.45  # Cosine similarity threshold (lowered for cross-camera matching)
     RECOGNITION_MARGIN: float = 0.1  # Min gap between top-1 and top-2 scores
