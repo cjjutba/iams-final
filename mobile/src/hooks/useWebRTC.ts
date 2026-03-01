@@ -65,6 +65,9 @@ export function useWebRTC(scheduleId: string, enabled: boolean): UseWebRTCReturn
   const isMountedRef = useRef(true);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Ref so scheduleReconnect (empty-deps callback) always calls the latest connect.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const connectRef = useRef<() => Promise<void>>(null as any);
 
   // --------------------------------------------------
   // scheduleReconnect — exponential backoff
@@ -79,9 +82,8 @@ export function useWebRTC(scheduleId: string, enabled: boolean): UseWebRTCReturn
     );
     reconnectAttemptRef.current = attempt + 1;
     reconnectTimerRef.current = setTimeout(() => {
-      if (isMountedRef.current) connect();
+      if (isMountedRef.current) connectRef.current();
     }, delay);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // --------------------------------------------------
@@ -93,6 +95,8 @@ export function useWebRTC(scheduleId: string, enabled: boolean): UseWebRTCReturn
 
     // Tear down any previous peer connection
     if (pcRef.current) {
+      (pcRef.current as any).ontrack = null;
+      (pcRef.current as any).oniceconnectionstatechange = null;
       pcRef.current.close();
       pcRef.current = null;
     }
@@ -192,6 +196,11 @@ export function useWebRTC(scheduleId: string, enabled: boolean): UseWebRTCReturn
     }
   }, [scheduleId, enabled, scheduleReconnect]);
 
+  // Keep connectRef pointing at the latest connect function.
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
+
   // --------------------------------------------------
   // Mount / unmount
   // --------------------------------------------------
@@ -212,6 +221,9 @@ export function useWebRTC(scheduleId: string, enabled: boolean): UseWebRTCReturn
       }
 
       if (pcRef.current) {
+        // Null out listeners before close() so late callbacks cannot fire.
+        (pcRef.current as any).ontrack = null;
+        (pcRef.current as any).oniceconnectionstatechange = null;
         pcRef.current.close();
         pcRef.current = null;
       }

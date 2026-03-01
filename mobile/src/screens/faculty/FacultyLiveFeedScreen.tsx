@@ -168,16 +168,23 @@ export const FacultyLiveFeedScreen: React.FC = () => {
     reconnect: rtcReconnect,
   } = useWebRTC(scheduleId, streamMode === 'webrtc');
 
-  // HLS video player — pass null when in WebRTC mode to avoid starting HLS connection
+  // HLS video player — pass null when in WebRTC mode to avoid starting HLS connection.
+  // The setup callback runs immediately with the initial (null) hlsUrl, so p.play()
+  // would never execute there. Instead, a useEffect below calls play() once the URL
+  // arrives and streamMode is confirmed.
   const player = useVideoPlayer(
     streamMode === 'hls' || streamMode === 'legacy' ? hlsUrl : null,
     (p) => {
       p.loop = false;
-      if (hlsUrl && (streamMode === 'hls' || streamMode === 'legacy')) {
-        p.play();
-      }
     },
   );
+
+  // Start playback as soon as the HLS URL is available.
+  useEffect(() => {
+    if ((streamMode === 'hls' || streamMode === 'legacy') && hlsUrl) {
+      player.play();
+    }
+  }, [hlsUrl, streamMode, player]);
 
   // Combined reconnect: resets both WS and WebRTC connections
   const handleReconnect = useCallback(() => {
