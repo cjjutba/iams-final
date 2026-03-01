@@ -111,6 +111,21 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
+class _HLSAccessFilter(logging.Filter):
+    """
+    Drop uvicorn access-log records for HLS playlist polls.
+
+    The mobile player polls playlist.m3u8 several times per second during
+    live streaming.  Those lines add nothing actionable and drown out other
+    requests.  Segment fetches (.m4s / init.mp4) are kept so genuine
+    delivery issues remain visible.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return "/hls/" not in msg or "playlist.m3u8" not in msg
+
+
 def setup_logging() -> logging.Logger:
     """
     Setup structured logging with file rotation
@@ -118,6 +133,9 @@ def setup_logging() -> logging.Logger:
     Returns:
         Configured logger instance
     """
+    # Suppress noisy HLS playlist polls from uvicorn's access log
+    logging.getLogger("uvicorn.access").addFilter(_HLSAccessFilter())
+
     logger = logging.getLogger("iams")
 
     # Set level based on debug mode
