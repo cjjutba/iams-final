@@ -187,6 +187,11 @@ class FaceDetector:
     # range but risk tensor overflow on some platforms.
     MAX_DETECT_DIM = 1280
 
+    # Minimum face bounding box size in pixels. Detections smaller than this
+    # in either dimension are discarded — they produce poor-quality embeddings
+    # and waste backend resources.
+    MIN_FACE_PIXELS = 80
+
     def detect(self, frame: np.ndarray) -> List[FaceBox]:
         """
         Detect faces in a frame.
@@ -253,6 +258,14 @@ class FaceDetector:
                 confidence = detection.categories[0].score if detection.categories else 0.0
 
                 face_box = FaceBox(x, y, width, height, confidence)
+
+                # Skip faces that are too small for reliable recognition
+                if face_box.width < self.MIN_FACE_PIXELS or face_box.height < self.MIN_FACE_PIXELS:
+                    logger.debug(
+                        f"Skipping small face: {face_box.width}x{face_box.height} < {self.MIN_FACE_PIXELS}px"
+                    )
+                    continue
+
                 face_boxes.append(face_box)
 
             logger.debug(f"Detected {len(face_boxes)} faces in frame")
