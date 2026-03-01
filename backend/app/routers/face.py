@@ -410,7 +410,7 @@ async def process_faces(
                 # Log each detected user to presence system
                 for matched_user in matched_users:
                     try:
-                        await presence_service.log_detection(
+                        await presence_service.feed_detection(
                             schedule_id=schedule_id,
                             user_id=matched_user.user_id,
                             confidence=matched_user.confidence

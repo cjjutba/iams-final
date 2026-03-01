@@ -178,6 +178,28 @@ class PresenceService:
 
         return session
 
+    async def feed_detection(
+        self,
+        schedule_id: str,
+        user_id: str,
+        confidence: float,
+        bbox: Optional[List[float]] = None
+    ):
+        """Feed a detection into the tracking service without updating attendance.
+        Attendance updates happen solely in run_scan_cycle()."""
+        if schedule_id not in self.active_sessions:
+            logger.debug(f"No active session for {schedule_id}, skipping detection feed")
+            return
+
+        detection = Detection(
+            bbox=bbox or [0, 0, 0, 0],
+            confidence=1.0,
+            user_id=user_id,
+            recognition_confidence=confidence,
+        )
+        self.tracking_service.update(schedule_id, [detection])
+        logger.debug(f"Fed detection to tracking: user={user_id}, schedule={schedule_id}")
+
     async def log_detection(
         self,
         schedule_id: str,
