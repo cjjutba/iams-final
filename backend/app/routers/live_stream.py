@@ -18,6 +18,7 @@ Supports two modes controlled by ``USE_HLS_STREAMING``:
 """
 
 import asyncio
+import time as _time
 import threading as _threading
 import uuid as uuid_mod
 from datetime import datetime, timezone
@@ -45,23 +46,20 @@ class NameCache:
 
     def get(self, user_id: str):
         """Return (name, student_id) or None if missing/expired."""
-        import time
         with self._lock:
             entry = self._store.get(user_id)
-        if entry is None:
-            return None
-        value, inserted_at = entry
-        if time.monotonic() - inserted_at > self._ttl:
-            with self._lock:
+            if entry is None:
+                return None
+            value, inserted_at = entry
+            if _time.monotonic() - inserted_at > self._ttl:
                 self._store.pop(user_id, None)
-            return None
-        return value
+                return None
+            return value
 
     def set(self, user_id: str, name: str, student_id: str) -> None:
         """Store (name, student_id) with current timestamp."""
-        import time
         with self._lock:
-            self._store[user_id] = ((name, student_id), time.monotonic())
+            self._store[user_id] = ((name, student_id), _time.monotonic())
 
 
 # 5-minute TTL — auto-refresh if student name changes in DB
@@ -279,7 +277,7 @@ async def _hls_mode(
             else:
                 # Recognition service not running for this room
                 stale_count += 1
-                if stale_count >= 100:  # ~15s of no recognition service
+                if stale_count >= 100:  # ~10s of no recognition service (100 × 100ms)
                     logger.warning(
                         f"Live stream: recognition service gone for room {room_id}, "
                         "attempting restart"
