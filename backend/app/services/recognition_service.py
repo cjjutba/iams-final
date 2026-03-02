@@ -76,43 +76,28 @@ class RecognitionService:
     _BACKOFF_MAX: float = 30.0
 
     def __init__(self):
-        self._face_detector = None
-        self._detector_initialized = False
-        self._facenet = None
+        self._insight = None
         self._faiss = None
         self._ml_available = False
         self._ml_checked = False
 
     # ------------------------------------------------------------------
-    # Lazy initializers (same pattern as live_stream_service)
+    # Lazy initializers
     # ------------------------------------------------------------------
-
-    def _ensure_detector(self):
-        if not self._detector_initialized:
-            try:
-                from app.services.live_stream_service import _create_face_detector
-                self._face_detector = _create_face_detector()
-                if self._face_detector is not None:
-                    logger.info("Recognition: MediaPipe face detector initialized OK")
-                else:
-                    logger.error("Recognition: MediaPipe face detector returned None")
-            except Exception as exc:
-                logger.warning(f"Recognition: MediaPipe init failed: {exc}")
-            self._detector_initialized = True
 
     def _ensure_ml(self):
         if not self._ml_checked:
             try:
-                from app.services.ml.face_recognition import facenet_model
+                from app.services.ml.insightface_model import insightface_model
                 from app.services.ml.faiss_manager import faiss_manager
 
-                if facenet_model.model is not None and faiss_manager.index is not None:
-                    self._facenet = facenet_model
+                if insightface_model.app is not None and faiss_manager.index is not None:
+                    self._insight = insightface_model
                     self._faiss = faiss_manager
                     self._ml_available = True
-                    logger.info("Recognition: FaceNet + FAISS available")
+                    logger.info("Recognition: InsightFace + FAISS available")
                 else:
-                    logger.warning("Recognition: FaceNet/FAISS not loaded")
+                    logger.warning("Recognition: InsightFace/FAISS not loaded")
             except Exception as exc:
                 logger.warning(f"Recognition: ML import failed: {exc}")
             self._ml_checked = True
@@ -146,7 +131,6 @@ class RecognitionService:
             return False
 
         # Ensure lazy components are initialized
-        self._ensure_detector()
         self._ensure_ml()
 
         # Start recognition loop
@@ -335,16 +319,21 @@ class RecognitionService:
         """
         Full recognition pipeline:
         1. Optionally downscale large frames (cap at RECOGNITION_MAX_DIM)
-        2. Detect faces with MediaPipe
-        3. Crop faces → batch FaceNet embeddings → batch FAISS search
+        2+3. InsightFace detect + ArcFace embed + FAISS search in one call
 
+        Returns (detections, frame_width, frame_height).
+        """
+        return self._process_frame_ml(frame)
+
+    def _process_frame_ml(self, frame: np.ndarray) -> tuple:
+        """
+        Run InsightFace detection + recognition on one frame.
         Returns (detections, frame_width, frame_height).
         """
         h, w = frame.shape[:2]
         max_dim = max(h, w)
-        cap = settings.RECOGNITION_MAX_DIM  # default 1280
+        cap = settings.RECOGNITION_MAX_DIM
 
-        # Only downscale if larger than cap — never upscale
         if max_dim > cap:
             scale = cap / max_dim
             new_w, new_h = int(w * scale), int(h * scale)
@@ -352,122 +341,41 @@ class RecognitionService:
 
         frame_h, frame_w = frame.shape[:2]
 
-        # Detect
-        detections = self._detect_faces(frame)
-        if not detections:
+        if not self._ml_available:
             return [], frame_w, frame_h
 
-        logger.info(f"Recognition: detected {len(detections)} face(s) in {frame_w}x{frame_h} frame")
-
-        # Recognize (batch)
-        if self._ml_available:
-            self._recognise_faces_batch(frame, detections)
-
-        return detections, frame_w, frame_h
-
-    _detect_log_counter: int = 0
-
-    def _detect_faces(self, frame: np.ndarray) -> List[Detection]:
-        """Run MediaPipe face detection on a BGR frame."""
-        if self._face_detector is None:
-            self._detect_log_counter += 1
-            if self._detect_log_counter <= 3:
-                logger.warning("Recognition: face detector is None — skipping detection")
-            return []
-
         try:
-            import mediapipe as mp
+            insight_faces = self._insight.get_faces(frame)
+            if not insight_faces:
+                return [], frame_w, frame_h
 
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            result = self._face_detector.detect(mp_image)
-
-            detections: List[Detection] = []
-            if result.detections:
-                for det in result.detections:
-                    bbox = det.bounding_box
-                    conf = det.categories[0].score if det.categories else 0.0
-                    detections.append(
-                        Detection(
-                            x=max(0, bbox.origin_x),
-                            y=max(0, bbox.origin_y),
-                            width=max(1, bbox.width),
-                            height=max(1, bbox.height),
-                            confidence=conf,
-                        )
-                    )
-            return detections
-        except Exception as exc:
-            logger.error(f"Recognition: detection error: {exc}")
-            return []
-
-    def _recognise_faces_batch(
-        self,
-        frame: np.ndarray,
-        detections: List[Detection],
-    ) -> None:
-        """
-        Batch recognition: crop all faces, generate embeddings in a single
-        forward pass, then batch FAISS search. Mutates detections in place.
-        """
-        if self._facenet is None or self._faiss is None:
-            return
-
-        h, w = frame.shape[:2]
-        face_crops = []
-        crop_indices = []  # maps back to detection index
-
-        min_px = settings.RECOGNITION_MIN_FACE_PX
-        for i, det in enumerate(detections):
-            if det.width < min_px or det.height < min_px:
-                continue  # face too small for reliable recognition
-
-            # Expand bbox by ~20% on each side so MTCNN has enough surrounding
-            # context to align the face consistently with how it was aligned
-            # during registration (full-selfie MTCNN path).
-            pad_x = int(det.width * 0.20)
-            pad_y = int(det.height * 0.20)
-            x1 = max(0, det.x - pad_x)
-            y1 = max(0, det.y - pad_y)
-            x2 = min(w, det.x + det.width + pad_x)
-            y2 = min(h, det.y + det.height + pad_y)
-
-            face_crop = frame[y1:y2, x1:x2]
-            face_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
-            face_crops.append(face_rgb)
-            crop_indices.append(i)
-
-        if not face_crops:
-            return
-
-        try:
-            # Limit batch size
-            max_batch = settings.RECOGNITION_MAX_BATCH_SIZE
-            face_crops = face_crops[:max_batch]
-            crop_indices = crop_indices[:max_batch]
-
-            # Batch FaceNet embedding (single forward pass).
-            # Each crop is an expanded MediaPipe bbox (20% padding) so MTCNN
-            # has enough surrounding context to successfully align the face —
-            # producing embeddings consistent with the registration path
-            # (full-selfie → MTCNN → aligned face → FaceNet).
-            embeddings = self._facenet.generate_embeddings_batch(
-                face_crops,
-                use_alignment=settings.USE_FACE_ALIGNMENT_FOR_RECOGNITION,
+            logger.info(
+                f"Recognition: detected {len(insight_faces)} face(s) "
+                f"in {frame_w}x{frame_h} frame"
             )
 
-            # Batch FAISS search
-            batch_results = self._faiss.search_batch(embeddings, k=1)
+            detections = []
+            for face in insight_faces:
+                user_id, similarity = None, None
+                if self._faiss is not None:
+                    matches = self._faiss.search(face.embedding, k=1)
+                    if matches:
+                        user_id, similarity = matches[0]
 
-            # Map results back to detections
-            for idx, results in zip(crop_indices, batch_results):
-                if results:
-                    user_id, similarity = results[0]
-                    detections[idx].user_id = user_id
-                    detections[idx].similarity = similarity
+                detections.append(Detection(
+                    x=face.x,
+                    y=face.y,
+                    width=face.width,
+                    height=face.height,
+                    confidence=face.confidence,
+                    user_id=user_id,
+                    similarity=similarity,
+                ))
+            return detections, frame_w, frame_h
 
         except Exception as exc:
-            logger.error(f"Recognition: batch recognition error: {exc}")
+            logger.error(f"Recognition: InsightFace error: {exc}")
+            return [], frame_w, frame_h
 
     # ------------------------------------------------------------------
     # Enrichment helper (requires DB session — called from router layer)
