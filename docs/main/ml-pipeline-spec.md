@@ -1,9 +1,15 @@
 # ML Pipeline Specification
 
 > **Single source of truth** for the IAMS face recognition and attendance pipeline.
-> Covers the full data path from camera capture on the Raspberry Pi edge device,
-> through backend recognition and presence tracking, to real-time streaming on
-> the mobile app.
+> Covers the full data path from camera capture to backend recognition and presence
+> tracking, through to real-time streaming on the mobile app.
+>
+> **Migration note (2026-03):** The ML pipeline was fully replaced. FaceNet
+> (InceptionResnetV1, PyTorch), MTCNN (facenet-pytorch), and MediaPipe were removed.
+> The system now uses InsightFace `buffalo_l` (SCRFD 10G detector + ArcFace w600k_r50
+> embedder, both ONNX Runtime) for both registration and CCTV recognition.
+
+<!-- Last updated: 2026-03-02 -->
 
 ---
 
@@ -16,27 +22,26 @@
 5. [FAISS Lifecycle](#5-faiss-lifecycle)
 6. [Streaming](#6-streaming)
 7. [Threshold Reference Table](#7-threshold-reference-table)
+8. [Academic References](#8-academic-references)
 
 ---
 
 ## 1. Preprocessing Chain
 
-The preprocessing chain spans two tiers: the edge device (Raspberry Pi) handles
-detection and cropping; the backend handles alignment, embedding, and search.
+The preprocessing chain is now fully consolidated in the backend. The edge device
+(Raspberry Pi) streams raw RTSP video; the backend samples frames and runs the
+InsightFace pipeline end-to-end.
 
 ### 1.1 Edge Device (Raspberry Pi)
 
+The edge device no longer performs face detection or cropping. Its sole
+responsibility is to publish the camera stream over RTSP. The backend samples
+frames directly from the RTSP URL at `RECOGNITION_FPS`.
+
 ```
-Camera capture (BGR, 640x480 @ 15fps default)
-  -> MediaPipe Face Detection (short-range model, confidence >= 0.6)
-     -> Discard detections smaller than 80x80 px (MIN_FACE_PIXELS)
-     -> Downscale frame to max 1280px before detection if needed
-  -> Crop face region with 20% padding on each side
-     -> Clamp to frame boundaries
-  -> Resize crop to 160x160 px (FACE_CROP_SIZE)
-  -> JPEG encode at 85% quality (JPEG_QUALITY)
-  -> Base64 encode
-  -> POST to backend /api/v1/face/process
+Camera
+  -> RTSP publish (H.264 stream)
+  -> Backend samples at RECOGNITION_FPS (2.0 fps default)
 ```
 
 **Key details:**
@@ -44,45 +49,52 @@ Camera capture (BGR, 640x480 @ 15fps default)
 | Step | Implementation | File |
 |------|---------------|------|
 | Camera capture | OpenCV / PiCamera2 / RTSP | `edge/app/config.py` |
-| Face detection | MediaPipe Tasks API, `blaze_face_short_range.tflite` | `edge/app/detector.py` |
-| Min detection confidence | `DETECTION_CONFIDENCE = 0.6` | `edge/app/config.py` |
-| Min face size | `MIN_FACE_PIXELS = 80` (width and height) | `edge/app/detector.py` |
-| Max detection dimension | `MAX_DETECT_DIM = 1280` | `edge/app/detector.py` |
-| Crop padding | 20% (`padding=0.2`) | `edge/app/processor.py` |
-| Crop resize | `FACE_CROP_SIZE = 160` (160x160 px) | `edge/app/config.py` |
-| JPEG quality | `JPEG_QUALITY = 85` | `edge/app/config.py` |
-| Encoding | `base64.b64encode(jpeg_bytes)` | `edge/app/processor.py` |
+| Stream format | RTSP (H.264) | `edge/app/config.py` |
+| Frame sampling | Backend samples at `RECOGNITION_FPS` | `backend/app/config.py` |
 
-### 1.2 Backend
+### 1.2 Backend — InsightFace Pipeline
+
+Both the registration path (single selfies from the mobile app) and the CCTV
+recognition path (sampled RTSP frames) share the same model instance and
+produce numerically compatible embeddings.
 
 ```
-Receive Base64 string
-  -> Decode Base64 (reject if > 15MB encoded / 10MB decoded)
-  -> Validate image format (JPEG or PNG only)
-  -> Validate dimensions >= 160x160, <= 4096x4096
-  -> If USE_FACE_ALIGNMENT is True:
-       -> MTCNN alignment (detect landmarks, align face)
-       -> Fallback: use raw crop if MTCNN finds no landmarks
-  -> Resize to 160x160 (FACE_IMAGE_SIZE) using PIL BILINEAR
-  -> Normalize pixel values to [-1, 1]:  (pixel - 127.5) / 128.0
-  -> Convert to tensor [1, 3, 160, 160] (CHW format)
-  -> FaceNet forward pass (InceptionResnetV1, VGGFace2 pretrained)
-  -> Output: 512-dimensional embedding
-  -> L2 normalize embedding
+Input image (selfie bytes or RTSP frame)
+  -> InsightFaceModel._to_bgr()                 # PIL / bytes / ndarray -> BGR ndarray
+  -> insightface.app.FaceAnalysis.get(bgr)       # Single call — detection + alignment + embedding
+       -> SCRFD 10G (ResNet50): face detection at det_size (640x640 default)
+       -> 5-point landmark detection (eyes, nose, mouth corners)
+       -> Landmark-guided affine crop -> 112x112 aligned face
+       -> ArcFace w600k_r50 (ResNet50): 512-dim embedding
+       -> L2 normalization (normed_embedding)
+  -> Output: 512-dim float32 ndarray, L2-normalized
 ```
 
 **Key details:**
 
 | Step | Implementation | File |
 |------|---------------|------|
-| Base64 decode + validation | `FaceNetModel.decode_base64_image()` | `backend/app/services/ml/face_recognition.py` |
-| MTCNN alignment | `FaceNetModel.align_face()` via `facenet_pytorch.MTCNN` | `backend/app/services/ml/face_recognition.py` |
-| MTCNN config | `image_size=160, margin=0, min_face_size=20, select_largest=True, post_process=False` | `backend/app/services/ml/face_recognition.py` |
-| Preprocessing | `FaceNetModel.preprocess_image()` | `backend/app/services/ml/face_recognition.py` |
-| Normalization formula | `(pixel - 127.5) / 128.0` | `backend/app/services/ml/face_recognition.py` |
-| Model | `InceptionResnetV1(pretrained='vggface2')` | `backend/app/services/ml/face_recognition.py` |
+| Model wrapper | `InsightFaceModel` | `backend/app/services/ml/insightface_model.py` |
+| Model pack | `buffalo_l` (ONNX, ~500 MB, downloaded on first use) | `backend/app/config.py` |
+| Detector | SCRFD 10G (ResNet50 backbone) | InsightFace buffalo_l |
+| Detection input size | `INSIGHTFACE_DET_SIZE = 640` (640x640) | `backend/app/config.py` |
+| Alignment | 5-point landmark affine warp | InsightFace buffalo_l |
+| Aligned crop size | 112x112 px (fixed by ArcFace) | InsightFace buffalo_l |
+| Embedder | ArcFace w600k_r50 (ResNet50) | InsightFace buffalo_l |
 | Embedding dim | 512 | `backend/app/services/ml/faiss_manager.py` |
-| L2 normalization | `embedding / np.linalg.norm(embedding)` | `backend/app/services/ml/face_recognition.py` |
+| Normalization | L2 (`face.normed_embedding`) | InsightFace internal |
+| Execution provider | CoreML on macOS (Apple Silicon); CPU elsewhere | `InsightFaceModel._get_providers()` |
+
+**ONNX Runtime execution providers** (from `_get_providers()`):
+
+| Platform | Providers |
+|----------|-----------|
+| macOS (Darwin) | `["CoreMLExecutionProvider", "CPUExecutionProvider"]` |
+| Linux / Windows | `["CPUExecutionProvider"]` |
+
+CoreML leverages the Apple Neural Engine on M-series Macs. On Linux/Windows
+servers there is no CUDA provider; GPU acceleration is not used in the current
+build.
 
 ---
 
@@ -95,18 +107,20 @@ FAISS index and the PostgreSQL database.
 ### 2.1 Flow
 
 ```
-Mobile app captures 3-5 face images (guided 5-angle capture)
+Mobile app captures 3-5 face images (guided multi-angle capture)
   -> Upload as multipart files to POST /api/v1/face/register
   -> Validate: MIN_FACE_IMAGES (3) <= count <= MAX_FACE_IMAGES (5)
   -> Check user does not already have a registration (else error)
   -> For each image:
        -> Read bytes, validate file size (<= 10MB)
-       -> generate_embedding(image_bytes):
-            -> MTCNN alignment (if USE_FACE_ALIGNMENT=True)
-            -> Preprocess: resize 160x160, normalize [-1,1]
-            -> FaceNet forward pass -> 512-dim embedding
-            -> L2 normalize
-  -> Average all embeddings: np.mean(embeddings, axis=0)
+       -> InsightFaceModel.get_embedding(image_bytes):
+            -> Convert to BGR ndarray
+            -> SCRFD 10G detection -> 5-point alignment -> 112x112 crop
+            -> ArcFace w600k_r50 -> 512-dim embedding
+            -> L2 normalization (normed_embedding)
+            -> Return 512-dim float32 ndarray
+            -> On no face detected: raise ValueError (image skipped with warning)
+  -> Average all valid embeddings: np.mean(embeddings, axis=0)
   -> L2 normalize the averaged embedding
   -> Add to FAISS index -> returns faiss_id
   -> Transaction safety:
@@ -115,14 +129,20 @@ Mobile app captures 3-5 face images (guided 5-angle capture)
        -> On DB commit failure: rollback DB + remove FAISS entry
 ```
 
+**Batch helper (`get_embeddings_batch`):** Internally calls `get_embedding()`
+per image; images where SCRFD finds no face are skipped with a warning log. If
+no images yield a valid face, a `ValueError` is raised and the registration is
+rejected.
+
 ### 2.2 Configuration
 
 | Parameter | Env Var | Default | Description |
 |-----------|---------|---------|-------------|
+| Model pack | `INSIGHTFACE_MODEL` | `buffalo_l` | InsightFace model pack name |
+| Detection size | `INSIGHTFACE_DET_SIZE` | `640` | SCRFD input resolution (px, square) |
 | Min images | `MIN_FACE_IMAGES` | `3` | Minimum face images for registration |
 | Max images | `MAX_FACE_IMAGES` | `5` | Maximum face images for registration |
 | Max upload size | `MAX_UPLOAD_SIZE_MB` | `10` | Per-image upload limit (MB) |
-| Face alignment | `USE_FACE_ALIGNMENT` | `True` | Enable MTCNN alignment before embedding |
 
 ### 2.3 Re-registration
 
@@ -135,49 +155,59 @@ index rebuild.
 
 ## 3. Face Recognition
 
-Recognition matches an incoming face crop against all registered embeddings
-using FAISS nearest-neighbor search with a confidence margin check.
+Recognition matches one or more faces from a sampled RTSP frame against all
+registered embeddings using FAISS nearest-neighbor search.
 
-### 3.1 Single Recognition Flow
-
-```
-Input: image bytes (from edge device or test endpoint)
-  -> generate_embedding(image_bytes)
-       -> MTCNN alignment (if enabled) -> preprocess -> FaceNet -> L2 normalize
-  -> FAISS search_with_margin(embedding):
-       -> Search top-K (RECOGNITION_TOP_K=3) neighbors with threshold=0.0
-       -> If top-1 score < RECOGNITION_THRESHOLD (0.55): no match
-       -> If top-1 score >= 0.55:
-            -> Compute gap = top-1 score - top-2 score
-            -> If gap <= RECOGNITION_MARGIN (0.1): flag as ambiguous
-            -> Return user_id, confidence, is_ambiguous
-  -> Ambiguous matches: logged with warning but still accepted (user_id returned)
-```
-
-### 3.2 Batch Recognition Flow
-
-Used by the Edge API and the recognition service for processing multiple
-faces in a single request.
+### 3.1 CCTV Recognition Flow
 
 ```
-Input: list of image bytes
-  -> Phase 1: Decode all images (Base64 or raw bytes -> PIL)
-  -> Phase 2: Batch embedding via generate_embeddings_batch()
-       -> Preprocess each image -> stack tensors -> single forward pass [N,3,160,160] -> [N,512]
-       -> L2 normalize each row
-  -> Phase 3: Batch FAISS search via search_batch(embeddings, k=RECOGNITION_TOP_K)
-       -> For each query, return matches above RECOGNITION_THRESHOLD
+RTSP frame sampled at RECOGNITION_FPS (2.0 fps default)
+  -> InsightFaceModel.get_faces(frame):   # frame is BGR ndarray from cv2.VideoCapture
+       -> insightface.app.FaceAnalysis.get(frame)
+            -> SCRFD 10G: detect all faces in frame
+            -> Per detected face:
+                 -> 5-point landmark alignment -> 112x112 crop
+                 -> ArcFace w600k_r50 -> 512-dim normed_embedding
+       -> Return List[DetectedFace] (empty list if no faces or model not loaded)
+  -> For each DetectedFace:
+       -> FAISS search_with_margin(embedding):
+            -> Search top-K (RECOGNITION_TOP_K=3) neighbors with threshold=0.0
+            -> If top-1 cosine similarity < RECOGNITION_THRESHOLD (0.45): no match
+            -> If top-1 >= 0.45:
+                 -> Compute gap = top-1 score - top-2 score
+                 -> If gap <= RECOGNITION_MARGIN (0.1): flag as ambiguous
+                 -> Attach user_id + similarity to DetectedFace
+  -> Push DetectedFace list via WebSocket
+  -> Feed matched user_ids to PresenceService
+```
+
+**Note on threshold:** `RECOGNITION_THRESHOLD = 0.45` (lower than the former
+0.55) was calibrated for cross-camera matching where embeddings from a wide-angle
+CCTV frame may differ slightly from registration selfies.
+
+### 3.2 Single Registration Embedding Flow
+
+Used only during face registration (not CCTV recognition).
+
+```
+Input: single image bytes from mobile upload
+  -> InsightFaceModel.get_embedding(image):
+       -> SCRFD 10G detection (largest face selected)
+       -> 5-point alignment -> 112x112 crop
+       -> ArcFace w600k_r50 -> 512-dim normed_embedding
+  -> Return 512-dim float32 ndarray
 ```
 
 ### 3.3 Configuration
 
 | Parameter | Env Var | Default | Description |
 |-----------|---------|---------|-------------|
-| Threshold | `RECOGNITION_THRESHOLD` | `0.55` | Cosine similarity threshold for a match |
-| Margin | `RECOGNITION_MARGIN` | `0.1` | Min gap between top-1 and top-2 to be non-ambiguous |
-| Top-K | `RECOGNITION_TOP_K` | `3` | Number of neighbors to retrieve from FAISS |
-| GPU | `USE_GPU` | `True` | Use CUDA if available, fallback to CPU |
-| Face alignment | `USE_FACE_ALIGNMENT` | `True` | MTCNN alignment before embedding |
+| Recognition threshold | `RECOGNITION_THRESHOLD` | `0.45` | Cosine similarity threshold for a match |
+| Recognition margin | `RECOGNITION_MARGIN` | `0.1` | Min gap between top-1 and top-2 to be non-ambiguous |
+| Top-K neighbors | `RECOGNITION_TOP_K` | `3` | FAISS neighbors to retrieve per query |
+| Detection size | `INSIGHTFACE_DET_SIZE` | `640` | SCRFD input resolution (px, square) |
+| Recognition FPS | `RECOGNITION_FPS` | `2.0` | Frames per second sampled for recognition |
+| Max batch size | `RECOGNITION_MAX_BATCH_SIZE` | `50` | Max faces per backend batch pass |
 
 ---
 
@@ -228,8 +258,8 @@ service account token.
   "data": {
     "processed": 5,
     "matched": [
-      { "user_id": "uuid-1", "confidence": 0.85 },
-      { "user_id": "uuid-2", "confidence": 0.92 }
+      { "user_id": "uuid-1", "confidence": 0.72 },
+      { "user_id": "uuid-2", "confidence": 0.81 }
     ],
     "unmatched": 3,
     "processing_time_ms": 245,
@@ -281,6 +311,9 @@ After recognition, matched users are fed to the presence tracking system:
 
 **`faiss.IndexFlatIP`** -- exact inner-product search on L2-normalized vectors,
 which is equivalent to cosine similarity. Dimension: **512**.
+
+This is unchanged from the prior pipeline. InsightFace ArcFace embeddings are
+also 512-dimensional and L2-normalized, so the FAISS index is fully compatible.
 
 ### 5.2 No Native Delete
 
@@ -365,7 +398,7 @@ When the last viewer disconnects, the process is killed and segments are
 cleaned up.
 
 **Detection metadata:** A separate recognition pipeline reads the RTSP stream
-at `RECOGNITION_FPS` (8 fps) on a background thread. Results are pushed to
+at `RECOGNITION_FPS` (2.0 fps) on a background thread. Results are pushed to
 connected clients via WebSocket at ~8 Hz (`poll_interval = 0.125s`).
 
 **WebSocket message format (HLS mode):**
@@ -381,7 +414,7 @@ connected clients via WebSocket at ~8 Hz (`poll_interval = 0.125s`).
       "user_id": "uuid-1",
       "name": "Juan Dela Cruz",
       "student_id": "2021-0001",
-      "similarity": 0.87
+      "similarity": 0.72
     }
   ],
   "detection_width": 1280,
@@ -420,8 +453,8 @@ the HLS video player:
 | Playlist size | `HLS_PLAYLIST_SIZE` | `3` | Sliding-window segment count |
 | Segment directory | `HLS_SEGMENT_DIR` | `data/hls` | Storage for `.m3u8` / `.ts` files |
 | FFmpeg path | `HLS_FFMPEG_PATH` | `bin/ffmpeg.exe` | Path to FFmpeg binary |
-| Recognition FPS | `RECOGNITION_FPS` | `8.0` | Frames/sec sampled for recognition |
-| Max batch size | `RECOGNITION_MAX_BATCH_SIZE` | `20` | Max faces per batch forward pass |
+| Recognition FPS | `RECOGNITION_FPS` | `2.0` | Frames/sec sampled for recognition |
+| Max batch size | `RECOGNITION_MAX_BATCH_SIZE` | `50` | Max faces per batch forward pass |
 | Recognition RTSP | `RECOGNITION_RTSP_URL` | `""` | Separate high-res RTSP for recognition |
 | Recognition max dim | `RECOGNITION_MAX_DIM` | `1280` | Cap frame dimension for detection |
 | Legacy stream FPS | `STREAM_FPS` | `3` | FPS for legacy JPEG-over-WS mode |
@@ -440,13 +473,6 @@ and valid ranges. All are set in backend or edge `.env` files.
 
 | Parameter | Env Var | Default | Valid Range | Description |
 |-----------|---------|---------|-------------|-------------|
-| Detection confidence | `DETECTION_CONFIDENCE` | `0.6` | 0.0 - 1.0 | MediaPipe min detection confidence |
-| Detection model | `DETECTION_MODEL` | `0` | 0 or 1 | 0 = short-range (only supported model) |
-| Min face pixels | (hardcoded) | `80` | > 0 | Min bbox dimension in px to accept |
-| Max detect dimension | (hardcoded) | `1280` | > 0 | Downscale frame if larger |
-| Face crop size | `FACE_CROP_SIZE` | `160` | > 0 | Resize crop before JPEG encode (px) |
-| JPEG quality | `JPEG_QUALITY` | `85` | 1 - 100 | JPEG compression quality |
-| Crop padding | (hardcoded) | `0.2` | 0.0 - 1.0 | Padding ratio around face bbox |
 | Scan interval | `SCAN_INTERVAL` | `60` | > 0 | Seconds between edge scans |
 | Queue max size | `QUEUE_MAX_SIZE` | `500` | > 0 | Offline queue capacity |
 | Queue TTL | `QUEUE_TTL_SECONDS` | `300` | > 0 | Queue item expiry (seconds) |
@@ -457,12 +483,11 @@ and valid ranges. All are set in backend or edge `.env` files.
 
 | Parameter | Env Var | Default | Valid Range | Description |
 |-----------|---------|---------|-------------|-------------|
-| Recognition threshold | `RECOGNITION_THRESHOLD` | `0.55` | 0.0 - 1.0 | Cosine similarity threshold for a match |
+| InsightFace model | `INSIGHTFACE_MODEL` | `buffalo_l` | string | InsightFace model pack name |
+| Detection size | `INSIGHTFACE_DET_SIZE` | `640` | > 0 | SCRFD input resolution (px, square) |
+| Recognition threshold | `RECOGNITION_THRESHOLD` | `0.45` | 0.0 - 1.0 | ArcFace cosine similarity threshold |
 | Recognition margin | `RECOGNITION_MARGIN` | `0.1` | 0.0 - 1.0 | Min gap between top-1 and top-2 scores |
 | Top-K neighbors | `RECOGNITION_TOP_K` | `3` | >= 1 | FAISS neighbors to retrieve |
-| Face alignment | `USE_FACE_ALIGNMENT` | `True` | True/False | Enable MTCNN alignment |
-| GPU usage | `USE_GPU` | `True` | True/False | Use CUDA if available |
-| Face image size | `FACE_IMAGE_SIZE` | `160` | > 0 | FaceNet input dimensions (px) |
 | Min face images | `MIN_FACE_IMAGES` | `3` | >= 1 | Min images for registration |
 | Max face images | `MAX_FACE_IMAGES` | `5` | >= MIN_FACE_IMAGES | Max images for registration |
 | FAISS index path | `FAISS_INDEX_PATH` | `data/faiss/faces.index` | valid path | Disk path for FAISS index |
@@ -483,8 +508,8 @@ and valid ranges. All are set in backend or edge `.env` files.
 | HLS enabled | `USE_HLS_STREAMING` | `True` | True/False | HLS mode feature flag |
 | HLS segment duration | `HLS_SEGMENT_DURATION` | `2` | >= 1 | Seconds per `.ts` segment |
 | HLS playlist size | `HLS_PLAYLIST_SIZE` | `3` | >= 1 | Sliding-window segment count |
-| Recognition FPS | `RECOGNITION_FPS` | `8.0` | > 0 | Detection sampling rate |
-| Recognition max batch | `RECOGNITION_MAX_BATCH_SIZE` | `20` | >= 1 | Max faces per forward pass |
+| Recognition FPS | `RECOGNITION_FPS` | `2.0` | > 0 | Detection sampling rate |
+| Recognition max batch | `RECOGNITION_MAX_BATCH_SIZE` | `50` | >= 1 | Max faces per forward pass |
 | Recognition max dim | `RECOGNITION_MAX_DIM` | `1280` | > 0 | Cap frame dimension for detection |
 | WS poll interval | (hardcoded) | `0.125` | > 0 | WebSocket push interval (seconds) = 8 Hz |
 | WS heartbeat interval | (hardcoded) | `5.0` | > 0 | Heartbeat interval (seconds) |
@@ -503,3 +528,43 @@ and valid ranges. All are set in backend or edge `.env` files.
 | Max decoded size | (hardcoded) | `10,000,000` | > 0 | Max decoded image size (bytes) |
 | Max image dimension | (hardcoded) | `4096` | > 0 | Max image width/height (px) |
 | Rate limit (recommended) | -- | `1/sec/room` | -- | Recommended max request rate |
+
+---
+
+## 8. Academic References
+
+This section documents the foundational work underlying the IAMS ML pipeline,
+for inclusion in the project thesis.
+
+**ArcFace (face recognition):**
+
+> Deng, J., Guo, J., Xue, N., & Zafeiriou, S. (2019). ArcFace: Additive Angular
+> Margin Loss for Deep Face Recognition. In *Proceedings of the IEEE/CVF Conference
+> on Computer Vision and Pattern Recognition (CVPR)*, pp. 4690-4699.
+
+ArcFace introduces an additive angular margin loss (CosFace variant) to improve
+discriminative power of face embeddings. The w600k_r50 model (ResNet50 backbone,
+trained on WebFace600K) used in IAMS produces 512-dimensional embeddings and is
+distributed as part of the InsightFace `buffalo_l` model pack.
+
+**SCRFD (face detection):**
+
+> Guo, J., Deng, J., Lattas, A., & Zafeiriou, S. (2021). Sample and Computation
+> Redistribution for Efficient Face Detection. In *Proceedings of the IEEE/CVF
+> International Conference on Computer Vision (ICCV)*, pp. 1468-1477.
+
+SCRFD (Sample and Computation Redistribution for Face Detection) uses a ResNet50
+backbone with a feature pyramid network and redistributes computation across
+scales for improved accuracy-efficiency trade-offs. The SCRFD-10GF model used
+in IAMS (part of `buffalo_l`) is calibrated for high-resolution frames.
+
+**InsightFace library:**
+
+> Deng, J., Guo, J., Feng, Z., Liu, C., & Zafeiriou, S. (2022). InsightFace:
+> An Open Source 2D&3D Deep Face Analysis Library. *arXiv preprint*
+> arXiv:2112.05905.
+
+InsightFace provides the unified `FaceAnalysis.get()` API used by IAMS to run
+SCRFD detection, 5-point landmark alignment, and ArcFace embedding in a single
+call. The `buffalo_l` model pack bundles SCRFD-10GF and w600k_r50 as ONNX
+models, removing the PyTorch runtime dependency entirely.
