@@ -398,20 +398,20 @@ def test_face_image_base64():
 
 
 @pytest.fixture()
-def mock_facenet():
-    """Mock FaceNet model for face recognition tests."""
+def mock_insightface():
+    """Mock InsightFace model for face recognition tests."""
     from unittest.mock import MagicMock, patch
     import numpy as np
 
     mock = MagicMock()
 
-    # Mock generate_embedding to return a random 512-dim vector
+    # Mock get_embedding to return a random 512-dim vector
     def mock_generate_embedding(image_bytes):
         embedding = np.random.randn(512).astype(np.float32)
         embedding = embedding / np.linalg.norm(embedding)  # L2 normalize
         return embedding
 
-    mock.generate_embedding = mock_generate_embedding
+    mock.get_embedding = mock_generate_embedding
     mock.decode_base64_image = MagicMock(return_value=Image.new('RGB', (160, 160)))
 
     return mock

@@ -36,13 +36,13 @@ class TestFaceRecognitionPerformance:
         """
         from app.services.face_service import FaceService
 
-        with patch('app.services.face_service.facenet_model') as mock_facenet, \
+        with patch('app.services.face_service.insightface_model') as mock_insightface, \
              patch('app.services.face_service.faiss_manager') as mock_faiss:
 
-            # Mock FaceNet (fast)
+            # Mock InsightFace (fast)
             mock_embedding = np.random.randn(512).astype(np.float32)
             mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
-            mock_facenet.generate_embedding = MagicMock(return_value=mock_embedding)
+            mock_insightface.get_embedding = MagicMock(return_value=mock_embedding)
 
             # Mock FAISS (fast)
             mock_faiss.search = MagicMock(return_value=[("user-123", 0.85)])
@@ -84,13 +84,13 @@ class TestFaceRecognitionPerformance:
         from app.services.face_service import FaceService
         import asyncio
 
-        with patch('app.services.face_service.facenet_model') as mock_facenet, \
+        with patch('app.services.face_service.insightface_model') as mock_insightface, \
              patch('app.services.face_service.faiss_manager') as mock_faiss:
 
-            # Mock FaceNet
+            # Mock InsightFace
             mock_embedding = np.random.randn(512).astype(np.float32)
             mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
-            mock_facenet.generate_embedding = MagicMock(return_value=mock_embedding)
+            mock_insightface.get_embedding = MagicMock(return_value=mock_embedding)
 
             # Mock FAISS
             mock_faiss.search = MagicMock(return_value=[("user-456", 0.88)])

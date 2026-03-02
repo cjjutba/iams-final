@@ -11,7 +11,7 @@ Tests all 7 endpoints in app/routers/face.py:
   7. DELETE /api/v1/face/{user_id}   (auth + ownership check)
 
 Mocking strategy:
-  - facenet_model and faiss_manager are module-level singletons imported into
+  - insightface_model and faiss_manager are module-level singletons imported into
     face_service.py.  We patch them at the *import location* inside FaceService
     so every FaceService(db) instance picks up the mocks.
   - The router's _request_cache dict is cleared between tests via an autouse
@@ -88,7 +88,7 @@ def _patch_ml_singletons(
     faiss_add_return=0,
 ):
     """
-    Return a combined patch context that replaces facenet_model and
+    Return a combined patch context that replaces insightface_model and
     faiss_manager inside face_service.py.
 
     Parameters let callers customise per-test behaviour without repeating
