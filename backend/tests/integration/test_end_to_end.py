@@ -57,14 +57,14 @@ class TestCompleteClassSessionFlow:
         # STEP 1: Student registers face
         # ============================================================
 
-        with patch('app.services.face_service.facenet_model') as mock_facenet, \
+        with patch('app.services.face_service.insightface_model') as mock_facenet, \
              patch('app.services.face_service.faiss_manager') as mock_faiss:
 
-            # Mock FaceNet to return consistent embedding
+            # Mock InsightFace to return consistent embedding
             student_embedding = np.random.randn(512).astype(np.float32)
             student_embedding = student_embedding / np.linalg.norm(student_embedding)
 
-            mock_facenet.generate_embedding = MagicMock(return_value=student_embedding)
+            mock_facenet.get_embedding = MagicMock(return_value=student_embedding)
             mock_faiss.add = MagicMock(return_value=1)
             mock_faiss.save = MagicMock()
 
@@ -392,7 +392,7 @@ class TestEdgeToEndSystemIntegration:
             face_instance.facenet.decode_base64_image = MagicMock(return_value=MagicMock())
             mock_embedding = np.random.randn(512).astype(np.float32)
             mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
-            face_instance.facenet.generate_embedding = MagicMock(return_value=mock_embedding)
+            face_instance.facenet.get_embedding = MagicMock(return_value=mock_embedding)
             face_instance.faiss.search_with_margin = MagicMock(return_value={
                 "user_id": str(test_student.id),
                 "confidence": 0.88,

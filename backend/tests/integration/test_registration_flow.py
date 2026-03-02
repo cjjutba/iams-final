@@ -43,7 +43,7 @@ class TestFaceRegistrationFlow:
         """Register face with minimum 3 images"""
         from app.services.face_service import FaceService
 
-        with patch('app.services.face_service.facenet_model') as mock_facenet, \
+        with patch('app.services.face_service.insightface_model') as mock_facenet, \
              patch('app.services.face_service.faiss_manager') as mock_faiss:
 
             # Mock FaceNet
@@ -51,7 +51,7 @@ class TestFaceRegistrationFlow:
                 emb = np.random.randn(512).astype(np.float32)
                 return emb / np.linalg.norm(emb)
 
-            mock_facenet.generate_embedding = MagicMock(side_effect=mock_embedding)
+            mock_facenet.get_embedding = MagicMock(side_effect=mock_embedding)
 
             # Mock FAISS
             mock_faiss.add = MagicMock(return_value=1)
@@ -84,7 +84,7 @@ class TestFaceRegistrationFlow:
         """Register face with maximum 5 images"""
         from app.services.face_service import FaceService
 
-        with patch('app.services.face_service.facenet_model') as mock_facenet, \
+        with patch('app.services.face_service.insightface_model') as mock_facenet, \
              patch('app.services.face_service.faiss_manager') as mock_faiss:
 
             # Mock FaceNet
@@ -92,7 +92,7 @@ class TestFaceRegistrationFlow:
                 emb = np.random.randn(512).astype(np.float32)
                 return emb / np.linalg.norm(emb)
 
-            mock_facenet.generate_embedding = MagicMock(side_effect=mock_embedding)
+            mock_facenet.get_embedding = MagicMock(side_effect=mock_embedding)
 
             # Mock FAISS
             mock_faiss.add = MagicMock(return_value=2)
@@ -164,7 +164,7 @@ class TestFaceRegistrationFlow:
         from app.services.face_service import FaceService
         from app.utils.exceptions import ValidationError
 
-        with patch('app.services.face_service.facenet_model') as mock_facenet, \
+        with patch('app.services.face_service.insightface_model') as mock_facenet, \
              patch('app.services.face_service.faiss_manager') as mock_faiss:
 
             # Mock FaceNet
@@ -172,7 +172,7 @@ class TestFaceRegistrationFlow:
                 emb = np.random.randn(512).astype(np.float32)
                 return emb / np.linalg.norm(emb)
 
-            mock_facenet.generate_embedding = MagicMock(side_effect=mock_embedding)
+            mock_facenet.get_embedding = MagicMock(side_effect=mock_embedding)
             mock_faiss.add = MagicMock(return_value=1)
             mock_faiss.save = MagicMock()
 
@@ -217,7 +217,7 @@ class TestFaceReregistrationFlow:
         """Re-register existing face successfully"""
         from app.services.face_service import FaceService
 
-        with patch('app.services.face_service.facenet_model') as mock_facenet, \
+        with patch('app.services.face_service.insightface_model') as mock_facenet, \
              patch('app.services.face_service.faiss_manager') as mock_faiss:
 
             # Mock FaceNet
@@ -225,7 +225,7 @@ class TestFaceReregistrationFlow:
                 emb = np.random.randn(512).astype(np.float32)
                 return emb / np.linalg.norm(emb)
 
-            mock_facenet.generate_embedding = MagicMock(side_effect=mock_embedding)
+            mock_facenet.get_embedding = MagicMock(side_effect=mock_embedding)
             mock_faiss.add = MagicMock(side_effect=[1, 2])  # Two registrations
             mock_faiss.save = MagicMock()
 
@@ -262,14 +262,14 @@ class TestFaceRecognitionFlow:
         """Recognize a face that was previously registered"""
         from app.services.face_service import FaceService
 
-        with patch('app.services.face_service.facenet_model') as mock_facenet, \
+        with patch('app.services.face_service.insightface_model') as mock_facenet, \
              patch('app.services.face_service.faiss_manager') as mock_faiss:
 
             # Mock FaceNet
             test_embedding = np.random.randn(512).astype(np.float32)
             test_embedding = test_embedding / np.linalg.norm(test_embedding)
 
-            mock_facenet.generate_embedding = MagicMock(return_value=test_embedding)
+            mock_facenet.get_embedding = MagicMock(return_value=test_embedding)
 
             # Mock FAISS search to return match
             mock_faiss.search = MagicMock(
@@ -297,14 +297,14 @@ class TestFaceRecognitionFlow:
         """Recognize a face that is not registered"""
         from app.services.face_service import FaceService
 
-        with patch('app.services.face_service.facenet_model') as mock_facenet, \
+        with patch('app.services.face_service.insightface_model') as mock_facenet, \
              patch('app.services.face_service.faiss_manager') as mock_faiss:
 
             # Mock FaceNet
             test_embedding = np.random.randn(512).astype(np.float32)
             test_embedding = test_embedding / np.linalg.norm(test_embedding)
 
-            mock_facenet.generate_embedding = MagicMock(return_value=test_embedding)
+            mock_facenet.get_embedding = MagicMock(return_value=test_embedding)
 
             # Mock FAISS search to return no match
             mock_faiss.search = MagicMock(return_value=[])
@@ -331,14 +331,14 @@ class TestFaceRecognitionFlow:
         """Recognize face with custom confidence threshold"""
         from app.services.face_service import FaceService
 
-        with patch('app.services.face_service.facenet_model') as mock_facenet, \
+        with patch('app.services.face_service.insightface_model') as mock_facenet, \
              patch('app.services.face_service.faiss_manager') as mock_faiss:
 
             # Mock FaceNet
             test_embedding = np.random.randn(512).astype(np.float32)
             test_embedding = test_embedding / np.linalg.norm(test_embedding)
 
-            mock_facenet.generate_embedding = MagicMock(return_value=test_embedding)
+            mock_facenet.get_embedding = MagicMock(return_value=test_embedding)
 
             # Mock FAISS search with custom threshold
             mock_faiss.search = MagicMock(

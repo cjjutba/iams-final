@@ -23,7 +23,7 @@ class TestEdgeProcessEndpoint:
     def mock_face_service(self):
         """Mock FaceService for edge tests.
 
-        The edge API uses face_service.facenet.generate_embedding() and
+        The edge API uses face_service.facenet.get_embedding() and
         face_service.faiss.search_with_margin() directly (not recognize_face).
         """
         with patch('app.routers.face.FaceService') as mock:
@@ -35,7 +35,7 @@ class TestEdgeProcessEndpoint:
             )
             mock_embedding = np.random.randn(512).astype(np.float32)
             mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
-            service_instance.facenet.generate_embedding = MagicMock(
+            service_instance.facenet.get_embedding = MagicMock(
                 return_value=mock_embedding
             )
 
@@ -142,7 +142,7 @@ class TestEdgeProcessEndpoint:
             # Mock embedding generation + no match via search_with_margin
             mock_embedding = np.random.randn(512).astype(np.float32)
             mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
-            service_instance.facenet.generate_embedding = MagicMock(
+            service_instance.facenet.get_embedding = MagicMock(
                 return_value=mock_embedding
             )
             service_instance.faiss.search_with_margin = MagicMock(
@@ -179,10 +179,10 @@ class TestEdgeProcessEndpoint:
                 return_value=MagicMock()
             )
 
-            # Mock generate_embedding
+            # Mock get_embedding
             mock_embedding = np.random.randn(512).astype(np.float32)
             mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
-            service_instance.facenet.generate_embedding = MagicMock(
+            service_instance.facenet.get_embedding = MagicMock(
                 return_value=mock_embedding
             )
 
@@ -344,7 +344,7 @@ class TestEdgeDeviceConcurrency:
 
             mock_embedding = np.random.randn(512).astype(np.float32)
             mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
-            service_instance.facenet.generate_embedding = MagicMock(
+            service_instance.facenet.get_embedding = MagicMock(
                 return_value=mock_embedding
             )
             service_instance.faiss.search_with_margin = MagicMock(
@@ -397,7 +397,7 @@ class TestEdgeQueueSimulation:
 
             mock_embedding = np.random.randn(512).astype(np.float32)
             mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
-            service_instance.facenet.generate_embedding = MagicMock(
+            service_instance.facenet.get_embedding = MagicMock(
                 return_value=mock_embedding
             )
             service_instance.faiss.search_with_margin = MagicMock(
@@ -448,7 +448,7 @@ class TestEdgeErrorHandling:
             # Mock embedding generation to succeed
             mock_embedding = np.random.randn(512).astype(np.float32)
             mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
-            service_instance.facenet.generate_embedding = MagicMock(
+            service_instance.facenet.get_embedding = MagicMock(
                 return_value=mock_embedding
             )
 
@@ -494,7 +494,7 @@ class TestEdgeErrorHandling:
             # Mock embedding generation + margin-aware search
             mock_embedding = np.random.randn(512).astype(np.float32)
             mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
-            face_instance.facenet.generate_embedding = MagicMock(
+            face_instance.facenet.get_embedding = MagicMock(
                 return_value=mock_embedding
             )
             face_instance.faiss.search_with_margin = MagicMock(

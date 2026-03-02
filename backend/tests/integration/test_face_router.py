@@ -100,14 +100,14 @@ def _patch_ml_singletons(
     no-match result ``{"user_id": None, "confidence": None, "is_ambiguous": False}``.
     """
     mock_fn = MagicMock()
-    mock_fn.generate_embedding = MagicMock(
+    mock_fn.get_embedding = MagicMock(
         side_effect=generate_embedding or (lambda *_a, **_kw: _make_embedding())
     )
     mock_fn.decode_base64_image = MagicMock(
         side_effect=decode_base64_image
         or (lambda *_a, **_kw: Image.new("RGB", (160, 160)))
     )
-    mock_fn.model = MagicMock()  # Not None -> model "loaded"
+    mock_fn.app = MagicMock()  # Not None -> model "loaded"
 
     mock_faiss = MagicMock()
     mock_faiss.index = MagicMock()  # Not None -> index "loaded"
@@ -130,7 +130,7 @@ def _patch_ml_singletons(
     })
 
     return (
-        patch("app.services.face_service.facenet_model", mock_fn),
+        patch("app.services.face_service.insightface_model", mock_fn),
         patch("app.services.face_service.faiss_manager", mock_faiss),
         mock_fn,
         mock_faiss,

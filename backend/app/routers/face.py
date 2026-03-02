@@ -350,7 +350,7 @@ async def process_faces(
             # Recognize face using margin-aware search
             processed_count += 1
             try:
-                embedding = face_service.facenet.generate_embedding(img_bytes)
+                embedding = face_service.facenet.get_embedding(img_bytes)
                 match_result = face_service.faiss.search_with_margin(
                     embedding,
                     k=settings.RECOGNITION_TOP_K,
