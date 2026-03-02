@@ -38,3 +38,10 @@ def test_mediamtx_bin_path_default():
 def test_mediamtx_config_path_default():
     from app.config import settings
     assert settings.MEDIAMTX_CONFIG_PATH == "mediamtx.yml"
+
+
+def test_insightface_defaults():
+    from app.config import Settings
+    s = Settings()
+    assert s.INSIGHTFACE_MODEL == "buffalo_l"
+    assert s.INSIGHTFACE_DET_SIZE == 640
