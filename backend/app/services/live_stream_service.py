@@ -9,8 +9,8 @@ Frame pipeline:
     1. cv2.VideoCapture(rtsp_url)
     2. Read frame at target FPS (configurable, default 8)
     3. Resize to stream resolution (640x360)
-    4. Face detection only every Nth frame (configurable) — cache results
-    5. For each face: crop -> FaceNet embedding -> FAISS search
+    4. Face detection + recognition only every Nth frame (configurable) — cache results
+    5. InsightFace unified detect+embed+search per frame
     6. Draw bounding boxes with name, student_id, confidence (every frame)
     7. Encode as JPEG (quality 50)
     8. Pre-compute base64 (once, shared across viewers)
@@ -18,10 +18,8 @@ Frame pipeline:
 
 import asyncio
 import base64
-import os
 import threading
 import time
-import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set, Tuple
@@ -30,65 +28,6 @@ import cv2
 import numpy as np
 
 from app.config import settings, logger
-
-# ---------------------------------------------------------------------------
-# MediaPipe face detection helpers (same pattern as edge/app/detector.py)
-# ---------------------------------------------------------------------------
-
-_MODEL_URL = (
-    "https://storage.googleapis.com/mediapipe-models/"
-    "face_detector/blaze_face_short_range/float16/latest/"
-    "blaze_face_short_range.tflite"
-)
-_MODEL_FILENAME = "blaze_face_short_range.tflite"
-
-
-def _get_mediapipe_model_path() -> str:
-    """
-    Download (if needed) and return the path to the MediaPipe face detection
-    TFLite model.  Cached under ``backend/data/.models/``.
-    """
-    cache_dir = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", ".models"
-    )
-    cache_dir = os.path.normpath(cache_dir)
-    os.makedirs(cache_dir, exist_ok=True)
-
-    model_path = os.path.join(cache_dir, _MODEL_FILENAME)
-    if not os.path.exists(model_path):
-        logger.info(f"Downloading MediaPipe face detection model to {model_path} ...")
-        urllib.request.urlretrieve(_MODEL_URL, model_path)
-        logger.info("MediaPipe model downloaded.")
-    return model_path
-
-
-def _create_face_detector():
-    """
-    Create and return a MediaPipe FaceDetector instance (Tasks API).
-
-    Returns None if MediaPipe is unavailable so the service can
-    gracefully degrade to detection-only or no-detection mode.
-    """
-    try:
-        import mediapipe as mp
-        from mediapipe.tasks import python as mp_python
-        from mediapipe.tasks.python import vision as mp_vision
-
-        model_path = _get_mediapipe_model_path()
-        base_options = mp_python.BaseOptions(model_asset_path=model_path)
-        options = mp_vision.FaceDetectorOptions(
-            base_options=base_options,
-            min_detection_confidence=settings.MEDIAPIPE_DETECTION_CONFIDENCE,
-        )
-        detector = mp_vision.FaceDetector.create_from_options(options)
-        logger.info(
-            f"MediaPipe FaceDetector created for live stream service "
-            f"(confidence={settings.MEDIAPIPE_DETECTION_CONFIDENCE})."
-        )
-        return detector
-    except Exception as exc:
-        logger.warning(f"MediaPipe unavailable for live stream -- detection disabled: {exc}")
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -162,9 +101,7 @@ class LiveStreamService:
     def __init__(self):
         # Lazy-initialized per-instance references (avoid import at module level
         # because ML models are loaded during FastAPI startup).
-        self._face_detector = None
-        self._detector_initialized = False
-        self._facenet = None
+        self._insight = None
         self._faiss = None
         self._ml_available = False
         self._ml_checked = False
@@ -173,28 +110,24 @@ class LiveStreamService:
     # Lazy initializers
     # ------------------------------------------------------------------
 
-    def _ensure_detector(self):
-        """Lazy-init MediaPipe detector (first call only)."""
-        if not self._detector_initialized:
-            self._face_detector = _create_face_detector()
-            self._detector_initialized = True
-
     def _ensure_ml(self):
-        """Lazy-check whether FaceNet + FAISS are available."""
+        """Lazy-init InsightFace + FAISS (first call only)."""
         if not self._ml_checked:
             try:
-                from app.services.ml.face_recognition import facenet_model
+                from app.services.ml.insightface_model import insightface_model
                 from app.services.ml.faiss_manager import faiss_manager
 
-                if facenet_model.model is not None and faiss_manager.index is not None:
-                    self._facenet = facenet_model
+                if insightface_model.app is not None and faiss_manager.index is not None:
+                    self._insight = insightface_model
                     self._faiss = faiss_manager
                     self._ml_available = True
-                    logger.info("Live stream: FaceNet + FAISS available for recognition.")
+                    logger.info("Live stream: InsightFace + FAISS ready for recognition.")
                 else:
-                    logger.warning("Live stream: FaceNet/FAISS not loaded -- recognition disabled.")
+                    logger.warning(
+                        "Live stream: InsightFace/FAISS not loaded — recognition disabled."
+                    )
             except Exception as exc:
-                logger.warning(f"Live stream: ML import failed -- recognition disabled: {exc}")
+                logger.warning(f"Live stream: ML import failed — recognition disabled: {exc}")
             self._ml_checked = True
 
     # ------------------------------------------------------------------
@@ -348,7 +281,6 @@ class LiveStreamService:
         target_interval = 1.0 / settings.STREAM_FPS
 
         # Ensure lazy components are initialized
-        self._ensure_detector()
         self._ensure_ml()
 
         logger.info(
@@ -455,8 +387,7 @@ class LiveStreamService:
         """
         Full frame pipeline (synchronous, meant to run in executor):
             1. Resize to stream resolution
-            2. Optionally detect faces with MediaPipe (only every Nth frame)
-            3. For each face, run FaceNet + FAISS recognition (if available)
+            2+3. Optionally detect+recognise faces with InsightFace (only every Nth frame)
             4. Annotate frame with bounding boxes / labels
             5. JPEG-encode
             6. Base64-encode (pre-computed, shared across all viewers)
@@ -476,12 +407,9 @@ class LiveStreamService:
             interpolation=cv2.INTER_AREA,
         )
 
-        # 2. Detect faces (only on detection frames)
+        # 2 & 3. Detect + recognise in one InsightFace call
         if run_detection:
-            detections = self._detect_faces(frame)
-            # 3. Recognise (if ML available)
-            if self._ml_available and detections:
-                self._recognise_faces(frame, detections)
+            detections = self._detect_and_recognise(frame) if self._ml_available else []
         else:
             detections = cached_detections
 
@@ -498,87 +426,34 @@ class LiveStreamService:
 
         return jpeg_bytes, detections, b64_str
 
-    def _detect_faces(self, frame: np.ndarray) -> List[Detection]:
-        """Run MediaPipe face detection on a BGR frame."""
-        if self._face_detector is None:
-            return []
-
+    def _detect_and_recognise(self, frame: np.ndarray) -> List[Detection]:
+        """
+        Run InsightFace detection + ArcFace embedding + FAISS search on one frame.
+        Returns Detection list (user_id/similarity populated for matched faces).
+        """
         try:
-            import mediapipe as mp
+            insight_faces = self._insight.get_faces(frame)
+            detections = []
+            for face in insight_faces:
+                user_id, similarity = None, None
+                if self._faiss is not None:
+                    matches = self._faiss.search(face.embedding, k=1)
+                    if matches:
+                        user_id, similarity = matches[0]
 
-            # MediaPipe expects RGB
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            result = self._face_detector.detect(mp_image)
-
-            detections: List[Detection] = []
-            if result.detections:
-                for det in result.detections:
-                    bbox = det.bounding_box
-                    conf = det.categories[0].score if det.categories else 0.0
-                    detections.append(
-                        Detection(
-                            x=max(0, bbox.origin_x),
-                            y=max(0, bbox.origin_y),
-                            width=max(1, bbox.width),
-                            height=max(1, bbox.height),
-                            confidence=conf,
-                        )
-                    )
+                detections.append(Detection(
+                    x=face.x,
+                    y=face.y,
+                    width=face.width,
+                    height=face.height,
+                    confidence=face.confidence,
+                    user_id=user_id,
+                    similarity=similarity,
+                ))
             return detections
         except Exception as exc:
-            logger.error(f"Face detection error in live stream: {exc}")
+            logger.error(f"Live stream detect+recognise error: {exc}")
             return []
-
-    def _recognise_faces(
-        self,
-        frame: np.ndarray,
-        detections: List[Detection],
-    ) -> None:
-        """
-        For each detection, crop the face region, generate a FaceNet
-        embedding, and search FAISS for a match.  Mutates *detections*
-        in place, filling in user_id / name / student_id / similarity.
-        """
-        if self._facenet is None or self._faiss is None:
-            return
-
-        h, w = frame.shape[:2]
-
-        min_px = settings.RECOGNITION_MIN_FACE_PX
-        for det in detections:
-            try:
-                if det.width < min_px or det.height < min_px:
-                    continue  # face crop too small for reliable recognition
-
-                # Expand MediaPipe bbox by 20% so MTCNN has enough context to
-                # locate landmarks consistently — matching the registration path
-                # where MTCNN ran on a full close-up selfie.
-                pad_x = int(det.width * 0.20)
-                pad_y = int(det.height * 0.20)
-                x1 = max(0, det.x - pad_x)
-                y1 = max(0, det.y - pad_y)
-                x2 = min(w, det.x + det.width + pad_x)
-                y2 = min(h, det.y + det.height + pad_y)
-
-                face_crop = frame[y1:y2, x1:x2]
-
-                # FaceNet expects RGB input; convert BGR → RGB.
-                face_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
-
-                embedding = self._facenet.generate_embedding(
-                    face_rgb,
-                    use_alignment=settings.USE_FACE_ALIGNMENT_FOR_RECOGNITION,
-                )
-                matches = self._faiss.search(embedding, k=1)
-
-                if matches:
-                    user_id, similarity = matches[0]
-                    det.user_id = user_id
-                    det.similarity = similarity
-
-            except Exception as exc:
-                logger.debug(f"Recognition error for one face: {exc}")
 
     def _annotate_frame(
         self,
