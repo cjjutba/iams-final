@@ -229,6 +229,19 @@ class TestGetFaces:
         assert faces[0].x == 0
         assert faces[0].y == 0
 
+    def test_clamps_x2_y2_to_frame_boundary(self, model_with_mock_app):
+        """SCRFD can return x2/y2 beyond the frame edge — clamp to frame size."""
+        # Face bbox extends beyond the 640x480 frame on both sides
+        model_with_mock_app.app.get.return_value = [
+            _make_mock_face(bbox=(600, 450, 700, 530))  # x2>640, y2>480
+        ]
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        faces = model_with_mock_app.get_faces(frame)
+        assert faces[0].x == 600
+        assert faces[0].y == 450
+        assert faces[0].width == 40   # clamped: min(640,700)-600 = 40
+        assert faces[0].height == 30  # clamped: min(480,530)-450 = 30
+
 
 # ---------------------------------------------------------------------------
 # Tests: decode_base64_image

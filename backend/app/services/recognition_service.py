@@ -1,9 +1,9 @@
 """
 Recognition Service
 
-Decoupled face recognition pipeline that samples frames from an RTSP stream
-at a configurable low FPS (default 1.5), runs MediaPipe face detection, then
-batch FaceNet + FAISS recognition on all detected faces.
+Samples RTSP frames at a configurable FPS (default 2.0), runs InsightFace
+(SCRFD detection + ArcFace embedding) on each frame, then performs FAISS
+nearest-neighbor search to identify detected faces.
 
 This runs independently from the HLS video layer, producing lightweight
 detection metadata that is pushed to mobile clients via WebSocket.

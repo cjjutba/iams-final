@@ -2,7 +2,7 @@
 Face Service
 
 Business logic for face registration and recognition.
-Orchestrates FaceNet model, FAISS search, and database operations.
+Orchestrates InsightFace (ArcFace) model, FAISS search, and database operations.
 """
 
 import io

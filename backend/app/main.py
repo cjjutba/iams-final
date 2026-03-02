@@ -88,7 +88,7 @@ async def startup_event():
     Performs initialization tasks:
     - Check database connection
     - Load FAISS index (once face service is implemented)
-    - Warm up FaceNet model (once face service is implemented)
+    - Load InsightFace model (buffalo_l)
     """
     logger.info(f"Starting {settings.APP_NAME}...")
     logger.info(f"Debug mode: {settings.DEBUG}")

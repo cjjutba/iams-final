@@ -30,7 +30,7 @@ class FAISSManager:
             index_path: Path to FAISS index file (default from settings)
         """
         self.index_path = index_path or settings.FAISS_INDEX_PATH
-        self.dimension = 512  # FaceNet embedding dimension
+        self.dimension = 512  # ArcFace embedding dimension
         self.index: Optional[faiss.Index] = None
         self.user_map: Dict[int, str] = {}  # faiss_id → user_id mapping
 
