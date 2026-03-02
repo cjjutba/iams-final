@@ -101,13 +101,13 @@ async def startup_event():
     else:
         logger.info("Database connection established")
 
-    # Load FaceNet model and FAISS index
+    # Load InsightFace model and FAISS index
     try:
-        from app.services.ml.face_recognition import facenet_model
+        from app.services.ml.insightface_model import insightface_model
         from app.services.ml.faiss_manager import faiss_manager
 
-        logger.info("Loading FaceNet model...")
-        facenet_model.load_model()
+        logger.info("Loading InsightFace model...")
+        insightface_model.load_model()
 
         logger.info("Loading FAISS index...")
         faiss_manager.load_or_create_index()
