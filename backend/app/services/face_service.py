@@ -13,7 +13,7 @@ import numpy as np
 from PIL import Image
 
 from app.repositories.face_repository import FaceRepository
-from app.services.ml.face_recognition import facenet_model
+from app.services.ml.insightface_model import insightface_model
 from app.services.ml.faiss_manager import faiss_manager
 from app.utils.exceptions import ValidationError, FaceRecognitionError, NotFoundError
 from app.config import settings, logger
@@ -25,7 +25,7 @@ class FaceService:
     def __init__(self, db: Session):
         self.db = db
         self.face_repo = FaceRepository(db)
-        self.facenet = facenet_model
+        self.facenet = insightface_model
         self.faiss = faiss_manager
 
     async def register_face(
@@ -85,7 +85,7 @@ class FaceService:
                     raise ValidationError(f"Image {i+1} exceeds size limit")
 
                 # Generate embedding
-                embedding = self.facenet.generate_embedding(image_bytes)
+                embedding = self.facenet.get_embedding(image_bytes)
                 embeddings.append(embedding)
 
                 logger.debug(f"Generated embedding for image {i+1}/{len(images)}")
@@ -159,7 +159,7 @@ class FaceService:
         """
         try:
             # Generate embedding
-            embedding = self.facenet.generate_embedding(image_bytes)
+            embedding = self.facenet.get_embedding(image_bytes)
 
             # Search FAISS
             results = self.faiss.search(embedding, k=1, threshold=threshold)
@@ -194,7 +194,7 @@ class FaceService:
         for i, img_bytes in enumerate(images_bytes):
             try:
                 if isinstance(img_bytes, str):
-                    pil_img = facenet_model.decode_base64_image(img_bytes)
+                    pil_img = insightface_model.decode_base64_image(img_bytes)
                 else:
                     pil_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
                 decoded_images.append(pil_img)
@@ -207,7 +207,7 @@ class FaceService:
 
         # Phase 2: Batch embedding (single forward pass)
         try:
-            embeddings = facenet_model.generate_embeddings_batch(decoded_images)
+            embeddings = insightface_model.get_embeddings_batch(decoded_images)
         except Exception as e:
             for idx in index_map:
                 results.append({"index": idx, "user_id": None, "confidence": None, "error": str(e)})
@@ -353,9 +353,9 @@ class FaceService:
 
     def load_model(self):
         """
-        Load FaceNet model (called during startup)
+        Load InsightFace model (called during startup)
         """
-        if self.facenet.model is None:
+        if self.facenet.app is None:
             self.facenet.load_model()
 
     def load_faiss_index(self):

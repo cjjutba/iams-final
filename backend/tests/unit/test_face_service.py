@@ -53,7 +53,7 @@ def _make_face_service(db_session):
     service = FaceService(db_session)
 
     mock_facenet = MagicMock()
-    mock_facenet.generate_embedding = MagicMock(return_value=_make_embedding())
+    mock_facenet.get_embedding = MagicMock(return_value=_make_embedding())
 
     mock_faiss = MagicMock()
     mock_faiss.add = MagicMock(return_value=0)
@@ -95,7 +95,7 @@ class TestFaceServiceRegister:
 
         assert faiss_id == 0
         assert "successfully" in msg.lower()
-        assert mock_fn.generate_embedding.call_count == 3
+        assert mock_fn.get_embedding.call_count == 3
         mock_faiss.add.assert_called_once()
         mock_faiss.save.assert_called_once()
 
@@ -109,7 +109,7 @@ class TestFaceServiceRegister:
         faiss_id, msg = await service.register_face(user_id, images)
 
         assert faiss_id == 0
-        assert mock_fn.generate_embedding.call_count == 5
+        assert mock_fn.get_embedding.call_count == 5
 
     @pytest.mark.asyncio
     async def test_register_face_too_few_images(self, db_session):
@@ -145,7 +145,7 @@ class TestFaceServiceRegister:
     async def test_register_face_embedding_failure(self, db_session):
         """If FaceNet raises ValueError, service should raise FaceRecognitionError."""
         service, mock_fn, _ = _make_face_service(db_session)
-        mock_fn.generate_embedding.side_effect = ValueError("No face detected")
+        mock_fn.get_embedding.side_effect = ValueError("No face detected")
 
         user_id = str(uuid.uuid4())
         images = [_make_mock_upload_file() for _ in range(3)]
@@ -174,7 +174,7 @@ class TestFaceServiceRegister:
         emb1 = np.ones(512, dtype=np.float32)
         emb2 = np.ones(512, dtype=np.float32) * 2
         emb3 = np.ones(512, dtype=np.float32) * 3
-        mock_fn.generate_embedding.side_effect = [emb1, emb2, emb3]
+        mock_fn.get_embedding.side_effect = [emb1, emb2, emb3]
 
         user_id = str(uuid.uuid4())
         images = [_make_mock_upload_file() for _ in range(3)]
@@ -253,7 +253,7 @@ class TestFaceServiceRecognize:
     async def test_recognize_face_embedding_error(self, db_session):
         """If FaceNet fails, recognize_face should raise FaceRecognitionError."""
         service, mock_fn, _ = _make_face_service(db_session)
-        mock_fn.generate_embedding.side_effect = ValueError("No face detected")
+        mock_fn.get_embedding.side_effect = ValueError("No face detected")
 
         with pytest.raises(FaceRecognitionError, match="Face recognition failed"):
             await service.recognize_face(b"bad_image")
@@ -276,12 +276,12 @@ class TestFaceServiceRecognizeBatch:
         emb_batch = np.stack([_make_embedding(), _make_embedding()])
 
         with patch("app.services.face_service.Image") as mock_pil, \
-             patch("app.services.face_service.facenet_model") as mock_fn, \
+             patch("app.services.face_service.insightface_model") as mock_fn, \
              patch("app.services.face_service.faiss_manager") as mock_faiss:
             # Phase 1: decoding returns mock PIL images
             mock_pil.open.return_value.convert.return_value = MagicMock()
             # Phase 2: batch embedding
-            mock_fn.generate_embeddings_batch.return_value = emb_batch
+            mock_fn.get_embeddings_batch.return_value = emb_batch
             # Phase 3: batch FAISS search — one result list per query
             mock_faiss.search_batch.return_value = [
                 [(uid1, 0.90)],
@@ -305,7 +305,7 @@ class TestFaceServiceRecognizeBatch:
         emb_batch = np.stack([_make_embedding()])
 
         with patch("app.services.face_service.Image") as mock_pil, \
-             patch("app.services.face_service.facenet_model") as mock_fn, \
+             patch("app.services.face_service.insightface_model") as mock_fn, \
              patch("app.services.face_service.faiss_manager") as mock_faiss:
             # First image decodes fine, second raises
             good_img = MagicMock()
@@ -322,7 +322,7 @@ class TestFaceServiceRecognizeBatch:
             mock_pil.open.side_effect = _open_side_effect
             mock_convert.convert.return_value = good_img
 
-            mock_fn.generate_embeddings_batch.return_value = emb_batch
+            mock_fn.get_embeddings_batch.return_value = emb_batch
             mock_faiss.search_batch.return_value = [[(uid, 0.80)]]
 
             results = await service.recognize_batch([b"good", b"bad"])
