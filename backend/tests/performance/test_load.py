@@ -14,6 +14,7 @@ from datetime import datetime, date, timedelta
 from unittest.mock import patch, MagicMock, AsyncMock
 import concurrent.futures
 import numpy as np
+from PIL import Image
 
 from app.config import settings
 
@@ -142,14 +143,16 @@ class TestEdgeAPIPerformance:
         """
         with patch('app.routers.face.FaceService') as mock_service:
             service_instance = MagicMock()
+            # Mock InsightFace (fast)
             service_instance.facenet.decode_base64_image = MagicMock(
-                return_value=MagicMock()
+                return_value=Image.new("RGB", (112, 112))
             )
-
-            async def mock_recognize(img_bytes, threshold=None):
-                return "user-789", 0.90
-
-            service_instance.recognize_face = AsyncMock(side_effect=mock_recognize)
+            service_instance.facenet.get_embedding = MagicMock(
+                return_value=np.random.randn(512).astype(np.float32)
+            )
+            service_instance.faiss.search_with_margin = MagicMock(
+                return_value={"user_id": "user-789", "confidence": 0.90, "is_ambiguous": False}
+            )
             mock_service.return_value = service_instance
 
             with patch('app.routers.face.PresenceService'):
@@ -196,14 +199,16 @@ class TestEdgeAPIPerformance:
         """
         with patch('app.routers.face.FaceService') as mock_service:
             service_instance = MagicMock()
+            # Mock InsightFace (fast)
             service_instance.facenet.decode_base64_image = MagicMock(
-                return_value=MagicMock()
+                return_value=Image.new("RGB", (112, 112))
             )
-
-            async def mock_recognize(img_bytes, threshold=None):
-                return f"user-{np.random.randint(1000)}", 0.85
-
-            service_instance.recognize_face = AsyncMock(side_effect=mock_recognize)
+            service_instance.facenet.get_embedding = MagicMock(
+                return_value=np.random.randn(512).astype(np.float32)
+            )
+            service_instance.faiss.search_with_margin = MagicMock(
+                return_value={"user_id": "user-789", "confidence": 0.90, "is_ambiguous": False}
+            )
             mock_service.return_value = service_instance
 
             with patch('app.routers.face.PresenceService'):
@@ -515,14 +520,16 @@ class TestRateLimiting:
         """
         with patch('app.routers.face.FaceService') as mock_service:
             service_instance = MagicMock()
+            # Mock InsightFace (fast)
             service_instance.facenet.decode_base64_image = MagicMock(
-                return_value=MagicMock()
+                return_value=Image.new("RGB", (112, 112))
             )
-
-            async def mock_recognize(img_bytes, threshold=None):
-                return "user-burst", 0.85
-
-            service_instance.recognize_face = AsyncMock(side_effect=mock_recognize)
+            service_instance.facenet.get_embedding = MagicMock(
+                return_value=np.random.randn(512).astype(np.float32)
+            )
+            service_instance.faiss.search_with_margin = MagicMock(
+                return_value={"user_id": "user-789", "confidence": 0.90, "is_ambiguous": False}
+            )
             mock_service.return_value = service_instance
 
             with patch('app.routers.face.PresenceService'):

@@ -81,7 +81,7 @@ def _clear_request_cache():
 
 def _patch_ml_singletons(
     *,
-    generate_embedding=None,
+    get_embedding=None,
     decode_base64_image=None,
     faiss_search=None,
     faiss_search_with_margin=None,
@@ -101,7 +101,7 @@ def _patch_ml_singletons(
     """
     mock_fn = MagicMock()
     mock_fn.get_embedding = MagicMock(
-        side_effect=generate_embedding or (lambda *_a, **_kw: _make_embedding())
+        side_effect=get_embedding or (lambda *_a, **_kw: _make_embedding())
     )
     mock_fn.decode_base64_image = MagicMock(
         side_effect=decode_base64_image
