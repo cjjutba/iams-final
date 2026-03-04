@@ -120,45 +120,73 @@ class FaceService:
         if not embeddings:
             raise FaceRecognitionError("No valid face embeddings generated")
 
-        # Average embeddings to get single representative embedding
-        avg_embedding = np.mean(embeddings, axis=0)
+        # L2 normalize each embedding individually
+        normed = []
+        for emb in embeddings:
+            n = emb / np.linalg.norm(emb)
+            normed.append(n)
 
-        # L2 normalize (for cosine similarity)
-        avg_embedding = avg_embedding / np.linalg.norm(avg_embedding)
-
-        # Add to FAISS index
+        # Add all embeddings to FAISS (one per angle, all mapped to same user)
+        all_embs = np.stack(normed).astype(np.float32)
         try:
-            faiss_id = self.faiss.add(avg_embedding, user_id)
+            faiss_ids = self.faiss.add_batch(all_embs, [user_id] * len(normed))
         except Exception as e:
             logger.error(f"Failed to add to FAISS: {e}")
-            raise FaceRecognitionError("Failed to index face embedding")
+            raise FaceRecognitionError("Failed to index face embeddings")
 
-        # Convert embedding to bytes for database storage
-        embedding_bytes = avg_embedding.astype(np.float32).tobytes()
+        # Compute a representative averaged embedding for backward-compatible
+        # storage in face_registrations.embedding_vector (used as fallback)
+        avg_embedding = np.mean(all_embs, axis=0)
+        avg_embedding = avg_embedding / np.linalg.norm(avg_embedding)
+        avg_bytes = avg_embedding.astype(np.float32).tobytes()
+
+        # Angle labels based on step index
+        angle_labels = ["center", "left", "right", "up", "down"]
 
         # Transaction: DB insert with FAISS rollback on failure
         try:
-            self.face_repo.create(user_id, faiss_id, embedding_bytes)
+            # Create parent FaceRegistration (embedding_id = first FAISS ID)
+            # Use _create_no_commit to delay commit until embeddings are also added
+            registration = self.face_repo._create_no_commit(user_id, faiss_ids[0], avg_bytes)
+
+            # Create individual FaceEmbedding rows
+            embedding_entries = []
+            for idx, (fid, emb) in enumerate(zip(faiss_ids, normed)):
+                q_score = None
+                if quality_reports and idx < len(quality_reports):
+                    q_score = quality_reports[idx].blur_score  # Use blur as overall quality proxy
+                embedding_entries.append({
+                    "faiss_id": fid,
+                    "embedding_vector": emb.astype(np.float32).tobytes(),
+                    "angle_label": angle_labels[idx] if idx < len(angle_labels) else None,
+                    "quality_score": q_score,
+                })
+            self.face_repo.create_embeddings_batch(
+                str(registration.id), embedding_entries
+            )
+            self.db.commit()
 
             # Persist FAISS index to disk only after DB commit succeeds
             self.faiss.save()
 
-            logger.info(f"Face registered successfully for user {user_id} (FAISS ID: {faiss_id})")
+            logger.info(
+                f"Face registered for user {user_id}: "
+                f"{len(faiss_ids)} embeddings (FAISS IDs {faiss_ids[0]}-{faiss_ids[-1]})"
+            )
         except Exception as e:
             # Rollback DB transaction
             self.db.rollback()
 
-            # Rollback FAISS addition since DB commit failed
-            try:
-                self.faiss.remove(faiss_id)
-                logger.info(f"Rolled back FAISS entry {faiss_id} for user {user_id}")
-            except Exception as remove_err:
-                logger.error(f"Failed to rollback FAISS entry {faiss_id}: {remove_err}")
-
+            # Rollback FAISS additions since DB commit failed
+            for fid in faiss_ids:
+                try:
+                    self.faiss.remove(fid)
+                except Exception:
+                    pass
             logger.error(f"Failed to save face registration for user {user_id}: {e}")
             raise FaceRecognitionError("Failed to save face registration")
 
-        return faiss_id, "Face registered successfully", quality_reports or None
+        return faiss_ids[0], "Face registered successfully", quality_reports or None
 
     async def recognize_face(
         self,

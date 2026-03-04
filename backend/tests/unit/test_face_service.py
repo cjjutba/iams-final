@@ -57,6 +57,8 @@ def _make_face_service(db_session):
 
     mock_faiss = MagicMock()
     mock_faiss.add = MagicMock(return_value=0)
+    # add_batch returns sequential FAISS IDs starting from 0
+    mock_faiss.add_batch = MagicMock(side_effect=lambda embs, uids: list(range(len(uids))))
     mock_faiss.save = MagicMock()
     mock_faiss.search = MagicMock(return_value=[])
     mock_faiss.rebuild = MagicMock()
@@ -96,7 +98,7 @@ class TestFaceServiceRegister:
         assert faiss_id == 0
         assert "successfully" in msg.lower()
         assert mock_fn.get_embedding.call_count == 3
-        mock_faiss.add.assert_called_once()
+        mock_faiss.add_batch.assert_called_once()
         mock_faiss.save.assert_called_once()
 
     @pytest.mark.asyncio
@@ -155,9 +157,9 @@ class TestFaceServiceRegister:
 
     @pytest.mark.asyncio
     async def test_register_face_faiss_add_failure(self, db_session):
-        """If FAISS add fails, service should raise FaceRecognitionError."""
+        """If FAISS add_batch fails, service should raise FaceRecognitionError."""
         service, _, mock_faiss = _make_face_service(db_session)
-        mock_faiss.add.side_effect = RuntimeError("Index not initialized")
+        mock_faiss.add_batch.side_effect = RuntimeError("Index not initialized")
 
         user_id = str(uuid.uuid4())
         images = [_make_mock_upload_file() for _ in range(3)]
@@ -166,11 +168,10 @@ class TestFaceServiceRegister:
             await service.register_face(user_id, images)
 
     @pytest.mark.asyncio
-    async def test_register_face_averages_embeddings(self, db_session):
-        """The averaged embedding passed to FAISS should be L2-normalised."""
+    async def test_register_stores_individual_embeddings(self, db_session):
+        """Each embedding passed to FAISS add_batch should be L2-normalised."""
         service, mock_fn, mock_faiss = _make_face_service(db_session)
 
-        # Use fixed embeddings so we can predict the average
         emb1 = np.ones(512, dtype=np.float32)
         emb2 = np.ones(512, dtype=np.float32) * 2
         emb3 = np.ones(512, dtype=np.float32) * 3
@@ -179,18 +180,26 @@ class TestFaceServiceRegister:
         user_id = str(uuid.uuid4())
         images = [_make_mock_upload_file() for _ in range(3)]
 
-        await service.register_face(user_id, images)  # returns 3-tuple
+        await service.register_face(user_id, images)
 
-        # The embedding passed to faiss.add should be L2-normalised
-        call_args = mock_faiss.add.call_args
-        added_embedding = call_args[0][0]
-        norm = np.linalg.norm(added_embedding)
-        assert abs(norm - 1.0) < 1e-5, f"Embedding norm should be ~1.0, got {norm}"
+        # add_batch should receive 3 individually L2-normalised embeddings
+        mock_faiss.add_batch.assert_called_once()
+        call_args = mock_faiss.add_batch.call_args
+        batch_embs = call_args[0][0]  # First positional arg: numpy array [3, 512]
+        user_ids = call_args[0][1]    # Second positional arg: list of user_ids
+        assert batch_embs.shape == (3, 512)
+        assert len(user_ids) == 3
+        assert all(uid == user_id for uid in user_ids)
+        for i in range(3):
+            norm = np.linalg.norm(batch_embs[i])
+            assert abs(norm - 1.0) < 1e-5, f"Embedding {i} norm should be ~1.0, got {norm}"
 
     @pytest.mark.asyncio
     async def test_register_face_saves_to_db(self, db_session):
-        """After successful registration the DB should contain a FaceRegistration row."""
+        """After successful registration the DB should contain a FaceRegistration row
+        and individual FaceEmbedding rows."""
         from app.models.face_registration import FaceRegistration
+        from app.models.face_embedding import FaceEmbedding
 
         service, _, _ = _make_face_service(db_session)
         user_id = str(uuid.uuid4())
@@ -205,6 +214,15 @@ class TestFaceServiceRegister:
         assert row.embedding_id == faiss_id
         assert row.is_active is True
         assert row.embedding_vector is not None
+
+        # Verify individual FaceEmbedding rows were created
+        emb_rows = db_session.query(FaceEmbedding).filter(
+            FaceEmbedding.registration_id == row.id
+        ).all()
+        assert len(emb_rows) == 3
+        assert emb_rows[0].angle_label == "center"
+        assert emb_rows[1].angle_label == "left"
+        assert emb_rows[2].angle_label == "right"
 
 
 # ===================================================================
@@ -232,7 +250,7 @@ class TestFaceServiceRegisterQuality:
         })
 
         mock_faiss = MagicMock()
-        mock_faiss.add = MagicMock(return_value=0)
+        mock_faiss.add_batch = MagicMock(side_effect=lambda embs, uids: list(range(len(uids))))
         mock_faiss.save = MagicMock()
 
         service.facenet = mock_facenet
