@@ -38,6 +38,9 @@ import Svg, { Path, Ellipse } from 'react-native-svg';
 import { Check, RotateCcw } from 'lucide-react-native';
 import { config, strings } from '../../constants';
 import { Text } from '../ui';
+import { FaceQualityBar } from './FaceQualityBar';
+import { AngleGuide } from './AngleGuide';
+import { StepIndicator } from './StepIndicator';
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -60,6 +63,26 @@ const OVAL_CX = SW / 2;
 const OVAL_CY = SH * 0.35;
 
 const MIN_FACE_SIZE_RATIO = 0.25;
+
+// Quality tracking thresholds
+const STABILITY_THRESHOLD = 15; // Max pixel movement between frames to count as "stable"
+const ALIGNMENT_TOLERANCE = 0.35; // Fraction of oval radius — face center must be within this
+
+// ── Quality state type (used via refs for frame processor stability) ──
+
+interface QualityState {
+  faceSizeOk: boolean;
+  stabilityOk: boolean;
+  alignmentOk: boolean;
+  eyesOpenOk: boolean;
+}
+
+const INITIAL_QUALITY: QualityState = {
+  faceSizeOk: false,
+  stabilityOk: false,
+  alignmentOk: false,
+  eyesOpenOk: false,
+};
 
 // Step instructions (maps to the 5 angle captures)
 const STEP_INSTRUCTIONS = [
@@ -134,11 +157,17 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
   const [retakeIndex, setRetakeIndex] = useState<number | null>(null);
   const [images, setImages] = useState<string[]>([]);
 
+  // ── Quality state (for UI rendering) ──
+  const [quality, setQuality] = useState<QualityState>(INITIAL_QUALITY);
+
   // ── Refs (for stable callbacks — avoids frameProcessor recreation) ──
   const phaseRef = useRef<ScanPhase>('scanning');
   const isCapturingRef = useRef(false);
   const completedRef = useRef(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  // Quality tracking refs (accessed in frame callback — must NOT be useState)
+  const prevFaceBoundsRef = useRef<{ x: number; y: number } | null>(null);
 
   // Keep phaseRef in sync
   useEffect(() => { phaseRef.current = phase; }, [phase]);
@@ -184,19 +213,43 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
 
     if (!faces || faces.length === 0) {
       setFaceDetected(false);
+      setQuality(INITIAL_QUALITY);
+      prevFaceBoundsRef.current = null;
       return;
     }
 
     const face = faces[0];
-    const faceSizeRatio = face.bounds.width / SW;
-    const isBigEnough = faceSizeRatio >= MIN_FACE_SIZE_RATIO;
+    const { bounds } = face;
 
-    // Eyes-open gate (lenient threshold for angled captures)
-    const eyesOpen =
+    // ── Face size ──
+    const faceSizeRatio = bounds.width / SW;
+    const faceSizeOk = faceSizeRatio >= MIN_FACE_SIZE_RATIO;
+
+    // ── Eyes open (lenient threshold for angled captures) ──
+    const eyesOpenOk =
       face.leftEyeOpenProbability > 0.25 &&
       face.rightEyeOpenProbability > 0.25;
 
-    setFaceDetected(isBigEnough && eyesOpen);
+    // ── Stability (compare face center with previous frame) ──
+    const faceCenterX = bounds.x + bounds.width / 2;
+    const faceCenterY = bounds.y + bounds.height / 2;
+    let stabilityOk = false;
+
+    if (prevFaceBoundsRef.current) {
+      const dx = Math.abs(faceCenterX - prevFaceBoundsRef.current.x);
+      const dy = Math.abs(faceCenterY - prevFaceBoundsRef.current.y);
+      stabilityOk = dx < STABILITY_THRESHOLD && dy < STABILITY_THRESHOLD;
+    }
+    prevFaceBoundsRef.current = { x: faceCenterX, y: faceCenterY };
+
+    // ── Alignment (face center within oval tolerance) ──
+    const offsetX = Math.abs(faceCenterX - OVAL_CX) / OVAL_RX;
+    const offsetY = Math.abs(faceCenterY - OVAL_CY) / OVAL_RY;
+    const alignmentOk = offsetX < ALIGNMENT_TOLERANCE && offsetY < ALIGNMENT_TOLERANCE;
+
+    // ── Update UI state ──
+    setFaceDetected(faceSizeOk && eyesOpenOk);
+    setQuality({ faceSizeOk, stabilityOk, alignmentOk, eyesOpenOk });
   }, []); // Empty deps → stable forever
 
   // ── Capture (button press) ─────────────────────────────────
@@ -271,6 +324,8 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
     isCapturingRef.current = false;
     setCurrentStep(index);
     setFaceDetected(false);
+    setQuality(INITIAL_QUALITY);
+    prevFaceBoundsRef.current = null;
     flashAnim.setValue(0);
     checkAnim.setValue(0);
     setPhase('scanning');
@@ -285,6 +340,8 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
     completedRef.current = false;
     setCurrentStep(0);
     setFaceDetected(false);
+    setQuality(INITIAL_QUALITY);
+    prevFaceBoundsRef.current = null;
     flashAnim.setValue(0);
     checkAnim.setValue(0);
     setPhase('scanning');
@@ -305,6 +362,8 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
     completedRef.current = false;
     setCurrentStep(0);
     setFaceDetected(false);
+    setQuality(INITIAL_QUALITY);
+    prevFaceBoundsRef.current = null;
     flashAnim.setValue(0);
     checkAnim.setValue(0);
     setPhase('scanning');
@@ -559,6 +618,21 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
                 </View>
               ) : (
                 <>
+                  {/* Angle guide (direction indicator) */}
+                  <AngleGuide
+                    step={currentStep}
+                    isAligned={faceDetected && quality.alignmentOk}
+                  />
+
+                  {/* Quality bar */}
+                  <FaceQualityBar
+                    faceDetected={faceDetected}
+                    faceSizeOk={quality.faceSizeOk}
+                    stabilityOk={quality.stabilityOk}
+                    alignmentOk={quality.alignmentOk}
+                    eyesOpenOk={quality.eyesOpenOk}
+                  />
+
                   {/* Instruction */}
                   <Text
                     variant="h3"
@@ -570,31 +644,17 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
                     {STEP_INSTRUCTIONS[currentStep]}
                   </Text>
 
-                  {/* Progress dots */}
-                  <View style={s.dotsRow}>
-                    {Array.from({ length: captureCount }).map((_, i) => {
-                      const isDone = retakeIndex !== null
-                        ? i !== retakeIndex
-                        : i < currentStep;
-                      const isActive = retakeIndex !== null
-                        ? i === retakeIndex
-                        : i === currentStep;
-
-                      return (
-                        <View
-                          key={i}
-                          style={[
-                            s.dot,
-                            isDone
-                              ? s.dotDone
-                              : isActive
-                                ? s.dotActive
-                                : s.dotPending,
-                          ]}
-                        />
-                      );
-                    })}
-                  </View>
+                  {/* Step indicator (replaces simple dots) */}
+                  <StepIndicator
+                    totalSteps={captureCount}
+                    currentStep={currentStep}
+                    completedSteps={
+                      retakeIndex !== null
+                        ? Array.from({ length: images.length }, (_, i) => i).filter(i => i !== retakeIndex)
+                        : Array.from({ length: currentStep }, (_, i) => i)
+                    }
+                    retakeIndex={retakeIndex}
+                  />
 
                   {/* Shutter button */}
                   <TouchableOpacity
@@ -677,32 +737,6 @@ const s = StyleSheet.create({
     textShadowColor: 'rgba(0,0,0,0.8)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 6,
-  },
-
-  // Progress dots
-  dotsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    marginBottom: 28,
-  },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  dotDone: {
-    backgroundColor: '#22C55E',
-  },
-  dotActive: {
-    backgroundColor: '#FFFFFF',
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  dotPending: {
-    backgroundColor: 'rgba(255,255,255,0.25)',
   },
 
   // Shutter button

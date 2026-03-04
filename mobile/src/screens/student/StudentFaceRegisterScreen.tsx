@@ -5,12 +5,12 @@
  * Uses the shared FaceScanCamera for iPhone Face ID-style continuous capture.
  */
 
-import React, { useState, useCallback } from 'react';
-import { View, StyleSheet, ActivityIndicator } from 'react-native';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { View, StyleSheet, ActivityIndicator, Animated } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import { Camera as VisionCamera } from 'react-native-vision-camera';
-import { Camera } from 'lucide-react-native';
+import { Camera, Check } from 'lucide-react-native';
 import { faceService } from '../../services';
 import { useToast } from '../../hooks/useToast';
 import { theme, strings } from '../../constants';
@@ -30,6 +30,8 @@ export const StudentFaceRegisterScreen: React.FC = () => {
   const { showSuccess, showError } = useToast();
   const [permissionGranted, setPermissionGranted] = useState<boolean | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [registrationSuccess, setRegistrationSuccess] = useState(false);
+  const successAnim = useRef(new Animated.Value(0)).current;
 
   // Check vision-camera permission on mount
   React.useEffect(() => {
@@ -54,21 +56,33 @@ export const StudentFaceRegisterScreen: React.FC = () => {
         await faceService.reregisterFace(images);
       }
 
-      navigation.goBack();
-      showSuccess(
-        mode === 'register'
-          ? 'Face registered successfully'
-          : 'Face re-registered successfully',
-        'Success',
-      );
+      // Show confirmation state briefly before navigating back
+      setIsSubmitting(false);
+      setRegistrationSuccess(true);
+
+      Animated.spring(successAnim, {
+        toValue: 1,
+        friction: 6,
+        tension: 80,
+        useNativeDriver: true,
+      }).start();
+
+      setTimeout(() => {
+        navigation.goBack();
+        showSuccess(
+          mode === 'register'
+            ? 'Face registered successfully'
+            : 'Face re-registered successfully',
+          'Success',
+        );
+      }, 2000);
     } catch (error: unknown) {
       const message = getErrorMessage(error);
+      setIsSubmitting(false);
       navigation.goBack();
       showError(message, 'Registration Failed');
-    } finally {
-      setIsSubmitting(false);
     }
-  }, [mode, navigation, showSuccess, showError]);
+  }, [mode, navigation, showSuccess, showError, successAnim]);
 
   // ── Permission loading ─────────────────────────────────────
 
@@ -118,6 +132,35 @@ export const StudentFaceRegisterScreen: React.FC = () => {
     );
   }
 
+  // ── Registration success confirmation ─────────────────────
+
+  if (registrationSuccess) {
+    return (
+      <View style={styles.submittingRoot}>
+        <Animated.View
+          style={[
+            styles.successCheckCircle,
+            {
+              transform: [{ scale: successAnim }],
+              opacity: successAnim,
+            },
+          ]}
+        >
+          <Check size={48} color="#FFFFFF" strokeWidth={3} />
+        </Animated.View>
+        <Text
+          variant="h3"
+          weight="700"
+          color="#22C55E"
+          align="center"
+          style={styles.successText}
+        >
+          Face registered!
+        </Text>
+      </View>
+    );
+  }
+
   // ── Submitting overlay ─────────────────────────────────────
 
   if (isSubmitting) {
@@ -159,5 +202,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: theme.spacing[6],
+  },
+  successCheckCircle: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: 'rgba(34,197,94,0.85)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: theme.spacing[3],
+  },
+  successText: {
+    marginTop: theme.spacing[2],
   },
 });
