@@ -7,6 +7,7 @@ Exports all SQLAlchemy models for easy import.
 from app.database import Base
 from app.models.user import User, UserRole
 from app.models.face_registration import FaceRegistration
+from app.models.face_embedding import FaceEmbedding
 from app.models.room import Room
 from app.models.schedule import Schedule
 from app.models.enrollment import Enrollment
@@ -22,6 +23,7 @@ __all__ = [
     "User",
     "UserRole",
     "FaceRegistration",
+    "FaceEmbedding",
     "Room",
     "Schedule",
     "Enrollment",
