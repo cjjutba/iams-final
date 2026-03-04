@@ -40,7 +40,6 @@ export const FacultyTabNavigator: React.FC = () => {
           borderTopWidth: 1,
           height: theme.layout.tabBarHeight + insets.bottom,
           paddingBottom: insets.bottom + 8,
-          paddingTop: 8,
         },
         tabBarLabelStyle: {
           fontSize: theme.typography.fontSize.xs,

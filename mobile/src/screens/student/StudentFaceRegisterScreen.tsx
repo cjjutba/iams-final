@@ -47,6 +47,11 @@ export const StudentFaceRegisterScreen: React.FC = () => {
   // ── Handle scan complete ───────────────────────────────────
 
   const handleScanComplete = useCallback(async (images: string[]) => {
+    // FaceScanCamera already deactivated the camera before calling this.
+    // Wait one frame to ensure the native camera view is fully stopped
+    // before unmounting via state change (prevents ViewNotFoundError).
+    await new Promise(r => requestAnimationFrame(r));
+
     try {
       setIsSubmitting(true);
 

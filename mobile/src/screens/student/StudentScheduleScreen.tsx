@@ -172,7 +172,7 @@ export const StudentScheduleScreen: React.FC = () => {
 
   if (error && schedules.length === 0 && !isLoading) {
     return (
-      <ScreenLayout safeArea padded={false}>
+      <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
         <Header title={strings.schedule.mySchedule} />
         <View style={styles.errorContainer}>
           <RefreshCw size={40} color={theme.colors.text.tertiary} style={styles.errorIcon} />
@@ -190,7 +190,7 @@ export const StudentScheduleScreen: React.FC = () => {
   // ---------- main render ----------
 
   return (
-    <ScreenLayout safeArea padded={false}>
+    <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
       <Header title={strings.schedule.mySchedule} />
 
       {/* Day selector */}

@@ -38,7 +38,6 @@ import Svg, { Path, Ellipse } from 'react-native-svg';
 import { Check, RotateCcw } from 'lucide-react-native';
 import { config, strings } from '../../constants';
 import { Text } from '../ui';
-import { FaceQualityBar } from './FaceQualityBar';
 import { AngleGuide } from './AngleGuide';
 import { StepIndicator } from './StepIndicator';
 
@@ -67,6 +66,10 @@ const MIN_FACE_SIZE_RATIO = 0.25;
 // Quality tracking thresholds
 const STABILITY_THRESHOLD = 15; // Max pixel movement between frames to count as "stable"
 const ALIGNMENT_TOLERANCE = 0.35; // Fraction of oval radius — face center must be within this
+
+// Hysteresis: require this many consecutive "no face" frames before dropping detected state.
+// At ~30fps this is ~130ms grace period — prevents single-frame flicker.
+const FACE_LOST_GRACE_FRAMES = 4;
 
 // ── Quality state type (used via refs for frame processor stability) ──
 
@@ -147,7 +150,6 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
   const device = useCameraDevice('front');
   const { hasPermission, requestPermission } = useCameraPermission();
   const cameraRef = useRef<any>(null);
-
   const { detectFaces, stopListeners } = useFaceDetector(FACE_DETECTION_OPTIONS);
 
   // ── State (for UI rendering) ────────────────────────────────
@@ -156,6 +158,7 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
   const [faceDetected, setFaceDetected] = useState(false);
   const [retakeIndex, setRetakeIndex] = useState<number | null>(null);
   const [images, setImages] = useState<string[]>([]);
+  const [isCameraActive, setIsCameraActive] = useState(true);
 
   // ── Quality state (for UI rendering) ──
   const [quality, setQuality] = useState<QualityState>(INITIAL_QUALITY);
@@ -168,6 +171,7 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
 
   // Quality tracking refs (accessed in frame callback — must NOT be useState)
   const prevFaceBoundsRef = useRef<{ x: number; y: number } | null>(null);
+  const missedFramesRef = useRef(0);
 
   // Keep phaseRef in sync
   useEffect(() => { phaseRef.current = phase; }, [phase]);
@@ -181,6 +185,7 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
   useEffect(() => {
     return () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      setIsCameraActive(false);
       stopListeners();
     };
   }, [stopListeners]);
@@ -211,44 +216,55 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
   const handleFacesDetected = useCallback((faces: Face[]) => {
     if (phaseRef.current !== 'scanning') return;
 
-    if (!faces || faces.length === 0) {
-      setFaceDetected(false);
-      setQuality(INITIAL_QUALITY);
-      prevFaceBoundsRef.current = null;
-      return;
-    }
-
-    const face = faces[0];
-    const { bounds } = face;
-
-    // ── Face size ──
-    const faceSizeRatio = bounds.width / SW;
-    const faceSizeOk = faceSizeRatio >= MIN_FACE_SIZE_RATIO;
-
-    // ── Eyes open (lenient threshold for angled captures) ──
-    const eyesOpenOk =
-      face.leftEyeOpenProbability > 0.25 &&
-      face.rightEyeOpenProbability > 0.25;
-
-    // ── Stability (compare face center with previous frame) ──
-    const faceCenterX = bounds.x + bounds.width / 2;
-    const faceCenterY = bounds.y + bounds.height / 2;
+    // ── Determine if this frame has a valid face ──
+    let frameOk = false;
+    let faceSizeOk = false;
     let stabilityOk = false;
+    let alignmentOk = false;
+    let eyesOpenOk = false;
 
-    if (prevFaceBoundsRef.current) {
-      const dx = Math.abs(faceCenterX - prevFaceBoundsRef.current.x);
-      const dy = Math.abs(faceCenterY - prevFaceBoundsRef.current.y);
-      stabilityOk = dx < STABILITY_THRESHOLD && dy < STABILITY_THRESHOLD;
+    if (faces && faces.length > 0) {
+      const face = faces[0];
+      const { bounds } = face;
+
+      const faceSizeRatio = bounds.width / SW;
+      faceSizeOk = faceSizeRatio >= MIN_FACE_SIZE_RATIO;
+
+      // Lenient eye threshold — blinks & angles cause noisy readings
+      eyesOpenOk =
+        face.leftEyeOpenProbability > 0.15 &&
+        face.rightEyeOpenProbability > 0.15;
+
+      const faceCenterX = bounds.x + bounds.width / 2;
+      const faceCenterY = bounds.y + bounds.height / 2;
+
+      if (prevFaceBoundsRef.current) {
+        const dx = Math.abs(faceCenterX - prevFaceBoundsRef.current.x);
+        const dy = Math.abs(faceCenterY - prevFaceBoundsRef.current.y);
+        stabilityOk = dx < STABILITY_THRESHOLD && dy < STABILITY_THRESHOLD;
+      }
+      prevFaceBoundsRef.current = { x: faceCenterX, y: faceCenterY };
+
+      const offsetX = Math.abs(faceCenterX - OVAL_CX) / OVAL_RX;
+      const offsetY = Math.abs(faceCenterY - OVAL_CY) / OVAL_RY;
+      alignmentOk = offsetX < ALIGNMENT_TOLERANCE && offsetY < ALIGNMENT_TOLERANCE;
+
+      frameOk = faceSizeOk && eyesOpenOk;
     }
-    prevFaceBoundsRef.current = { x: faceCenterX, y: faceCenterY };
 
-    // ── Alignment (face center within oval tolerance) ──
-    const offsetX = Math.abs(faceCenterX - OVAL_CX) / OVAL_RX;
-    const offsetY = Math.abs(faceCenterY - OVAL_CY) / OVAL_RY;
-    const alignmentOk = offsetX < ALIGNMENT_TOLERANCE && offsetY < ALIGNMENT_TOLERANCE;
+    // ── Hysteresis: instant ON, delayed OFF ──
+    if (frameOk) {
+      missedFramesRef.current = 0;
+      setFaceDetected(true);
+    } else {
+      missedFramesRef.current += 1;
+      if (missedFramesRef.current >= FACE_LOST_GRACE_FRAMES) {
+        setFaceDetected(false);
+        prevFaceBoundsRef.current = null;
+      }
+      // else: keep faceDetected=true (grace period)
+    }
 
-    // ── Update UI state ──
-    setFaceDetected(faceSizeOk && eyesOpenOk);
     setQuality({ faceSizeOk, stabilityOk, alignmentOk, eyesOpenOk });
   }, []); // Empty deps → stable forever
 
@@ -264,7 +280,7 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
       if (photo?.path) {
         const uri = `file://${photo.path}`;
 
-        // Flash + haptic
+        // Flash + haptic (instant capture feedback)
         flashAnim.setValue(0.3);
         Animated.timing(flashAnim, {
           toValue: 0,
@@ -326,6 +342,7 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
     setFaceDetected(false);
     setQuality(INITIAL_QUALITY);
     prevFaceBoundsRef.current = null;
+    missedFramesRef.current = 0;
     flashAnim.setValue(0);
     checkAnim.setValue(0);
     setPhase('scanning');
@@ -342,6 +359,7 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
     setFaceDetected(false);
     setQuality(INITIAL_QUALITY);
     prevFaceBoundsRef.current = null;
+    missedFramesRef.current = 0;
     flashAnim.setValue(0);
     checkAnim.setValue(0);
     setPhase('scanning');
@@ -350,7 +368,12 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
   // ── Confirm (from review) ──────────────────────────────────
 
   const handleConfirm = useCallback(() => {
-    onComplete(images);
+    // Deactivate camera first to stop the frame processor before the
+    // parent unmounts this component — prevents ViewNotFoundError.
+    setIsCameraActive(false);
+    requestAnimationFrame(() => {
+      onComplete(images);
+    });
   }, [onComplete, images]);
 
   // ── Retry from error ────────────────────────────────────────
@@ -364,6 +387,7 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
     setFaceDetected(false);
     setQuality(INITIAL_QUALITY);
     prevFaceBoundsRef.current = null;
+    missedFramesRef.current = 0;
     flashAnim.setValue(0);
     checkAnim.setValue(0);
     setPhase('scanning');
@@ -390,7 +414,6 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
 
   const isComplete = phase === 'complete';
   const isError = phase === 'error';
-  const isScanning = phase === 'scanning';
   const isReview = phase === 'review';
 
   if (!hasPermission) {
@@ -433,10 +456,6 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
       ? '#22C55E'
       : 'rgba(255,255,255,0.3)';
 
-  const stepLabel = retakeIndex !== null
-    ? `Retake: ${STEP_LABELS[retakeIndex]}`
-    : `Step ${currentStep + 1} of ${captureCount}`;
-
   // Dynamic thumbnail height to fit screen without scrolling
   // Layout: topPad + header(50) + grid(3 rows) + footer(88) + botPad
   const topPad = insets.top + 12;
@@ -457,8 +476,9 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
         ref={cameraRef}
         style={s.camera}
         device={device}
-        isActive={!isError}
+        isActive={isCameraActive && !isError}
         photo={true}
+        photoQualityBalance="quality"
         frameProcessor={frameProcessor}
         pixelFormat="yuv"
       />
@@ -561,16 +581,6 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
               <Text variant="h3" weight="600" color="#FFFFFF" align="center">
                 {strings.register.faceInstructions.scanLabel}
               </Text>
-              {isScanning && (
-                <Text
-                  variant="caption"
-                  color="rgba(255,255,255,0.5)"
-                  align="center"
-                  style={s.stepCounter}
-                >
-                  {stepLabel}
-                </Text>
-              )}
             </View>
 
             {/* Bottom section */}
@@ -621,21 +631,12 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
                   {/* Angle guide (direction indicator) */}
                   <AngleGuide
                     step={currentStep}
-                    isAligned={faceDetected && quality.alignmentOk}
-                  />
-
-                  {/* Quality bar */}
-                  <FaceQualityBar
-                    faceDetected={faceDetected}
-                    faceSizeOk={quality.faceSizeOk}
-                    stabilityOk={quality.stabilityOk}
-                    alignmentOk={quality.alignmentOk}
-                    eyesOpenOk={quality.eyesOpenOk}
+                    isAligned={faceDetected}
                   />
 
                   {/* Instruction */}
                   <Text
-                    variant="h3"
+                    variant="body"
                     weight="600"
                     color="#FFFFFF"
                     align="center"
@@ -674,7 +675,7 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
                     />
                   </TouchableOpacity>
 
-                  {!faceDetected && (
+                  {!faceDetected ? (
                     <Text
                       variant="caption"
                       color="rgba(255,255,255,0.4)"
@@ -683,7 +684,7 @@ export const FaceScanCamera: React.FC<FaceScanCameraProps> = ({
                     >
                       {strings.register.faceInstructions.noFace}
                     </Text>
-                  )}
+                  ) : null}
                 </>
               )}
             </View>
@@ -723,10 +724,6 @@ const s = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 24,
   },
-  stepCounter: {
-    marginTop: 4,
-  },
-
   // Bottom
   bottomSection: {
     alignItems: 'center',

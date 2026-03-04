@@ -194,17 +194,18 @@ class AntiSpoofDetector:
         Returns:
             SpoofResult with combined assessment
         """
-        # Per-image checks
+        # Per-image checks (majority must pass — single noisy frame shouldn't reject)
         image_scores = [self.check_single_image(crop) for crop in face_crops]
-        any_image_failed = any(not s.is_live for s in image_scores)
-        avg_image_score = np.mean([s.spoof_score for s in image_scores])
+        passed_count = sum(1 for s in image_scores if s.is_live)
+        majority_passed = passed_count > len(image_scores) / 2 if image_scores else True
+        avg_image_score = np.mean([s.spoof_score for s in image_scores]) if image_scores else 1.0
 
         # Multi-image variance check
         variance = check_embedding_variance(embeddings)
         variance_passed = variance >= settings.ANTISPOOF_EMBEDDING_VARIANCE_MIN
 
-        # Combined decision
-        is_live = variance_passed and not any_image_failed
+        # Combined decision: majority of images pass + embedding variance is sufficient
+        is_live = variance_passed and majority_passed
         combined_score = 0.5 * float(avg_image_score) + 0.5 * min(variance / 0.3, 1.0)
 
         details = {
@@ -224,11 +225,14 @@ class AntiSpoofDetector:
                     f"embedding variance too low ({variance:.3f} < "
                     f"{settings.ANTISPOOF_EMBEDDING_VARIANCE_MIN})"
                 )
-            if any_image_failed:
+            if not majority_passed:
                 failed_indices = [
                     i for i, s in enumerate(image_scores) if not s.is_live
                 ]
-                reasons.append(f"images {failed_indices} failed texture/frequency check")
+                reasons.append(
+                    f"majority of images ({len(failed_indices)}/{len(image_scores)}) "
+                    f"failed texture/frequency check"
+                )
             details["rejection_reasons"] = reasons
 
         return SpoofResult(

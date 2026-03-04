@@ -93,12 +93,18 @@ class FaceService:
                 if settings.QUALITY_GATE_ENABLED and hasattr(self.facenet, 'get_face_with_quality'):
                     face_data = self.facenet.get_face_with_quality(image_bytes)
                     embedding = face_data["embedding"]
-                    face_crops.append(face_data["image_bgr"])
+                    # Extract the actual face crop using the bbox for anti-spoof.
+                    # Passing the full image causes FFT/LBP to analyze background
+                    # pixels, producing false spoof detections on every image.
+                    bx, by, bw, bh = face_data["bbox"]
+                    face_crop = face_data["image_bgr"][by:by+bh, bx:bx+bw]
+                    face_crops.append(face_crop)
                     quality = assess_quality(
                         image_bgr=face_data["image_bgr"],
                         det_score=face_data["det_score"],
                         bbox=face_data["bbox"],
                         image_shape=face_data["image_bgr"].shape,
+                        blur_threshold_override=settings.QUALITY_BLUR_THRESHOLD_MOBILE,
                     )
                     quality_reports.append(quality)
                     if not quality.passed:

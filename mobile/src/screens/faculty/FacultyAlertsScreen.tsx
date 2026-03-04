@@ -136,7 +136,7 @@ export const FacultyAlertsScreen: React.FC = () => {
 
   if (error && !isRefreshing && alerts.length === 0) {
     return (
-      <ScreenLayout safeArea padded={false}>
+      <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
         <Header title={strings.faculty.alerts} />
         <View style={styles.errorContainer}>
           <RefreshCw size={40} color={theme.colors.text.tertiary} style={styles.errorIcon} />
@@ -160,7 +160,7 @@ export const FacultyAlertsScreen: React.FC = () => {
 
   if (isLoading && alerts.length === 0) {
     return (
-      <ScreenLayout safeArea padded={false}>
+      <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
         <Header title={strings.faculty.alerts} />
 
         {/* Filters */}
@@ -191,7 +191,7 @@ export const FacultyAlertsScreen: React.FC = () => {
   // ---------- main render ----------
 
   return (
-    <ScreenLayout safeArea padded={false}>
+    <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
       <Header title={strings.faculty.alerts} />
 
       {/* Filters */}

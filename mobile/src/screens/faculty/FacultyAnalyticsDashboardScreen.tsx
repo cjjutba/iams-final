@@ -140,7 +140,7 @@ export const FacultyAnalyticsDashboardScreen: React.FC = () => {
 
   if (isLoading && !isRefreshing) {
     return (
-      <ScreenLayout safeArea padded={false}>
+      <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
         <Header title="Analytics" />
         <View style={styles.centerContainer}>
           <Loader size="large" />
@@ -160,7 +160,7 @@ export const FacultyAnalyticsDashboardScreen: React.FC = () => {
 
   if (error && classOverviews.length === 0) {
     return (
-      <ScreenLayout safeArea padded={false}>
+      <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
         <Header title="Analytics" />
         <View style={styles.centerContainer}>
           <BarChart3 size={40} color={theme.colors.text.tertiary} />
@@ -197,7 +197,7 @@ export const FacultyAnalyticsDashboardScreen: React.FC = () => {
   // ---------- main render ----------
 
   return (
-    <ScreenLayout safeArea padded={false}>
+    <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
       <Header title="Analytics" />
 
       <ScrollView

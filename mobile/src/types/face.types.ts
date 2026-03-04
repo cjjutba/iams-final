@@ -58,6 +58,16 @@ export interface MatchedUser {
   student_name?: string;
 }
 
+// Per-image quality validation response (POST /face/validate-image)
+export interface ImageQualityResponse {
+  passed: boolean;
+  blur_score: number;
+  brightness: number;
+  face_size_ratio: number;
+  det_score: number;
+  rejection_reasons: string[];
+}
+
 // Face registration data (for multi-step registration flow)
 export interface FaceRegistrationData {
   images: string[]; // Array of Base64-encoded images

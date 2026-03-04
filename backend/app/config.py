@@ -58,7 +58,8 @@ class Settings(BaseSettings):
 
     # Face Quality Gating
     QUALITY_GATE_ENABLED: bool = True
-    QUALITY_BLUR_THRESHOLD: float = 100.0       # Laplacian variance minimum
+    QUALITY_BLUR_THRESHOLD: float = 100.0       # Laplacian variance minimum (CCTV)
+    QUALITY_BLUR_THRESHOLD_MOBILE: float = 35.0  # Laplacian variance minimum (mobile selfie)
     QUALITY_BRIGHTNESS_MIN: float = 40.0        # Mean pixel intensity minimum
     QUALITY_BRIGHTNESS_MAX: float = 220.0       # Mean pixel intensity maximum
     QUALITY_MIN_FACE_SIZE_RATIO: float = 0.05   # Face area / image area minimum
@@ -76,8 +77,8 @@ class Settings(BaseSettings):
     ANTISPOOF_REGISTRATION_STRICT: bool = True      # Block registration if spoof detected
     ANTISPOOF_RECOGNITION_LOG_ONLY: bool = True     # Only log during CCTV (no blocking)
     ANTISPOOF_EMBEDDING_VARIANCE_MIN: float = 0.1   # Min embedding cosine distance variance across angles
-    ANTISPOOF_LBP_THRESHOLD: float = 0.3            # LBP texture uniformity threshold
-    ANTISPOOF_FFT_THRESHOLD: float = 0.4            # FFT high-freq energy threshold
+    ANTISPOOF_LBP_THRESHOLD: float = 0.15            # LBP texture uniformity threshold (lowered for mobile selfie)
+    ANTISPOOF_FFT_THRESHOLD: float = 0.20            # FFT high-freq energy threshold (lowered for mobile selfie)
 
     # Presence Tracking
     SCAN_INTERVAL_SECONDS: int = 60  # How often to run presence scans

@@ -13,7 +13,7 @@ Quality checks:
 """
 
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -91,6 +91,7 @@ def assess_quality(
     det_score: float,
     bbox: Tuple[int, int, int, int],
     image_shape: Tuple[int, ...],
+    blur_threshold_override: Optional[float] = None,
 ) -> QualityReport:
     """
     Run all quality checks and return a unified report.
@@ -111,9 +112,10 @@ def assess_quality(
     reasons: List[str] = []
 
     if settings.QUALITY_GATE_ENABLED:
-        if blur < settings.QUALITY_BLUR_THRESHOLD:
+        blur_min = blur_threshold_override if blur_threshold_override is not None else settings.QUALITY_BLUR_THRESHOLD
+        if blur < blur_min:
             reasons.append(
-                f"Image too blurry (score {blur:.1f}, min {settings.QUALITY_BLUR_THRESHOLD})"
+                f"Image too blurry (score {blur:.1f}, min {blur_min})"
             )
 
         if brightness < settings.QUALITY_BRIGHTNESS_MIN:

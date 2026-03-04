@@ -72,7 +72,7 @@ export const FacultyProfileScreen: React.FC = () => {
   if (!user) return null;
 
   return (
-    <ScreenLayout safeArea padded={false}>
+    <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
       <Header title={strings.faculty.profile} />
 
       <ScrollView

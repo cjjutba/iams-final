@@ -326,7 +326,7 @@ export const FacultyHomeScreen: React.FC = () => {
   );
 
   return (
-    <ScreenLayout safeArea padded={false}>
+    <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
       <Header
         title={strings.faculty.home}
         showNotification

@@ -22,7 +22,7 @@
  */
 
 import { api } from '../utils/api';
-import type { FaceRegisterResponse, FaceStatusResponse } from '../types';
+import type { FaceRegisterResponse, FaceStatusResponse, ImageQualityResponse } from '../types';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -30,6 +30,9 @@ import type { FaceRegisterResponse, FaceStatusResponse } from '../types';
 
 /** Upload timeout: 60 seconds (images can be large) */
 const UPLOAD_TIMEOUT_MS = 60_000;
+
+/** Validation timeout: 15 seconds (single image, lightweight) */
+const VALIDATE_TIMEOUT_MS = 15_000;
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -185,6 +188,41 @@ export const faceService = {
   ): Promise<{ success: boolean; message: string }> {
     const response = await api.delete<{ success: boolean; message: string }>(
       `/face/${userId}`,
+    );
+    return response.data;
+  },
+
+  /**
+   * Validate a single face image quality before adding it to the capture set.
+   *
+   * Runs server-side quality gating (blur, brightness, face size, det confidence)
+   * using the mobile-calibrated blur threshold so the user can retake a bad
+   * angle immediately instead of failing at final submission.
+   *
+   * @param imageUri - file:// URI of the captured image
+   * @returns Quality validation result with pass/fail and rejection reasons
+   * @throws AxiosError on network or server errors
+   *
+   * Backend: POST /face/validate-image (accepts authenticated or unauthenticated)
+   * Request: multipart/form-data with field "image" (single UploadFile)
+   * Response: ImageQualityResponse { passed, blur_score, brightness, ... }
+   */
+  async validateImage(imageUri: string): Promise<ImageQualityResponse> {
+    const formData = new FormData();
+    const file = {
+      uri: imageUri,
+      type: 'image/jpeg',
+      name: 'check.jpg',
+    } as unknown as Blob;
+    formData.append('image', file);
+
+    const response = await api.post<ImageQualityResponse>(
+      '/face/validate-image',
+      formData,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: VALIDATE_TIMEOUT_MS,
+      },
     );
     return response.data;
   },

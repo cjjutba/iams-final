@@ -21,6 +21,16 @@ class QualityScoreResponse(BaseModel):
     passed: bool
 
 
+class ImageQualityResponse(BaseModel):
+    """Per-image quality validation result (used by mobile pre-upload check)."""
+    passed: bool
+    blur_score: float
+    brightness: float
+    face_size_ratio: float
+    det_score: float
+    rejection_reasons: List[str] = []
+
+
 class FaceRegisterResponse(BaseModel):
     """Face registration response"""
     success: bool

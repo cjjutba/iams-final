@@ -20,6 +20,7 @@ from app.models.user import User
 from app.schemas.face import (
     FaceRegisterResponse,
     QualityScoreResponse,
+    ImageQualityResponse,
     FaceStatusResponse,
     FaceRecognizeRequest,
     FaceRecognizeResponse,
@@ -31,7 +32,9 @@ from app.schemas.face import (
 from app.services.face_service import FaceService
 from app.services.presence_service import PresenceService
 from app.repositories.schedule_repository import ScheduleRepository
-from app.utils.dependencies import get_current_user, get_current_student
+from app.services.ml.insightface_model import insightface_model
+from app.services.ml.face_quality import assess_quality
+from app.utils.dependencies import get_current_user, get_current_student, get_optional_user
 from app.utils.exceptions import EdgeAPIError, ValidationError
 from app.config import settings, logger
 
@@ -164,6 +167,64 @@ async def get_face_status(
     status_data = face_service.get_face_status(str(current_user.id))
 
     return FaceStatusResponse(**status_data)
+
+
+@router.post("/validate-image", response_model=ImageQualityResponse, status_code=status.HTTP_200_OK)
+async def validate_image(
+    image: UploadFile = File(..., description="Single face image to validate"),
+    current_user: User | None = Depends(get_optional_user),
+):
+    """
+    **Validate a single face image quality (mobile pre-upload check)**
+
+    Runs quality gating (blur, brightness, face size, detection confidence)
+    on a single image using the mobile-calibrated blur threshold.
+
+    Returns quality scores and pass/fail so the mobile app can prompt a
+    retake *before* the user finishes all 5 captures.
+
+    Works for both authenticated and unauthenticated users (initial registration).
+    """
+    image_bytes = await image.read()
+
+    if len(image_bytes) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
+        return ImageQualityResponse(
+            passed=False,
+            blur_score=0.0,
+            brightness=0.0,
+            face_size_ratio=0.0,
+            det_score=0.0,
+            rejection_reasons=["Image exceeds maximum file size"],
+        )
+
+    try:
+        face_data = insightface_model.get_face_with_quality(image_bytes)
+    except ValueError as e:
+        return ImageQualityResponse(
+            passed=False,
+            blur_score=0.0,
+            brightness=0.0,
+            face_size_ratio=0.0,
+            det_score=0.0,
+            rejection_reasons=[str(e)],
+        )
+
+    quality = assess_quality(
+        image_bgr=face_data["image_bgr"],
+        det_score=face_data["det_score"],
+        bbox=face_data["bbox"],
+        image_shape=face_data["image_bgr"].shape,
+        blur_threshold_override=settings.QUALITY_BLUR_THRESHOLD_MOBILE,
+    )
+
+    return ImageQualityResponse(
+        passed=quality.passed,
+        blur_score=quality.blur_score,
+        brightness=quality.brightness,
+        face_size_ratio=quality.face_size_ratio,
+        det_score=quality.det_score,
+        rejection_reasons=quality.rejection_reasons,
+    )
 
 
 @router.post("/recognize", response_model=FaceRecognizeResponse, status_code=status.HTTP_200_OK)
