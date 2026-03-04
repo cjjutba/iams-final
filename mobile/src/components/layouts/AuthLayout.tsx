@@ -5,7 +5,7 @@
  * Includes optional back button, title, and subtitle.
  */
 
-import React from 'react';
+import React, { useCallback } from 'react';
 import {
   View,
   ScrollView,
@@ -16,9 +16,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
+import type { StackNavigationProp } from '@react-navigation/stack';
 import { ChevronLeft } from 'lucide-react-native';
 import { theme } from '../../constants';
 import { Text } from '../ui';
+import type { AuthStackParamList } from '../../types';
 
 interface AuthLayoutProps {
   children: React.ReactNode;
@@ -33,7 +35,15 @@ export const AuthLayout: React.FC<AuthLayoutProps> = ({
   subtitle,
   showBack = false,
 }) => {
-  const navigation = useNavigation();
+  const navigation = useNavigation<StackNavigationProp<AuthStackParamList>>();
+
+  const handleBack = useCallback(() => {
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+    } else {
+      navigation.replace('Welcome');
+    }
+  }, [navigation]);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -49,7 +59,7 @@ export const AuthLayout: React.FC<AuthLayoutProps> = ({
           {/* Back button */}
           {showBack && (
             <TouchableOpacity
-              onPress={() => navigation.goBack()}
+              onPress={handleBack}
               style={styles.backButton}
               activeOpacity={theme.interaction.activeOpacity}
             >

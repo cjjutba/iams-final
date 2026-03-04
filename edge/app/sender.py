@@ -9,11 +9,12 @@ Features:
 - Connection pooling and timeout management
 - Error classification and logging
 - Response validation
+- Session status polling for session-aware scanning
 """
 
 import asyncio
 import httpx
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime
 
 from app.config import config, logger
@@ -208,6 +209,53 @@ class BackendSender:
             logger.debug(f"Backend health check failed: {e}")
             return False
 
+    async def check_session_status(self, room_id: str) -> Tuple[bool, Optional[str]]:
+        """
+        Check if there is an active attendance session for a given room.
+
+        Polls GET /api/v1/presence/sessions/room-status?room_id={room_id}
+
+        Args:
+            room_id: Room UUID to check
+
+        Returns:
+            Tuple of (active, schedule_id):
+                - active: True if there is an active session in this room
+                - schedule_id: The schedule ID of the active session, or None
+        """
+        url = config.get_api_endpoint("/api/v1/presence/sessions/room-status")
+
+        try:
+            client = await self._get_client()
+            response = await client.get(
+                url,
+                params={"room_id": room_id},
+                timeout=10.0
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            active = data.get("active", False)
+            schedule_id = data.get("schedule_id", None)
+
+            return (active, schedule_id)
+
+        except httpx.TimeoutException as e:
+            logger.warning(f"Session status check timed out: {e}")
+            return (False, None)
+
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"Session status check HTTP error {e.response.status_code}: {e}")
+            return (False, None)
+
+        except httpx.RequestError as e:
+            logger.warning(f"Session status check request error: {e}")
+            return (False, None)
+
+        except Exception as e:
+            logger.warning(f"Session status check unexpected error: {e}")
+            return (False, None)
+
     async def close(self) -> None:
         """
         Close HTTP client and release resources.
@@ -241,46 +289,125 @@ class BackendSender:
         }
 
 
-# Synchronous wrapper for backward compatibility
+# Synchronous sender using httpx.Client (no event-loop issues)
 class SyncBackendSender:
     """
-    Synchronous wrapper for BackendSender.
+    Synchronous HTTP sender for the edge device.
 
-    Provides synchronous interface by running async methods in event loop.
+    Uses httpx.Client directly to avoid asyncio.run() event-loop lifecycle
+    issues that cause 'Event loop is closed' errors on repeated calls.
     """
 
     def __init__(self):
-        self._async_sender = BackendSender()
+        self.base_url = config.BACKEND_URL
+        self.endpoint = "/api/v1/face/process"
+        self.timeout = config.HTTP_TIMEOUT
+        self.max_retries = config.HTTP_MAX_RETRIES
+        self._client: Optional[httpx.Client] = None
+
+    def _get_client(self) -> httpx.Client:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.Client(
+                timeout=httpx.Timeout(self.timeout),
+                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+            )
+        return self._client
 
     def send_faces(
         self,
         faces: List[FaceData],
         room_id: str,
-        timestamp: Optional[datetime] = None
+        timestamp: Optional[datetime] = None,
     ) -> Dict[str, Any]:
-        """Synchronous send_faces"""
-        return asyncio.run(self._async_sender.send_faces(faces, room_id, timestamp))
+        if timestamp is None:
+            timestamp = datetime.utcnow()
+
+        payload = {
+            "room_id": room_id,
+            "timestamp": timestamp.isoformat() + "Z",
+            "faces": [face.to_dict() for face in faces],
+        }
+        url = config.get_api_endpoint(self.endpoint)
+        client = self._get_client()
+        response = client.post(url, json=payload)
+        response.raise_for_status()
+        result = response.json()
+        logger.info(
+            f"Backend response: processed={result.get('data', {}).get('processed', 0)}, "
+            f"matched={len(result.get('data', {}).get('matched', []))}, "
+            f"unmatched={result.get('data', {}).get('unmatched', 0)}"
+        )
+        return result
 
     def send_with_retry(
         self,
         faces: List[FaceData],
         room_id: str,
         timestamp: Optional[datetime] = None,
-        max_attempts: Optional[int] = None
+        max_attempts: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Synchronous send_with_retry"""
-        return asyncio.run(
-            self._async_sender.send_with_retry(faces, room_id, timestamp, max_attempts)
-        )
+        if max_attempts is None:
+            max_attempts = self.max_retries
+
+        import time as _time
+
+        last_error = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return self.send_faces(faces, room_id, timestamp)
+            except httpx.HTTPStatusError as e:
+                if 400 <= e.response.status_code < 500:
+                    logger.error(f"Permanent HTTP error {e.response.status_code}, not retrying")
+                    return None
+                last_error = e
+            except Exception as e:
+                last_error = e
+
+            if attempt < max_attempts:
+                backoff = 2 ** (attempt - 1)
+                logger.warning(f"Send failed (attempt {attempt}/{max_attempts}), retrying in {backoff}s...")
+                _time.sleep(backoff)
+            else:
+                logger.error(f"Send failed after {max_attempts} attempts: {last_error}")
+        return None
 
     def check_backend_health(self) -> bool:
-        """Synchronous health check"""
-        return asyncio.run(self._async_sender.check_backend_health())
+        try:
+            client = self._get_client()
+            response = client.get(f"{self.base_url}/", timeout=5.0)
+            return response.status_code < 500
+        except Exception as e:
+            logger.debug(f"Backend health check failed: {e}")
+            return False
+
+    def check_session_status(self, room_id: str) -> Tuple[bool, Optional[str]]:
+        url = config.get_api_endpoint("/api/v1/presence/sessions/room-status")
+        try:
+            client = self._get_client()
+            response = client.get(url, params={"room_id": room_id}, timeout=10.0)
+            response.raise_for_status()
+            data = response.json()
+            return (data.get("active", False), data.get("schedule_id", None))
+        except httpx.TimeoutException as e:
+            logger.warning(f"Session status check timed out: {e}")
+            return (False, None)
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"Session status check HTTP error {e.response.status_code}: {e}")
+            return (False, None)
+        except Exception as e:
+            logger.warning(f"Session status check error: {e}")
+            return (False, None)
 
     def close(self) -> None:
-        """Synchronous close"""
-        asyncio.run(self._async_sender.close())
+        if self._client and not self._client.is_closed:
+            self._client.close()
+            self._client = None
 
     def get_status(self) -> dict:
-        """Get status"""
-        return self._async_sender.get_status()
+        return {
+            "base_url": self.base_url,
+            "endpoint": self.endpoint,
+            "timeout": self.timeout,
+            "max_retries": self.max_retries,
+            "client_active": self._client is not None and not self._client.is_closed,
+        }

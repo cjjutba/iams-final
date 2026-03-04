@@ -57,16 +57,25 @@ class TestCompleteClassSessionFlow:
         # STEP 1: Student registers face
         # ============================================================
 
-        with patch('app.services.face_service.facenet_model') as mock_facenet, \
-             patch('app.services.face_service.faiss_manager') as mock_faiss:
+        with patch('app.services.face_service.insightface_model') as mock_facenet, \
+             patch('app.services.face_service.faiss_manager') as mock_faiss, \
+             patch('app.services.face_service.anti_spoof_detector') as mock_antispoof:
 
-            # Mock FaceNet to return consistent embedding
+            # Mock InsightFace to return consistent embedding
             student_embedding = np.random.randn(512).astype(np.float32)
             student_embedding = student_embedding / np.linalg.norm(student_embedding)
 
-            mock_facenet.generate_embedding = MagicMock(return_value=student_embedding)
+            mock_facenet.get_embedding = MagicMock(return_value=student_embedding)
+            del mock_facenet.get_face_with_quality
             mock_faiss.add = MagicMock(return_value=1)
+            mock_faiss.add_batch = MagicMock(return_value=[1, 2, 3])
             mock_faiss.save = MagicMock()
+
+            # Mock anti-spoof to always pass
+            from app.services.ml.anti_spoof import SpoofResult
+            mock_antispoof.check_registration_set.return_value = SpoofResult(
+                is_live=True, spoof_score=0.9, method="mock", details={}
+            )
 
             face_service = FaceService(db_session)
 
@@ -84,7 +93,7 @@ class TestCompleteClassSessionFlow:
                 ))
 
             # Register face
-            faiss_id, message = await face_service.register_face(
+            faiss_id, message, _ = await face_service.register_face(
                 str(test_student.id),
                 images
             )
@@ -387,19 +396,23 @@ class TestEdgeToEndSystemIntegration:
         with patch('app.routers.face.FaceService') as mock_face_service, \
              patch('app.routers.face.PresenceService') as mock_presence_service:
 
-            # Mock face recognition
+            # Mock face recognition (edge API uses facenet + faiss directly)
             face_instance = MagicMock()
             face_instance.facenet.decode_base64_image = MagicMock(return_value=MagicMock())
-
-            async def mock_recognize(img_bytes, threshold=None):
-                return str(test_student.id), 0.88
-
-            face_instance.recognize_face = AsyncMock(side_effect=mock_recognize)
+            mock_embedding = np.random.randn(512).astype(np.float32)
+            mock_embedding = mock_embedding / np.linalg.norm(mock_embedding)
+            face_instance.facenet.get_embedding = MagicMock(return_value=mock_embedding)
+            face_instance.faiss.search_with_margin = MagicMock(return_value={
+                "user_id": str(test_student.id),
+                "confidence": 0.88,
+                "is_ambiguous": False,
+            })
+            face_instance.recognize_face = AsyncMock(return_value=(str(test_student.id), 0.88))
             mock_face_service.return_value = face_instance
 
-            # Mock presence logging
+            # Mock presence logging (edge API calls feed_detection)
             presence_instance = MagicMock()
-            presence_instance.log_detection = AsyncMock()
+            presence_instance.feed_detection = AsyncMock()
             mock_presence_service.return_value = presence_instance
 
             # Mock schedule repository
@@ -428,8 +441,8 @@ class TestEdgeToEndSystemIntegration:
         assert len(data["data"]["matched"]) == 1
         assert data["data"]["matched"][0]["user_id"] == str(test_student.id)
 
-        # Verify presence was logged
-        presence_instance.log_detection.assert_called_once()
+        # Verify presence was logged via feed_detection
+        presence_instance.feed_detection.assert_called_once()
 
 
 class TestSystemErrorRecovery:

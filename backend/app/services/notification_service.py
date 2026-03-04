@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.config import logger
 from app.models.attendance_record import AttendanceRecord
+from app.models.notification import Notification
+from app.models.notification_preference import NotificationPreference
 from app.models.schedule import Schedule
 from app.models.user import User
 
@@ -23,6 +25,8 @@ class NotificationService:
     - Attendance updates (check-in notifications)
     - Session start/end notifications
     - Broadcast messages to all users in a schedule
+    - Anomaly alerts, attendance confirmations, low attendance warnings
+    - Persisted notifications with preference gating
     """
 
     def __init__(self, ws_manager, db: Session):
@@ -35,6 +39,66 @@ class NotificationService:
         """
         self.ws_manager = ws_manager
         self.db = db
+
+    def _check_preference(self, user_id: str, pref_field: str) -> bool:
+        """Check if a user has a specific notification preference enabled."""
+        import uuid
+        pref = self.db.query(NotificationPreference).filter(
+            NotificationPreference.user_id == uuid.UUID(user_id)
+        ).first()
+        if pref is None:
+            return True  # Default to enabled if no preference record
+        return getattr(pref, pref_field, True)
+
+    def create_persisted_notification(
+        self,
+        user_id: str,
+        title: str,
+        message: str,
+        notification_type: str = "system",
+        data: Dict[str, Any] = None,
+        reference_id: str = None,
+        reference_type: str = None,
+    ) -> Notification:
+        """Create a notification in the DB and push via WebSocket."""
+        import uuid
+        notif = Notification(
+            user_id=uuid.UUID(user_id),
+            title=title,
+            message=message,
+            type=notification_type,
+            reference_id=reference_id,
+            reference_type=reference_type,
+        )
+        self.db.add(notif)
+        self.db.commit()
+        self.db.refresh(notif)
+
+        # Also push via WebSocket
+        ws_message = {
+            "event": "notification",
+            "data": {
+                "id": str(notif.id),
+                "title": title,
+                "message": message,
+                "type": notification_type,
+                "timestamp": notif.created_at.isoformat(),
+            },
+        }
+        if data:
+            ws_message["data"]["extra"] = data
+
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(self.ws_manager.send_personal(user_id, ws_message))
+            else:
+                loop.run_until_complete(self.ws_manager.send_personal(user_id, ws_message))
+        except Exception as e:
+            logger.debug(f"WebSocket push failed (notification still persisted): {e}")
+
+        return notif
 
     async def notify_early_leave(self, attendance: AttendanceRecord):
         """
@@ -96,6 +160,44 @@ class NotificationService:
 
         except Exception as e:
             logger.error(f"Failed to send early leave notification: {e}")
+
+    async def notify_early_leave_return(
+        self, attendance: AttendanceRecord, absence_duration_seconds: int
+    ):
+        """Send notification that a student returned after early leave."""
+        try:
+            schedule = self.db.query(Schedule).filter(
+                Schedule.id == attendance.schedule_id
+            ).first()
+            if not schedule:
+                return
+
+            student = self.db.query(User).filter(User.id == attendance.student_id).first()
+            if not student:
+                return
+
+            message = {
+                "event": "early_leave_return",
+                "data": {
+                    "attendance_id": str(attendance.id),
+                    "student_id": str(attendance.student_id),
+                    "student_name": f"{student.first_name} {student.last_name}",
+                    "schedule_id": str(attendance.schedule_id),
+                    "subject_code": schedule.subject_code,
+                    "absence_duration_seconds": absence_duration_seconds,
+                    "returned_at": datetime.now().isoformat(),
+                },
+            }
+
+            faculty_id = str(schedule.faculty_id)
+            await self.ws_manager.send_personal(faculty_id, message)
+
+            logger.info(
+                f"Early leave return notification sent for student {student.student_id} "
+                f"(absent {absence_duration_seconds}s)"
+            )
+        except Exception as e:
+            logger.error(f"Failed to send early leave return notification: {e}")
 
     async def notify_attendance_update(
         self,
@@ -244,3 +346,66 @@ class NotificationService:
 
         except Exception as e:
             logger.error(f"Failed to broadcast session summary: {e}")
+
+    async def notify_anomaly_detected(
+        self, faculty_id: str, anomaly_type: str, student_name: str, severity: str
+    ):
+        """Send anomaly detection alert to faculty (if preference allows)."""
+        if not self._check_preference(faculty_id, "anomaly_alerts"):
+            return
+
+        message = {
+            "event": "anomaly_detected",
+            "data": {
+                "anomaly_type": anomaly_type,
+                "student_name": student_name,
+                "severity": severity,
+                "timestamp": datetime.now().isoformat(),
+            },
+        }
+        try:
+            await self.ws_manager.send_personal(faculty_id, message)
+        except Exception as e:
+            logger.error(f"Failed to send anomaly notification: {e}")
+
+    async def notify_attendance_confirmation(
+        self, student_id: str, subject_name: str, status: str, check_in_time: datetime
+    ):
+        """Send attendance confirmation to student (if preference allows)."""
+        if not self._check_preference(student_id, "attendance_confirmation"):
+            return
+
+        message = {
+            "event": "attendance_confirmed",
+            "data": {
+                "subject_name": subject_name,
+                "status": status,
+                "check_in_time": check_in_time.isoformat() if check_in_time else None,
+                "timestamp": datetime.now().isoformat(),
+            },
+        }
+        try:
+            await self.ws_manager.send_personal(student_id, message)
+        except Exception as e:
+            logger.error(f"Failed to send attendance confirmation: {e}")
+
+    async def notify_low_attendance_warning(
+        self, student_id: str, subject_name: str, current_rate: float, threshold: float
+    ):
+        """Send low attendance warning to student (if preference allows)."""
+        if not self._check_preference(student_id, "low_attendance_warning"):
+            return
+
+        message = {
+            "event": "low_attendance_warning",
+            "data": {
+                "subject_name": subject_name,
+                "current_rate": round(current_rate, 1),
+                "threshold": threshold,
+                "timestamp": datetime.now().isoformat(),
+            },
+        }
+        try:
+            await self.ws_manager.send_personal(student_id, message)
+        except Exception as e:
+            logger.error(f"Failed to send low attendance warning: {e}")

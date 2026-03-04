@@ -52,7 +52,7 @@ class AuthService:
         entering random student IDs.
 
         Args:
-            student_id: Student ID to verify (e.g. "21-A-02177")
+            student_id: Student ID to verify (e.g. "21-A-012345")
             birthdate: Student's birthdate for identity verification
 
         Returns:
@@ -170,10 +170,15 @@ class AuthService:
         if not record.is_active:
             raise ValidationError("Student ID is no longer active")
 
-        # Check if already registered
-        existing_user = self.user_repo.get_by_student_id(normalized_id)
+        # Check if already registered (student ID or email) in a single query
+        existing_user = self.user_repo.get_by_student_id_or_email(
+            normalized_id, registration_data["email"]
+        )
         if existing_user:
-            raise ValidationError("This student ID is already registered. Please login instead.")
+            if existing_user.student_id == normalized_id:
+                raise ValidationError("This student ID is already registered. Please login instead.")
+            from app.utils.exceptions import DuplicateError
+            raise DuplicateError("An account with this email already exists")
 
         # Validate password strength
         is_valid, error_msg = validate_password_strength(registration_data["password"])
@@ -189,55 +194,106 @@ class AuthService:
             return self._register_student_legacy(registration_data, record, normalized_id)
 
     def _register_student_supabase(self, registration_data: dict, record, normalized_id: str) -> Tuple[User, dict]:
-        """Create student via Supabase Auth Admin API."""
-        from app.services.supabase_client import get_supabase_admin
+        """Create student via Supabase Auth signup endpoint.
 
-        supabase = get_supabase_admin()
+        Uses the regular POST /auth/v1/signup endpoint (not admin API)
+        so that Supabase automatically sends the confirmation email.
+        """
+        import httpx
 
-        # Create user in Supabase Auth (email_confirm=False → sends verification email)
         try:
-            sb_response = supabase.auth.admin.create_user({
-                "email": registration_data["email"],
-                "password": registration_data["password"],
-                "email_confirm": False,
-                "user_metadata": {
-                    "first_name": record.first_name,
-                    "last_name": record.last_name,
-                    "student_id": normalized_id,
-                    "role": "student",
+            # Build the redirect URL for the confirmation email link.
+            # After the user clicks "Confirm Email" in the email, Supabase
+            # verifies the token and redirects the browser to this URL.
+            redirect_url = f"{settings.SUPABASE_URL.rstrip('/')}"
+            # Use the backend's email-confirmed landing page if we can
+            # construct it from the BACKEND_URL env var or fall back to
+            # letting Supabase handle it (site_url configured in dashboard).
+            import os
+            backend_url = os.environ.get("BACKEND_URL", "").rstrip("/")
+            if backend_url:
+                redirect_url = f"{backend_url}{settings.API_PREFIX}/auth/email-confirmed"
+
+            response = httpx.post(
+                f"{settings.SUPABASE_URL}/auth/v1/signup",
+                json={
+                    "email": registration_data["email"],
+                    "password": registration_data["password"],
+                    "data": {
+                        "first_name": record.first_name,
+                        "last_name": record.last_name,
+                        "student_id": normalized_id,
+                        "role": "student",
+                    },
+                    "options": {
+                        "emailRedirectTo": redirect_url,
+                    },
                 },
-            })
-            supabase_user = sb_response.user
-        except Exception as e:
+                headers={
+                    "apikey": settings.SUPABASE_ANON_KEY,
+                    "Content-Type": "application/json",
+                },
+                timeout=15.0,
+            )
+
+            if response.status_code >= 400:
+                body = response.json() if "application/json" in response.headers.get("content-type", "") else {}
+                error_msg = body.get("msg") or body.get("message") or body.get("error_description") or response.text
+                raise RuntimeError(error_msg)
+
+            result = response.json()
+            supabase_user = result.get("user") or result
+            logger.info(f"Supabase signup successful, verification email sent to: {registration_data['email']}")
+
+        except RuntimeError as e:
             error_msg = str(e)
             logger.error(f"Supabase user creation failed: {error_msg}")
             if "already been registered" in error_msg.lower() or "duplicate" in error_msg.lower():
                 from app.utils.exceptions import DuplicateError
                 raise DuplicateError("An account with this email already exists")
             raise ValidationError(f"Failed to create account: {error_msg}")
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Supabase signup request failed: {error_msg}")
+            raise ValidationError(f"Failed to create account: {error_msg}")
 
-        # Create local user record
-        user_data = {
-            "email": registration_data["email"],
-            "password_hash": None,  # Managed by Supabase
-            "role": UserRole.STUDENT,
-            "first_name": record.first_name,
-            "last_name": record.last_name,
-            "student_id": normalized_id,
-            "phone": registration_data.get("phone"),
-            "is_active": True,
-            "email_verified": False,
-            "supabase_user_id": uuid_mod.UUID(supabase_user.id),
-        }
+        # Create local user record — skip duplicate checks (already validated
+        # by register_student() and Supabase signup above).  Use flush() to
+        # obtain user.id without an extra commit round-trip.
+        user = User(
+            email=registration_data["email"],
+            password_hash=None,  # Managed by Supabase
+            role=UserRole.STUDENT,
+            first_name=record.first_name,
+            last_name=record.last_name,
+            student_id=normalized_id,
+            phone=registration_data.get("phone"),
+            is_active=True,
+            email_verified=False,
+            supabase_user_id=uuid_mod.UUID(supabase_user["id"]),
+        )
+        self.db.add(user)
+        self.db.flush()  # Assigns user.id without committing
 
-        user = self.user_repo.create(user_data)
-
-        # Auto-enroll in matching schedules
+        # Auto-enroll in matching schedules.  Pass the already-fetched
+        # student record and skip enrollment duplicate checks (brand-new user
+        # can't have existing enrollments).
         from app.services.enrollment_service import EnrollmentService
         enrollment_service = EnrollmentService(self.db)
-        enrollments = enrollment_service.auto_enroll_student(user.id, normalized_id)
-        if enrollments:
-            self.db.commit()
+        enrollment_service.auto_enroll_student(
+            user.id, normalized_id,
+            record=record,
+            skip_duplicate_check=True,
+        )
+
+        # Single commit for user + enrollments.
+        # Temporarily disable expire_on_commit so that the user object's
+        # attributes stay loaded after commit — avoids a costly re-fetch
+        # query (~300-400ms to remote Supabase PostgreSQL) when the router
+        # serializes the user into a response.
+        self.db.expire_on_commit = False
+        self.db.commit()
+        self.db.expire_on_commit = True
 
         logger.info(f"Student registered via Supabase Auth: {user.email}")
         return user, {
@@ -246,26 +302,32 @@ class AuthService:
 
     def _register_student_legacy(self, registration_data: dict, record, normalized_id: str) -> Tuple[User, dict]:
         """Create student with local password hashing (legacy / custom JWT mode)."""
-        user_data = {
-            "email": registration_data["email"],
-            "password_hash": hash_password(registration_data["password"]),
-            "role": UserRole.STUDENT,
-            "first_name": record.first_name,
-            "last_name": record.last_name,
-            "student_id": normalized_id,
-            "phone": registration_data.get("phone"),
-            "is_active": True,
-            "email_verified": True,  # Legacy mode: skip email verification
-        }
-
-        user = self.user_repo.create(user_data)
+        user = User(
+            email=registration_data["email"],
+            password_hash=hash_password(registration_data["password"]),
+            role=UserRole.STUDENT,
+            first_name=record.first_name,
+            last_name=record.last_name,
+            student_id=normalized_id,
+            phone=registration_data.get("phone"),
+            is_active=True,
+            email_verified=True,  # Legacy mode: skip email verification
+        )
+        self.db.add(user)
+        self.db.flush()
 
         # Auto-enroll in matching schedules
         from app.services.enrollment_service import EnrollmentService
         enrollment_service = EnrollmentService(self.db)
-        enrollments = enrollment_service.auto_enroll_student(user.id, normalized_id)
-        if enrollments:
-            self.db.commit()
+        enrollment_service.auto_enroll_student(
+            user.id, normalized_id,
+            record=record,
+            skip_duplicate_check=True,
+        )
+
+        self.db.expire_on_commit = False
+        self.db.commit()
+        self.db.expire_on_commit = True
 
         tokens = self._generate_tokens(user)
 
@@ -365,8 +427,8 @@ class AuthService:
         """
         Handle forgot password request.
 
-        When USE_SUPABASE_AUTH is True, delegates to Supabase Auth
-        to generate a password recovery link and send the email.
+        When USE_SUPABASE_AUTH is True, calls the Supabase Auth
+        `/auth/v1/recover` endpoint which sends the recovery email.
 
         Always returns a success response to prevent email enumeration.
 
@@ -380,17 +442,23 @@ class AuthService:
 
         if settings.USE_SUPABASE_AUTH:
             try:
-                from app.services.supabase_client import get_supabase_admin
-                supabase = get_supabase_admin()
-
-                supabase.auth.admin.generate_link({
-                    "type": "recovery",
-                    "email": email,
-                })
-                logger.info(f"Password reset link generated for: {email}")
+                import httpx
+                response = httpx.post(
+                    f"{settings.SUPABASE_URL}/auth/v1/recover",
+                    json={"email": email},
+                    headers={
+                        "apikey": settings.SUPABASE_ANON_KEY,
+                        "Content-Type": "application/json",
+                    },
+                    timeout=10.0,
+                )
+                if response.status_code < 300:
+                    logger.info(f"Password recovery email sent for: {email}")
+                else:
+                    logger.warning(f"Password recovery request returned {response.status_code}")
             except Exception as e:
                 # Don't reveal whether the email exists
-                logger.warning(f"Password reset generation failed (may be unknown email): {e}")
+                logger.warning(f"Password recovery request failed: {e}")
         else:
             # Legacy mode: log the request
             user = self.user_repo.get_by_email(email)
@@ -445,11 +513,55 @@ class AuthService:
         logger.info(f"Email verified for user {user.email}")
         return user
 
+    def check_email_verified(self, email: str) -> dict:
+        """
+        Check if a user's email has been verified.
+
+        First checks the local DB. If not verified locally, checks Supabase Auth
+        directly and syncs the result to the local DB.
+
+        Returns:
+            Dictionary with email_verified boolean
+        """
+        user = self.user_repo.get_by_email(email)
+        if not user:
+            return {"email_verified": False}
+
+        if user.email_verified:
+            return {"email_verified": True}
+
+        # Not verified locally — check Supabase Auth directly
+        if settings.USE_SUPABASE_AUTH and user.supabase_user_id:
+            try:
+                import httpx
+                response = httpx.get(
+                    f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user.supabase_user_id}",
+                    headers={
+                        "apikey": settings.SUPABASE_ANON_KEY,
+                        "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
+                    },
+                    timeout=10.0,
+                )
+                if response.status_code == 200:
+                    sb_user = response.json()
+                    if sb_user.get("email_confirmed_at"):
+                        user.email_verified = True
+                        user.email_verified_at = datetime.utcnow()
+                        self.db.commit()
+                        self.db.refresh(user)
+                        logger.info(f"Email verified (synced from Supabase): {email}")
+                        return {"email_verified": True}
+            except Exception as e:
+                logger.warning(f"Supabase verification check failed: {e}")
+
+        return {"email_verified": False}
+
     def resend_verification_email(self, email: str) -> dict:
         """
         Resend the email verification link.
 
-        Uses Supabase Admin API to re-send the sign-up confirmation email.
+        Calls the Supabase Auth `/auth/v1/resend` endpoint to re-send
+        the sign-up confirmation email.
         Always returns success to prevent email enumeration.
         """
         success_msg = "If an account with that email exists, a verification email has been sent."
@@ -458,14 +570,20 @@ class AuthService:
             return {"success": True, "message": success_msg}
 
         try:
-            from app.services.supabase_client import get_supabase_admin
-            supabase = get_supabase_admin()
-
-            supabase.auth.admin.generate_link({
-                "type": "signup",
-                "email": email,
-            })
-            logger.info(f"Verification email re-sent to: {email}")
+            import httpx
+            response = httpx.post(
+                f"{settings.SUPABASE_URL}/auth/v1/resend",
+                json={"type": "signup", "email": email},
+                headers={
+                    "apikey": settings.SUPABASE_ANON_KEY,
+                    "Content-Type": "application/json",
+                },
+                timeout=10.0,
+            )
+            if response.status_code < 300:
+                logger.info(f"Verification email re-sent to: {email}")
+            else:
+                logger.warning(f"Resend verification returned {response.status_code}")
         except Exception as e:
             logger.warning(f"Resend verification failed: {e}")
 
@@ -505,8 +623,8 @@ class AuthService:
         if settings.USE_SUPABASE_AUTH and user.supabase_user_id:
             try:
                 from app.services.supabase_client import get_supabase_admin
-                supabase = get_supabase_admin()
-                supabase.auth.admin.update_user_by_id(
+                admin = get_supabase_admin()
+                admin.update_user_by_id(
                     str(user.supabase_user_id),
                     {"password": new_password},
                 )

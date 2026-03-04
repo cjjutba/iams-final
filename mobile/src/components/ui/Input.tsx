@@ -18,6 +18,7 @@ import {
   TextStyle,
   TouchableOpacity,
 } from 'react-native';
+import { Eye, EyeOff } from 'lucide-react-native';
 import { theme } from '../../constants';
 import { Text } from './Text';
 
@@ -46,9 +47,7 @@ export const Input: React.FC<InputProps> = ({
   const inputContainerStyle: ViewStyle = {
     backgroundColor: theme.colors.inputBackground,
     borderWidth: 1,
-    borderColor: error
-      ? theme.colors.destructive
-      : isFocused
+    borderColor: isFocused
       ? theme.colors.borderDark
       : theme.colors.border,
     borderRadius: theme.borderRadius.md,
@@ -92,12 +91,14 @@ export const Input: React.FC<InputProps> = ({
         {isPassword && (
           <TouchableOpacity
             onPress={() => setShowPassword(!showPassword)}
-            style={{ marginLeft: theme.spacing[2] }}
+            style={{ marginLeft: theme.spacing[2], padding: 4 }}
             activeOpacity={theme.interaction.activeOpacity}
           >
-            <Text variant="caption" color={theme.colors.text.tertiary}>
-              {showPassword ? '👁️' : '👁️‍🗨️'}
-            </Text>
+            {showPassword ? (
+              <Eye size={20} color={theme.colors.text.tertiary} />
+            ) : (
+              <EyeOff size={20} color={theme.colors.text.tertiary} />
+            )}
           </TouchableOpacity>
         )}
 
@@ -109,7 +110,7 @@ export const Input: React.FC<InputProps> = ({
       {error && (
         <Text
           variant="caption"
-          color={theme.colors.destructive}
+          color={theme.colors.error}
           style={{ marginTop: theme.spacing[1] }}
         >
           {error}

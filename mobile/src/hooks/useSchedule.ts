@@ -31,7 +31,7 @@ export const useSchedule = (autoFetch = true) => {
     if (autoFetch && schedules.length === 0 && !isLoading) {
       fetchMySchedules();
     }
-  }, [autoFetch]);
+  }, [autoFetch, fetchMySchedules]);
 
   // Get current JS day (0=Sunday, 6=Saturday)
   const currentJsDay = useMemo(() => new Date().getDay(), []);
@@ -106,6 +106,29 @@ export const useSchedule = (autoFetch = true) => {
     });
   }, [todaySchedules]);
 
+  /**
+   * Find the next day (after today) that has classes.
+   * Returns the backend day number (0=Monday) and the schedules for that day.
+   * Searches up to 7 days ahead (wraps around the week).
+   */
+  const getNextDayWithClasses = useCallback((): {
+    backendDay: number;
+    schedules: Schedule[];
+  } | null => {
+    const todayBackend = jsDayToBackendDay(currentJsDay);
+
+    for (let offset = 1; offset <= 7; offset++) {
+      const checkDay = (todayBackend + offset) % 7;
+      const daySchedules = schedules.filter(
+        (s) => s.day_of_week === checkDay && s.is_active,
+      );
+      if (daySchedules.length > 0) {
+        return { backendDay: checkDay, schedules: daySchedules };
+      }
+    }
+    return null;
+  }, [schedules, currentJsDay]);
+
   return {
     // State
     schedules,
@@ -121,6 +144,7 @@ export const useSchedule = (autoFetch = true) => {
     getSchedulesByDay,
     getCurrentClass,
     getNextClass,
+    getNextDayWithClasses,
 
     // Computed
     hasSchedulesToday: todaySchedules.length > 0,

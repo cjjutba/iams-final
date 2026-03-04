@@ -21,7 +21,8 @@ from app.schemas.attendance import (
     LiveAttendanceResponse,
     StudentAttendanceStatus,
     AttendanceUpdateRequest,
-    AlertResponse
+    AlertResponse,
+    ScheduleAttendanceSummaryItem,
 )
 from app.repositories.attendance_repository import AttendanceRepository
 from app.repositories.schedule_repository import ScheduleRepository
@@ -31,6 +32,91 @@ from app.config import logger
 
 
 router = APIRouter()
+
+
+@router.get(
+    "/schedule-summaries",
+    response_model=List[ScheduleAttendanceSummaryItem],
+    status_code=status.HTTP_200_OK,
+)
+def get_schedule_summaries(
+    target_date: Optional[date] = Query(None, alias="date", description="Date to summarise (defaults to today)"),
+    current_user: User = Depends(get_current_faculty),
+    db: Session = Depends(get_db),
+):
+    """
+    **Get Attendance Summaries Per Schedule** (Faculty Only)
+
+    Returns per-schedule attendance summaries for all classes the faculty
+    teaches on the given date (or today if omitted). Each item contains
+    present/late/absent counts, attendance rate, session status, and
+    schedule metadata.
+
+    Requires faculty authentication.
+    """
+    from app.models.attendance_record import AttendanceStatus as DBAttendanceStatus
+
+    schedule_repo = ScheduleRepository(db)
+    attendance_repo = AttendanceRepository(db)
+
+    summary_date = target_date if target_date else date.today()
+
+    # Get the day_of_week for the target date (Monday=0 ... Sunday=6)
+    day_of_week = summary_date.weekday()
+
+    # Fetch all schedules this faculty teaches
+    all_schedules = schedule_repo.get_by_faculty(str(current_user.id))
+
+    # Filter to only those that occur on the requested day
+    day_schedules = [s for s in all_schedules if s.day_of_week == day_of_week]
+
+    results: List[ScheduleAttendanceSummaryItem] = []
+
+    for schedule in day_schedules:
+        schedule_id = str(schedule.id)
+
+        # Get attendance records for this schedule on the target date
+        records = attendance_repo.get_by_schedule_date(schedule_id, summary_date)
+
+        # Count by status
+        present_count = sum(1 for r in records if r.status == DBAttendanceStatus.PRESENT)
+        late_count = sum(1 for r in records if r.status == DBAttendanceStatus.LATE)
+        absent_count = sum(1 for r in records if r.status == DBAttendanceStatus.ABSENT)
+
+        # Get enrolled students for total
+        enrolled_students = schedule_repo.get_enrolled_students(schedule_id)
+        total_enrolled = len(enrolled_students)
+
+        # Calculate attendance rate
+        attendance_rate = 0.0
+        if total_enrolled > 0:
+            attendance_rate = ((present_count + late_count) / total_enrolled) * 100
+
+        # Check session status
+        is_active = session_manager.is_session_active(schedule_id)
+
+        # Room name
+        room_name = schedule.room.name if schedule.room else None
+
+        results.append(ScheduleAttendanceSummaryItem(
+            schedule_id=schedule_id,
+            subject_code=schedule.subject_code,
+            subject_name=schedule.subject_name,
+            start_time=schedule.start_time,
+            end_time=schedule.end_time,
+            room_name=room_name,
+            session_active=is_active,
+            total_enrolled=total_enrolled,
+            present_count=present_count,
+            late_count=late_count,
+            absent_count=absent_count,
+            attendance_rate=round(attendance_rate, 2),
+        ))
+
+    # Sort by start_time
+    results.sort(key=lambda x: x.start_time)
+
+    return results
 
 
 @router.get("/today", response_model=List[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
@@ -726,6 +812,68 @@ def update_attendance_record(
     logger.info(f"Attendance record updated by {current_user.email}: {attendance_id}")
 
     return AttendanceRecordResponse.model_validate(record)
+
+
+@router.get("/schedule-summaries", status_code=status.HTTP_200_OK)
+def get_schedule_summaries(
+    target_date: Optional[date] = Query(None, alias="date", description="Date to summarize (defaults to today)"),
+    current_user: User = Depends(get_current_faculty),
+    db: Session = Depends(get_db),
+):
+    """
+    **Get Schedule Summaries** (Faculty Only)
+
+    Get attendance summary for all of the faculty's schedules on a given date.
+    Returns per-schedule present/late/absent/early_leave counts and rate.
+    """
+    from app.models.attendance_record import AttendanceStatus
+    from app.models.schedule import Schedule
+    from app.models.enrollment import Enrollment
+    from sqlalchemy import func
+
+    summary_date = target_date or date.today()
+
+    # Get faculty's schedules
+    schedules = db.query(Schedule).filter(
+        Schedule.faculty_id == current_user.id
+    ).all()
+
+    results = []
+    for schedule in schedules:
+        from app.models.attendance_record import AttendanceRecord
+        records = db.query(AttendanceRecord).filter(
+            AttendanceRecord.schedule_id == schedule.id,
+            AttendanceRecord.date == summary_date,
+        ).all()
+
+        enrolled = db.query(func.count(Enrollment.id)).filter(
+            Enrollment.schedule_id == schedule.id
+        ).scalar() or 0
+
+        present = sum(1 for r in records if r.status == AttendanceStatus.PRESENT)
+        late = sum(1 for r in records if r.status == AttendanceStatus.LATE)
+        absent = sum(1 for r in records if r.status == AttendanceStatus.ABSENT)
+        early_leave = sum(1 for r in records if r.status == AttendanceStatus.EARLY_LEAVE)
+        total = len(records)
+        rate = ((present + late) / total * 100.0) if total > 0 else 0.0
+
+        results.append({
+            "schedule_id": str(schedule.id),
+            "subject_code": schedule.subject_code,
+            "subject_name": schedule.subject_name,
+            "start_time": str(schedule.start_time),
+            "end_time": str(schedule.end_time),
+            "room_name": schedule.room.name if schedule.room else None,
+            "total_enrolled": enrolled,
+            "present_count": present,
+            "late_count": late,
+            "absent_count": absent,
+            "early_leave_count": early_leave,
+            "attendance_rate": round(rate, 1),
+            "session_active": session_manager.is_session_active(str(schedule.id)),
+        })
+
+    return results
 
 
 @router.get("/early-leaves/", response_model=List[EarlyLeaveResponse], status_code=status.HTTP_200_OK)

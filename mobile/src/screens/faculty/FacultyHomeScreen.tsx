@@ -3,18 +3,29 @@
  *
  * Dashboard showing:
  * - Greeting
- * - Current ongoing class (if any) with quick stats
+ * - Current ongoing class (if any) with session controls
+ * - Session status indicator (active/inactive)
+ * - Start/Stop session button
  * - Today's teaching schedule
  */
 
-import React from 'react';
-import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity } from 'react-native';
+import React, { useCallback, useState } from 'react';
+import {
+  View,
+  StyleSheet,
+  FlatList,
+  RefreshControl,
+  TouchableOpacity,
+  ActivityIndicator,
+  Alert,
+} from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
-import { Bell, Users } from 'lucide-react-native';
-import { useAuth, useSchedule } from '../../hooks';
+import { Users, Play, Square, Camera } from 'lucide-react-native';
+import { useAuth, useSchedule, useSession } from '../../hooks';
+import { useToast } from '../../hooks/useToast';
 import { theme, strings } from '../../constants';
-import { formatDate, formatTime } from '../../utils';
+import { formatDate, formatTime, getDayName } from '../../utils';
 import type { FacultyStackParamList, ScheduleWithAttendance } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
 import { Text, Button } from '../../components/ui';
@@ -25,9 +36,18 @@ type FacultyHomeNavigationProp = StackNavigationProp<FacultyStackParamList, 'Fac
 export const FacultyHomeScreen: React.FC = () => {
   const navigation = useNavigation<FacultyHomeNavigationProp>();
   const { fullName } = useAuth();
-  const { todaySchedules, isLoading, fetchMySchedules, getCurrentClass } = useSchedule();
+  const { todaySchedules, isLoading, fetchMySchedules, getCurrentClass, getNextDayWithClasses, totalSchedules } = useSchedule();
+  const {
+    isSessionActive,
+    startSession,
+    endSession,
+    isLoading: sessionLoading,
+    refreshActiveSessions,
+  } = useSession();
+  const { showError, showSuccess } = useToast();
 
   const currentClass = getCurrentClass();
+  const sessionActive = currentClass ? isSessionActive(currentClass.id) : false;
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -50,9 +70,60 @@ export const FacultyHomeScreen: React.FC = () => {
     }
   };
 
+  const handleViewLiveFeed = () => {
+    if (currentClass) {
+      navigation.navigate('LiveFeed', {
+        scheduleId: currentClass.id,
+        roomId: currentClass.room_id || '',
+        subjectName: currentClass.subject_name,
+      });
+    }
+  };
+
+  const handleStartSession = useCallback(async () => {
+    if (!currentClass) return;
+    const result = await startSession(currentClass.id);
+    if (result) {
+      showSuccess(`Session started with ${result.student_count} students`);
+    } else {
+      showError('Failed to start session');
+    }
+  }, [currentClass, startSession, showSuccess, showError]);
+
+  const handleEndSession = useCallback(async () => {
+    if (!currentClass) return;
+
+    Alert.alert(
+      'End Session',
+      `End the session for ${currentClass.subject_name}? Final attendance scores will be calculated.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'End Session',
+          style: 'destructive',
+          onPress: async () => {
+            const result = await endSession(currentClass.id);
+            if (result) {
+              showSuccess(
+                `Session ended. ${result.present_count}/${result.total_students} present.`,
+              );
+            } else {
+              showError('Failed to end session');
+            }
+          },
+        },
+      ],
+    );
+  }, [currentClass, endSession, showSuccess, showError]);
+
   const handleCardPress = (schedule: ScheduleWithAttendance) => {
     navigation.navigate('ClassDetail', { scheduleId: schedule.id, date: new Date().toISOString() });
   };
+
+  const handleRefresh = useCallback(() => {
+    fetchMySchedules();
+    refreshActiveSessions();
+  }, [fetchMySchedules, refreshActiveSessions]);
 
   const renderHeader = () => (
     <View style={styles.headerContent}>
@@ -71,9 +142,23 @@ export const FacultyHomeScreen: React.FC = () => {
         <View style={styles.currentClassCard}>
           <View style={styles.currentClassHeader}>
             <View style={styles.currentClassInfo}>
-              <Text variant="caption" color={theme.colors.primary} style={styles.currentClassLabel}>
-                {strings.schedule.currentClass}
-              </Text>
+              {/* Session status indicator */}
+              <View style={styles.sessionStatusRow}>
+                <View
+                  style={[
+                    styles.statusDot,
+                    sessionActive ? styles.statusDotActive : styles.statusDotInactive,
+                  ]}
+                />
+                <Text
+                  variant="caption"
+                  color={sessionActive ? theme.colors.success : theme.colors.text.tertiary}
+                  style={styles.statusText}
+                >
+                  {sessionActive ? 'Session Active' : 'Session Inactive'}
+                </Text>
+              </View>
+
               <Text variant="h3" weight="600" style={styles.currentClassName}>
                 {currentClass.subject_name}
               </Text>
@@ -86,23 +171,88 @@ export const FacultyHomeScreen: React.FC = () => {
             <TouchableOpacity
               style={styles.studentsButton}
               onPress={handleViewLiveAttendance}
+              disabled={!sessionActive}
             >
-              <Users size={20} color={theme.colors.text.secondary} />
-              <Text variant="caption" color={theme.colors.text.secondary}>
+              <Users
+                size={20}
+                color={sessionActive ? theme.colors.text.secondary : theme.colors.text.tertiary}
+              />
+              <Text
+                variant="caption"
+                color={sessionActive ? theme.colors.text.secondary : theme.colors.text.tertiary}
+              >
                 View
               </Text>
             </TouchableOpacity>
           </View>
 
-          <Button
-            variant="primary"
-            size="md"
-            fullWidth
-            onPress={handleViewLiveAttendance}
-            style={styles.liveButton}
-          >
-            {strings.faculty.viewLiveAttendance}
-          </Button>
+          {/* Session control buttons */}
+          <View style={styles.buttonRow}>
+            {sessionActive ? (
+              <>
+                <Button
+                  variant="secondary"
+                  size="md"
+                  onPress={handleEndSession}
+                  disabled={sessionLoading}
+                  style={styles.sessionButton}
+                >
+                  {sessionLoading ? (
+                    <ActivityIndicator size="small" color={theme.colors.text.primary} />
+                  ) : (
+                    <View style={styles.buttonContent}>
+                      <Square size={16} color={theme.colors.text.primary} />
+                      <Text variant="bodySmall" weight="600" style={styles.buttonLabel}>
+                        End Class
+                      </Text>
+                    </View>
+                  )}
+                </Button>
+                <Button
+                  variant="primary"
+                  size="md"
+                  onPress={handleViewLiveAttendance}
+                  style={styles.liveButton}
+                >
+                  {strings.faculty.viewLiveAttendance}
+                </Button>
+              </>
+            ) : (
+              <Button
+                variant="primary"
+                size="md"
+                fullWidth
+                onPress={handleStartSession}
+                disabled={sessionLoading}
+              >
+                {sessionLoading ? (
+                  <ActivityIndicator size="small" color={theme.colors.background} />
+                ) : (
+                  <View style={styles.buttonContent}>
+                    <Play size={16} color={theme.colors.background} />
+                    <Text
+                      variant="bodySmall"
+                      weight="600"
+                      color={theme.colors.background}
+                      style={styles.buttonLabel}
+                    >
+                      Start Class
+                    </Text>
+                  </View>
+                )}
+              </Button>
+            )}
+          </View>
+
+          {/* Camera feed shortcut when session is active */}
+          {sessionActive && (
+            <TouchableOpacity style={styles.cameraLink} onPress={handleViewLiveFeed}>
+              <Camera size={14} color={theme.colors.primary} />
+              <Text variant="caption" color={theme.colors.primary} style={styles.cameraLinkText}>
+                View Camera Feed
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
 
@@ -113,11 +263,65 @@ export const FacultyHomeScreen: React.FC = () => {
     </View>
   );
 
+  const nextDay = getNextDayWithClasses();
+
   const renderEmpty = () => (
     <View style={styles.emptyContainer}>
       <Text variant="body" color={theme.colors.text.secondary} align="center">
-        {strings.empty.noClasses}
+        {strings.schedule.noClassesToday}
       </Text>
+
+      {/* Show next day with classes */}
+      {nextDay && (
+        <View style={styles.nextDaySection}>
+          <Text
+            variant="bodySmall"
+            color={theme.colors.text.tertiary}
+            align="center"
+            style={styles.nextDayLabel}
+          >
+            Next classes on {getDayName(nextDay.backendDay)}
+          </Text>
+
+          {nextDay.schedules
+            .sort((a, b) => a.start_time.localeCompare(b.start_time))
+            .slice(0, 3)
+            .map((s) => (
+              <View key={s.id} style={styles.nextDayCard}>
+                <Text variant="bodySmall" weight="600" numberOfLines={1}>
+                  {s.subject_name}
+                </Text>
+                <Text variant="caption" color={theme.colors.text.secondary}>
+                  {formatTime(s.start_time)} - {formatTime(s.end_time)}
+                  {s.room_name ? ` \u2022 ${s.room_name}` : ''}
+                </Text>
+              </View>
+            ))}
+
+          {nextDay.schedules.length > 3 && (
+            <Text
+              variant="caption"
+              color={theme.colors.text.tertiary}
+              align="center"
+              style={styles.nextDayLabel}
+            >
+              +{nextDay.schedules.length - 3} more
+            </Text>
+          )}
+        </View>
+      )}
+
+      {/* No schedules at all */}
+      {!nextDay && totalSchedules === 0 && (
+        <Text
+          variant="bodySmall"
+          color={theme.colors.text.tertiary}
+          align="center"
+          style={styles.nextDayLabel}
+        >
+          {strings.empty.noClasses}
+        </Text>
+      )}
     </View>
   );
 
@@ -142,7 +346,7 @@ export const FacultyHomeScreen: React.FC = () => {
         refreshControl={
           <RefreshControl
             refreshing={isLoading}
-            onRefresh={fetchMySchedules}
+            onRefresh={handleRefresh}
             colors={[theme.colors.primary]}
             tintColor={theme.colors.primary}
           />
@@ -180,8 +384,24 @@ const styles = StyleSheet.create({
   currentClassInfo: {
     flex: 1,
   },
-  currentClassLabel: {
-    marginBottom: theme.spacing[1],
+  sessionStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: theme.spacing[2],
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: theme.spacing[2],
+  },
+  statusDotActive: {
+    backgroundColor: theme.colors.success,
+  },
+  statusDotInactive: {
+    backgroundColor: theme.colors.text.tertiary,
+  },
+  statusText: {
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
@@ -192,8 +412,35 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: theme.spacing[3],
   },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: theme.spacing[2],
+  },
+  sessionButton: {
+    flex: 0,
+    paddingHorizontal: theme.spacing[4],
+  },
   liveButton: {
-    // No additional styles
+    flex: 1,
+  },
+  buttonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  buttonLabel: {
+    marginLeft: theme.spacing[2],
+  },
+  cameraLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: theme.spacing[3],
+    paddingTop: theme.spacing[3],
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border,
+  },
+  cameraLinkText: {
+    marginLeft: theme.spacing[1],
   },
   sectionTitle: {
     marginBottom: theme.spacing[4],
@@ -203,6 +450,22 @@ const styles = StyleSheet.create({
     paddingBottom: theme.spacing[6],
   },
   emptyContainer: {
-    paddingVertical: theme.spacing[12],
+    paddingVertical: theme.spacing[8],
+  },
+  nextDaySection: {
+    marginTop: theme.spacing[4],
+    alignItems: 'center',
+    width: '100%',
+  },
+  nextDayLabel: {
+    marginTop: theme.spacing[2],
+  },
+  nextDayCard: {
+    backgroundColor: theme.colors.secondary,
+    paddingVertical: theme.spacing[3],
+    paddingHorizontal: theme.spacing[4],
+    borderRadius: theme.borderRadius.md,
+    marginTop: theme.spacing[2],
+    width: '100%',
   },
 });

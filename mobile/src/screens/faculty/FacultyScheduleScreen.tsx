@@ -21,12 +21,22 @@ type FacultyScheduleNavigationProp = StackNavigationProp<FacultyStackParamList, 
 
 const DAYS = [0, 1, 2, 3, 4, 5, 6];
 
+/**
+ * Convert JS Date.getDay() (0=Sunday) to backend day_of_week (0=Monday).
+ */
+const jsDayToScheduleDay = (jsDay: number): number => {
+  return jsDay === 0 ? 6 : jsDay - 1;
+};
+
 export const FacultyScheduleScreen: React.FC = () => {
   const navigation = useNavigation<FacultyScheduleNavigationProp>();
-  const { getSchedulesByDay, isLoading, fetchMySchedules, clearError } = useSchedule();
+  const { schedules: allSchedules, isLoading, fetchMySchedules, clearError } = useSchedule();
 
-  const [selectedDay, setSelectedDay] = useState(new Date().getDay());
-  const schedules = getSchedulesByDay(selectedDay);
+  const [selectedDay, setSelectedDay] = useState(jsDayToScheduleDay(new Date().getDay()));
+  // Filter directly using backend day format (selectedDay is 0=Monday)
+  const schedules = allSchedules.filter(
+    (s) => s.day_of_week === selectedDay && s.is_active
+  );
 
   const handleCardPress = (schedule: ScheduleWithAttendance) => {
     navigation.navigate('ClassDetail', { scheduleId: schedule.id, date: new Date().toISOString() });
@@ -39,7 +49,7 @@ export const FacultyScheduleScreen: React.FC = () => {
 
   const renderDayButton = (day: number) => {
     const isSelected = day === selectedDay;
-    const isToday = day === new Date().getDay();
+    const isToday = day === jsDayToScheduleDay(new Date().getDay());
 
     return (
       <TouchableOpacity

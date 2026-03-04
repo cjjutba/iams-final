@@ -19,6 +19,7 @@ from app.database import get_db
 from app.models.user import User
 from app.schemas.face import (
     FaceRegisterResponse,
+    QualityScoreResponse,
     FaceStatusResponse,
     FaceRecognizeRequest,
     FaceRecognizeResponse,
@@ -32,7 +33,7 @@ from app.services.presence_service import PresenceService
 from app.repositories.schedule_repository import ScheduleRepository
 from app.utils.dependencies import get_current_user, get_current_student
 from app.utils.exceptions import EdgeAPIError, ValidationError
-from app.config import logger
+from app.config import settings, logger
 
 
 router = APIRouter()
@@ -66,13 +67,27 @@ async def register_face(
     face_service = FaceService(db)
 
     try:
-        faiss_id, message = await face_service.register_face(str(current_user.id), images)
+        faiss_id, message, quality_reports = await face_service.register_face(str(current_user.id), images)
+
+        quality_scores = None
+        if quality_reports:
+            quality_scores = [
+                QualityScoreResponse(
+                    blur_score=q.blur_score,
+                    brightness=q.brightness,
+                    face_size_ratio=q.face_size_ratio,
+                    det_score=q.det_score,
+                    passed=q.passed,
+                )
+                for q in quality_reports
+            ]
 
         return FaceRegisterResponse(
             success=True,
             message=message,
             embedding_id=faiss_id,
-            user_id=str(current_user.id)
+            user_id=str(current_user.id),
+            quality_scores=quality_scores,
         )
 
     except Exception as e:
@@ -103,13 +118,27 @@ async def reregister_face(
     face_service = FaceService(db)
 
     try:
-        faiss_id, message = await face_service.reregister_face(str(current_user.id), images)
+        faiss_id, message, quality_reports = await face_service.reregister_face(str(current_user.id), images)
+
+        quality_scores = None
+        if quality_reports:
+            quality_scores = [
+                QualityScoreResponse(
+                    blur_score=q.blur_score,
+                    brightness=q.brightness,
+                    face_size_ratio=q.face_size_ratio,
+                    det_score=q.det_score,
+                    passed=q.passed,
+                )
+                for q in quality_reports
+            ]
 
         return FaceRegisterResponse(
             success=True,
             message=message,
             embedding_id=faiss_id,
-            user_id=str(current_user.id)
+            user_id=str(current_user.id),
+            quality_scores=quality_scores,
         )
 
     except Exception as e:
@@ -236,7 +265,7 @@ async def process_faces(
     - **room_id**: Room UUID or identifier
     - **timestamp**: Scan timestamp (ISO format)
     - **faces**: Array of face data:
-      - **image**: Base64-encoded JPEG (112x112 or larger)
+      - **image**: Base64-encoded JPEG (160x160 or larger)
       - **bbox**: Bounding box [x, y, w, h] (optional, for tracking)
 
     **Response:**
@@ -347,18 +376,31 @@ async def process_faces(
             image.save(img_bytes, format='JPEG')
             img_bytes = img_bytes.getvalue()
 
-            # Recognize face
+            # Recognize face using margin-aware search
+            processed_count += 1
             try:
-                user_id, confidence = await face_service.recognize_face(img_bytes)
-                processed_count += 1
+                embedding = face_service.facenet.get_embedding(img_bytes)
+                match_result = face_service.faiss.search_with_margin(
+                    embedding,
+                    k=settings.RECOGNITION_TOP_K,
+                    threshold=settings.RECOGNITION_THRESHOLD,
+                    margin=settings.RECOGNITION_MARGIN,
+                )
 
-                if user_id:
+                if match_result["user_id"]:
                     # Face matched
                     matched_users.append(MatchedUser(
-                        user_id=user_id,
-                        confidence=confidence
+                        user_id=match_result["user_id"],
+                        confidence=match_result["confidence"],
                     ))
-                    logger.debug(f"Face {i+1} matched: user {user_id}, confidence {confidence:.3f}")
+                    if match_result["is_ambiguous"]:
+                        logger.warning(
+                            f"Ambiguous match for face {i+1} in room {request.room_id}"
+                        )
+                    logger.debug(
+                        f"Face {i+1} matched: user {match_result['user_id']}, "
+                        f"confidence {match_result['confidence']:.3f}"
+                    )
                 else:
                     # Face not matched
                     unmatched_count += 1
@@ -373,7 +415,6 @@ async def process_faces(
                     "error": "RECOGNITION_FAILED",
                     "message": str(e)
                 })
-                processed_count += 1
                 unmatched_count += 1
 
         except Exception as e:
@@ -410,7 +451,7 @@ async def process_faces(
                 # Log each detected user to presence system
                 for matched_user in matched_users:
                     try:
-                        await presence_service.log_detection(
+                        await presence_service.feed_detection(
                             schedule_id=schedule_id,
                             user_id=matched_user.user_id,
                             confidence=matched_user.confidence

@@ -4,23 +4,43 @@
  * Type definitions for class schedules, rooms, and subjects.
  */
 
+// Nested faculty info from backend ScheduleResponse
+export interface ScheduleFaculty {
+  id: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  role: string;
+}
+
+// Nested room info from backend ScheduleResponse
+export interface ScheduleRoom {
+  id: string;
+  name: string;
+  building: string;
+  capacity?: number;
+}
+
 // Schedule (class) definition
 export interface Schedule {
   id: string;
   subject_code: string;
   subject_name: string;
   faculty_id: string;
-  faculty_name?: string; // Populated from join
+  faculty_name?: string; // Derived from faculty.first_name + faculty.last_name
   room_id: string;
-  room_name?: string; // Populated from join
+  room_name?: string; // Derived from room.name
   day_of_week: number; // 0=Monday, 6=Sunday
   start_time: string; // HH:MM:SS format
   end_time: string; // HH:MM:SS format
   semester?: string; // e.g., "1st Semester"
   academic_year?: string; // e.g., "2024-2025"
   is_active: boolean;
-  created_at: string;
+  created_at?: string;
   updated_at?: string;
+  // Nested objects from backend (kept for detailed views)
+  faculty?: ScheduleFaculty;
+  room?: ScheduleRoom;
 }
 
 // Schedule with attendance status (for student home view)

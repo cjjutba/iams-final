@@ -4,7 +4,7 @@
 - [ ] Mobile app has correct `API_BASE_URL` and `WS_BASE_URL` environment values.
 - [ ] Backend services for auth, face, schedule, attendance, websocket are running.
 - [ ] Student test account and/or registration data source available (seed data in `student_records`).
-- [ ] Test student ID available (e.g., `21-A-02177` from seed data).
+- [ ] Test student ID available (e.g., `21-A-02177` or `21-A-01234` from seed data).
 
 ## Core Functionality
 - [ ] Show splash screen → onboarding → welcome routing.

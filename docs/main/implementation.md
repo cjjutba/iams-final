@@ -23,16 +23,20 @@ Camera → Frame → Detect Faces → Crop → Compress → Send to Server
 |------|-------|--------|------|
 | Capture | Camera stream | Raw frame (640x480) | picamera2 / OpenCV |
 | Detect | Raw frame | Face bounding boxes | MediaPipe |
-| Crop | Frame + boxes | Face images (112x112) | OpenCV |
-| Compress | Face images | JPEG (70% quality) | OpenCV |
+| Crop | Frame + boxes | Face images (160x160) | OpenCV |
+| Compress | Face images | JPEG (85% quality) | OpenCV |
 | Send | JPEG bytes | HTTP response | httpx |
 
 ### Key Settings
 - Frame rate: 15 FPS
 - Resolution: 640x480
-- Face crop size: 112x112 pixels
-- Compression: JPEG 70%
+- Face crop size: 160x160 pixels
+- Compression: JPEG 85%
+- Detection confidence: >= 0.6
+- Minimum face size: 80x80 pixels in frame
 - Send interval: Every detected face
+
+> **See also:** [ML Pipeline Specification](ml-pipeline-spec.md) for the authoritative preprocessing chain and threshold reference.
 
 ### RPi Queue Policy (Server Unreachable)
 When the server is unreachable, the edge device queues faces locally to avoid data loss and retries until the connection is restored.
@@ -127,26 +131,31 @@ DeepSORT runs on the **server**, not on the RPi. The server receives multiple cr
 | Rule | Value | Description |
 |------|-------|-------------|
 | Number of images | 3–5 | Require at least 3, accept up to 5 |
-| Resolution | Min 112×112, recommended 160×160 | Reject if too small |
+| Resolution | Min 160×160 | Reject if smaller than FaceNet input size |
 | Rejection | Blur, multiple faces, no face | Validate before upload; return 400 with reason |
 | Session | Tied to authenticated user | No anonymous registration |
 
 ### Recognition Flow
 ```
-1. RPi sends cropped face
-2. Server generates embedding
-3. Server searches FAISS (top 1 match)
-4. If similarity > 0.6 → match found
-5. Server returns user ID
-6. Server marks attendance
+1. RPi sends cropped face (160x160, JPEG 85%)
+2. Server validates >= 160x160, applies MTCNN alignment
+3. Server generates FaceNet embedding (512-dim)
+4. Server searches FAISS top-3 with confidence margin
+5. If top match > 0.55 AND margin > 0.1 → confident match
+6. Server returns user ID
+7. Tracking service updated (scan cycle writes attendance)
 ```
 
 ### Embedding Details
 - Model: FaceNet (InceptionResnetV1)
 - Input: 160x160 RGB image
 - Output: 512-dimensional vector
-- Distance: Cosine similarity
-- Threshold: 0.6 (adjustable)
+- Distance: Cosine similarity (via IndexFlatIP on L2-normalized vectors)
+- Threshold: 0.55 (adjustable via `RECOGNITION_THRESHOLD`)
+- Top-K: 3 with confidence margin 0.1
+- Alignment: MTCNN 5-landmark (fallback: raw crop)
+
+> **See also:** [ML Pipeline Specification](ml-pipeline-spec.md) for the complete recognition pipeline, FAISS lifecycle, and threshold reference.
 
 ### FAISS Index Lifecycle
 The FAISS index and the `face_registrations` table must stay in sync.

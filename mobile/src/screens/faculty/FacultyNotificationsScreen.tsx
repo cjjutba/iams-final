@@ -17,9 +17,9 @@ import {
 } from 'react-native';
 import { Bell, CheckCircle, AlertTriangle, Info, RefreshCw } from 'lucide-react-native';
 import { api } from '../../utils/api';
+import { useToast } from '../../hooks/useToast';
 import { theme, strings } from '../../constants';
 import { formatTimeAgo, getErrorMessage } from '../../utils';
-import type { ApiResponse } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
 import { Text, Card, Button } from '../../components/ui';
 
@@ -34,6 +34,7 @@ interface Notification {
 }
 
 export const FacultyNotificationsScreen: React.FC = () => {
+  const { showError } = useToast();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -47,10 +48,11 @@ export const FacultyNotificationsScreen: React.FC = () => {
     setError(null);
 
     try {
-      const response = await api.get<ApiResponse<Notification[]>>('/notifications');
-      setNotifications(response.data.data || []);
+      const response = await api.get<Notification[]>('/notifications');
+      setNotifications(response.data || []);
     } catch (err) {
       setError(getErrorMessage(err));
+      showError(getErrorMessage(err), 'Load Failed');
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
@@ -176,7 +178,7 @@ export const FacultyNotificationsScreen: React.FC = () => {
         <View style={styles.errorContainer}>
           <RefreshCw size={40} color={theme.colors.text.tertiary} style={styles.errorIcon} />
           <Text variant="body" color={theme.colors.text.secondary} align="center">
-            {error}
+            Unable to load notifications. Please try again.
           </Text>
           <Button
             variant="secondary"

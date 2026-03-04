@@ -378,31 +378,14 @@ export const authService = {
   /**
    * Request a password reset email.
    *
-   * Supabase mode: uses supabase.auth.resetPasswordForEmail() which sends
-   * a magic link to the user's email. The deep link redirects to the app's
-   * ResetPasswordScreen where they can set a new password.
+   * Always calls the backend POST /auth/forgot-password endpoint,
+   * which triggers a Supabase recovery email redirecting to the
+   * backend's browser-based password reset form.
    *
-   * Legacy mode: calls backend POST /auth/forgot-password.
+   * The user resets their password in the browser, then returns
+   * to the app to sign in with the new password.
    */
   async forgotPassword(email: string): Promise<SuccessResponse> {
-    const supabase = getSupabaseClient();
-
-    if (supabase && config.USE_SUPABASE_AUTH) {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: 'iams://reset-password',
-      });
-
-      if (error) {
-        throw new Error(error.message);
-      }
-
-      return {
-        success: true,
-        message: 'Password reset instructions sent to your email',
-      };
-    }
-
-    // Legacy mode
     const payload: ForgotPasswordPayload = { email };
     const response = await api.post<SuccessResponse>('/auth/forgot-password', payload);
     return response.data;
@@ -447,11 +430,16 @@ export const authService = {
   },
 
   /**
-   * Check the current user's email verification status.
-   * Returns the user profile; caller should check user.email_verified.
+   * Check if a user's email has been verified.
+   * Uses the public check-email-verified endpoint (no auth token needed).
+   * The backend checks Supabase Auth directly and syncs the result.
    */
-  async checkVerificationStatus(): Promise<User> {
-    return this.getMe();
+  async checkEmailVerified(email: string): Promise<boolean> {
+    const response = await api.post<{ email_verified: boolean }>(
+      '/auth/check-email-verified',
+      { email },
+    );
+    return response.data.email_verified;
   },
 
   /**

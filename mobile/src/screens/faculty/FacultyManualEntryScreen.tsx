@@ -104,7 +104,7 @@ export const FacultyManualEntryScreen: React.FC = () => {
           name="studentId"
           control={control}
           label={strings.form.studentId}
-          placeholder="e.g. 21-A-02177"
+          placeholder="e.g. 21-A-012345"
           autoCapitalize="characters"
         />
 

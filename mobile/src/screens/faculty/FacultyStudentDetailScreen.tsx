@@ -13,6 +13,7 @@ import type { RouteProp } from '@react-navigation/native';
 import { RefreshCw } from 'lucide-react-native';
 import { api } from '../../utils/api';
 import { attendanceService } from '../../services';
+import { useToast } from '../../hooks/useToast';
 import { theme, strings } from '../../constants';
 import { formatDate, formatPercentage, getErrorMessage } from '../../utils';
 import type {
@@ -30,6 +31,7 @@ type StudentDetailRouteProp = RouteProp<FacultyStackParamList, 'StudentDetail'>;
 export const FacultyStudentDetailScreen: React.FC = () => {
   const route = useRoute<StudentDetailRouteProp>();
   const { studentId, scheduleId } = route.params;
+  const { showError } = useToast();
 
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -78,6 +80,7 @@ export const FacultyStudentDetailScreen: React.FC = () => {
         }
       } catch (err) {
         setError(getErrorMessage(err));
+        showError(getErrorMessage(err), 'Load Failed');
       } finally {
         setIsLoading(false);
         setIsRefreshing(false);
@@ -104,7 +107,7 @@ export const FacultyStudentDetailScreen: React.FC = () => {
         <View style={styles.errorContainer}>
           <RefreshCw size={40} color={theme.colors.text.tertiary} style={styles.errorIcon} />
           <Text variant="body" color={theme.colors.text.secondary} align="center">
-            {error}
+            Unable to load student details. Please try again.
           </Text>
           <Button
             variant="secondary"

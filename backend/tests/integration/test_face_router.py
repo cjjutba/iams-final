@@ -11,7 +11,7 @@ Tests all 7 endpoints in app/routers/face.py:
   7. DELETE /api/v1/face/{user_id}   (auth + ownership check)
 
 Mocking strategy:
-  - facenet_model and faiss_manager are module-level singletons imported into
+  - insightface_model and faiss_manager are module-level singletons imported into
     face_service.py.  We patch them at the *import location* inside FaceService
     so every FaceService(db) instance picks up the mocks.
   - The router's _request_cache dict is cleared between tests via an autouse
@@ -81,32 +81,46 @@ def _clear_request_cache():
 
 def _patch_ml_singletons(
     *,
-    generate_embedding=None,
+    get_embedding=None,
     decode_base64_image=None,
     faiss_search=None,
+    faiss_search_with_margin=None,
     faiss_add_return=0,
 ):
     """
-    Return a combined patch context that replaces facenet_model and
+    Return a combined patch context that replaces insightface_model and
     faiss_manager inside face_service.py.
 
     Parameters let callers customise per-test behaviour without repeating
     boilerplate.
+
+    ``faiss_search`` controls the legacy ``.search()`` return value.
+    ``faiss_search_with_margin`` controls ``.search_with_margin()`` used by
+    the Edge API (POST /face/process).  When not supplied it defaults to a
+    no-match result ``{"user_id": None, "confidence": None, "is_ambiguous": False}``.
     """
     mock_fn = MagicMock()
-    mock_fn.generate_embedding = MagicMock(
-        side_effect=generate_embedding or (lambda *_a, **_kw: _make_embedding())
+    mock_fn.get_embedding = MagicMock(
+        side_effect=get_embedding or (lambda *_a, **_kw: _make_embedding())
     )
     mock_fn.decode_base64_image = MagicMock(
         side_effect=decode_base64_image
         or (lambda *_a, **_kw: Image.new("RGB", (160, 160)))
     )
-    mock_fn.model = MagicMock()  # Not None -> model "loaded"
+    mock_fn.app = MagicMock()  # Not None -> model "loaded"
+    # Remove auto-created attribute so quality gate path isn't triggered
+    if hasattr(mock_fn, 'get_face_with_quality'):
+        del mock_fn.get_face_with_quality
 
     mock_faiss = MagicMock()
     mock_faiss.index = MagicMock()  # Not None -> index "loaded"
     mock_faiss.add = MagicMock(return_value=faiss_add_return)
+    mock_faiss.add_batch = MagicMock(return_value=[faiss_add_return] * 5)
     mock_faiss.search = MagicMock(return_value=faiss_search or [])
+    mock_faiss.search_with_margin = MagicMock(
+        return_value=faiss_search_with_margin
+        or {"user_id": None, "confidence": None, "is_ambiguous": False}
+    )
     mock_faiss.save = MagicMock()
     mock_faiss.rebuild = MagicMock()
     mock_faiss._create_index = MagicMock()
@@ -119,9 +133,20 @@ def _patch_ml_singletons(
         "user_mappings": 5,
     })
 
+    # Mock anti-spoof detector to always pass
+    from app.services.ml.anti_spoof import SpoofResult
+    mock_antispoof = MagicMock()
+    mock_antispoof.check_registration_set = MagicMock(
+        return_value=SpoofResult(is_live=True, spoof_score=0.9, method="mock", details={})
+    )
+    mock_antispoof.check_single_image = MagicMock(
+        return_value=SpoofResult(is_live=True, spoof_score=0.9, method="mock", details={})
+    )
+
     return (
-        patch("app.services.face_service.facenet_model", mock_fn),
+        patch("app.services.face_service.insightface_model", mock_fn),
         patch("app.services.face_service.faiss_manager", mock_faiss),
+        patch("app.services.face_service.anti_spoof_detector", mock_antispoof),
         mock_fn,
         mock_faiss,
     )
@@ -136,8 +161,8 @@ class TestFaceRegister:
 
     def test_register_face_success(self, client, auth_headers_student, test_student):
         """Student uploads 3 face images and gets 201 with embedding_id."""
-        p_fn, p_faiss, _, _ = _patch_ml_singletons(faiss_add_return=0)
-        with p_fn, p_faiss:
+        p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons(faiss_add_return=0)
+        with p_fn, p_faiss, p_spoof:
             files = _make_upload_files(3)
             response = client.post(
                 f"{PREFIX}/register", files=files, headers=auth_headers_student
@@ -166,8 +191,8 @@ class TestFaceRegister:
 
     def test_register_face_too_few_images(self, client, auth_headers_student, test_student):
         """Uploading fewer than 3 images raises a validation error."""
-        p_fn, p_faiss, _, _ = _patch_ml_singletons()
-        with p_fn, p_faiss:
+        p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons()
+        with p_fn, p_faiss, p_spoof:
             files = _make_upload_files(1)
             response = client.post(
                 f"{PREFIX}/register", files=files, headers=auth_headers_student
@@ -180,8 +205,8 @@ class TestFaceRegister:
 
     def test_register_face_too_many_images(self, client, auth_headers_student, test_student):
         """Uploading more than 5 images raises a validation error."""
-        p_fn, p_faiss, _, _ = _patch_ml_singletons()
-        with p_fn, p_faiss:
+        p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons()
+        with p_fn, p_faiss, p_spoof:
             files = _make_upload_files(7)
             response = client.post(
                 f"{PREFIX}/register", files=files, headers=auth_headers_student
@@ -195,8 +220,8 @@ class TestFaceRegister:
         self, client, auth_headers_student, test_student, test_face_registration
     ):
         """Registering when face is already registered returns 400."""
-        p_fn, p_faiss, _, _ = _patch_ml_singletons()
-        with p_fn, p_faiss:
+        p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons()
+        with p_fn, p_faiss, p_spoof:
             files = _make_upload_files(3)
             response = client.post(
                 f"{PREFIX}/register", files=files, headers=auth_headers_student
@@ -217,8 +242,8 @@ class TestFaceReregister:
         self, client, auth_headers_student, test_student, test_face_registration
     ):
         """Re-register deletes old registration and creates new one."""
-        p_fn, p_faiss, _, _ = _patch_ml_singletons(faiss_add_return=1)
-        with p_fn, p_faiss:
+        p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons(faiss_add_return=1)
+        with p_fn, p_faiss, p_spoof:
             files = _make_upload_files(3)
             response = client.post(
                 f"{PREFIX}/reregister", files=files, headers=auth_headers_student
@@ -233,8 +258,8 @@ class TestFaceReregister:
         self, client, auth_headers_student, test_student
     ):
         """Re-register when no prior registration exists still works (creates new)."""
-        p_fn, p_faiss, _, _ = _patch_ml_singletons(faiss_add_return=0)
-        with p_fn, p_faiss:
+        p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons(faiss_add_return=0)
+        with p_fn, p_faiss, p_spoof:
             files = _make_upload_files(3)
             response = client.post(
                 f"{PREFIX}/reregister", files=files, headers=auth_headers_student
@@ -300,10 +325,10 @@ class TestFaceRecognize:
     def test_recognize_match(self, client):
         """Image that matches a user returns matched=True."""
         user_id = str(uuid.uuid4())
-        p_fn, p_faiss, _, _ = _patch_ml_singletons(
+        p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons(
             faiss_search=[(user_id, 0.85)]
         )
-        with p_fn, p_faiss:
+        with p_fn, p_faiss, p_spoof:
             response = client.post(
                 f"{PREFIX}/recognize", json={"image": _make_test_image_base64()}
             )
@@ -317,8 +342,8 @@ class TestFaceRecognize:
 
     def test_recognize_no_match(self, client):
         """Image that matches nobody returns matched=False."""
-        p_fn, p_faiss, _, _ = _patch_ml_singletons(faiss_search=[])
-        with p_fn, p_faiss:
+        p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons(faiss_search=[])
+        with p_fn, p_faiss, p_spoof:
             response = client.post(
                 f"{PREFIX}/recognize", json={"image": _make_test_image_base64()}
             )
@@ -334,8 +359,8 @@ class TestFaceRecognize:
         def _raise(*_a, **_kw):
             raise ValueError("Invalid Base64")
 
-        p_fn, p_faiss, _, _ = _patch_ml_singletons(decode_base64_image=_raise)
-        with p_fn, p_faiss:
+        p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons(decode_base64_image=_raise)
+        with p_fn, p_faiss, p_spoof:
             response = client.post(
                 f"{PREFIX}/recognize", json={"image": "not_valid!!!"}
             )
@@ -364,10 +389,12 @@ class TestEdgeProcess:
     def test_process_single_match(self, client):
         """One face that matches a user returns processed=1, matched=[user]."""
         user_id = str(uuid.uuid4())
-        p_fn, p_faiss, _, _ = _patch_ml_singletons(
-            faiss_search=[(user_id, 0.88)]
+        p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons(
+            faiss_search_with_margin={
+                "user_id": user_id, "confidence": 0.88, "is_ambiguous": False,
+            }
         )
-        with p_fn, p_faiss:
+        with p_fn, p_faiss, p_spoof:
             response = client.post(f"{PREFIX}/process", json=self._payload())
 
         assert response.status_code == 200
@@ -380,8 +407,8 @@ class TestEdgeProcess:
 
     def test_process_no_match(self, client):
         """Face that doesn't match anyone -> unmatched=1."""
-        p_fn, p_faiss, _, _ = _patch_ml_singletons(faiss_search=[])
-        with p_fn, p_faiss:
+        p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons(faiss_search=[])
+        with p_fn, p_faiss, p_spoof:
             response = client.post(f"{PREFIX}/process", json=self._payload())
 
         data = response.json()
@@ -395,24 +422,24 @@ class TestEdgeProcess:
         uid1 = str(uuid.uuid4())
         uid2 = str(uuid.uuid4())
 
-        # We need the search to return different results per call.
+        # search_with_margin returns different results per call.
         call_count = {"n": 0}
         results_per_call = [
-            [(uid1, 0.90)],
-            [(uid2, 0.82)],
-            [],  # third face: no match
+            {"user_id": uid1, "confidence": 0.90, "is_ambiguous": False},
+            {"user_id": uid2, "confidence": 0.82, "is_ambiguous": False},
+            {"user_id": None, "confidence": None, "is_ambiguous": False},
         ]
 
-        def _search(embedding, k=1, threshold=None):
+        def _search_with_margin(embedding, k=1, threshold=None, margin=None):
             idx = call_count["n"]
             call_count["n"] += 1
             if idx < len(results_per_call):
                 return results_per_call[idx]
-            return []
+            return {"user_id": None, "confidence": None, "is_ambiguous": False}
 
-        p_fn, p_faiss, _, mock_faiss = _patch_ml_singletons()
-        mock_faiss.search = MagicMock(side_effect=_search)
-        with p_fn, p_faiss:
+        p_fn, p_faiss, p_spoof, _, mock_faiss = _patch_ml_singletons()
+        mock_faiss.search_with_margin = MagicMock(side_effect=_search_with_margin)
+        with p_fn, p_faiss, p_spoof:
             response = client.post(
                 f"{PREFIX}/process", json=self._payload(faces=3)
             )
@@ -427,8 +454,8 @@ class TestEdgeProcess:
         """Second request with same request_id returns processed=0."""
         rid = "dedup-test-001"
         room = str(uuid.uuid4()).replace("-", "")
-        p_fn, p_faiss, _, _ = _patch_ml_singletons(faiss_search=[])
-        with p_fn, p_faiss:
+        p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons(faiss_search=[])
+        with p_fn, p_faiss, p_spoof:
             payload = self._payload(room_id=room, request_id=rid)
             r1 = client.post(f"{PREFIX}/process", json=payload)
             assert r1.status_code == 200
@@ -467,9 +494,9 @@ class TestEdgeProcess:
         def _raise(*_a, **_kw):
             raise ValueError("Invalid Base64")
 
-        p_fn, p_faiss, mock_fn, _ = _patch_ml_singletons()
+        p_fn, p_faiss, p_spoof, mock_fn, _ = _patch_ml_singletons()
         mock_fn.decode_base64_image = MagicMock(side_effect=_raise)
-        with p_fn, p_faiss:
+        with p_fn, p_faiss, p_spoof:
             response = client.post(f"{PREFIX}/process", json=self._payload())
 
         assert response.status_code == 200
@@ -480,8 +507,8 @@ class TestEdgeProcess:
 
     def test_process_with_bbox(self, client):
         """Face data with bbox is accepted and processed."""
-        p_fn, p_faiss, _, _ = _patch_ml_singletons(faiss_search=[])
-        with p_fn, p_faiss:
+        p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons(faiss_search=[])
+        with p_fn, p_faiss, p_spoof:
             payload = {
                 "room_id": str(uuid.uuid4()).replace("-", ""),
                 "timestamp": datetime.now().isoformat(),
@@ -507,8 +534,8 @@ class TestFaceStatistics:
 
     def test_get_statistics_authenticated(self, client, auth_headers_student):
         """Authenticated user can retrieve statistics."""
-        p_fn, p_faiss, _, _ = _patch_ml_singletons()
-        with p_fn, p_faiss:
+        p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons()
+        with p_fn, p_faiss, p_spoof:
             response = client.get(
                 f"{PREFIX}/statistics", headers=auth_headers_student
             )
@@ -536,8 +563,8 @@ class TestFaceDeregister:
         self, client, auth_headers_student, test_student, test_face_registration
     ):
         """Student deregisters their own face -> 200 success."""
-        p_fn, p_faiss, _, _ = _patch_ml_singletons()
-        with p_fn, p_faiss:
+        p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons()
+        with p_fn, p_faiss, p_spoof:
             response = client.delete(
                 f"{PREFIX}/{test_student.id}", headers=auth_headers_student
             )
@@ -561,8 +588,8 @@ class TestFaceDeregister:
         self, client, auth_headers_admin, test_student, test_face_registration
     ):
         """Admin can deregister any user's face."""
-        p_fn, p_faiss, _, _ = _patch_ml_singletons()
-        with p_fn, p_faiss:
+        p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons()
+        with p_fn, p_faiss, p_spoof:
             response = client.delete(
                 f"{PREFIX}/{test_student.id}", headers=auth_headers_admin
             )
@@ -574,8 +601,8 @@ class TestFaceDeregister:
         self, client, auth_headers_student, test_student
     ):
         """Deregistering when no face is registered raises NotFoundError -> 404."""
-        p_fn, p_faiss, _, _ = _patch_ml_singletons()
-        with p_fn, p_faiss:
+        p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons()
+        with p_fn, p_faiss, p_spoof:
             response = client.delete(
                 f"{PREFIX}/{test_student.id}", headers=auth_headers_student
             )

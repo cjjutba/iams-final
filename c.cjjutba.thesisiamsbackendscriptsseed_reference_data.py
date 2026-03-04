@@ -37,7 +37,7 @@ from app.config import logger
 # ---------------------------------------------------------------------------
 MOCK_STUDENTS = [
     # 4th year students (born 2003)
-    ("21-A-02177", "Christian Jerald", "Jutba",      "cjjutbaofficial@gmail.com",        "BSCPE", 4, "A", date(2003, 5, 15), "09764556948"),
+    ("21-A-012345", "Christian Jerald", "Jutba",      "cjjutbaofficial@gmail.com",        "BSCPE", 4, "A", date(2003, 5, 15), "09764556948"),
     ("21-A-12345", "Juan",             "Dela Cruz",  "juan.delacruz@jrmsu.edu.ph",        "BSCPE", 4, "A", date(2003, 3, 22), "09171234567"),
     ("21-B-55555", "Sofia",            "Torres",     "sofia.torres@jrmsu.edu.ph",         "BSCPE", 4, "B", date(2003, 7, 10), "09281234567"),
     # 3rd year students (born 2004)

@@ -13,6 +13,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Mail, Phone, Lock } from 'lucide-react-native';
+import { useToast } from '../../hooks';
 import { theme, strings } from '../../constants';
 import type { AuthStackParamList } from '../../types';
 import { AuthLayout } from '../../components/layouts';
@@ -43,6 +44,7 @@ export const RegisterStep2Screen: React.FC = () => {
   const navigation = useNavigation<RegisterStep2NavigationProp>();
   const route = useRoute<RegisterStep2RouteProp>();
   const { studentInfo } = route.params;
+  const { showError } = useToast();
 
   const { control, handleSubmit } = useForm<AccountDetailsData>({
     resolver: zodResolver(accountDetailsSchema),
@@ -124,7 +126,10 @@ export const RegisterStep2Screen: React.FC = () => {
           />
         </View>
 
-        <Button variant="primary" size="lg" fullWidth onPress={handleSubmit(onSubmit)} style={styles.button}>
+        <Button variant="primary" size="lg" fullWidth onPress={handleSubmit(onSubmit, (formErrors) => {
+            const firstError = Object.values(formErrors)[0]?.message;
+            if (firstError) showError(firstError, 'Validation Error');
+          })} style={styles.button}>
           {strings.common.next}
         </Button>
       </View>

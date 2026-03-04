@@ -20,7 +20,14 @@ class EnrollmentService:
     def __init__(self, db: Session):
         self.db = db
 
-    def auto_enroll_student(self, user_id, student_id: str) -> List[Enrollment]:
+    def auto_enroll_student(
+        self,
+        user_id,
+        student_id: str,
+        *,
+        record: "StudentRecord | None" = None,
+        skip_duplicate_check: bool = False,
+    ) -> List[Enrollment]:
         """
         Auto-enroll a student into all matching active schedules.
 
@@ -32,14 +39,19 @@ class EnrollmentService:
         Args:
             user_id: The user's UUID (from users table)
             student_id: The school-issued student ID (e.g., "21-A-11111")
+            record: Pre-fetched StudentRecord to avoid redundant DB query.
+            skip_duplicate_check: When True (e.g. during registration of a
+                brand-new user), skip the per-schedule EXISTS checks since
+                no enrollments can exist yet.
 
         Returns:
             List of created Enrollment records
         """
-        # Look up student record to get course + year_level
-        record = self.db.query(StudentRecord).filter(
-            StudentRecord.student_id == student_id
-        ).first()
+        # Use provided record or fetch from DB
+        if record is None:
+            record = self.db.query(StudentRecord).filter(
+                StudentRecord.student_id == student_id
+            ).first()
 
         if not record or not record.course or not record.year_level:
             logger.info(f"No course/year info for {student_id}, skipping auto-enrollment")
@@ -56,15 +68,21 @@ class EnrollmentService:
             logger.info(f"No matching schedules for {record.course} Year {record.year_level}")
             return []
 
+        # Determine which schedule IDs already have enrollments (single query)
+        if skip_duplicate_check:
+            existing_schedule_ids = set()
+        else:
+            schedule_ids = [s.id for s in matching_schedules]
+            rows = self.db.query(Enrollment.schedule_id).filter(
+                Enrollment.student_id == user_id,
+                Enrollment.schedule_id.in_(schedule_ids),
+            ).all()
+            existing_schedule_ids = {r[0] for r in rows}
+
         # Create enrollments (skip duplicates)
         created = []
         for schedule in matching_schedules:
-            existing = self.db.query(Enrollment).filter(
-                Enrollment.student_id == user_id,
-                Enrollment.schedule_id == schedule.id,
-            ).first()
-
-            if not existing:
+            if schedule.id not in existing_schedule_ids:
                 enrollment = Enrollment(
                     student_id=user_id,
                     schedule_id=schedule.id,

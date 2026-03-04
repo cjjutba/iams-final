@@ -155,9 +155,11 @@ Example:
 ### Errors
 | Code | When |
 |------|------|
-| 400 | Invalid JSON, missing room_id/timestamp/faces, or invalid image |
+| 422 | Invalid JSON, missing room_id/timestamp/faces, or validation error |
 | 401 | Missing or invalid auth (if endpoint is protected) |
 | 500 | Server/recognition error |
+
+> **See also:** [ML Pipeline Specification](ml-pipeline-spec.md) for the authoritative Edge API contract, error codes, and retry logic.
 
 ---
 
@@ -167,10 +169,12 @@ Example:
 | Parameter | Value |
 |-----------|-------|
 | Image format | JPEG, PNG |
-| Minimum resolution | 112x112 |
-| Recommended resolution | 160x160 |
+| Minimum resolution | 160x160 |
+| Edge crop size | 160x160 |
+| Edge JPEG quality | 85% |
 | Face angle | ±30° yaw, ±20° pitch |
 | Minimum face size | 80x80 pixels in frame |
+| Detection confidence | >= 0.6 |
 
 ### Model Specifications
 | Parameter | Value |
@@ -178,8 +182,9 @@ Example:
 | Model | FaceNet (InceptionResnetV1) |
 | Embedding size | 512 dimensions |
 | Input size | 160x160x3 |
+| Alignment | MTCNN 5-landmark (fallback: raw crop) |
 | Distance metric | Cosine similarity |
-| Match threshold | 0.6 |
+| Match threshold | 0.55 |
 | Training dataset | VGGFace2 |
 
 ### FAISS Index
@@ -188,7 +193,10 @@ Example:
 | Index type | IndexFlatIP (Inner Product) |
 | Dimensions | 512 |
 | Search type | Exact nearest neighbor |
-| Top-K | 1 |
+| Top-K | 3 |
+| Confidence margin | 0.1 (between top-1 and top-2) |
+
+> **See also:** [ML Pipeline Specification](ml-pipeline-spec.md) for the complete face recognition pipeline and threshold reference.
 
 ---
 
@@ -368,7 +376,7 @@ Heartbeat: 30 seconds
 | DATABASE_URL | PostgreSQL connection (Supabase pooler or local) | - |
 | SECRET_KEY | JWT signing key (if custom auth) | - |
 | FAISS_INDEX_PATH | Path to FAISS file | ./data/faiss.index |
-| RECOGNITION_THRESHOLD | Match threshold | 0.6 |
+| RECOGNITION_THRESHOLD | Match threshold | 0.55 |
 | SCAN_INTERVAL | Seconds between scans | 60 |
 | EARLY_LEAVE_THRESHOLD | Missed scans to flag | 3 |
 | EDGE_SERVER_URL | Backend URL for RPi | - |

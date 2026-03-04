@@ -20,9 +20,10 @@ import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { AlertTriangle, RefreshCw } from 'lucide-react-native';
 import { api } from '../../utils/api';
+import { useToast } from '../../hooks/useToast';
 import { theme, strings } from '../../constants';
 import { getErrorMessage } from '../../utils';
-import type { FacultyStackParamList, EarlyLeaveEvent, ApiResponse } from '../../types';
+import type { FacultyStackParamList, EarlyLeaveEvent } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
 import { Text, Button } from '../../components/ui';
 import { AlertCard } from '../../components/cards';
@@ -39,6 +40,7 @@ type FilterValue = typeof FILTERS[number]['value'];
 
 export const FacultyAlertsScreen: React.FC = () => {
   const navigation = useNavigation<FacultyAlertsNavigationProp>();
+  const { showError } = useToast();
 
   const [selectedFilter, setSelectedFilter] = useState<FilterValue>('today');
   const [alerts, setAlerts] = useState<EarlyLeaveEvent[]>([]);
@@ -54,13 +56,14 @@ export const FacultyAlertsScreen: React.FC = () => {
       setError(null);
 
       try {
-        const response = await api.get<ApiResponse<EarlyLeaveEvent[]>>(
+        const response = await api.get<EarlyLeaveEvent[]>(
           '/attendance/alerts',
           { params: { filter: selectedFilter } }
         );
-        setAlerts(response.data.data || []);
+        setAlerts(response.data || []);
       } catch (err) {
         setError(getErrorMessage(err));
+        showError(getErrorMessage(err), 'Load Failed');
       } finally {
         setIsLoading(false);
         setIsRefreshing(false);
@@ -138,7 +141,7 @@ export const FacultyAlertsScreen: React.FC = () => {
         <View style={styles.errorContainer}>
           <RefreshCw size={40} color={theme.colors.text.tertiary} style={styles.errorIcon} />
           <Text variant="body" color={theme.colors.text.secondary} align="center">
-            {error}
+            Unable to load alerts. Please try again.
           </Text>
           <Button
             variant="secondary"

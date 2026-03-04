@@ -5,6 +5,11 @@
  * Shows all students with detection status, search filtering,
  * stats bar with correct counts, and handles WebSocket
  * disconnect/reconnect gracefully.
+ *
+ * Features:
+ * - Session active indicator bar
+ * - "View Camera Feed" button in header
+ * - "End Session" fixed bar at bottom when session is active
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
@@ -16,12 +21,14 @@ import {
   RefreshControl,
   TouchableOpacity,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
-import { Search, Edit, RefreshCw, Wifi, WifiOff } from 'lucide-react-native';
-import { useAttendance, useWebSocket } from '../../hooks';
+import { Search, Edit, RefreshCw, Wifi, WifiOff, Camera, Square } from 'lucide-react-native';
+import { useAttendance, useWebSocket, useSession } from '../../hooks';
+import { useToast } from '../../hooks/useToast';
 import { theme, strings } from '../../constants';
 import { getErrorMessage } from '../../utils';
 import type {
@@ -40,6 +47,7 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
   const navigation = useNavigation<LiveAttendanceNavigationProp>();
 
   const { scheduleId } = route.params;
+  const { showError, showSuccess } = useToast();
 
   const {
     liveAttendance,
@@ -48,8 +56,18 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
     fetchLiveAttendance,
     updateStudentStatus,
   } = useAttendance();
+
+  const {
+    isSessionActive,
+    endSession,
+    isLoading: isSessionLoading,
+  } = useSession();
+
   const [searchQuery, setSearchQuery] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isEndingSession, setIsEndingSession] = useState(false);
+
+  const sessionActive = isSessionActive(scheduleId);
 
   // WebSocket integration for real-time updates
   const { isConnected } = useWebSocket({
@@ -65,6 +83,10 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
       }
     },
   });
+
+  useEffect(() => {
+    if (error) showError(error, 'Load Failed');
+  }, [error]);
 
   useEffect(() => {
     fetchLiveAttendance(scheduleId);
@@ -84,6 +106,43 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
 
   const handleManualEntry = () => {
     navigation.navigate('ManualEntry', { scheduleId });
+  };
+
+  const handleViewCameraFeed = () => {
+    (navigation as any).navigate('LiveFeed', {
+      scheduleId,
+      roomId: '',
+      subjectName: route.params.subjectName || '',
+    });
+  };
+
+  const handleEndSession = () => {
+    Alert.alert(
+      'End Session',
+      'Are you sure you want to end this attendance session? This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'End Session',
+          style: 'destructive',
+          onPress: async () => {
+            setIsEndingSession(true);
+            try {
+              const result = await endSession(scheduleId);
+              if (result) {
+                showSuccess('Session ended successfully');
+              } else {
+                showError('Failed to end session');
+              }
+            } catch (err) {
+              showError(getErrorMessage(err));
+            } finally {
+              setIsEndingSession(false);
+            }
+          },
+        },
+      ],
+    );
   };
 
   const handleStudentPress = (studentId: string) => {
@@ -117,7 +176,7 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
         <View style={styles.errorContainer}>
           <RefreshCw size={40} color={theme.colors.text.tertiary} style={styles.errorIcon} />
           <Text variant="body" color={theme.colors.text.secondary} align="center">
-            {error}
+            Unable to load live attendance. Please try again.
           </Text>
           <Button
             variant="secondary"
@@ -249,13 +308,23 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
         showBack
         title="Live Attendance"
         rightAction={
-          <TouchableOpacity
-            onPress={handleManualEntry}
-            activeOpacity={theme.interaction.activeOpacity}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Edit size={24} color={theme.colors.primary} />
-          </TouchableOpacity>
+          <View style={styles.headerActions}>
+            <TouchableOpacity
+              onPress={handleViewCameraFeed}
+              activeOpacity={theme.interaction.activeOpacity}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Camera size={24} color={theme.colors.primary} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handleManualEntry}
+              activeOpacity={theme.interaction.activeOpacity}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={styles.headerActionSpacing}
+            >
+              <Edit size={24} color={theme.colors.primary} />
+            </TouchableOpacity>
+          </View>
         }
       />
 
@@ -279,6 +348,16 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
             {isConnected ? 'Live' : 'Reconnecting...'}
           </Text>
         </View>
+
+        {/* Session active indicator bar */}
+        {sessionActive && (
+          <View style={styles.sessionBar}>
+            <View style={styles.sessionDot} />
+            <Text variant="caption" weight="600" color="#FFFFFF">
+              Session Active
+            </Text>
+          </View>
+        )}
 
         {/* Stats row */}
         <View style={styles.statsRow}>
@@ -325,6 +404,7 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
           contentContainerStyle={[
             styles.listContent,
             filteredStudents.length === 0 && styles.listContentEmpty,
+            sessionActive && styles.listContentWithEndSession,
           ]}
           showsVerticalScrollIndicator={false}
           alwaysBounceVertical={true}
@@ -338,6 +418,27 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
           }
         />
       </View>
+
+      {/* End Session fixed bar at bottom */}
+      {sessionActive && (
+        <View style={styles.endSessionBar}>
+          <TouchableOpacity
+            style={styles.endSessionButton}
+            onPress={handleEndSession}
+            activeOpacity={theme.interaction.activeOpacity}
+            disabled={isEndingSession || isSessionLoading}
+          >
+            {isEndingSession ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Square size={18} color="#FFFFFF" />
+            )}
+            <Text variant="body" weight="700" color="#FFFFFF" style={styles.endSessionText}>
+              {isEndingSession ? 'Ending Session...' : 'End Session'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </ScreenLayout>
   );
 };
@@ -362,6 +463,13 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  headerActionSpacing: {
+    marginLeft: theme.spacing[4],
+  },
   connectionBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -371,6 +479,20 @@ const styles = StyleSheet.create({
   },
   connectionText: {
     marginLeft: theme.spacing[1],
+  },
+  sessionBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: theme.spacing[2],
+    backgroundColor: theme.colors.success,
+  },
+  sessionDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#FFFFFF',
+    marginRight: theme.spacing[2],
   },
   statsRow: {
     flexDirection: 'row',
@@ -413,6 +535,9 @@ const styles = StyleSheet.create({
   },
   listContentEmpty: {
     flexGrow: 1,
+  },
+  listContentWithEndSession: {
+    paddingBottom: 80,
   },
   studentCard: {
     marginBottom: theme.spacing[2],
@@ -479,5 +604,27 @@ const styles = StyleSheet.create({
   },
   retryButton: {
     marginTop: theme.spacing[4],
+  },
+  endSessionBar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: theme.spacing[4],
+    paddingVertical: theme.spacing[3],
+    backgroundColor: theme.colors.background,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border,
+  },
+  endSessionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.error,
+    paddingVertical: theme.spacing[4],
+    borderRadius: theme.borderRadius.md,
+  },
+  endSessionText: {
+    marginLeft: theme.spacing[2],
   },
 });

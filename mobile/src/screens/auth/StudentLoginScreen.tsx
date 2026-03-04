@@ -35,7 +35,6 @@ export const StudentLoginScreen: React.FC = () => {
   const {
     control,
     handleSubmit,
-    formState: { errors },
   } = useForm<StudentLoginFormData>({
     resolver: zodResolver(studentLoginSchema),
     defaultValues: {
@@ -99,7 +98,6 @@ export const StudentLoginScreen: React.FC = () => {
                 value={value}
                 onChangeText={onChange}
                 onBlur={onBlur}
-                error={errors.student_id?.message}
                 leftIcon={<IdCard size={20} color={theme.colors.text.tertiary} />}
                 autoCapitalize="characters"
                 autoCorrect={false}
@@ -119,9 +117,8 @@ export const StudentLoginScreen: React.FC = () => {
                 value={value}
                 onChangeText={onChange}
                 onBlur={onBlur}
-                error={errors.password?.message}
                 leftIcon={<Lock size={20} color={theme.colors.text.tertiary} />}
-                secureTextEntry
+                isPassword
                 autoCapitalize="none"
                 autoCorrect={false}
               />
@@ -135,19 +132,14 @@ export const StudentLoginScreen: React.FC = () => {
           </Text>
         </TouchableOpacity>
 
-        {authError ? (
-          <View style={styles.errorContainer}>
-            <Text variant="bodySmall" color={theme.colors.error}>
-              {authError}
-            </Text>
-          </View>
-        ) : null}
-
         <Button
           variant="primary"
           size="lg"
           fullWidth
-          onPress={handleSubmit(onSubmit)}
+          onPress={handleSubmit(onSubmit, (formErrors) => {
+            const firstError = Object.values(formErrors)[0]?.message;
+            if (firstError) showError(firstError, 'Validation Error');
+          })}
           loading={isSubmitting}
           style={styles.loginButton}
         >
@@ -180,12 +172,6 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-end',
     marginTop: theme.spacing[2],
     marginBottom: theme.spacing[6],
-  },
-  errorContainer: {
-    marginBottom: theme.spacing[5],
-    padding: theme.spacing[4],
-    backgroundColor: theme.colors.errorLight,
-    borderRadius: theme.borderRadius.md,
   },
   loginButton: {
     marginTop: theme.spacing[2],

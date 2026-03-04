@@ -22,19 +22,20 @@ cryptography==46.0.4
 passlib==1.7.4
 python-jose==3.5.0
 email-validator==2.3.0
-supabase>=2.0.0
+# supabase SDK replaced by direct httpx calls to GoTrue Admin API
+# (avoids storage3 → pyiceberg → Rust compiler dependency on Windows)
 slowapi>=0.1.9
 
 # ===== ML / Face Recognition =====
-torch==2.10.0+cpu
-torchvision==0.25.0+cpu
-facenet-pytorch==2.6.0
+insightface>=0.7.3
+onnxruntime>=1.21.0
 faiss-cpu==1.13.2
 numpy==2.4.2
 pillow==12.1.0
 opencv-python-headless==4.13.0.90
 
 # ===== HTTP / Networking =====
+aiofiles>=24.0.0
 httpcore==1.0.9
 httpx==0.28.1
 requests==2.32.5

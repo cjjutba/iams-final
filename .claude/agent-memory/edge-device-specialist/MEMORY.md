@@ -47,9 +47,21 @@
 
 ### Edge API Contract
 - **POST /api/v1/face/process** - Matches EdgeProcessRequest schema in backend
+- **GET /api/v1/presence/sessions/room-status?room_id={uuid}** - Session status check for edge devices
+  - Response: `{"active": bool, "schedule_id": str | null}` (RoomStatusResponse)
+  - No auth required (trusted network)
+  - Returns `active=false` on errors (fail-safe)
 - **Timestamp must be ISO 8601 format** - `datetime.isoformat() + "Z"`
 - **Faces array supports batch processing** - Send multiple faces per request
 - **Bounding box format: [x, y, width, height]** - Matches MediaPipe output
+
+### Session-Aware Scanning (Added Feb 2026)
+- **SESSION_AWARE=true by default** - Edge device polls backend before scanning
+- **Two-interval pattern** - SESSION_POLL_INTERVAL (10s) when idle, SCAN_INTERVAL (60s) when active
+- **Fallback on network error** - If session was previously active, continue scanning (avoid missing attendance)
+- **State transitions logged** - "Session became active" / "Session ended" for monitoring
+- **run_single_scan() returns bool** - True if scan performed, False if skipped (drives interval selection)
+- **Disable with SESSION_AWARE=false** - Reverts to original unconditional scanning behavior
 
 ## File Structure Implemented
 

@@ -4,6 +4,7 @@ WebSocket Router
 Real-time communication for attendance updates and early-leave alerts.
 """
 
+import json
 from typing import Dict, Set
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.config import logger
@@ -277,12 +278,20 @@ async def websocket_endpoint(user_id: str, websocket: WebSocket):
 
         # Keep connection alive and listen for incoming messages
         while True:
-            # Receive messages from client (optional, for heartbeat/ping)
             data = await websocket.receive_text()
-
-            # Echo back (for testing/heartbeat)
-            # In production, you might handle client commands here
             logger.debug(f"Received from {user_id}: {data}")
+
+            # Handle application-level ping/pong for heartbeat
+            try:
+                message = json.loads(data)
+                if message.get("event") == "ping":
+                    await websocket.send_json({
+                        "event": "pong",
+                        "data": {}
+                    })
+                    continue
+            except (json.JSONDecodeError, TypeError):
+                pass
 
     except WebSocketDisconnect:
         manager.disconnect(user_id)

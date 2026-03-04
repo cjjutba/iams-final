@@ -7,5 +7,7 @@
 export { useAuth } from './useAuth';
 export { useAttendance } from './useAttendance';
 export { useSchedule } from './useSchedule';
+export { useSession } from './useSession';
 export { useWebSocket } from './useWebSocket';
+export { useDetectionWebSocket } from './useDetectionWebSocket';
 export { useToast } from './useToast';

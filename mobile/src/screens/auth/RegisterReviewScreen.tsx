@@ -36,14 +36,12 @@ export const RegisterReviewScreen: React.FC = () => {
 
   const [isAgreed, setIsAgreed] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async () => {
     if (!isAgreed) return;
 
     try {
       setIsSubmitting(true);
-      setError(null);
 
       // Step 1: Create the account via authService directly.
       // We bypass authStore.register() to avoid setting isLoading/isAuthenticated
@@ -57,8 +55,6 @@ export const RegisterReviewScreen: React.FC = () => {
         phone: accountInfo.phone,
       });
 
-      showSuccess('Account created successfully!', 'Welcome to IAMS');
-
       // Step 2: Upload face images if tokens are available.
       // In Supabase mode: no tokens returned (email verification required first),
       // so face registration will happen after the user verifies email and logs in.
@@ -67,7 +63,7 @@ export const RegisterReviewScreen: React.FC = () => {
       if (faceImages.length > 0 && result.tokens) {
         try {
           await faceService.registerFace(faceImages);
-          showSuccess('Face registered successfully!', 'Face Recognition Active');
+          showSuccess('Face registered successfully!', 'Welcome to IAMS');
         } catch (faceErr: any) {
           console.error('Face registration failed:', faceErr);
           showWarning(
@@ -75,6 +71,15 @@ export const RegisterReviewScreen: React.FC = () => {
             'Face Registration Incomplete',
           );
         }
+      } else if (faceImages.length > 0 && !result.tokens) {
+        // Supabase mode: tokens not available yet (email verification required).
+        // Let the user know face registration will happen after they log in.
+        showSuccess(
+          'Account created! Your face photos will be registered after you verify your email and log in.',
+          'Welcome to IAMS',
+        );
+      } else {
+        showSuccess('Account created successfully!', 'Welcome to IAMS');
       }
 
       // Step 3: NOW update auth state to trigger navigation.
@@ -105,7 +110,6 @@ export const RegisterReviewScreen: React.FC = () => {
         err.response?.data?.message ||
         err.message ||
         strings.errors.generic;
-      setError(errorMsg);
       showError(errorMsg, 'Registration Failed');
       setIsSubmitting(false);
     }
@@ -172,14 +176,6 @@ export const RegisterReviewScreen: React.FC = () => {
             </Text>
           </TouchableOpacity>
         </View>
-
-        {error ? (
-          <View style={styles.errorContainer}>
-            <Text variant="bodySmall" color={theme.colors.error}>
-              {error}
-            </Text>
-          </View>
-        ) : null}
 
         <Button
           variant="primary"
@@ -264,12 +260,6 @@ const styles = StyleSheet.create({
     flex: 1,
     marginLeft: theme.spacing[3],
     lineHeight: 20,
-  },
-  errorContainer: {
-    marginBottom: theme.spacing[5],
-    padding: theme.spacing[4],
-    backgroundColor: theme.colors.errorLight,
-    borderRadius: theme.borderRadius.md,
   },
   submitButton: {
     marginTop: theme.spacing[2],

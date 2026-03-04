@@ -6,10 +6,11 @@ API endpoints for class schedule management.
 
 from typing import List, Optional
 from fastapi import APIRouter, Depends, status, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models.user import User, UserRole
+from app.models.schedule import Schedule
 from app.schemas.schedule import (
     ScheduleCreate,
     ScheduleUpdate,
@@ -63,24 +64,51 @@ def get_my_schedules(
     - **Students**: Enrolled schedules
     - **Faculty**: Teaching schedules
 
-    Returns list of relevant schedules.
+    Returns list of relevant schedules with eager-loaded faculty and room info.
 
     Requires authentication.
     """
-    schedule_repo = ScheduleRepository(db)
+    from app.models.enrollment import Enrollment
+
+    base_query = db.query(Schedule).options(
+        joinedload(Schedule.faculty),
+        joinedload(Schedule.room),
+    )
 
     if current_user.role == UserRole.FACULTY:
-        # Get teaching schedules
-        schedules = schedule_repo.get_by_faculty(str(current_user.id))
+        schedules = base_query.filter(
+            Schedule.faculty_id == current_user.id,
+            Schedule.is_active == True,
+        ).all()
+        logger.info(
+            f"GET /schedules/me — faculty={current_user.email} "
+            f"(id={current_user.id}), found {len(schedules)} schedule(s)"
+        )
     elif current_user.role == UserRole.STUDENT:
-        # Get enrolled schedules
-        from app.models.enrollment import Enrollment
-        enrollments = db.query(Enrollment).filter(Enrollment.student_id == current_user.id).all()
-        schedules = [schedule_repo.get_by_id(str(e.schedule_id)) for e in enrollments]
-        schedules = [s for s in schedules if s is not None]
+        # Single query: join enrollments → schedules with faculty/room
+        schedules = (
+            base_query
+            .join(Enrollment, Enrollment.schedule_id == Schedule.id)
+            .filter(
+                Enrollment.student_id == current_user.id,
+                Schedule.is_active == True,
+            )
+            .all()
+        )
+        enrollment_count = db.query(Enrollment).filter(
+            Enrollment.student_id == current_user.id
+        ).count()
+        logger.info(
+            f"GET /schedules/me — student={current_user.email} "
+            f"(id={current_user.id}), enrollments={enrollment_count}, "
+            f"active schedules={len(schedules)}"
+        )
     else:
-        # Admin gets all schedules
-        schedules = schedule_repo.get_all()
+        schedules = base_query.filter(Schedule.is_active == True).all()
+        logger.info(
+            f"GET /schedules/me — admin={current_user.email}, "
+            f"found {len(schedules)} schedule(s)"
+        )
 
     return [ScheduleResponse.model_validate(s) for s in schedules]
 

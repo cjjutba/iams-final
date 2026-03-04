@@ -32,6 +32,13 @@ build/
 # FAISS
 data/faiss/*.index
 
+# Binaries — downloaded separately, never committed (see scripts/start_mediamtx.sh)
+backend/bin/*
+!backend/bin/.gitkeep
+
+# HLS segments (generated at runtime)
+backend/data/hls/
+
 # MediaPipe models (downloaded at runtime)
 edge/app/.models/
 edge/tools/.cache/
@@ -71,3 +78,8 @@ backups/
 tmp/
 temp/
 *.tmp
+
+# mediamtx binary (downloaded locally, not committed)
+backend/bin/mediamtx
+backend/bin/mediamtx.exe
+.worktrees/

@@ -45,6 +45,8 @@ class WebSocketService {
   private isIntentionalClose = false;
   private _connectionState: ConnectionState = 'DISCONNECTED';
   private appStateSubscription: ReturnType<typeof AppState.addEventListener> | null = null;
+  /** Number of active consumers (hooks) holding the connection open */
+  private refCount = 0;
 
   /**
    * Current connection state
@@ -173,10 +175,32 @@ class WebSocketService {
   }
 
   /**
+   * Acquire a connection (reference-counted).
+   * Multiple hooks can call acquire — connection opens on first,
+   * and only closes when the last one calls release.
+   */
+  acquire(userId: string): void {
+    this.refCount++;
+    this.connect(userId);
+  }
+
+  /**
+   * Release a connection (reference-counted).
+   * Only disconnects when refCount drops to 0.
+   */
+  release(): void {
+    this.refCount = Math.max(0, this.refCount - 1);
+    if (this.refCount === 0) {
+      this.disconnect();
+    }
+  }
+
+  /**
    * Fully clean up - disconnect and remove all handlers
    * Call this when the user logs out
    */
   destroy(): void {
+    this.refCount = 0;
     this.disconnect();
     this.messageHandlers.clear();
     this.stateListeners.clear();

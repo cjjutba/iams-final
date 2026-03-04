@@ -65,6 +65,7 @@ Every student screen should have:
 
 ### Navigation Params (FacultyStack)
 - `LiveAttendance`: `{ scheduleId: string; subjectCode: string; subjectName: string }`
+- `LiveFeed`: `{ scheduleId: string; roomId: string; subjectName: string }`
 - `ClassDetail`: `{ scheduleId: string; date: string }`
 - `StudentDetail`: `{ studentId: string; scheduleId: string }`
 - `ManualEntry`: `{ scheduleId: string }`
@@ -118,7 +119,20 @@ Every student screen should have:
 - `StudentNotificationsScreen.tsx` - Card style array -> StyleSheet.flatten, weight props
 - `StudentProfileScreen.tsx` - Avatar wrapped in View, weight/medium props, Divider spacing
 
+### WebSocket Patterns
+- App-level WS: `config.WS_URL` = `ws://<host>:8000/api/v1/ws` -- used by `useWebSocket` hook
+- Camera stream WS: `ws://<host>:8000/api/v1/stream/{scheduleId}` -- raw WebSocket, NOT the hook
+- Derive WS URL from `config.API_BASE_URL` by replacing `http` with `ws`
+- Auth token passed as query param: `?token=<jwt>`
+- Always clean up WS on unmount: null out all handlers before `.close()`
+- Use `isMountedRef` to prevent state updates after unmount
+
 ### Service Return Types (GOTCHA)
 - `attendanceService.getTodayAttendance()` returns `AttendanceRecord[]` (array), NOT single record
 - `attendanceService.getAttendanceDetail()` returns single `AttendanceRecord`
 - When consuming array returns, use `data?.[0] ?? null` to extract first element
+
+## Files Modified (LiveFeed Screen - Session 5)
+- `screens/faculty/FacultyLiveFeedScreen.tsx` - NEW FILE: camera feed via raw WS with face detection overlays
+- `types/navigation.types.ts` - Added `LiveFeed` route params to FacultyStackParamList
+- `screens/faculty/index.ts` - Added FacultyLiveFeedScreen export

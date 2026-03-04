@@ -17,6 +17,7 @@ export const useAuth = () => {
     emailVerificationPending,
     pendingVerificationEmail,
     loadUser,
+    refreshUser,
     initializeAuthListener,
     login,
     register,
@@ -42,6 +43,7 @@ export const useAuth = () => {
 
     // Actions
     loadUser,
+    refreshUser,
     initializeAuthListener,
     login,
     register,

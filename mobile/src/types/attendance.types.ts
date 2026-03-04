@@ -116,3 +116,130 @@ export interface ManualAttendanceRequest {
   status: AttendanceStatus;
   remarks?: string;
 }
+
+// Per-schedule attendance summary (GET /attendance/schedule-summaries)
+export interface ScheduleAttendanceSummary {
+  schedule_id: string;
+  subject_code: string;
+  subject_name: string;
+  start_time: string; // HH:MM:SS
+  end_time: string;   // HH:MM:SS
+  room_name?: string;
+  session_active: boolean;
+  total_enrolled: number;
+  present_count: number;
+  late_count: number;
+  absent_count: number;
+  attendance_rate: number; // 0-100
+}
+
+// ---------------------------------------------------------------------------
+// Analytics Types
+// ---------------------------------------------------------------------------
+
+// Class overview analytics (from GET /analytics/class/{scheduleId})
+export interface ClassOverview {
+  schedule_id: string;
+  subject_code: string;
+  subject_name: string;
+  total_sessions: number;
+  average_attendance_rate: number; // Percentage (0-100)
+  total_enrolled: number;
+  early_leave_count: number;
+  anomaly_count: number;
+}
+
+// Student ranking within a class (from GET /analytics/class/{scheduleId}/ranking)
+export interface StudentRanking {
+  student_id: string;
+  student_name: string;
+  student_number: string | null;
+  attendance_rate: number; // Percentage (0-100)
+  sessions_attended: number;
+  sessions_total: number;
+  engagement_score: number | null; // Optional engagement metric
+}
+
+// At-risk student alert (from GET /analytics/at-risk)
+export interface AtRiskStudent {
+  student_id: string;
+  student_name: string;
+  student_number: string | null;
+  schedule_id: string;
+  subject_code: string;
+  subject_name: string;
+  attendance_rate: number; // Percentage (0-100)
+  sessions_missed: number;
+  sessions_total: number;
+  risk_level: 'low' | 'medium' | 'high' | 'critical';
+  last_attended: string | null; // ISO date or null if never attended
+}
+
+// Heatmap entry for daily attendance visualization
+export interface HeatmapEntry {
+  date: string; // ISO date (YYYY-MM-DD)
+  attendance_rate: number; // Percentage (0-100)
+  present_count: number;
+  total_enrolled: number;
+}
+
+// Student analytics dashboard (from GET /analytics/me/dashboard)
+export interface StudentAnalyticsDashboard {
+  overall_attendance_rate: number; // Percentage (0-100)
+  total_classes_attended: number;
+  total_classes: number;
+  current_streak: number; // Consecutive present days
+  longest_streak: number;
+  early_leave_count: number;
+  trend: 'improving' | 'stable' | 'declining';
+  rank_in_class: number | null;
+  total_students: number | null;
+}
+
+// Per-subject attendance breakdown (from GET /analytics/me/subjects)
+export interface SubjectBreakdown {
+  schedule_id: string;
+  subject_code: string;
+  subject_name: string;
+  attendance_rate: number; // Percentage (0-100)
+  sessions_attended: number;
+  sessions_total: number;
+  status: AttendanceStatus | 'good' | 'warning' | 'critical';
+  last_attended: string | null; // ISO date
+}
+
+// Anomaly detection item (from GET /analytics/anomalies)
+export interface AnomalyItem {
+  id: string;
+  type: 'proxy_attendance' | 'unusual_pattern' | 'bulk_absence' | 'time_anomaly';
+  severity: 'low' | 'medium' | 'high';
+  description: string;
+  student_id: string | null;
+  student_name: string | null;
+  schedule_id: string | null;
+  subject_name: string | null;
+  detected_at: string; // ISO datetime
+  resolved: boolean;
+  resolved_at: string | null;
+}
+
+// System-wide metrics (from GET /analytics/system/metrics, admin only)
+export interface SystemMetrics {
+  total_students: number;
+  total_faculty: number;
+  total_schedules: number;
+  total_sessions_today: number;
+  overall_attendance_rate: number; // Percentage (0-100)
+  at_risk_count: number;
+  anomaly_count: number;
+  active_sessions: number;
+}
+
+// Attendance prediction (from GET /analytics/predictions/{scheduleId})
+export interface AttendancePrediction {
+  date: string; // ISO date (YYYY-MM-DD)
+  predicted_attendance_rate: number; // Percentage (0-100)
+  predicted_present: number;
+  total_enrolled: number;
+  confidence: number; // 0-1 confidence score
+}

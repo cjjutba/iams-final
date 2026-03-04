@@ -16,9 +16,10 @@ from app.config import settings
 from app.database import Base
 # Import all models to ensure they're registered with Base.metadata
 from app.models import (
-    User, FaceRegistration, Room, Schedule, Enrollment,
+    User, FaceRegistration, FaceEmbedding, Room, Schedule, Enrollment,
     AttendanceRecord, PresenceLog, EarlyLeaveEvent, Notification,
-    StudentRecord, FacultyRecord
+    StudentRecord, FacultyRecord, EngagementScore, AttendanceAnomaly,
+    AttendancePrediction, NotificationPreference
 )
 
 # this is the Alembic Config object, which provides

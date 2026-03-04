@@ -13,7 +13,6 @@ import type {
   LiveAttendanceResponse,
   PresenceLog,
   EarlyLeaveEvent,
-  ApiResponse,
 } from '../types';
 
 interface AttendanceState {
@@ -55,16 +54,12 @@ export const useAttendanceStore = create<AttendanceState>((set, get) => ({
       if (startDate) params.start_date = startDate;
       if (endDate) params.end_date = endDate;
 
-      const response = await api.get<ApiResponse<AttendanceRecord[]>>('/attendance/me', { params });
+      const response = await api.get<AttendanceRecord[]>('/attendance/me', { params });
 
-      if (response.data && response.data.data) {
-        set({
-          myAttendance: response.data.data,
-          isLoading: false,
-        });
-      } else {
-        set({ isLoading: false });
-      }
+      set({
+        myAttendance: response.data ?? [],
+        isLoading: false,
+      });
     } catch (error) {
       console.error('Failed to fetch attendance:', error);
       set({
@@ -79,18 +74,14 @@ export const useAttendanceStore = create<AttendanceState>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const response = await api.get<ApiResponse<AttendanceRecord[]>>('/attendance/today', {
+      const response = await api.get<AttendanceRecord[]>('/attendance/today', {
         params: { schedule_id: scheduleId },
       });
 
-      if (response.data && response.data.data) {
-        set({
-          todayAttendance: response.data.data,
-          isLoading: false,
-        });
-      } else {
-        set({ isLoading: false });
-      }
+      set({
+        todayAttendance: response.data ?? [],
+        isLoading: false,
+      });
     } catch (error) {
       console.error('Failed to fetch today attendance:', error);
       set({
@@ -105,18 +96,14 @@ export const useAttendanceStore = create<AttendanceState>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const response = await api.get<ApiResponse<LiveAttendanceResponse>>(
+      const response = await api.get<LiveAttendanceResponse>(
         `/attendance/live/${scheduleId}`
       );
 
-      if (response.data && response.data.data) {
-        set({
-          liveAttendance: response.data.data,
-          isLoading: false,
-        });
-      } else {
-        set({ isLoading: false });
-      }
+      set({
+        liveAttendance: response.data ?? null,
+        isLoading: false,
+      });
     } catch (error) {
       console.error('Failed to fetch live attendance:', error);
       set({
@@ -131,18 +118,14 @@ export const useAttendanceStore = create<AttendanceState>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const response = await api.get<ApiResponse<PresenceLog[]>>(
+      const response = await api.get<PresenceLog[]>(
         `/attendance/${attendanceId}/logs`
       );
 
-      if (response.data && response.data.data) {
-        set({
-          presenceLogs: response.data.data,
-          isLoading: false,
-        });
-      } else {
-        set({ isLoading: false });
-      }
+      set({
+        presenceLogs: response.data ?? [],
+        isLoading: false,
+      });
     } catch (error) {
       console.error('Failed to fetch presence logs:', error);
       set({
@@ -157,18 +140,14 @@ export const useAttendanceStore = create<AttendanceState>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const response = await api.get<ApiResponse<AttendanceSummary>>('/attendance/me/summary', {
+      const response = await api.get<AttendanceSummary>('/attendance/me/summary', {
         params: { start_date: startDate, end_date: endDate },
       });
 
-      if (response.data && response.data.data) {
-        set({
-          summary: response.data.data,
-          isLoading: false,
-        });
-      } else {
-        set({ isLoading: false });
-      }
+      set({
+        summary: response.data ?? null,
+        isLoading: false,
+      });
     } catch (error) {
       console.error('Failed to fetch summary:', error);
       set({

@@ -75,6 +75,19 @@
 - Attendance logic: if check-in <= start_time + 15min → PRESENT, else → LATE
 - Tests that mock time (e.g., late detection) use `patch('app.services.presence_service.datetime')`
 
+### Live Stream System
+- **Service**: `backend/app/services/live_stream_service.py` - manages RTSP captures + frame processing
+- **Camera config**: `backend/app/services/camera_config.py` - room_id -> RTSP URL resolution
+- **Router**: `backend/app/routers/live_stream.py` - WebSocket at `/api/v1/stream/{schedule_id}`
+- **Settings**: `STREAM_FPS=3`, `STREAM_QUALITY=65`, `STREAM_WIDTH=1280`, `STREAM_HEIGHT=720`, `DEFAULT_RTSP_URL=""`
+- Room model already has `camera_endpoint` column -- used as first priority, `DEFAULT_RTSP_URL` as fallback
+- One RTSP `cv2.VideoCapture` per room, shared across WebSocket viewers
+- `LiveStreamService._active_streams` is class-level dict (shared across instances)
+- MediaPipe face detection lazy-initialized; FaceNet/FAISS lazy-checked; graceful degradation if unavailable
+- Detection enrichment (user name/student_id) requires DB session -- done at router layer via `enrich_detections()`
+- `mediapipe>=0.10.14` added to requirements.txt
+- Router mounted in main.py BEFORE websocket router
+
 ## Files NOT to Touch
 - face.py, websocket.py routers - handled by another agent
 - Database/migration files

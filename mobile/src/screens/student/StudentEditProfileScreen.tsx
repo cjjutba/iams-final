@@ -49,7 +49,7 @@ type PasswordData = z.infer<typeof passwordSchema>;
 
 export const StudentEditProfileScreen: React.FC = () => {
   const navigation = useNavigation();
-  const { user, loadUser } = useAuth();
+  const { user, refreshUser } = useAuth();
 
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -60,13 +60,13 @@ export const StudentEditProfileScreen: React.FC = () => {
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      await loadUser();
+      await refreshUser();
     } catch (error) {
       console.error('Failed to refresh user data:', error);
     } finally {
       setIsRefreshing(false);
     }
-  }, [loadUser]);
+  }, [refreshUser]);
 
   // ---------- profile form ----------
 
@@ -108,7 +108,7 @@ export const StudentEditProfileScreen: React.FC = () => {
       });
 
       // Reload user data so the rest of the app picks up the changes
-      await loadUser();
+      await refreshUser();
 
       Alert.alert('Success', 'Profile updated successfully');
     } catch (error: unknown) {

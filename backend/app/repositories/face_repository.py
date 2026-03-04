@@ -1,7 +1,7 @@
 """
 Face Repository
 
-Data access layer for FaceRegistration operations.
+Data access layer for FaceRegistration and FaceEmbedding operations.
 """
 
 import uuid
@@ -9,6 +9,7 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 
 from app.models.face_registration import FaceRegistration
+from app.models.face_embedding import FaceEmbedding
 from app.utils.exceptions import NotFoundError, DuplicateError
 
 
@@ -67,7 +68,7 @@ class FaceRepository:
 
     def create(self, user_id: str, embedding_id: int, embedding_vector: bytes) -> FaceRegistration:
         """
-        Create new face registration
+        Create new face registration (commits immediately).
 
         Args:
             user_id: User UUID
@@ -80,7 +81,18 @@ class FaceRepository:
         Raises:
             DuplicateError: If user already has active registration
         """
-        # Check if user already has active registration
+        registration = self._create_no_commit(user_id, embedding_id, embedding_vector)
+        self.db.commit()
+        self.db.refresh(registration)
+        return registration
+
+    def _create_no_commit(self, user_id: str, embedding_id: int, embedding_vector: bytes) -> FaceRegistration:
+        """
+        Create new face registration without committing.
+
+        Use when building a multi-row transaction (e.g. registration + embeddings).
+        Caller is responsible for db.commit().
+        """
         existing = self.get_by_user(user_id)
         if existing:
             raise DuplicateError(f"User already has active face registration: {user_id}")
@@ -91,8 +103,7 @@ class FaceRepository:
             embedding_vector=embedding_vector
         )
         self.db.add(registration)
-        self.db.commit()
-        self.db.refresh(registration)
+        self.db.flush()  # Assign PK (id) without committing
         return registration
 
     def deactivate(self, user_id: str) -> bool:
@@ -140,3 +151,79 @@ class FaceRepository:
     def count_active(self) -> int:
         """Get count of active face registrations"""
         return self.db.query(FaceRegistration).filter(FaceRegistration.is_active == True).count()
+
+    # ------------------------------------------------------------------
+    # Multi-embedding operations (FaceEmbedding table)
+    # ------------------------------------------------------------------
+
+    def create_embedding(
+        self,
+        registration_id: str,
+        faiss_id: int,
+        embedding_vector: bytes,
+        angle_label: Optional[str] = None,
+        quality_score: Optional[float] = None,
+    ) -> FaceEmbedding:
+        """Create a single FaceEmbedding row."""
+        emb = FaceEmbedding(
+            registration_id=uuid.UUID(registration_id),
+            faiss_id=faiss_id,
+            embedding_vector=embedding_vector,
+            angle_label=angle_label,
+            quality_score=quality_score,
+        )
+        self.db.add(emb)
+        return emb
+
+    def create_embeddings_batch(
+        self,
+        registration_id: str,
+        entries: List[dict],
+    ) -> List[FaceEmbedding]:
+        """
+        Batch-create FaceEmbedding rows.
+
+        Args:
+            registration_id: Parent FaceRegistration UUID.
+            entries: List of dicts with keys: faiss_id, embedding_vector,
+                     angle_label (optional), quality_score (optional).
+
+        Returns:
+            List of created FaceEmbedding instances (not yet committed).
+        """
+        reg_uuid = uuid.UUID(registration_id)
+        rows = []
+        for e in entries:
+            row = FaceEmbedding(
+                registration_id=reg_uuid,
+                faiss_id=e["faiss_id"],
+                embedding_vector=e["embedding_vector"],
+                angle_label=e.get("angle_label"),
+                quality_score=e.get("quality_score"),
+            )
+            self.db.add(row)
+            rows.append(row)
+        return rows
+
+    def get_embeddings_by_registration(
+        self, registration_id: str
+    ) -> List[FaceEmbedding]:
+        """Get all embeddings for a registration."""
+        return (
+            self.db.query(FaceEmbedding)
+            .filter(FaceEmbedding.registration_id == uuid.UUID(registration_id))
+            .all()
+        )
+
+    def get_all_active_embeddings(self) -> List[FaceEmbedding]:
+        """
+        Get all FaceEmbedding rows belonging to active registrations.
+
+        Used for FAISS index rebuild with multi-embedding storage.
+        """
+        return (
+            self.db.query(FaceEmbedding)
+            .join(FaceRegistration, FaceEmbedding.registration_id == FaceRegistration.id)
+            .filter(FaceRegistration.is_active == True)
+            .all()
+        )

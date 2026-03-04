@@ -23,7 +23,11 @@ import numpy as np
 import pytest
 
 from app.services.face_service import FaceService
+from app.services.ml.anti_spoof import SpoofResult
 from app.utils.exceptions import ValidationError, FaceRecognitionError, NotFoundError
+
+# Default passing anti-spoof result for tests
+_PASS_SPOOF = SpoofResult(is_live=True, spoof_score=0.9, method="mock", details={})
 
 
 # ---------------------------------------------------------------------------
@@ -52,11 +56,13 @@ def _make_face_service(db_session):
     """
     service = FaceService(db_session)
 
-    mock_facenet = MagicMock()
-    mock_facenet.generate_embedding = MagicMock(return_value=_make_embedding())
+    mock_facenet = MagicMock(spec=['get_embedding', 'get_embeddings_batch', 'app', 'load_model'])
+    mock_facenet.get_embedding = MagicMock(return_value=_make_embedding())
 
     mock_faiss = MagicMock()
     mock_faiss.add = MagicMock(return_value=0)
+    # add_batch returns sequential FAISS IDs starting from 0
+    mock_faiss.add_batch = MagicMock(side_effect=lambda embs, uids: list(range(len(uids))))
     mock_faiss.save = MagicMock()
     mock_faiss.search = MagicMock(return_value=[])
     mock_faiss.rebuild = MagicMock()
@@ -81,38 +87,41 @@ def _make_face_service(db_session):
 # register_face
 # ===================================================================
 
+@patch("app.services.face_service.anti_spoof_detector")
 class TestFaceServiceRegister:
     """Tests for FaceService.register_face"""
 
     @pytest.mark.asyncio
-    async def test_register_face_success_3_images(self, db_session):
+    async def test_register_face_success_3_images(self, mock_antispoof, db_session):
         """Registering with exactly 3 images (minimum) should succeed."""
+        mock_antispoof.check_registration_set.return_value = _PASS_SPOOF
         service, mock_fn, mock_faiss = _make_face_service(db_session)
         user_id = str(uuid.uuid4())
         images = [_make_mock_upload_file() for _ in range(3)]
 
-        faiss_id, msg = await service.register_face(user_id, images)
+        faiss_id, msg, quality_reports = await service.register_face(user_id, images)
 
         assert faiss_id == 0
         assert "successfully" in msg.lower()
-        assert mock_fn.generate_embedding.call_count == 3
-        mock_faiss.add.assert_called_once()
+        assert mock_fn.get_embedding.call_count == 3
+        mock_faiss.add_batch.assert_called_once()
         mock_faiss.save.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_register_face_success_5_images(self, db_session):
+    async def test_register_face_success_5_images(self, mock_antispoof, db_session):
         """Registering with exactly 5 images (maximum) should succeed."""
+        mock_antispoof.check_registration_set.return_value = _PASS_SPOOF
         service, mock_fn, mock_faiss = _make_face_service(db_session)
         user_id = str(uuid.uuid4())
         images = [_make_mock_upload_file() for _ in range(5)]
 
-        faiss_id, msg = await service.register_face(user_id, images)
+        faiss_id, msg, _ = await service.register_face(user_id, images)
 
         assert faiss_id == 0
-        assert mock_fn.generate_embedding.call_count == 5
+        assert mock_fn.get_embedding.call_count == 5
 
     @pytest.mark.asyncio
-    async def test_register_face_too_few_images(self, db_session):
+    async def test_register_face_too_few_images(self, mock_antispoof, db_session):
         """Providing fewer than MIN_FACE_IMAGES should raise ValidationError."""
         service, _, _ = _make_face_service(db_session)
         user_id = str(uuid.uuid4())
@@ -122,7 +131,7 @@ class TestFaceServiceRegister:
             await service.register_face(user_id, images)
 
     @pytest.mark.asyncio
-    async def test_register_face_too_many_images(self, db_session):
+    async def test_register_face_too_many_images(self, mock_antispoof, db_session):
         """Providing more than MAX_FACE_IMAGES should raise ValidationError."""
         service, _, _ = _make_face_service(db_session)
         user_id = str(uuid.uuid4())
@@ -132,7 +141,7 @@ class TestFaceServiceRegister:
             await service.register_face(user_id, images)
 
     @pytest.mark.asyncio
-    async def test_register_face_duplicate_user(self, db_session, test_face_registration):
+    async def test_register_face_duplicate_user(self, mock_antispoof, db_session, test_face_registration):
         """Registering a user who already has a face should raise ValidationError."""
         service, _, _ = _make_face_service(db_session)
         user_id = str(test_face_registration.user_id)
@@ -142,10 +151,10 @@ class TestFaceServiceRegister:
             await service.register_face(user_id, images)
 
     @pytest.mark.asyncio
-    async def test_register_face_embedding_failure(self, db_session):
+    async def test_register_face_embedding_failure(self, mock_antispoof, db_session):
         """If FaceNet raises ValueError, service should raise FaceRecognitionError."""
         service, mock_fn, _ = _make_face_service(db_session)
-        mock_fn.generate_embedding.side_effect = ValueError("No face detected")
+        mock_fn.get_embedding.side_effect = ValueError("No face detected")
 
         user_id = str(uuid.uuid4())
         images = [_make_mock_upload_file() for _ in range(3)]
@@ -154,10 +163,11 @@ class TestFaceServiceRegister:
             await service.register_face(user_id, images)
 
     @pytest.mark.asyncio
-    async def test_register_face_faiss_add_failure(self, db_session):
-        """If FAISS add fails, service should raise FaceRecognitionError."""
+    async def test_register_face_faiss_add_failure(self, mock_antispoof, db_session):
+        """If FAISS add_batch fails, service should raise FaceRecognitionError."""
+        mock_antispoof.check_registration_set.return_value = _PASS_SPOOF
         service, _, mock_faiss = _make_face_service(db_session)
-        mock_faiss.add.side_effect = RuntimeError("Index not initialized")
+        mock_faiss.add_batch.side_effect = RuntimeError("Index not initialized")
 
         user_id = str(uuid.uuid4())
         images = [_make_mock_upload_file() for _ in range(3)]
@@ -166,37 +176,46 @@ class TestFaceServiceRegister:
             await service.register_face(user_id, images)
 
     @pytest.mark.asyncio
-    async def test_register_face_averages_embeddings(self, db_session):
-        """The averaged embedding passed to FAISS should be L2-normalised."""
+    async def test_register_stores_individual_embeddings(self, mock_antispoof, db_session):
+        """Each embedding passed to FAISS add_batch should be L2-normalised."""
+        mock_antispoof.check_registration_set.return_value = _PASS_SPOOF
         service, mock_fn, mock_faiss = _make_face_service(db_session)
 
-        # Use fixed embeddings so we can predict the average
         emb1 = np.ones(512, dtype=np.float32)
         emb2 = np.ones(512, dtype=np.float32) * 2
         emb3 = np.ones(512, dtype=np.float32) * 3
-        mock_fn.generate_embedding.side_effect = [emb1, emb2, emb3]
+        mock_fn.get_embedding.side_effect = [emb1, emb2, emb3]
 
         user_id = str(uuid.uuid4())
         images = [_make_mock_upload_file() for _ in range(3)]
 
         await service.register_face(user_id, images)
 
-        # The embedding passed to faiss.add should be L2-normalised
-        call_args = mock_faiss.add.call_args
-        added_embedding = call_args[0][0]
-        norm = np.linalg.norm(added_embedding)
-        assert abs(norm - 1.0) < 1e-5, f"Embedding norm should be ~1.0, got {norm}"
+        # add_batch should receive 3 individually L2-normalised embeddings
+        mock_faiss.add_batch.assert_called_once()
+        call_args = mock_faiss.add_batch.call_args
+        batch_embs = call_args[0][0]  # First positional arg: numpy array [3, 512]
+        user_ids = call_args[0][1]    # Second positional arg: list of user_ids
+        assert batch_embs.shape == (3, 512)
+        assert len(user_ids) == 3
+        assert all(uid == user_id for uid in user_ids)
+        for i in range(3):
+            norm = np.linalg.norm(batch_embs[i])
+            assert abs(norm - 1.0) < 1e-5, f"Embedding {i} norm should be ~1.0, got {norm}"
 
     @pytest.mark.asyncio
-    async def test_register_face_saves_to_db(self, db_session):
-        """After successful registration the DB should contain a FaceRegistration row."""
+    async def test_register_face_saves_to_db(self, mock_antispoof, db_session):
+        """After successful registration the DB should contain a FaceRegistration row
+        and individual FaceEmbedding rows."""
+        mock_antispoof.check_registration_set.return_value = _PASS_SPOOF
         from app.models.face_registration import FaceRegistration
+        from app.models.face_embedding import FaceEmbedding
 
         service, _, _ = _make_face_service(db_session)
         user_id = str(uuid.uuid4())
         images = [_make_mock_upload_file() for _ in range(3)]
 
-        faiss_id, _ = await service.register_face(user_id, images)
+        faiss_id, _, _ = await service.register_face(user_id, images)
 
         row = db_session.query(FaceRegistration).filter(
             FaceRegistration.user_id == uuid.UUID(user_id)
@@ -205,6 +224,79 @@ class TestFaceServiceRegister:
         assert row.embedding_id == faiss_id
         assert row.is_active is True
         assert row.embedding_vector is not None
+
+        # Verify individual FaceEmbedding rows were created
+        emb_rows = db_session.query(FaceEmbedding).filter(
+            FaceEmbedding.registration_id == row.id
+        ).all()
+        assert len(emb_rows) == 3
+        assert emb_rows[0].angle_label == "center"
+        assert emb_rows[1].angle_label == "left"
+        assert emb_rows[2].angle_label == "right"
+
+
+# ===================================================================
+# register_face with quality gating
+# ===================================================================
+
+@patch("app.services.face_service.anti_spoof_detector")
+class TestFaceServiceRegisterQuality:
+    """Tests for quality gating during registration."""
+
+    @pytest.mark.asyncio
+    async def test_register_with_quality_gating_success(self, mock_antispoof, db_session):
+        """When quality checks pass, registration should return quality reports."""
+        mock_antispoof.check_registration_set.return_value = _PASS_SPOOF
+        service = FaceService(db_session)
+        user_id = str(uuid.uuid4())
+
+        good_image_bgr = np.random.RandomState(42).randint(
+            60, 200, (320, 320, 3), dtype=np.uint8
+        )
+        mock_facenet = MagicMock()
+        mock_facenet.get_face_with_quality = MagicMock(return_value={
+            "embedding": _make_embedding(),
+            "det_score": 0.95,
+            "bbox": (50, 50, 200, 200),
+            "image_bgr": good_image_bgr,
+        })
+
+        mock_faiss = MagicMock()
+        mock_faiss.add_batch = MagicMock(side_effect=lambda embs, uids: list(range(len(uids))))
+        mock_faiss.save = MagicMock()
+
+        service.facenet = mock_facenet
+        service.faiss = mock_faiss
+
+        images = [_make_mock_upload_file() for _ in range(3)]
+        faiss_id, msg, quality_reports = await service.register_face(user_id, images)
+
+        assert faiss_id == 0
+        assert quality_reports is not None
+        assert len(quality_reports) == 3
+        assert all(q.passed for q in quality_reports)
+
+    @pytest.mark.asyncio
+    async def test_register_rejects_blurry_image(self, mock_antispoof, db_session):
+        """When an image is too blurry, registration should raise ValidationError."""
+        service = FaceService(db_session)
+        user_id = str(uuid.uuid4())
+
+        blurry_image = np.ones((320, 320, 3), dtype=np.uint8) * 128
+        mock_facenet = MagicMock()
+        mock_facenet.get_face_with_quality = MagicMock(return_value={
+            "embedding": _make_embedding(),
+            "det_score": 0.95,
+            "bbox": (50, 50, 200, 200),
+            "image_bgr": blurry_image,
+        })
+
+        service.facenet = mock_facenet
+        service.faiss = MagicMock()
+
+        images = [_make_mock_upload_file() for _ in range(3)]
+        with pytest.raises(ValidationError, match="rejected"):
+            await service.register_face(user_id, images)
 
 
 # ===================================================================
@@ -253,7 +345,7 @@ class TestFaceServiceRecognize:
     async def test_recognize_face_embedding_error(self, db_session):
         """If FaceNet fails, recognize_face should raise FaceRecognitionError."""
         service, mock_fn, _ = _make_face_service(db_session)
-        mock_fn.generate_embedding.side_effect = ValueError("No face detected")
+        mock_fn.get_embedding.side_effect = ValueError("No face detected")
 
         with pytest.raises(FaceRecognitionError, match="Face recognition failed"):
             await service.recognize_face(b"bad_image")
@@ -264,52 +356,75 @@ class TestFaceServiceRecognize:
 # ===================================================================
 
 class TestFaceServiceRecognizeBatch:
-    """Tests for FaceService.recognize_batch"""
+    """Tests for FaceService.recognize_batch (batch embedding + batch FAISS search)"""
 
     @pytest.mark.asyncio
     async def test_recognize_batch_all_matched(self, db_session):
         """Batch recognition should return a result dict for every input image."""
-        service, _, mock_faiss = _make_face_service(db_session)
+        service, _, _ = _make_face_service(db_session)
         uid1 = str(uuid.uuid4())
         uid2 = str(uuid.uuid4())
-        mock_faiss.search.side_effect = [
-            [(uid1, 0.90)],
-            [(uid2, 0.75)],
-        ]
 
-        results = await service.recognize_batch([b"img1", b"img2"])
+        emb_batch = np.stack([_make_embedding(), _make_embedding()])
+
+        with patch("app.services.face_service.Image") as mock_pil, \
+             patch("app.services.face_service.insightface_model") as mock_fn, \
+             patch("app.services.face_service.faiss_manager") as mock_faiss:
+            # Phase 1: decoding returns mock PIL images
+            mock_pil.open.return_value.convert.return_value = MagicMock()
+            # Phase 2: batch embedding
+            mock_fn.get_embeddings_batch.return_value = emb_batch
+            # Phase 3: batch FAISS search — one result list per query
+            mock_faiss.search_batch.return_value = [
+                [(uid1, 0.90)],
+                [(uid2, 0.75)],
+            ]
+
+            results = await service.recognize_batch([b"img1", b"img2"])
 
         assert len(results) == 2
-        assert results[0]["matched"] is True
         assert results[0]["user_id"] == uid1
-        assert results[1]["matched"] is True
+        assert results[0]["confidence"] == pytest.approx(0.90)
         assert results[1]["user_id"] == uid2
+        assert results[1]["confidence"] == pytest.approx(0.75)
 
     @pytest.mark.asyncio
     async def test_recognize_batch_partial_failure(self, db_session):
-        """If one image fails, the others should still be processed; failed entry gets error key."""
-        service, mock_fn, mock_faiss = _make_face_service(db_session)
-
-        # First call succeeds, second raises
+        """If one image fails to decode, the others should still be processed; failed entry gets error key."""
+        service, _, _ = _make_face_service(db_session)
         uid = str(uuid.uuid4())
-        call_count = 0
 
-        def _side_effect(img_bytes):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 2:
-                raise ValueError("Corrupt image")
-            return _make_embedding()
+        emb_batch = np.stack([_make_embedding()])
 
-        mock_fn.generate_embedding.side_effect = _side_effect
-        mock_faiss.search.return_value = [(uid, 0.80)]
+        with patch("app.services.face_service.Image") as mock_pil, \
+             patch("app.services.face_service.insightface_model") as mock_fn, \
+             patch("app.services.face_service.faiss_manager") as mock_faiss:
+            # First image decodes fine, second raises
+            good_img = MagicMock()
+            mock_convert = MagicMock()
 
-        results = await service.recognize_batch([b"good", b"bad"])
+            call_count = 0
+            def _open_side_effect(*args, **kwargs):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 2:
+                    raise ValueError("Corrupt image")
+                return mock_convert
+
+            mock_pil.open.side_effect = _open_side_effect
+            mock_convert.convert.return_value = good_img
+
+            mock_fn.get_embeddings_batch.return_value = emb_batch
+            mock_faiss.search_batch.return_value = [[(uid, 0.80)]]
+
+            results = await service.recognize_batch([b"good", b"bad"])
 
         assert len(results) == 2
-        assert results[0]["matched"] is True
-        # Second result should indicate failure
-        assert results[1]["matched"] is False
+        # First result (index 0) should be a match
+        assert results[0]["user_id"] == uid
+        assert results[0]["confidence"] == pytest.approx(0.80)
+        # Second result (index 1) should indicate failure
+        assert results[1]["user_id"] is None
         assert "error" in results[1]
 
 
@@ -350,12 +465,14 @@ class TestFaceServiceDeregister:
 # reregister_face
 # ===================================================================
 
+@patch("app.services.face_service.anti_spoof_detector")
 class TestFaceServiceReregister:
     """Tests for FaceService.reregister_face"""
 
     @pytest.mark.asyncio
-    async def test_reregister_face_replaces_old(self, db_session, test_face_registration):
+    async def test_reregister_face_replaces_old(self, mock_antispoof, db_session, test_face_registration):
         """Re-register should delete old registration and create new one."""
+        mock_antispoof.check_registration_set.return_value = _PASS_SPOOF
         from app.models.face_registration import FaceRegistration
 
         service, mock_fn, mock_faiss = _make_face_service(db_session)
@@ -363,7 +480,7 @@ class TestFaceServiceReregister:
         old_id = test_face_registration.id
         images = [_make_mock_upload_file() for _ in range(3)]
 
-        faiss_id, msg = await service.reregister_face(user_id, images)
+        faiss_id, msg, _ = await service.reregister_face(user_id, images)
 
         assert "re-registered" in msg.lower()
         # Old registration should be gone
@@ -380,13 +497,14 @@ class TestFaceServiceReregister:
         assert new_row is not None
 
     @pytest.mark.asyncio
-    async def test_reregister_face_no_previous(self, db_session):
+    async def test_reregister_face_no_previous(self, mock_antispoof, db_session):
         """Re-register with no previous registration should still succeed (acts like first register)."""
+        mock_antispoof.check_registration_set.return_value = _PASS_SPOOF
         service, _, _ = _make_face_service(db_session)
         user_id = str(uuid.uuid4())
         images = [_make_mock_upload_file() for _ in range(3)]
 
-        faiss_id, msg = await service.reregister_face(user_id, images)
+        faiss_id, msg, _ = await service.reregister_face(user_id, images)
 
         assert "re-registered" in msg.lower()
         assert faiss_id == 0
@@ -515,3 +633,65 @@ class TestFaceServiceLoadIndex:
 
         mock_faiss.load_or_create_index.assert_called_once()
         assert len(mock_faiss.user_map) == 0
+
+
+# ===================================================================
+# reconcile_faiss_index
+# ===================================================================
+
+class TestFaceServiceReconcileIndex:
+    """Tests for FaceService.reconcile_faiss_index (startup user_map restoration)"""
+
+    def test_reconcile_always_rebuilds_user_map_when_counts_match(
+        self, db_session, test_face_registration
+    ):
+        """
+        Even when FAISS vector count equals active DB registrations,
+        reconcile must call faiss_manager.rebuild to populate user_map.
+
+        Regression test: previously the 'counts match' branch did nothing,
+        leaving user_map empty after every normal server restart, which
+        caused all face matches to be silently dropped.
+        """
+        with patch("app.services.face_service.faiss_manager") as mock_faiss:
+            mock_index = MagicMock()
+            mock_index.ntotal = 1  # matches the 1 active DB registration
+            mock_faiss.index = mock_index
+            mock_faiss.rebuild = MagicMock()
+
+            result = FaceService.reconcile_faiss_index(db_session)
+
+        # No mismatch → should return False
+        assert result is False
+        # rebuild must still be called to populate user_map
+        mock_faiss.rebuild.assert_called_once()
+        embeddings_data = mock_faiss.rebuild.call_args[0][0]
+        assert len(embeddings_data) == 1
+        _, uid = embeddings_data[0]
+        assert uid == str(test_face_registration.user_id)
+
+    def test_reconcile_rebuilds_on_mismatch(self, db_session, test_face_registration):
+        """When FAISS count differs from DB count, reconcile rebuilds and returns True."""
+        with patch("app.services.face_service.faiss_manager") as mock_faiss:
+            mock_index = MagicMock()
+            mock_index.ntotal = 0  # mismatch: DB has 1, FAISS has 0
+            mock_faiss.index = mock_index
+            mock_faiss.rebuild = MagicMock()
+
+            result = FaceService.reconcile_faiss_index(db_session)
+
+        assert result is True
+        mock_faiss.rebuild.assert_called_once()
+
+    def test_reconcile_skips_rebuild_when_no_registrations(self, db_session):
+        """With no active registrations, reconcile should not call rebuild."""
+        with patch("app.services.face_service.faiss_manager") as mock_faiss:
+            mock_index = MagicMock()
+            mock_index.ntotal = 0
+            mock_faiss.index = mock_index
+            mock_faiss.rebuild = MagicMock()
+
+            result = FaceService.reconcile_faiss_index(db_session)
+
+        assert result is False
+        mock_faiss.rebuild.assert_not_called()

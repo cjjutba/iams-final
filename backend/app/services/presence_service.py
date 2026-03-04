@@ -7,6 +7,7 @@ This is the core service that implements IAMS's unique feature:
 continuous attendance tracking throughout the class session.
 """
 
+import asyncio
 from typing import Dict, List, Optional
 from datetime import datetime, date, time, timedelta
 from sqlalchemy.orm import Session
@@ -21,6 +22,36 @@ from app.services.tracking_service import get_tracking_service, Detection
 from app.services import session_manager
 from app.utils.exceptions import NotFoundError, ValidationError
 from app.config import settings, logger
+
+
+def compute_early_leave_severity(
+    leave_time: datetime,
+    class_start: time,
+    class_end: time,
+) -> str:
+    """Compute context-aware severity based on when in class the leave occurred.
+
+    - Near start (<30% elapsed) → "high"
+    - Mid class (30-85% elapsed) → "medium"
+    - Near end (>85% elapsed) → "low"
+    """
+    now_time = leave_time.time()
+    start_secs = class_start.hour * 3600 + class_start.minute * 60 + class_start.second
+    end_secs = class_end.hour * 3600 + class_end.minute * 60 + class_end.second
+    now_secs = now_time.hour * 3600 + now_time.minute * 60 + now_time.second
+
+    total_duration = end_secs - start_secs
+    if total_duration <= 0:
+        return "medium"
+
+    elapsed = now_secs - start_secs
+    ratio = elapsed / total_duration
+
+    if ratio < 0.30:
+        return "high"
+    elif ratio > 0.85:
+        return "low"
+    return "medium"
 
 
 class SessionState:
@@ -71,6 +102,7 @@ class PresenceService:
 
     # Class-level shared state: sessions persist across all instances/requests
     _active_sessions: Dict[str, SessionState] = {}
+    _lock = asyncio.Lock()
 
     def __init__(self, db: Session, ws_manager=None):
         self.db = db
@@ -105,66 +137,67 @@ class PresenceService:
         Raises:
             NotFoundError: If schedule not found
         """
-        # Check if session already active
-        if schedule_id in self.active_sessions:
-            logger.warning(f"Session already active for schedule {schedule_id}")
-            return self.active_sessions[schedule_id]
+        async with self._lock:
+            # Check if session already active
+            if schedule_id in self.active_sessions:
+                logger.warning(f"Session already active for schedule {schedule_id}")
+                return self.active_sessions[schedule_id]
 
-        # Get schedule
-        schedule = self.schedule_repo.get_by_id(schedule_id)
-        if not schedule:
-            raise NotFoundError(f"Schedule not found: {schedule_id}")
+            # Get schedule
+            schedule = self.schedule_repo.get_by_id(schedule_id)
+            if not schedule:
+                raise NotFoundError(f"Schedule not found: {schedule_id}")
 
-        logger.info(f"Starting session for schedule {schedule_id} ({schedule.subject_code})")
+            logger.info(f"Starting session for schedule {schedule_id} ({schedule.subject_code})")
 
-        # Create session state
-        session = SessionState(schedule_id, schedule)
+            # Create session state
+            session = SessionState(schedule_id, schedule)
 
-        # Get enrolled students
-        students = self.schedule_repo.get_enrolled_students(schedule_id)
+            # Get enrolled students
+            students = self.schedule_repo.get_enrolled_students(schedule_id)
 
-        # Create attendance records for all students (initially absent)
-        today = date.today()
-        for student in students:
-            # Check if record already exists
-            existing = self.attendance_repo.get_by_student_date(
-                str(student.id),
-                schedule_id,
-                today
-            )
+            # Create attendance records for all students (initially absent)
+            today = date.today()
+            for student in students:
+                # Check if record already exists
+                existing = self.attendance_repo.get_by_student_date(
+                    str(student.id),
+                    schedule_id,
+                    today
+                )
 
-            if not existing:
-                # Create new attendance record
-                record = self.attendance_repo.create({
-                    "student_id": str(student.id),
-                    "schedule_id": schedule_id,
-                    "date": today,
-                    "status": AttendanceStatus.ABSENT,
-                    "total_scans": 0,
-                    "scans_present": 0,
-                    "presence_score": 0.0
-                })
-                attendance_id = str(record.id)
-            else:
-                attendance_id = str(existing.id)
+                if not existing:
+                    # Create new attendance record
+                    record = self.attendance_repo.create({
+                        "student_id": str(student.id),
+                        "schedule_id": schedule_id,
+                        "date": today,
+                        "status": AttendanceStatus.ABSENT,
+                        "total_scans": 0,
+                        "scans_present": 0,
+                        "presence_score": 0.0
+                    })
+                    attendance_id = str(record.id)
+                else:
+                    attendance_id = str(existing.id)
 
-            # Add to session tracking
-            session.add_student(str(student.id), attendance_id)
+                # Add to session tracking
+                session.add_student(str(student.id), attendance_id)
 
-        # Store active session
-        self.active_sessions[schedule_id] = session
+            # Store active session
+            self.active_sessions[schedule_id] = session
 
-        # Initialize tracking session
-        self.tracking_service.start_session(schedule_id)
+            # Initialize tracking session
+            self.tracking_service.start_session(schedule_id)
 
-        # Register in global session manager for cross-module access
-        session_manager.register_session(schedule_id, {
-            "subject_code": schedule.subject_code,
-            "subject_name": schedule.subject_name,
-            "student_count": len(students)
-        })
+            # Register in global session manager for cross-module access
+            session_manager.register_session(schedule_id, {
+                "subject_code": schedule.subject_code,
+                "subject_name": schedule.subject_name,
+                "student_count": len(students)
+            })
 
-        # Notify faculty via WebSocket
+        # Notify faculty via WebSocket (outside lock — no session mutation)
         if self.notification_service:
             try:
                 await self.notification_service.notify_session_start(schedule_id)
@@ -174,6 +207,29 @@ class PresenceService:
         logger.info(f"Session started with {len(students)} students")
 
         return session
+
+    async def feed_detection(
+        self,
+        schedule_id: str,
+        user_id: str,
+        confidence: float,
+        bbox: Optional[List[float]] = None
+    ):
+        """Feed a detection into the tracking service without updating attendance.
+        Attendance updates happen solely in run_scan_cycle()."""
+        async with self._lock:
+            if schedule_id not in self.active_sessions:
+                logger.debug(f"No active session for {schedule_id}, skipping detection feed")
+                return
+
+        detection = Detection(
+            bbox=bbox or [0, 0, 0, 0],
+            confidence=1.0,
+            user_id=user_id,
+            recognition_confidence=confidence,
+        )
+        self.tracking_service.update(schedule_id, [detection])
+        logger.debug(f"Fed detection to tracking: user={user_id}, schedule={schedule_id}")
 
     async def log_detection(
         self,
@@ -194,22 +250,29 @@ class PresenceService:
             confidence: Recognition confidence (0-1)
             bbox: Optional bounding box [x1, y1, x2, y2]
         """
-        # Check if session is active
+        # Auto-start session if not active (outside lock to avoid deadlock
+        # since start_session also acquires _lock)
         if schedule_id not in self.active_sessions:
             logger.warning(f"No active session for schedule {schedule_id}, auto-starting...")
             await self.start_session(schedule_id)
 
-        session = self.active_sessions[schedule_id]
+        # Acquire lock to safely read/write session state
+        async with self._lock:
+            session = self.active_sessions.get(schedule_id)
+            if session is None:
+                logger.error(f"Session unexpectedly missing for schedule {schedule_id}")
+                return
 
-        # Check if student is in this session
-        if user_id not in session.student_states:
-            logger.warning(f"Student {user_id} not enrolled in schedule {schedule_id}")
-            return
+            # Check if student is in this session
+            if user_id not in session.student_states:
+                logger.warning(f"Student {user_id} not enrolled in schedule {schedule_id}")
+                return
 
-        student_state = session.student_states[user_id]
-        attendance_id = student_state["attendance_id"]
+            student_state = session.student_states[user_id]
+            attendance_id = student_state["attendance_id"]
+            scan_number = session.scan_count
 
-        # Get attendance record
+        # DB and tracking operations (outside lock — no session mutation)
         attendance = self.attendance_repo.get_by_id(attendance_id)
         if not attendance:
             logger.error(f"Attendance record not found: {attendance_id}")
@@ -260,11 +323,13 @@ class PresenceService:
                 except Exception as e:
                     logger.error(f"Failed to send attendance update notification: {e}")
 
-        # Reset consecutive misses counter
-        session.update_student(user_id, detected=True)
+        # Re-acquire lock to update session state
+        async with self._lock:
+            session = self.active_sessions.get(schedule_id)
+            if session:
+                session.update_student(user_id, detected=True)
 
         # Log presence
-        scan_number = session.scan_count
         self.attendance_repo.log_presence(attendance_id, {
             "scan_number": scan_number,
             "scan_time": datetime.now(),
@@ -314,26 +379,37 @@ class PresenceService:
         Args:
             schedule_id: Schedule UUID
         """
-        if schedule_id not in self.active_sessions:
-            return
+        # Snapshot session state under lock
+        async with self._lock:
+            if schedule_id not in self.active_sessions:
+                return
 
-        session = self.active_sessions[schedule_id]
-        session.scan_count += 1
+            session = self.active_sessions[schedule_id]
+            session.scan_count += 1
+            scan_count = session.scan_count
+            student_snapshot = {
+                sid: {
+                    "attendance_id": s["attendance_id"],
+                    "early_leave_flagged": s["early_leave_flagged"],
+                }
+                for sid, s in session.student_states.items()
+            }
 
-        logger.debug(f"Processing scan #{session.scan_count} for schedule {schedule_id}")
+        logger.debug(f"Processing scan #{scan_count} for schedule {schedule_id}")
 
-        # Get currently identified users from tracking service
+        # Get currently identified users from tracking service (no lock needed)
         identified_users = self.tracking_service.get_identified_users(schedule_id)
         present_user_ids = set(identified_users.keys())
 
         logger.debug(
-            f"Scan #{session.scan_count}: {len(present_user_ids)} students detected "
+            f"Scan #{scan_count}: {len(present_user_ids)} students detected "
             f"(tracking stats: {self.tracking_service.get_session_stats(schedule_id)})"
         )
 
         # Check each enrolled student
-        for student_id, student_state in session.student_states.items():
-            attendance_id = student_state["attendance_id"]
+        early_leave_candidates = []
+        for student_id, snap in student_snapshot.items():
+            attendance_id = snap["attendance_id"]
 
             # Get attendance record
             attendance = self.attendance_repo.get_by_id(attendance_id)
@@ -344,24 +420,24 @@ class PresenceService:
             if attendance.status == AttendanceStatus.ABSENT:
                 continue
 
-            # Skip if already flagged for early leave
-            if student_state["early_leave_flagged"]:
+            # Handle return detection for previously flagged students
+            if snap["early_leave_flagged"]:
+                is_present_now = student_id in present_user_ids
+                if is_present_now:
+                    await self._handle_early_leave_return(attendance_id, student_id)
                 continue
 
             # Check if student is currently present (detected by tracker)
             is_present = student_id in present_user_ids
 
             if is_present:
-                # Student detected - reset miss counter
-                session.update_student(student_id, detected=True)
-
                 # Get recognition confidence from track
                 track = identified_users[student_id]
                 confidence = track.recognition_confidence
 
                 # Log presence
                 self.attendance_repo.log_presence(attendance_id, {
-                    "scan_number": session.scan_count,
+                    "scan_number": scan_count,
                     "scan_time": datetime.now(),
                     "detected": True,
                     "confidence": confidence
@@ -379,12 +455,9 @@ class PresenceService:
                 })
 
             else:
-                # Student not detected - increment miss counter
-                session.update_student(student_id, detected=False)
-
                 # Log as not detected
                 self.attendance_repo.log_presence(attendance_id, {
-                    "scan_number": session.scan_count,
+                    "scan_number": scan_count,
                     "scan_time": datetime.now(),
                     "detected": False,
                     "confidence": None
@@ -399,11 +472,19 @@ class PresenceService:
                     "presence_score": presence_score
                 })
 
-                # Check if should flag early leave
-                consecutive_misses = student_state["consecutive_misses"]
-                if consecutive_misses >= settings.EARLY_LEAVE_THRESHOLD:
-                    await self.flag_early_leave(attendance_id, student_id, consecutive_misses)
-                    student_state["early_leave_flagged"] = True
+            # Update session state under lock after DB ops
+            async with self._lock:
+                if schedule_id in self.active_sessions:
+                    self.active_sessions[schedule_id].update_student(student_id, detected=is_present)
+                    if not is_present:
+                        consecutive_misses = self.active_sessions[schedule_id].student_states[student_id]["consecutive_misses"]
+                        if consecutive_misses >= settings.EARLY_LEAVE_THRESHOLD:
+                            early_leave_candidates.append((attendance_id, student_id, consecutive_misses))
+                            self.active_sessions[schedule_id].student_states[student_id]["early_leave_flagged"] = True
+
+        # Handle early leave flagging outside per-student loop (WebSocket calls inside)
+        for attendance_id, student_id, consecutive_misses in early_leave_candidates:
+            await self.flag_early_leave(attendance_id, student_id, consecutive_misses)
 
     async def flag_early_leave(
         self,
@@ -440,13 +521,28 @@ class PresenceService:
                 last_seen = log.scan_time
                 break
 
+        # Compute context severity based on schedule
+        severity = "medium"
+        schedule = getattr(attendance, 'schedule', None)
+        if schedule:
+            s_time = getattr(schedule, 'start_time', None)
+            e_time = getattr(schedule, 'end_time', None)
+            if s_time and e_time and hasattr(s_time, 'hour') and hasattr(e_time, 'hour'):
+                try:
+                    severity = compute_early_leave_severity(
+                        datetime.now(), s_time, e_time
+                    )
+                except (TypeError, AttributeError):
+                    pass
+
         # Create early leave event
         event = self.attendance_repo.create_early_leave_event({
             "attendance_id": attendance_id,
             "detected_at": datetime.now(),
             "last_seen_at": last_seen or attendance.check_in_time,
             "consecutive_misses": consecutive_misses,
-            "notified": False
+            "notified": False,
+            "context_severity": severity,
         })
 
         logger.info(f"Early leave event created: {event.id}")
@@ -458,6 +554,49 @@ class PresenceService:
             except Exception as e:
                 logger.error(f"Failed to send early leave notification: {e}")
 
+    async def _handle_early_leave_return(self, attendance_id: str, student_id: str):
+        """Handle a student returning after being flagged for early leave.
+
+        Updates the most recent early leave event with return info.
+        """
+        from app.models.early_leave_event import EarlyLeaveEvent
+
+        # Find the most recent unflagged-returned event for this attendance
+        event = (
+            self.db.query(EarlyLeaveEvent)
+            .filter(
+                EarlyLeaveEvent.attendance_id == attendance_id,
+                EarlyLeaveEvent.returned == False,
+            )
+            .order_by(EarlyLeaveEvent.detected_at.desc())
+            .first()
+        )
+
+        if not event:
+            return
+
+        now = datetime.now()
+        event.returned = True
+        event.returned_at = now
+        event.absence_duration_seconds = int((now - event.detected_at).total_seconds())
+        self.db.commit()
+
+        logger.info(
+            f"Student {student_id} returned after early leave "
+            f"(absent {event.absence_duration_seconds}s, severity={event.context_severity})"
+        )
+
+        # Send return notification
+        if self.notification_service:
+            try:
+                attendance = self.attendance_repo.get_by_id(attendance_id)
+                if attendance:
+                    await self.notification_service.notify_early_leave_return(
+                        attendance, event.absence_duration_seconds
+                    )
+            except Exception as e:
+                logger.error(f"Failed to send early leave return notification: {e}")
+
     async def end_session(self, schedule_id: str):
         """
         End attendance session
@@ -467,53 +606,54 @@ class PresenceService:
         Args:
             schedule_id: Schedule UUID
         """
-        if schedule_id not in self.active_sessions:
-            logger.warning(f"No active session to end: {schedule_id}")
-            return
+        async with self._lock:
+            if schedule_id not in self.active_sessions:
+                logger.warning(f"No active session to end: {schedule_id}")
+                return
 
-        session = self.active_sessions[schedule_id]
+            session = self.active_sessions[schedule_id]
 
-        logger.info(f"Ending session for schedule {schedule_id} (Total scans: {session.scan_count})")
+            logger.info(f"Ending session for schedule {schedule_id} (Total scans: {session.scan_count})")
 
-        # Update final check-out times and presence scores
-        for student_id, student_state in session.student_states.items():
-            attendance_id = student_state["attendance_id"]
+            # Update final check-out times and presence scores
+            for student_id, student_state in session.student_states.items():
+                attendance_id = student_state["attendance_id"]
 
-            attendance = self.attendance_repo.get_by_id(attendance_id)
-            if not attendance:
-                continue
+                attendance = self.attendance_repo.get_by_id(attendance_id)
+                if not attendance:
+                    continue
 
-            # Set check-out time
-            if attendance.status != AttendanceStatus.ABSENT:
-                self.attendance_repo.update(attendance_id, {
-                    "check_out_time": datetime.now()
-                })
+                # Set check-out time
+                if attendance.status != AttendanceStatus.ABSENT:
+                    self.attendance_repo.update(attendance_id, {
+                        "check_out_time": datetime.now()
+                    })
 
-        # Build session summary
-        summary = {
-            "total_scans": session.scan_count,
-            "total_students": len(session.student_states),
-            "present_count": sum(1 for s in session.student_states.values()
-                                if not s.get("early_leave_flagged")),
-            "early_leave_count": sum(1 for s in session.student_states.values()
-                                    if s.get("early_leave_flagged"))
-        }
+            # Build session summary
+            summary = {
+                "total_scans": session.scan_count,
+                "total_students": len(session.student_states),
+                "present_count": sum(1 for s in session.student_states.values()
+                                    if not s.get("early_leave_flagged")),
+                "early_leave_count": sum(1 for s in session.student_states.values()
+                                        if s.get("early_leave_flagged"))
+            }
 
-        # Notify faculty of session end
+            # Remove from active sessions
+            del self.active_sessions[schedule_id]
+
+            # End tracking session
+            self.tracking_service.end_session(schedule_id)
+
+            # Unregister from global session manager
+            session_manager.unregister_session(schedule_id)
+
+        # Notify faculty of session end (outside lock — no session mutation)
         if self.notification_service:
             try:
                 await self.notification_service.notify_session_end(schedule_id, summary)
             except Exception as e:
                 logger.error(f"Failed to send session end notification: {e}")
-
-        # Remove from active sessions
-        del self.active_sessions[schedule_id]
-
-        # End tracking session
-        self.tracking_service.end_session(schedule_id)
-
-        # Unregister from global session manager
-        session_manager.unregister_session(schedule_id)
 
         logger.info(f"Session ended for schedule {schedule_id}")
 

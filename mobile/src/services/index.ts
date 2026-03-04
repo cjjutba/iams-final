@@ -6,7 +6,9 @@
 
 export { authService } from './authService';
 export { attendanceService } from './attendanceService';
+export { analyticsService } from './analyticsService';
 export { scheduleService } from './scheduleService';
+export { sessionService } from './sessionService';
 export { faceService } from './faceService';
 export { websocketService } from './websocketService';
 export { notificationService } from './notificationService';

@@ -75,7 +75,7 @@ async def get_current_user(
         user_id = None
 
         # Route to the correct verifier based on token claims
-        if is_supabase_token(token):
+        if settings.USE_SUPABASE_AUTH and is_supabase_token(token):
             payload = verify_supabase_token(token)
             user_id = payload.get("sub")
         else:
@@ -83,9 +83,12 @@ async def get_current_user(
                 payload = verify_token(token)
                 user_id = payload.get("user_id")
             except AuthenticationError:
-                # Custom JWT failed — try Supabase verification as fallback
-                payload = verify_supabase_token(token)
-                user_id = payload.get("sub")
+                if settings.USE_SUPABASE_AUTH:
+                    # Custom JWT failed — try Supabase verification as fallback
+                    payload = verify_supabase_token(token)
+                    user_id = payload.get("sub")
+                else:
+                    raise
 
         if not user_id:
             raise AuthenticationError("Invalid token: missing user identifier")

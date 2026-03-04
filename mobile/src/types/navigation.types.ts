@@ -101,6 +101,7 @@ export type StudentStackParamList = {
 export type FacultyTabParamList = {
   FacultyHome: undefined;
   FacultySchedule: undefined;
+  FacultyAnalytics: undefined;
   FacultyAlerts: undefined;
   FacultyProfile: undefined;
 };
@@ -111,6 +112,11 @@ export type FacultyStackParamList = {
   LiveAttendance: {
     scheduleId: string;
     subjectCode: string;
+    subjectName: string;
+  };
+  LiveFeed: {
+    scheduleId: string;
+    roomId: string;
     subjectName: string;
   };
   ClassDetail: {

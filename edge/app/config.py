@@ -13,9 +13,11 @@ Environment variables:
 - CAMERA_WIDTH: Camera capture width (default: 640)
 - CAMERA_HEIGHT: Camera capture height (default: 480)
 - CAMERA_FPS: Camera frame rate (default: 15)
-- FACE_CROP_SIZE: Face crop size in pixels (default: 112)
-- JPEG_QUALITY: JPEG compression quality (default: 70)
+- FACE_CROP_SIZE: Face crop size in pixels (default: 160)
+- JPEG_QUALITY: JPEG compression quality (default: 85)
 - SCAN_INTERVAL: Interval between scans in seconds (default: 60)
+- SESSION_AWARE: Enable session-aware scanning (default: True)
+- SESSION_POLL_INTERVAL: How often to poll for active sessions when idle, in seconds (default: 10)
 - LOG_LEVEL: Logging level (default: INFO)
 """
 
@@ -54,11 +56,11 @@ class Config:
     CAMERA_FPS: int = int(os.getenv("CAMERA_FPS", "15"))
 
     # ===== Face Detection Configuration =====
-    FACE_CROP_SIZE: int = int(os.getenv("FACE_CROP_SIZE", "112"))
-    JPEG_QUALITY: int = int(os.getenv("JPEG_QUALITY", "70"))
+    FACE_CROP_SIZE: int = int(os.getenv("FACE_CROP_SIZE", "160"))
+    JPEG_QUALITY: int = int(os.getenv("JPEG_QUALITY", "85"))
 
     # MediaPipe Face Detection settings
-    DETECTION_CONFIDENCE: float = float(os.getenv("DETECTION_CONFIDENCE", "0.5"))
+    DETECTION_CONFIDENCE: float = float(os.getenv("DETECTION_CONFIDENCE", "0.6"))
     DETECTION_MODEL: int = int(os.getenv("DETECTION_MODEL", "0"))  # 0 = short_range, 1 = full_range
 
     # ===== Queue Configuration =====
@@ -67,8 +69,20 @@ class Config:
     RETRY_INTERVAL_SECONDS: int = int(os.getenv("RETRY_INTERVAL_SECONDS", "10"))
     RETRY_MAX_ATTEMPTS: int = int(os.getenv("RETRY_MAX_ATTEMPTS", "3"))
 
+    # ===== Image Preprocessing =====
+    CLAHE_ENABLED: bool = os.getenv("CLAHE_ENABLED", "true").lower() in ("true", "1", "yes")
+    CLAHE_CLIP_LIMIT: float = float(os.getenv("CLAHE_CLIP_LIMIT", "2.0"))
+    CLAHE_TILE_SIZE: int = int(os.getenv("CLAHE_TILE_SIZE", "4"))
+    BLUR_DETECTION_ENABLED: bool = os.getenv("BLUR_DETECTION_ENABLED", "true").lower() in ("true", "1", "yes")
+    BLUR_THRESHOLD: float = float(os.getenv("BLUR_THRESHOLD", "50.0"))  # Laplacian variance min
+    DYNAMIC_PADDING_ENABLED: bool = os.getenv("DYNAMIC_PADDING_ENABLED", "true").lower() in ("true", "1", "yes")
+
     # ===== Processing Configuration =====
     SCAN_INTERVAL: int = int(os.getenv("SCAN_INTERVAL", "60"))  # 60 seconds
+
+    # ===== Session Awareness Configuration =====
+    SESSION_AWARE: bool = os.getenv("SESSION_AWARE", "true").lower() in ("true", "1", "yes")
+    SESSION_POLL_INTERVAL: int = int(os.getenv("SESSION_POLL_INTERVAL", "10"))  # seconds
 
     # ===== Logging Configuration =====
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
@@ -142,6 +156,10 @@ class Config:
         # Detection model (0 or 1)
         if cls.DETECTION_MODEL not in [0, 1]:
             errors.append(f"Invalid detection model: {cls.DETECTION_MODEL} (must be 0 or 1)")
+
+        # Session poll interval validation
+        if cls.SESSION_POLL_INTERVAL <= 0:
+            errors.append(f"Invalid session poll interval: {cls.SESSION_POLL_INTERVAL} (must be > 0)")
 
         if errors:
             raise ValueError(f"Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in errors))

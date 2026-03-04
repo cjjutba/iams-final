@@ -1,9 +1,10 @@
 /**
  * Faculty Tab Navigator - Bottom Tabs for Faculty
  *
- * Bottom tab navigation with 4 tabs:
+ * Bottom tab navigation with 5 tabs:
  * - Home
  * - Schedule
+ * - Analytics
  * - Alerts
  * - Profile
  */
@@ -11,12 +12,13 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Home, Calendar, Bell, User } from 'lucide-react-native';
+import { Home, Calendar, BarChart3, Bell, User } from 'lucide-react-native';
 import type { FacultyTabParamList } from '../types';
 import { theme } from '../constants';
 import {
   FacultyHomeScreen,
   FacultyScheduleScreen,
+  FacultyAnalyticsDashboardScreen,
   FacultyAlertsScreen,
   FacultyProfileScreen,
 } from '../screens';
@@ -60,6 +62,14 @@ export const FacultyTabNavigator: React.FC = () => {
         options={{
           tabBarLabel: 'Schedule',
           tabBarIcon: ({ color, size }) => <Calendar size={size} color={color} />,
+        }}
+      />
+      <Tab.Screen
+        name="FacultyAnalytics"
+        component={FacultyAnalyticsDashboardScreen}
+        options={{
+          tabBarLabel: 'Analytics',
+          tabBarIcon: ({ color, size }) => <BarChart3 size={size} color={color} />,
         }}
       />
       <Tab.Screen
