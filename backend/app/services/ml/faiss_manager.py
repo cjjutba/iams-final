@@ -154,6 +154,17 @@ class FAISSManager:
 
         return faiss_ids
 
+    @staticmethod
+    def _deduplicate_by_user(
+        raw: List[Tuple[str, float]],
+    ) -> List[Tuple[str, float]]:
+        """Keep only the best similarity per user_id, sorted descending."""
+        best: Dict[str, float] = {}
+        for user_id, sim in raw:
+            if user_id not in best or sim > best[user_id]:
+                best[user_id] = sim
+        return sorted(best.items(), key=lambda x: x[1], reverse=True)
+
     def search(
         self,
         embedding: np.ndarray,
@@ -161,18 +172,19 @@ class FAISSManager:
         threshold: Optional[float] = None
     ) -> List[Tuple[str, float]]:
         """
-        Search for similar faces
+        Search for similar faces (deduplicated by user_id).
+
+        With multi-embedding storage, one user can have multiple vectors in
+        the index. This method returns at most one result per user, keeping
+        the highest similarity.
 
         Args:
             embedding: Query embedding (512-dim, L2-normalized)
-            k: Number of nearest neighbors to return
+            k: Number of unique users to return
             threshold: Optional similarity threshold (default from settings)
 
         Returns:
             List of (user_id, similarity) tuples, sorted by similarity (descending)
-
-        Raises:
-            RuntimeError: If index not initialized or empty
         """
         if self.index is None:
             raise RuntimeError("Index not initialized")
@@ -187,31 +199,29 @@ class FAISSManager:
         # Ensure float32
         embedding = embedding.astype(np.float32)
 
-        # Search index
-        similarities, indices = self.index.search(embedding, k)
+        # Fetch more results than requested to account for multi-embedding
+        # duplicates. 5× is a safe multiplier (max 5 embeddings per user).
+        raw_k = min(k * 5, self.index.ntotal)
+        similarities, indices = self.index.search(embedding, raw_k)
 
-        # Extract results
-        results = []
+        # Collect raw results above threshold
         threshold = threshold or settings.RECOGNITION_THRESHOLD
+        raw: List[Tuple[str, float]] = []
 
-        for i in range(k):
+        for i in range(raw_k):
             faiss_id = int(indices[0][i])
             similarity = float(similarities[0][i])
 
-            # Check if valid result
-            if faiss_id == -1:  # FAISS returns -1 for no match
+            if faiss_id == -1 or similarity < threshold:
                 continue
 
-            # Apply threshold
-            if similarity < threshold:
-                continue
-
-            # Get user ID
             user_id = self.user_map.get(faiss_id)
             if user_id:
-                results.append((user_id, similarity))
+                raw.append((user_id, similarity))
 
-        return results
+        # Deduplicate: keep best similarity per user
+        deduped = self._deduplicate_by_user(raw)
+        return deduped[:k]
 
     def search_batch(
         self,
@@ -220,15 +230,15 @@ class FAISSManager:
         threshold: Optional[float] = None
     ) -> List[List[Tuple[str, float]]]:
         """
-        Search for multiple faces
+        Search for multiple faces (deduplicated by user_id per query).
 
         Args:
             embeddings: Array of query embeddings [N, 512]
-            k: Number of nearest neighbors per query
+            k: Number of unique users per query
             threshold: Optional similarity threshold
 
         Returns:
-            List of result lists (one per query)
+            List of result lists (one per query, deduplicated)
         """
         if self.index is None or self.index.ntotal == 0:
             return [[] for _ in range(len(embeddings))]
@@ -236,16 +246,17 @@ class FAISSManager:
         # Ensure float32
         embeddings = embeddings.astype(np.float32)
 
-        # Search index
-        similarities, indices = self.index.search(embeddings, k)
+        # Fetch more results to account for multi-embedding duplicates
+        raw_k = min(k * 5, self.index.ntotal)
+        similarities, indices = self.index.search(embeddings, raw_k)
 
-        # Extract results
+        # Extract and deduplicate results per query
         threshold = threshold or settings.RECOGNITION_THRESHOLD
         batch_results = []
 
         for i in range(len(embeddings)):
-            results = []
-            for j in range(k):
+            raw: List[Tuple[str, float]] = []
+            for j in range(raw_k):
                 faiss_id = int(indices[i][j])
                 similarity = float(similarities[i][j])
 
@@ -254,9 +265,10 @@ class FAISSManager:
 
                 user_id = self.user_map.get(faiss_id)
                 if user_id:
-                    results.append((user_id, similarity))
+                    raw.append((user_id, similarity))
 
-            batch_results.append(results)
+            deduped = self._deduplicate_by_user(raw)
+            batch_results.append(deduped[:k])
 
         return batch_results
 

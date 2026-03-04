@@ -243,6 +243,122 @@ class TestFAISSManager:
         assert batch_results[1][0][0] == "user-b"
         assert batch_results[1][0][1] > 0.99
 
+    # -- Multi-embedding deduplication --------------------------------------
+
+    def test_search_deduplicates_same_user(self, tmp_path):
+        """When a user has multiple embeddings, search returns only the best."""
+        manager = FAISSManager(index_path=str(tmp_path / "test.index"))
+        manager.load_or_create_index()
+
+        # Add 3 slightly different embeddings for the same user
+        rng = np.random.RandomState(50)
+        base = rng.randn(512).astype(np.float32)
+        base = base / np.linalg.norm(base)
+
+        for i in range(3):
+            noise = rng.randn(512).astype(np.float32) * 0.05
+            variant = base + noise
+            variant = (variant / np.linalg.norm(variant)).astype(np.float32)
+            manager.add(variant, "user-same")
+
+        # Search should return exactly 1 result (deduplicated)
+        results = manager.search(base, k=5, threshold=0.5)
+        assert len(results) == 1
+        assert results[0][0] == "user-same"
+
+    def test_search_deduplicates_keeps_best_similarity(self, tmp_path):
+        """Deduplication keeps the highest similarity per user."""
+        manager = FAISSManager(index_path=str(tmp_path / "test.index"))
+        manager.load_or_create_index()
+
+        emb = _make_embedding(seed=60)
+        # Add exact match (sim ~1.0)
+        manager.add(emb, "user-x")
+        # Add slightly different variant (sim < 1.0)
+        rng = np.random.RandomState(61)
+        noise = rng.randn(512).astype(np.float32) * 0.3
+        variant = emb + noise
+        variant = (variant / np.linalg.norm(variant)).astype(np.float32)
+        manager.add(variant, "user-x")
+
+        results = manager.search(emb, k=1, threshold=0.5)
+        assert len(results) == 1
+        # Best similarity should be near 1.0 (exact match)
+        assert results[0][1] > 0.95
+
+    def test_search_multi_user_multi_embedding(self, tmp_path):
+        """Multiple users with multiple embeddings each are all found."""
+        manager = FAISSManager(index_path=str(tmp_path / "test.index"))
+        manager.load_or_create_index()
+
+        rng = np.random.RandomState(70)
+        user_bases = {}
+        for uid in ["alice", "bob", "carol"]:
+            base = rng.randn(512).astype(np.float32)
+            base = base / np.linalg.norm(base)
+            user_bases[uid] = base
+            # Add 3 variants per user
+            for _ in range(3):
+                noise = rng.randn(512).astype(np.float32) * 0.05
+                v = base + noise
+                v = (v / np.linalg.norm(v)).astype(np.float32)
+                manager.add(v, uid)
+
+        # Search for alice's base → should get alice as top, plus bob and carol
+        results = manager.search(user_bases["alice"], k=3, threshold=0.0)
+        user_ids = [r[0] for r in results]
+        assert user_ids[0] == "alice"
+        assert len(set(user_ids)) == len(user_ids)  # All unique users
+
+    def test_search_batch_deduplicates(self, tmp_path):
+        """search_batch deduplicates per query."""
+        manager = FAISSManager(index_path=str(tmp_path / "test.index"))
+        manager.load_or_create_index()
+
+        emb_a = _make_embedding(seed=80)
+        emb_b = _make_embedding(seed=81)
+
+        # Add 3 embeddings per user
+        for _ in range(3):
+            rng = np.random.RandomState(_)
+            noise_a = rng.randn(512).astype(np.float32) * 0.02
+            v_a = emb_a + noise_a
+            v_a = (v_a / np.linalg.norm(v_a)).astype(np.float32)
+            manager.add(v_a, "user-a")
+
+            noise_b = rng.randn(512).astype(np.float32) * 0.02
+            v_b = emb_b + noise_b
+            v_b = (v_b / np.linalg.norm(v_b)).astype(np.float32)
+            manager.add(v_b, "user-b")
+
+        queries = np.array([emb_a, emb_b])
+        batch_results = manager.search_batch(queries, k=2, threshold=0.5)
+
+        assert len(batch_results) == 2
+        # Each query returns at most 2 unique users
+        for results in batch_results:
+            user_ids = [r[0] for r in results]
+            assert len(user_ids) == len(set(user_ids))
+
+    def test_search_with_margin_multi_embedding(self, tmp_path):
+        """search_with_margin compares different users, not same-user embeddings."""
+        manager = FAISSManager(index_path=str(tmp_path / "test.index"))
+        manager.load_or_create_index()
+
+        emb = _make_embedding(seed=90)
+        # Add 5 embeddings for one user (simulating multi-angle registration)
+        for i in range(5):
+            rng = np.random.RandomState(90 + i)
+            noise = rng.randn(512).astype(np.float32) * 0.03
+            v = emb + noise
+            v = (v / np.linalg.norm(v)).astype(np.float32)
+            manager.add(v, "user-only")
+
+        # With only one user, top-2 doesn't exist → not ambiguous
+        result = manager.search_with_margin(emb, k=5, threshold=0.5, margin=0.1)
+        assert result["user_id"] == "user-only"
+        assert result["is_ambiguous"] is False
+
     # -- Remove and rebuild ------------------------------------------------
 
     def test_remove(self, tmp_path):
