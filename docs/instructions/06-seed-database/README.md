@@ -24,7 +24,7 @@ This creates:
 - **1 faculty account** — for logging in and managing attendance
 - **3 rooms** — classroom locations
 - **13 class schedules** — pre-configured class schedules
-- **1 student record** — in the school registry (for testing registration)
+- **2 student records** — in the school registry (for testing registration)
 
 ---
 
@@ -72,7 +72,7 @@ Ready for development/testing.
 
 Faculty login: faculty@gmail.com / password123
 
-Student registration: use mobile app with Student ID 21-A-012345
+Student registration: use mobile app with a Student ID from seed_reference_data
 ```
 
 ---
@@ -86,16 +86,17 @@ Student registration: use mobile app with Student ID 21-A-012345
 | Password | password123 |
 | Role | Faculty |
 
-### Test Student Record
-| Field | Value |
-|-------|-------|
-| Student ID | 21-A-012345 |
-| Name | Christian Jerald Jutba |
-| Course | BSCPE |
-| Year Level | 4 |
-| Section | A |
+### Test Student Records
+| Field | Student 1 | Student 2 |
+|-------|-----------|-----------|
+| Student ID | 21-A-02177 | 21-A-01234 |
+| Name | Christian Jerald Jutba | Juhazelle Espela |
+| Course | BSCPE | BSCPE |
+| Year Level | 4 | 4 |
+| Section | A | A |
+| Birthday | 2003-01-13 | 2003-01-03 |
 
-> **Note:** The student record is in the school registry (`student_records` table). The student still needs to register through the mobile app to create their user account and face data.
+> **Note:** Student records are in the school registry (`student_records` table). Students still need to register through the mobile app to create their user accounts and face data.
 
 ---
 

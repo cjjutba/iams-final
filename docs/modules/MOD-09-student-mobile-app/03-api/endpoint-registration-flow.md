@@ -22,7 +22,7 @@ POST /api/v1/auth/verify-student-id
 Content-Type: application/json
 
 {
-  "student_id": "21-A-012345"
+  "student_id": "21-A-02177"
 }
 ```
 **Auth**: No JWT required (pre-auth).
@@ -32,7 +32,7 @@ Content-Type: application/json
 {
   "success": true,
   "data": {
-    "student_id": "21-A-012345",
+    "student_id": "21-A-02177",
     "first_name": "Chris",
     "last_name": "Jutba",
     "course": "CPE",
@@ -71,7 +71,7 @@ POST /api/v1/auth/register
 Content-Type: application/json
 
 {
-  "student_id": "21-A-012345",
+  "student_id": "21-A-02177",
   "email": "cjjutbaofficial@gmail.com",
   "password": "securepassword",
   "first_name": "Chris",

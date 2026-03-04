@@ -36,7 +36,8 @@ from app.config import logger
 # Format: (student_id, first_name, last_name, email, course, year_level, section, birthdate, contact_number)
 # ---------------------------------------------------------------------------
 MOCK_STUDENTS = [
-    ("21-A-012345", "Christian Jerald", "Jutba", "cjjutbaofficial@gmail.com", "BSCPE", 4, "A", date(2003, 1, 13), "09764556948"),
+    ("21-A-02177", "Christian Jerald", "Jutba", "cjjutbaofficial@gmail.com", "BSCPE", 4, "A", date(2003, 1, 13), "09764556948"),
+    ("21-A-01234", "Juhazelle", "Espela", "hazelleespela@gmail.com", "BSCPE", 4, "A", date(2003, 1, 3), "09389816260"),
 ]
 
 # ---------------------------------------------------------------------------

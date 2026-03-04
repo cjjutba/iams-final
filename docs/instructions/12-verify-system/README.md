@@ -24,7 +24,7 @@ Run through this checklist to confirm everything is set up correctly before pilo
 ### Mobile App
 - [ ] App opens and shows the login/register screen
 - [ ] Faculty can log in from the mobile app
-- [ ] Student can verify their Student ID (`21-A-012345`)
+- [ ] Student can verify their Student ID (`21-A-02177` or `21-A-01234`)
 - [ ] Student registration flow completes (ID verification > account creation > face capture)
 
 ### Network
@@ -55,7 +55,7 @@ Expected: JSON response with `access_token`, `refresh_token`, and user details.
 
 ### Test student ID verification
 ```bash
-curl http://localhost:8000/api/v1/auth/verify-student-id/21-A-012345
+curl http://localhost:8000/api/v1/auth/verify-student-id/21-A-02177
 ```
 Expected: JSON with student details (name, course, year, section).
 
@@ -75,7 +75,7 @@ Expected:
  users          |     1
  rooms          |     3
  schedules      |    13
- student_records|     1
+ student_records|     2
 ```
 
 ---

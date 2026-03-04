@@ -5,6 +5,7 @@
  */
 
 import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 
 const isDev = __DEV__;
 
@@ -22,7 +23,36 @@ const SUPABASE_ANON_KEY_ENV = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
 const debuggerHost = Constants.expoConfig?.hostUri
   ?? Constants.manifest?.debuggerHost
   ?? '';
-const devHostIp = debuggerHost.split(':')[0] || '192.168.1.9';
+const metroHostIp = debuggerHost.split(':')[0] || '192.168.1.9';
+
+// Android emulators use 10.0.2.2 to reach the host machine's localhost.
+// Detect emulator: the fingerprint/model on standard emulator images contains
+// "sdk" or "emulator" (e.g. "sdk_gphone64_arm64", "generic_x86_64").
+// Real Android devices and iOS simulator use the Metro host IP directly.
+const androidConstants = Platform.OS === 'android'
+  ? (Platform.constants as { Model?: string; Fingerprint?: string })
+  : null;
+const isAndroidEmulator =
+  Platform.OS === 'android' &&
+  isDev &&
+  !!(
+    androidConstants?.Fingerprint?.includes('sdk') ||
+    androidConstants?.Fingerprint?.includes('emulator') ||
+    androidConstants?.Model?.includes('sdk') ||
+    androidConstants?.Model?.includes('Emulator') ||
+    androidConstants?.Model?.includes('emulator')
+  );
+
+// Emulator → 10.0.2.2 (maps to host localhost), real device → LAN IP from Metro
+const devHostIp = isAndroidEmulator ? '10.0.2.2' : metroHostIp;
+
+// Log resolved host in dev so you can verify which IP each device uses
+if (isDev) {
+  console.log(
+    `[IAMS Config] Platform=${Platform.OS} emulator=${isAndroidEmulator} ` +
+    `metro=${metroHostIp} → backend=${devHostIp}:8000`,
+  );
+}
 
 export const config = {
   // API URLs — prefer env var, then auto-detect from Metro host in dev

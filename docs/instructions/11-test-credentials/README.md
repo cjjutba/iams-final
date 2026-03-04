@@ -29,7 +29,7 @@ Students **do not have pre-made accounts**. They must register through the mobil
 
 1. Open the IAMS app on the student's phone
 2. Tap **"Register as Student"**
-3. Enter the **Student ID** (e.g., `21-A-012345`)
+3. Enter the **Student ID** (e.g., `21-A-02177`)
 4. The app verifies the ID against the school registry and auto-fills:
    - Full name
    - Course
@@ -40,16 +40,18 @@ Students **do not have pre-made accounts**. They must register through the mobil
 6. The student captures **3-5 face photos** from different angles
 7. Review and submit
 
-### Test Student ID
+### Test Student IDs
 
-| Field | Value |
-|-------|-------|
-| **Student ID** | 21-A-012345 |
-| **Name** | Christian Jerald Jutba |
-| **Course** | BSCPE |
-| **Year Level** | 4 |
-| **Section** | A |
-| **Email** | cjjutbaofficial@gmail.com |
+| Field | Student 1 | Student 2 |
+|-------|-----------|-----------|
+| **Student ID** | 21-A-02177 | 21-A-01234 |
+| **Name** | Christian Jerald Jutba | Juhazelle Espela |
+| **Course** | BSCPE | BSCPE |
+| **Year Level** | 4 | 4 |
+| **Section** | A | A |
+| **Email** | cjjutbaofficial@gmail.com | hazelleespela@gmail.com |
+| **Birthday** | January 13, 2003 | January 3, 2003 |
+| **Contact** | 09764556948 | 09389816260 |
 
 > After registration, the student can log in with their Student ID/email and the password they created.
 

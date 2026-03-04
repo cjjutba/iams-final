@@ -54,10 +54,11 @@ def main():
     print("\nFaculty login: faculty@gmail.com / password123")
 
     if skip_sim:
-        print("\nStudent registration: use mobile app with Student ID 21-A-012345")
+        print("\nStudent registration: use mobile app with a Student ID from seed_reference_data")
     else:
         print("\nStudent login (password123):")
-        print("  21-A-012345 — Christian Jerald Jutba (cjjutbaofficial@gmail.com)")
+        print("  21-A-02177 — Christian Jerald Jutba (cjjutbaofficial@gmail.com)")
+        print("  21-A-01234 — Juhazelle Espela (hazelleespela@gmail.com)")
 
 
 if __name__ == "__main__":

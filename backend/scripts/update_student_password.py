@@ -1,7 +1,7 @@
 """
 Update Student Password Script
 
-Updates the password for the seed student (21-A-012345) to the new password.
+Updates the password for seed students to the new password.
 
 Run from backend directory:
     python -m scripts.update_student_password
@@ -20,7 +20,7 @@ from app.config import logger
 
 
 def update_password():
-    """Update the password for student 21-A-012345."""
+    """Update the password for all seed students."""
     db = SessionLocal()
 
     try:
@@ -28,34 +28,31 @@ def update_password():
         print("IAMS - Updating Student Password")
         print("=" * 60)
 
-        # Find the student
-        student = db.query(User).filter(
-            User.student_id == "21-A-012345"
-        ).first()
+        # Find all student users
+        students = db.query(User).filter(
+            User.role == "student",
+            User.student_id.isnot(None),
+        ).all()
 
-        if not student:
-            print("\nERROR: Student 21-A-012345 not found in database.")
-            print("Please run the seed script first: python -m scripts.seed_data")
+        if not students:
+            print("\nERROR: No student users found in database.")
+            print("Please run the seed script first: python -m scripts.seed_all")
             return
 
-        print(f"\nFound student: {student.first_name} {student.last_name}")
-        print(f"Email: {student.email}")
-        print(f"Student ID: {student.student_id}")
-
-        # Update password
         new_password = "password123"
-        student.password_hash = hash_password(new_password)
+        new_hash = hash_password(new_password)
+
+        for student in students:
+            student.password_hash = new_hash
+            print(f"  Updated: {student.student_id} — {student.first_name} {student.last_name}")
 
         db.commit()
-        logger.info(f"Password updated for student {student.student_id}")
+        logger.info(f"Password updated for {len(students)} students")
 
         print("\n" + "=" * 60)
         print("PASSWORD UPDATE COMPLETE")
         print("=" * 60)
-        print(f"\nNew Login Credentials:")
-        print(f"  Email:      {student.email}")
-        print(f"  Student ID: {student.student_id}")
-        print(f"  Password:   {new_password}")
+        print(f"\nUpdated {len(students)} student(s) — password: {new_password}")
 
     except Exception as e:
         db.rollback()

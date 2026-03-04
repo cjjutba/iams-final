@@ -36,7 +36,7 @@ Presence logic flags early-leave threshold for a student (MOD-07).
 |---|---|---|
 | `data.student_name` | string | Display name for alert UI |
 | `data.consecutive_misses` | integer | Miss count at detection time (default: 3) |
-| `data.student_id_number` | string | Student ID number (e.g., `21-A-012345`) |
+| `data.student_id_number` | string | Student ID number (e.g., `21-A-02177`) |
 
 ## Timezone Note
 `detected_at` field uses ISO-8601 format with timezone offset based on `TIMEZONE` env var (default: Asia/Manila, +08:00).

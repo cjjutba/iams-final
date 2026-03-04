@@ -24,7 +24,7 @@
       {
         "student_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
         "student_name": "Juan Dela Cruz",
-        "student_id_number": "21-A-012345",
+        "student_id_number": "21-A-02177",
         "status": "present",
         "check_in_time": "2026-02-12T08:05:00+08:00",
         "presence_score": 95.5

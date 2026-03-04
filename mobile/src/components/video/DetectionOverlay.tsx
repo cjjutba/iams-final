@@ -5,6 +5,11 @@
  * using react-native-reanimated. Detection coordinates are received from
  * the backend at ~15 FPS; reanimated smoothly transitions positions on
  * the native UI thread between updates.
+ *
+ * The box and its name label are rendered as **separate** absolutely-
+ * positioned Animated.Views (siblings in the overlay). This avoids
+ * Android's overflow clipping: the label is never a child of the narrow
+ * box, so its width isn't constrained by the tiny face-crop rectangle.
  */
 
 import React, { useEffect, useMemo } from 'react';
@@ -115,10 +120,18 @@ const FADE_OUT_CONFIG = {
 
 // ---------------------------------------------------------------------------
 // AnimatedDetectionBox
+//
+// Returns a Fragment with TWO sibling Animated.Views:
+//   1. The bounding box (border rectangle)
+//   2. The name label (positioned just above the box)
+//
+// Both share the same animated position values so they move in sync.
+// Because they are siblings (not parent/child), the label's width is
+// unconstrained and can display the full student name regardless of
+// how small the face box is.
 // ---------------------------------------------------------------------------
 
-// Height reserved for the name label above the bounding box.
-const LABEL_HEIGHT = 22;
+const LABEL_OFFSET = 10; // px above the box top
 
 // ---------------------------------------------------------------------------
 // Confidence-based color tiers
@@ -158,7 +171,6 @@ interface TrackedBoxProps {
   bbox: DetectionBBox;
   similarity: number | null;
   label: string;
-  simText: string;
   staleFrames: number;
   scaleInfo: ScaleInfo;
 }
@@ -167,7 +179,6 @@ const AnimatedDetectionBox: React.FC<TrackedBoxProps> = ({
   bbox,
   similarity,
   label,
-  simText,
   staleFrames,
   scaleInfo,
 }) => {
@@ -175,17 +186,10 @@ const AnimatedDetectionBox: React.FC<TrackedBoxProps> = ({
 
   const hasLabel = label.length > 0;
 
-  // The wrapper includes the label area above the box so that everything
-  // stays inside the Animated.View bounds (avoids Android overflow clipping).
-  const boxLeft = bbox.x * scale + offsetX;
-  const boxTop = bbox.y * scale + offsetY;
-  const boxWidth = bbox.width * scale;
-  const boxHeight = bbox.height * scale;
-
-  const targetLeft = boxLeft;
-  const targetTop = hasLabel ? boxTop - LABEL_HEIGHT : boxTop;
-  const targetWidth = boxWidth;
-  const targetHeight = hasLabel ? boxHeight + LABEL_HEIGHT : boxHeight;
+  const targetLeft = bbox.x * scale + offsetX;
+  const targetTop = bbox.y * scale + offsetY;
+  const targetWidth = bbox.width * scale;
+  const targetHeight = bbox.height * scale;
 
   const left = useSharedValue(targetLeft);
   const top = useSharedValue(targetTop);
@@ -204,7 +208,8 @@ const AnimatedDetectionBox: React.FC<TrackedBoxProps> = ({
     opacity.value = withTiming(staleFrames > 0 ? 0 : 1, FADE_OUT_CONFIG);
   }, [staleFrames]);
 
-  const animatedStyle = useAnimatedStyle(() => ({
+  // Box style — positioned exactly at the face coordinates
+  const boxStyle = useAnimatedStyle(() => ({
     left: left.value,
     top: top.value,
     width: width.value,
@@ -212,31 +217,43 @@ const AnimatedDetectionBox: React.FC<TrackedBoxProps> = ({
     opacity: opacity.value,
   }));
 
+  // Label style — centered above the box, no width constraint
+  const labelStyle = useAnimatedStyle(() => ({
+    left: left.value + width.value / 2,
+    top: Math.max(0, top.value - LABEL_OFFSET),
+    opacity: opacity.value,
+  }));
+
   const borderColor = getConfidenceColor(similarity);
-  const labelBg = getLabelBackground(similarity);
 
   return (
-    <Animated.View style={[styles.wrapper, animatedStyle]}>
-      {/* Label sits inside the wrapper, above the box border area */}
+    <>
+      {/* Bounding box */}
+      <Animated.View style={[styles.box, { borderColor }, boxStyle]} />
+      {/* Name label (separate element — not clipped by box width) */}
       {hasLabel && (
-        <View
-          style={[
-            styles.labelContainer,
-            { backgroundColor: labelBg },
-          ]}
-        >
+        <Animated.View style={[styles.labelAnchor, labelStyle]}>
+          {/* Stroke: dark text behind, offset by ~0.5px in each direction */}
           <Text
-            style={[styles.labelText, { color: borderColor }]}
+            style={[styles.labelText, styles.labelStroke]}
             numberOfLines={1}
           >
             {label}
-            {simText}
           </Text>
-        </View>
+          {/* Fill: white (known) or yellow (unknown) on top */}
+          <Text
+            style={[
+              styles.labelText,
+              styles.labelFill,
+              { color: similarity != null && similarity >= 0.6 ? '#FFFFFF' : '#FFD600' },
+            ]}
+            numberOfLines={1}
+          >
+            {label}
+          </Text>
+        </Animated.View>
       )}
-      {/* Box border fills remaining space */}
-      <View style={[styles.box, { borderColor }]} />
-    </Animated.View>
+    </>
   );
 };
 
@@ -292,14 +309,11 @@ export const DetectionOverlay: React.FC<DetectionOverlayProps> = React.memo(
         {detections.map((det) => {
           const trackId =
             (det as any).trackId || det.user_id || `unk-${det.bbox.x}-${det.bbox.y}`;
-          const label =
-            det.name ||
-            det.student_id ||
-            (det.user_id?.slice(0, 8) ?? '');
-          const simText =
-            det.similarity != null
-              ? ` ${(det.similarity * 100).toFixed(0)}%`
-              : '';
+          // Show first name only for known, "Unknown" for unrecognized
+          const fullName = det.name || det.student_id || '';
+          const label = det.user_id
+            ? fullName.split(' ')[0].slice(0, 10)
+            : 'Unknown';
           const staleFrames = (det as any).staleFrames ?? 0;
 
           return (
@@ -308,7 +322,6 @@ export const DetectionOverlay: React.FC<DetectionOverlayProps> = React.memo(
               bbox={det.bbox}
               similarity={det.similarity}
               label={label}
-              simText={simText}
               staleFrames={staleFrames}
               scaleInfo={scaleInfo}
             />
@@ -325,24 +338,30 @@ export const DetectionOverlay: React.FC<DetectionOverlayProps> = React.memo(
 // ---------------------------------------------------------------------------
 
 const styles = StyleSheet.create({
-  wrapper: {
-    position: 'absolute',
-  },
   box: {
-    flex: 1,
+    position: 'absolute',
     borderWidth: 2,
     borderRadius: 2,
   },
-  labelContainer: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-    borderRadius: 3,
-    marginBottom: 1,
+  labelAnchor: {
+    position: 'absolute',
+    width: 80,
+    marginLeft: -40,
+    alignItems: 'center',
   },
   labelText: {
-    fontSize: 11,
-    fontWeight: '800',
+    fontSize: 7,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  labelStroke: {
+    color: '#000000',
+    textShadowColor: '#000000',
+    textShadowOffset: { width: 0.4, height: 0.4 },
+    textShadowRadius: 0.8,
+  },
+  labelFill: {
+    position: 'absolute',
   },
   unknownBadge: {
     position: 'absolute',

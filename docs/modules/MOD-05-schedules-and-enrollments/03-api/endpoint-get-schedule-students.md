@@ -23,7 +23,7 @@ Return roster (enrolled students) for one schedule.
   "data": [
     {
       "id": "423e4567-e89b-12d3-a456-426614174000",
-      "student_id": "21-A-012345",
+      "student_id": "21-A-02177",
       "first_name": "Juan",
       "last_name": "Dela Cruz"
     }
@@ -34,7 +34,7 @@ Return roster (enrolled students) for one schedule.
 
 ### Response Field Details
 - `id`: `users.id` (UUID) — the student's user ID.
-- `student_id`: `users.student_id` (VARCHAR) — the school-issued student ID (e.g., "21-A-012345").
+- `student_id`: `users.student_id` (VARCHAR) — the school-issued student ID (e.g., "21-A-02177").
 - `first_name`: `users.first_name`.
 - `last_name`: `users.last_name`.
 

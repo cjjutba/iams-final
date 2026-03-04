@@ -50,7 +50,10 @@ docker compose down
 | Validate config | `cd backend && python -m scripts.validate_env` |
 | Install mobile deps | `cd mobile && pnpm install` |
 | Run mobile app (dev) | `cd mobile && pnpm android` |
-| Build APK (Windows) | `cd mobile\android && gradlew.bat assembleRelease` |
+| Run on emulator only | `cd mobile && pnpm android --device emulator-5554` |
+| Run on real device only | `cd mobile && pnpm android --device <serial>` |
+| List connected devices | `adb devices` |
+| Build APK (Mac) | `cd mobile/android && ./gradlew assembleRelease` |
 | Find laptop IP | `ipconfig` (Windows) / `ifconfig` (Mac/Linux) |
 | Connect to DB | `docker exec -it iams-postgres psql -U postgres -d iams` |
 | View DB logs | `docker logs iams-postgres` |
@@ -75,7 +78,7 @@ docker compose down
 | Faculty | faculty@gmail.com | password123 |
 | Student | (register via app) | (set during registration) |
 
-**Test Student ID:** `21-A-012345`
+**Test Student IDs:** `21-A-02177` (Christian Jerald Jutba), `21-A-01234` (Juhazelle Espela)
 
 ---
 
@@ -102,13 +105,32 @@ docker compose down
 
 ---
 
+## Dual-Device Testing (Emulator + Real Device)
+
+Run the faculty portal on an Android emulator and student portal on a real device simultaneously:
+
+1. Start the backend: `cd backend && python run.py` (binds to `0.0.0.0:8000`)
+2. Connect your real Android device via USB and enable USB debugging
+3. Start the emulator from Android Studio (e.g. `Medium_Phone_API_36`)
+4. Verify both are visible: `adb devices`
+5. Run Metro: `cd mobile && pnpm start`
+6. Press `a` to install on all connected Android devices
+
+The app auto-detects the device type:
+- **Emulator** → connects via `10.0.2.2:8000` (maps to host localhost)
+- **Real device** → connects via your Mac's LAN IP (auto-detected from Metro)
+
+Check Metro logs for: `[IAMS Config] Platform=android emulator=true/false ...`
+
+---
+
 ## Full Reset
 
 ```bash
 docker compose down -v
 docker compose up -d
 cd backend
-venv\Scripts\activate
+source venv/bin/activate
 alembic upgrade head
 python -m scripts.seed_all --no-sim
 python run.py

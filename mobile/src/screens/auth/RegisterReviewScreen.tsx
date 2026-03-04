@@ -55,8 +55,6 @@ export const RegisterReviewScreen: React.FC = () => {
         phone: accountInfo.phone,
       });
 
-      showSuccess('Account created successfully!', 'Welcome to IAMS');
-
       // Step 2: Upload face images if tokens are available.
       // In Supabase mode: no tokens returned (email verification required first),
       // so face registration will happen after the user verifies email and logs in.
@@ -65,7 +63,7 @@ export const RegisterReviewScreen: React.FC = () => {
       if (faceImages.length > 0 && result.tokens) {
         try {
           await faceService.registerFace(faceImages);
-          showSuccess('Face registered successfully!', 'Face Recognition Active');
+          showSuccess('Face registered successfully!', 'Welcome to IAMS');
         } catch (faceErr: any) {
           console.error('Face registration failed:', faceErr);
           showWarning(
@@ -73,6 +71,15 @@ export const RegisterReviewScreen: React.FC = () => {
             'Face Registration Incomplete',
           );
         }
+      } else if (faceImages.length > 0 && !result.tokens) {
+        // Supabase mode: tokens not available yet (email verification required).
+        // Let the user know face registration will happen after they log in.
+        showSuccess(
+          'Account created! Your face photos will be registered after you verify your email and log in.',
+          'Welcome to IAMS',
+        );
+      } else {
+        showSuccess('Account created successfully!', 'Welcome to IAMS');
       }
 
       // Step 3: NOW update auth state to trigger navigation.
