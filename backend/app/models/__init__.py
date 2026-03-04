@@ -18,6 +18,7 @@ from app.models.notification import Notification
 from app.models.student_record import StudentRecord
 from app.models.faculty_record import FacultyRecord
 from app.models.engagement_score import EngagementScore
+from app.models.attendance_anomaly import AttendanceAnomaly, AnomalyType
 
 __all__ = [
     "Base",
@@ -36,4 +37,6 @@ __all__ = [
     "StudentRecord",
     "FacultyRecord",
     "EngagementScore",
+    "AttendanceAnomaly",
+    "AnomalyType",
 ]

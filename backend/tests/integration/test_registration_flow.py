@@ -44,7 +44,8 @@ class TestFaceRegistrationFlow:
         from app.services.face_service import FaceService
 
         with patch('app.services.face_service.insightface_model') as mock_facenet, \
-             patch('app.services.face_service.faiss_manager') as mock_faiss:
+             patch('app.services.face_service.faiss_manager') as mock_faiss, \
+             patch('app.services.face_service.anti_spoof_detector') as mock_antispoof:
 
             # Mock FaceNet
             def mock_embedding(img_bytes):
@@ -52,9 +53,17 @@ class TestFaceRegistrationFlow:
                 return emb / np.linalg.norm(emb)
 
             mock_facenet.get_embedding = MagicMock(side_effect=mock_embedding)
+            del mock_facenet.get_face_with_quality
+
+            # Mock anti-spoof to always pass
+            from app.services.ml.anti_spoof import SpoofResult
+            mock_antispoof.check_registration_set.return_value = SpoofResult(
+                is_live=True, spoof_score=0.9, method="mock", details={}
+            )
 
             # Mock FAISS
             mock_faiss.add = MagicMock(return_value=1)
+            mock_faiss.add_batch = MagicMock(return_value=[1, 2, 3, 4, 5])
             mock_faiss.save = MagicMock()
 
             face_service = FaceService(db_session)
@@ -63,7 +72,7 @@ class TestFaceRegistrationFlow:
             images = [self._create_test_image_file(f"face_{i}.jpg") for i in range(3)]
 
             # Register face
-            faiss_id, message = await face_service.register_face(
+            faiss_id, message, _ = await face_service.register_face(
                 str(test_student.id),
                 images
             )
@@ -71,8 +80,8 @@ class TestFaceRegistrationFlow:
             assert faiss_id == 1
             assert "successfully" in message.lower()
 
-            # Verify embedding was added to FAISS
-            mock_faiss.add.assert_called_once()
+            # Verify embeddings were added to FAISS (now uses add_batch for multi-embedding)
+            mock_faiss.add_batch.assert_called_once()
             mock_faiss.save.assert_called_once()
 
     @pytest.mark.asyncio
@@ -85,7 +94,8 @@ class TestFaceRegistrationFlow:
         from app.services.face_service import FaceService
 
         with patch('app.services.face_service.insightface_model') as mock_facenet, \
-             patch('app.services.face_service.faiss_manager') as mock_faiss:
+             patch('app.services.face_service.faiss_manager') as mock_faiss, \
+             patch('app.services.face_service.anti_spoof_detector') as mock_antispoof:
 
             # Mock FaceNet
             def mock_embedding(img_bytes):
@@ -93,9 +103,17 @@ class TestFaceRegistrationFlow:
                 return emb / np.linalg.norm(emb)
 
             mock_facenet.get_embedding = MagicMock(side_effect=mock_embedding)
+            del mock_facenet.get_face_with_quality
+
+            # Mock anti-spoof to always pass
+            from app.services.ml.anti_spoof import SpoofResult
+            mock_antispoof.check_registration_set.return_value = SpoofResult(
+                is_live=True, spoof_score=0.9, method="mock", details={}
+            )
 
             # Mock FAISS
             mock_faiss.add = MagicMock(return_value=2)
+            mock_faiss.add_batch = MagicMock(return_value=[2, 3, 4, 5, 6])
             mock_faiss.save = MagicMock()
 
             face_service = FaceService(db_session)
@@ -104,7 +122,7 @@ class TestFaceRegistrationFlow:
             images = [self._create_test_image_file(f"face_{i}.jpg") for i in range(5)]
 
             # Register face
-            faiss_id, message = await face_service.register_face(
+            faiss_id, message, _ = await face_service.register_face(
                 str(test_student.id),
                 images
             )
@@ -165,7 +183,8 @@ class TestFaceRegistrationFlow:
         from app.utils.exceptions import ValidationError
 
         with patch('app.services.face_service.insightface_model') as mock_facenet, \
-             patch('app.services.face_service.faiss_manager') as mock_faiss:
+             patch('app.services.face_service.faiss_manager') as mock_faiss, \
+             patch('app.services.face_service.anti_spoof_detector') as mock_antispoof:
 
             # Mock FaceNet
             def mock_embedding(img_bytes):
@@ -173,7 +192,13 @@ class TestFaceRegistrationFlow:
                 return emb / np.linalg.norm(emb)
 
             mock_facenet.get_embedding = MagicMock(side_effect=mock_embedding)
+            del mock_facenet.get_face_with_quality
+            from app.services.ml.anti_spoof import SpoofResult
+            mock_antispoof.check_registration_set.return_value = SpoofResult(
+                is_live=True, spoof_score=0.9, method="mock", details={}
+            )
             mock_faiss.add = MagicMock(return_value=1)
+            mock_faiss.add_batch = MagicMock(return_value=[1, 2, 3, 4, 5])
             mock_faiss.save = MagicMock()
 
             face_service = FaceService(db_session)
@@ -218,7 +243,8 @@ class TestFaceReregistrationFlow:
         from app.services.face_service import FaceService
 
         with patch('app.services.face_service.insightface_model') as mock_facenet, \
-             patch('app.services.face_service.faiss_manager') as mock_faiss:
+             patch('app.services.face_service.faiss_manager') as mock_faiss, \
+             patch('app.services.face_service.anti_spoof_detector') as mock_antispoof:
 
             # Mock FaceNet
             def mock_embedding(img_bytes):
@@ -226,26 +252,32 @@ class TestFaceReregistrationFlow:
                 return emb / np.linalg.norm(emb)
 
             mock_facenet.get_embedding = MagicMock(side_effect=mock_embedding)
+            del mock_facenet.get_face_with_quality
+            from app.services.ml.anti_spoof import SpoofResult
+            mock_antispoof.check_registration_set.return_value = SpoofResult(
+                is_live=True, spoof_score=0.9, method="mock", details={}
+            )
             mock_faiss.add = MagicMock(side_effect=[1, 2])  # Two registrations
+            mock_faiss.add_batch = MagicMock(side_effect=[[1, 2, 3], [4, 5, 6]])
             mock_faiss.save = MagicMock()
 
             face_service = FaceService(db_session)
 
             # Initial registration
             images1 = [self._create_test_image_file(f"face_{i}.jpg") for i in range(3)]
-            faiss_id1, _ = await face_service.register_face(
+            faiss_id1, _, _ = await face_service.register_face(
                 str(test_student.id),
                 images1
             )
 
             # Re-registration
             images2 = [self._create_test_image_file(f"new_{i}.jpg") for i in range(3)]
-            faiss_id2, message = await face_service.reregister_face(
+            faiss_id2, message, _ = await face_service.reregister_face(
                 str(test_student.id),
                 images2
             )
 
-            assert faiss_id2 == 2
+            assert faiss_id2 == 4  # First ID from second add_batch call
             assert faiss_id2 != faiss_id1
             assert "re-registered" in message.lower()
 
@@ -263,13 +295,21 @@ class TestFaceRecognitionFlow:
         from app.services.face_service import FaceService
 
         with patch('app.services.face_service.insightface_model') as mock_facenet, \
-             patch('app.services.face_service.faiss_manager') as mock_faiss:
+             patch('app.services.face_service.faiss_manager') as mock_faiss, \
+             patch('app.services.face_service.anti_spoof_detector') as mock_antispoof:
 
             # Mock FaceNet
             test_embedding = np.random.randn(512).astype(np.float32)
             test_embedding = test_embedding / np.linalg.norm(test_embedding)
 
             mock_facenet.get_embedding = MagicMock(return_value=test_embedding)
+            del mock_facenet.get_face_with_quality
+
+            # Mock anti-spoof to always pass
+            from app.services.ml.anti_spoof import SpoofResult
+            mock_antispoof.check_registration_set.return_value = SpoofResult(
+                is_live=True, spoof_score=0.9, method="mock", details={}
+            )
 
             # Mock FAISS search to return match
             mock_faiss.search = MagicMock(
@@ -298,13 +338,21 @@ class TestFaceRecognitionFlow:
         from app.services.face_service import FaceService
 
         with patch('app.services.face_service.insightface_model') as mock_facenet, \
-             patch('app.services.face_service.faiss_manager') as mock_faiss:
+             patch('app.services.face_service.faiss_manager') as mock_faiss, \
+             patch('app.services.face_service.anti_spoof_detector') as mock_antispoof:
 
             # Mock FaceNet
             test_embedding = np.random.randn(512).astype(np.float32)
             test_embedding = test_embedding / np.linalg.norm(test_embedding)
 
             mock_facenet.get_embedding = MagicMock(return_value=test_embedding)
+            del mock_facenet.get_face_with_quality
+
+            # Mock anti-spoof to always pass
+            from app.services.ml.anti_spoof import SpoofResult
+            mock_antispoof.check_registration_set.return_value = SpoofResult(
+                is_live=True, spoof_score=0.9, method="mock", details={}
+            )
 
             # Mock FAISS search to return no match
             mock_faiss.search = MagicMock(return_value=[])
@@ -332,13 +380,21 @@ class TestFaceRecognitionFlow:
         from app.services.face_service import FaceService
 
         with patch('app.services.face_service.insightface_model') as mock_facenet, \
-             patch('app.services.face_service.faiss_manager') as mock_faiss:
+             patch('app.services.face_service.faiss_manager') as mock_faiss, \
+             patch('app.services.face_service.anti_spoof_detector') as mock_antispoof:
 
             # Mock FaceNet
             test_embedding = np.random.randn(512).astype(np.float32)
             test_embedding = test_embedding / np.linalg.norm(test_embedding)
 
             mock_facenet.get_embedding = MagicMock(return_value=test_embedding)
+            del mock_facenet.get_face_with_quality
+
+            # Mock anti-spoof to always pass
+            from app.services.ml.anti_spoof import SpoofResult
+            mock_antispoof.check_registration_set.return_value = SpoofResult(
+                is_live=True, spoof_score=0.9, method="mock", details={}
+            )
 
             # Mock FAISS search with custom threshold
             mock_faiss.search = MagicMock(
@@ -392,7 +448,7 @@ class TestFaceAPIEndpoints:
             service_instance = MagicMock()
 
             async def mock_register(user_id, images):
-                return 123, "Face registered successfully"
+                return 123, "Face registered successfully", []
 
             service_instance.register_face = AsyncMock(side_effect=mock_register)
             mock_service.return_value = service_instance

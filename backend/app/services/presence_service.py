@@ -524,10 +524,16 @@ class PresenceService:
         # Compute context severity based on schedule
         severity = "medium"
         schedule = getattr(attendance, 'schedule', None)
-        if schedule and hasattr(schedule, 'start_time') and hasattr(schedule, 'end_time'):
-            severity = compute_early_leave_severity(
-                datetime.now(), schedule.start_time, schedule.end_time
-            )
+        if schedule:
+            s_time = getattr(schedule, 'start_time', None)
+            e_time = getattr(schedule, 'end_time', None)
+            if s_time and e_time and hasattr(s_time, 'hour') and hasattr(e_time, 'hour'):
+                try:
+                    severity = compute_early_leave_severity(
+                        datetime.now(), s_time, e_time
+                    )
+                except (TypeError, AttributeError):
+                    pass
 
         # Create early leave event
         event = self.attendance_repo.create_early_leave_event({

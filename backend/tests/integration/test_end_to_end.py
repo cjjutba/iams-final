@@ -58,15 +58,24 @@ class TestCompleteClassSessionFlow:
         # ============================================================
 
         with patch('app.services.face_service.insightface_model') as mock_facenet, \
-             patch('app.services.face_service.faiss_manager') as mock_faiss:
+             patch('app.services.face_service.faiss_manager') as mock_faiss, \
+             patch('app.services.face_service.anti_spoof_detector') as mock_antispoof:
 
             # Mock InsightFace to return consistent embedding
             student_embedding = np.random.randn(512).astype(np.float32)
             student_embedding = student_embedding / np.linalg.norm(student_embedding)
 
             mock_facenet.get_embedding = MagicMock(return_value=student_embedding)
+            del mock_facenet.get_face_with_quality
             mock_faiss.add = MagicMock(return_value=1)
+            mock_faiss.add_batch = MagicMock(return_value=[1, 2, 3])
             mock_faiss.save = MagicMock()
+
+            # Mock anti-spoof to always pass
+            from app.services.ml.anti_spoof import SpoofResult
+            mock_antispoof.check_registration_set.return_value = SpoofResult(
+                is_live=True, spoof_score=0.9, method="mock", details={}
+            )
 
             face_service = FaceService(db_session)
 
@@ -84,7 +93,7 @@ class TestCompleteClassSessionFlow:
                 ))
 
             # Register face
-            faiss_id, message = await face_service.register_face(
+            faiss_id, message, _ = await face_service.register_face(
                 str(test_student.id),
                 images
             )

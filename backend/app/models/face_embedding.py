@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime
 from sqlalchemy import Column, Integer, Float, String, DateTime, ForeignKey, LargeBinary, Index
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, backref
 
 from app.database import Base
 
@@ -47,7 +47,10 @@ class FaceEmbedding(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships
-    registration = relationship("FaceRegistration", backref="embeddings")
+    registration = relationship(
+        "FaceRegistration",
+        backref=backref("embeddings", cascade="all, delete-orphan", passive_deletes=True),
+    )
 
     __table_args__ = (
         Index("ix_face_embeddings_registration_id", "registration_id"),

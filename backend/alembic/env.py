@@ -18,7 +18,7 @@ from app.database import Base
 from app.models import (
     User, FaceRegistration, FaceEmbedding, Room, Schedule, Enrollment,
     AttendanceRecord, PresenceLog, EarlyLeaveEvent, Notification,
-    StudentRecord, FacultyRecord, EngagementScore
+    StudentRecord, FacultyRecord, EngagementScore, AttendanceAnomaly
 )
 
 # this is the Alembic Config object, which provides
