@@ -12,12 +12,22 @@ from pydantic import BaseModel, Field, field_validator
 
 # ===== Face Registration (Mobile App) =====
 
+class QualityScoreResponse(BaseModel):
+    """Quality assessment scores for a single registration image."""
+    blur_score: float
+    brightness: float
+    face_size_ratio: float
+    det_score: float
+    passed: bool
+
+
 class FaceRegisterResponse(BaseModel):
     """Face registration response"""
     success: bool
     message: str
     embedding_id: Optional[int] = None
     user_id: str
+    quality_scores: Optional[List[QualityScoreResponse]] = None
 
 
 class FaceStatusResponse(BaseModel):

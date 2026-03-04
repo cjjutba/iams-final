@@ -15,6 +15,7 @@ from PIL import Image
 from app.repositories.face_repository import FaceRepository
 from app.services.ml.insightface_model import insightface_model
 from app.services.ml.faiss_manager import faiss_manager
+from app.services.ml.face_quality import assess_quality, QualityReport
 from app.utils.exceptions import ValidationError, FaceRecognitionError, NotFoundError
 from app.config import settings, logger
 
@@ -32,27 +33,28 @@ class FaceService:
         self,
         user_id: str,
         images: List[UploadFile]
-    ) -> Tuple[int, str]:
+    ) -> Tuple[int, str, Optional[List[QualityReport]]]:
         """
         Register user's face with multiple images
 
         Process:
         1. Validate images (3-5 images required)
         2. Generate embeddings for each image
-        3. Average embeddings → single 512-dim vector
-        4. Normalize vector
-        5. Add to FAISS index
-        6. Save to database
+        3. Quality-gate each image (blur, brightness, face size, confidence)
+        4. Average embeddings → single 512-dim vector
+        5. Normalize vector
+        6. Add to FAISS index
+        7. Save to database
 
         Args:
             user_id: User UUID
             images: List of 3-5 face images
 
         Returns:
-            Tuple of (embedding_id, message)
+            Tuple of (embedding_id, message, quality_reports)
 
         Raises:
-            ValidationError: If validation fails
+            ValidationError: If validation fails (including quality rejection)
             FaceRecognitionError: If face processing fails
         """
         # Validate number of images
@@ -75,6 +77,7 @@ class FaceService:
 
         # Generate embeddings for each image
         embeddings = []
+        quality_reports: List[QualityReport] = []
         for i, image_file in enumerate(images):
             try:
                 # Read image bytes
@@ -84,12 +87,30 @@ class FaceService:
                 if len(image_bytes) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
                     raise ValidationError(f"Image {i+1} exceeds size limit")
 
-                # Generate embedding
-                embedding = self.facenet.get_embedding(image_bytes)
+                # Generate embedding (with quality metadata if available)
+                if settings.QUALITY_GATE_ENABLED and hasattr(self.facenet, 'get_face_with_quality'):
+                    face_data = self.facenet.get_face_with_quality(image_bytes)
+                    embedding = face_data["embedding"]
+                    quality = assess_quality(
+                        image_bgr=face_data["image_bgr"],
+                        det_score=face_data["det_score"],
+                        bbox=face_data["bbox"],
+                        image_shape=face_data["image_bgr"].shape,
+                    )
+                    quality_reports.append(quality)
+                    if not quality.passed:
+                        raise ValidationError(
+                            f"Image {i+1} rejected: {', '.join(quality.rejection_reasons)}"
+                        )
+                else:
+                    embedding = self.facenet.get_embedding(image_bytes)
+
                 embeddings.append(embedding)
 
                 logger.debug(f"Generated embedding for image {i+1}/{len(images)}")
 
+            except ValidationError:
+                raise
             except ValueError as e:
                 raise FaceRecognitionError(f"Image {i+1}: {str(e)}")
             except Exception as e:
@@ -137,7 +158,7 @@ class FaceService:
             logger.error(f"Failed to save face registration for user {user_id}: {e}")
             raise FaceRecognitionError("Failed to save face registration")
 
-        return faiss_id, "Face registered successfully"
+        return faiss_id, "Face registered successfully", quality_reports or None
 
     async def recognize_face(
         self,
@@ -273,12 +294,12 @@ class FaceService:
             logger.info(f"No previous face registration found for user {user_id}")
 
         # Register new face
-        faiss_id, message = await self.register_face(user_id, images)
+        faiss_id, message, quality_reports = await self.register_face(user_id, images)
 
         # Rebuild FAISS to remove orphaned vectors from old registration
         await self.rebuild_faiss_index()
 
-        return faiss_id, "Face re-registered successfully"
+        return faiss_id, "Face re-registered successfully", quality_reports
 
     async def rebuild_faiss_index(self):
         """

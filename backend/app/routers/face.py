@@ -19,6 +19,7 @@ from app.database import get_db
 from app.models.user import User
 from app.schemas.face import (
     FaceRegisterResponse,
+    QualityScoreResponse,
     FaceStatusResponse,
     FaceRecognizeRequest,
     FaceRecognizeResponse,
@@ -66,13 +67,27 @@ async def register_face(
     face_service = FaceService(db)
 
     try:
-        faiss_id, message = await face_service.register_face(str(current_user.id), images)
+        faiss_id, message, quality_reports = await face_service.register_face(str(current_user.id), images)
+
+        quality_scores = None
+        if quality_reports:
+            quality_scores = [
+                QualityScoreResponse(
+                    blur_score=q.blur_score,
+                    brightness=q.brightness,
+                    face_size_ratio=q.face_size_ratio,
+                    det_score=q.det_score,
+                    passed=q.passed,
+                )
+                for q in quality_reports
+            ]
 
         return FaceRegisterResponse(
             success=True,
             message=message,
             embedding_id=faiss_id,
-            user_id=str(current_user.id)
+            user_id=str(current_user.id),
+            quality_scores=quality_scores,
         )
 
     except Exception as e:
@@ -103,13 +118,27 @@ async def reregister_face(
     face_service = FaceService(db)
 
     try:
-        faiss_id, message = await face_service.reregister_face(str(current_user.id), images)
+        faiss_id, message, quality_reports = await face_service.reregister_face(str(current_user.id), images)
+
+        quality_scores = None
+        if quality_reports:
+            quality_scores = [
+                QualityScoreResponse(
+                    blur_score=q.blur_score,
+                    brightness=q.brightness,
+                    face_size_ratio=q.face_size_ratio,
+                    det_score=q.det_score,
+                    passed=q.passed,
+                )
+                for q in quality_reports
+            ]
 
         return FaceRegisterResponse(
             success=True,
             message=message,
             embedding_id=faiss_id,
-            user_id=str(current_user.id)
+            user_id=str(current_user.id),
+            quality_scores=quality_scores,
         )
 
     except Exception as e:

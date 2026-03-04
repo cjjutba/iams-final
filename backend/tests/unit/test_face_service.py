@@ -52,7 +52,7 @@ def _make_face_service(db_session):
     """
     service = FaceService(db_session)
 
-    mock_facenet = MagicMock()
+    mock_facenet = MagicMock(spec=['get_embedding', 'get_embeddings_batch', 'app', 'load_model'])
     mock_facenet.get_embedding = MagicMock(return_value=_make_embedding())
 
     mock_faiss = MagicMock()
@@ -91,7 +91,7 @@ class TestFaceServiceRegister:
         user_id = str(uuid.uuid4())
         images = [_make_mock_upload_file() for _ in range(3)]
 
-        faiss_id, msg = await service.register_face(user_id, images)
+        faiss_id, msg, quality_reports = await service.register_face(user_id, images)
 
         assert faiss_id == 0
         assert "successfully" in msg.lower()
@@ -106,7 +106,7 @@ class TestFaceServiceRegister:
         user_id = str(uuid.uuid4())
         images = [_make_mock_upload_file() for _ in range(5)]
 
-        faiss_id, msg = await service.register_face(user_id, images)
+        faiss_id, msg, _ = await service.register_face(user_id, images)
 
         assert faiss_id == 0
         assert mock_fn.get_embedding.call_count == 5
@@ -179,7 +179,7 @@ class TestFaceServiceRegister:
         user_id = str(uuid.uuid4())
         images = [_make_mock_upload_file() for _ in range(3)]
 
-        await service.register_face(user_id, images)
+        await service.register_face(user_id, images)  # returns 3-tuple
 
         # The embedding passed to faiss.add should be L2-normalised
         call_args = mock_faiss.add.call_args
@@ -196,7 +196,7 @@ class TestFaceServiceRegister:
         user_id = str(uuid.uuid4())
         images = [_make_mock_upload_file() for _ in range(3)]
 
-        faiss_id, _ = await service.register_face(user_id, images)
+        faiss_id, _, _ = await service.register_face(user_id, images)
 
         row = db_session.query(FaceRegistration).filter(
             FaceRegistration.user_id == uuid.UUID(user_id)
@@ -205,6 +205,68 @@ class TestFaceServiceRegister:
         assert row.embedding_id == faiss_id
         assert row.is_active is True
         assert row.embedding_vector is not None
+
+
+# ===================================================================
+# register_face with quality gating
+# ===================================================================
+
+class TestFaceServiceRegisterQuality:
+    """Tests for quality gating during registration."""
+
+    @pytest.mark.asyncio
+    async def test_register_with_quality_gating_success(self, db_session):
+        """When quality checks pass, registration should return quality reports."""
+        service = FaceService(db_session)
+        user_id = str(uuid.uuid4())
+
+        good_image_bgr = np.random.RandomState(42).randint(
+            60, 200, (320, 320, 3), dtype=np.uint8
+        )
+        mock_facenet = MagicMock()
+        mock_facenet.get_face_with_quality = MagicMock(return_value={
+            "embedding": _make_embedding(),
+            "det_score": 0.95,
+            "bbox": (50, 50, 200, 200),
+            "image_bgr": good_image_bgr,
+        })
+
+        mock_faiss = MagicMock()
+        mock_faiss.add = MagicMock(return_value=0)
+        mock_faiss.save = MagicMock()
+
+        service.facenet = mock_facenet
+        service.faiss = mock_faiss
+
+        images = [_make_mock_upload_file() for _ in range(3)]
+        faiss_id, msg, quality_reports = await service.register_face(user_id, images)
+
+        assert faiss_id == 0
+        assert quality_reports is not None
+        assert len(quality_reports) == 3
+        assert all(q.passed for q in quality_reports)
+
+    @pytest.mark.asyncio
+    async def test_register_rejects_blurry_image(self, db_session):
+        """When an image is too blurry, registration should raise ValidationError."""
+        service = FaceService(db_session)
+        user_id = str(uuid.uuid4())
+
+        blurry_image = np.ones((320, 320, 3), dtype=np.uint8) * 128
+        mock_facenet = MagicMock()
+        mock_facenet.get_face_with_quality = MagicMock(return_value={
+            "embedding": _make_embedding(),
+            "det_score": 0.95,
+            "bbox": (50, 50, 200, 200),
+            "image_bgr": blurry_image,
+        })
+
+        service.facenet = mock_facenet
+        service.faiss = MagicMock()
+
+        images = [_make_mock_upload_file() for _ in range(3)]
+        with pytest.raises(ValidationError, match="rejected"):
+            await service.register_face(user_id, images)
 
 
 # ===================================================================
@@ -386,7 +448,7 @@ class TestFaceServiceReregister:
         old_id = test_face_registration.id
         images = [_make_mock_upload_file() for _ in range(3)]
 
-        faiss_id, msg = await service.reregister_face(user_id, images)
+        faiss_id, msg, _ = await service.reregister_face(user_id, images)
 
         assert "re-registered" in msg.lower()
         # Old registration should be gone
@@ -409,7 +471,7 @@ class TestFaceServiceReregister:
         user_id = str(uuid.uuid4())
         images = [_make_mock_upload_file() for _ in range(3)]
 
-        faiss_id, msg = await service.reregister_face(user_id, images)
+        faiss_id, msg, _ = await service.reregister_face(user_id, images)
 
         assert "re-registered" in msg.lower()
         assert faiss_id == 0
