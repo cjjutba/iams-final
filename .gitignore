@@ -82,3 +82,4 @@ temp/
 # mediamtx binary (downloaded locally, not committed)
 backend/bin/mediamtx
 backend/bin/mediamtx.exe
+.worktrees/
