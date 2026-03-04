@@ -209,6 +209,49 @@ class InsightFaceModel:
             return []
 
     # ------------------------------------------------------------------
+    # Registration API (with quality metadata)
+    # ------------------------------------------------------------------
+
+    def get_face_with_quality(
+        self,
+        image: Union[Image.Image, np.ndarray, bytes],
+    ) -> dict:
+        """
+        Single image -> embedding + quality metadata for registration.
+
+        Returns a dict with:
+          - embedding: 512-dim L2-normalized ArcFace embedding
+          - det_score: SCRFD detection confidence
+          - bbox: (x, y, w, h) bounding box
+          - image_bgr: BGR numpy array (for quality assessment)
+
+        Raises:
+            RuntimeError: Model not loaded.
+            ValueError:   No face detected in image.
+        """
+        if self.app is None:
+            raise RuntimeError("Model not loaded. Call load_model() first.")
+
+        bgr = self._to_bgr(image)
+        faces = self.app.get(bgr)
+
+        if not faces:
+            raise ValueError("No face detected in image")
+
+        face = faces[0]  # Largest face
+        x1, y1, x2, y2 = face.bbox.astype(int)
+        h, w = bgr.shape[:2]
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+
+        return {
+            "embedding": face.normed_embedding.copy(),
+            "det_score": float(face.det_score),
+            "bbox": (int(x1), int(y1), int(max(1, x2 - x1)), int(max(1, y2 - y1))),
+            "image_bgr": bgr,
+        }
+
+    # ------------------------------------------------------------------
     # Utility (same interface as old FaceNetModel)
     # ------------------------------------------------------------------
 

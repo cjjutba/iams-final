@@ -56,6 +56,14 @@ class Settings(BaseSettings):
     MIN_FACE_IMAGES: int = 3  # Minimum images for registration
     MAX_FACE_IMAGES: int = 5  # Maximum images for registration
 
+    # Face Quality Gating
+    QUALITY_GATE_ENABLED: bool = True
+    QUALITY_BLUR_THRESHOLD: float = 100.0       # Laplacian variance minimum
+    QUALITY_BRIGHTNESS_MIN: float = 40.0        # Mean pixel intensity minimum
+    QUALITY_BRIGHTNESS_MAX: float = 220.0       # Mean pixel intensity maximum
+    QUALITY_MIN_FACE_SIZE_RATIO: float = 0.05   # Face area / image area minimum
+    QUALITY_MIN_DET_SCORE: float = 0.5          # SCRFD detection confidence minimum
+
     # Presence Tracking
     SCAN_INTERVAL_SECONDS: int = 60  # How often to run presence scans
     EARLY_LEAVE_THRESHOLD: int = 3  # Consecutive misses to flag early leave
