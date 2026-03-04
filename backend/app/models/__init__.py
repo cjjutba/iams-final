@@ -17,6 +17,7 @@ from app.models.early_leave_event import EarlyLeaveEvent
 from app.models.notification import Notification
 from app.models.student_record import StudentRecord
 from app.models.faculty_record import FacultyRecord
+from app.models.engagement_score import EngagementScore
 
 __all__ = [
     "Base",
@@ -34,4 +35,5 @@ __all__ = [
     "Notification",
     "StudentRecord",
     "FacultyRecord",
+    "EngagementScore",
 ]
