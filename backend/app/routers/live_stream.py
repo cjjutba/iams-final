@@ -262,7 +262,7 @@ async def _hls_mode(
     receive_task = asyncio.create_task(_receive_loop())
 
     # --- Push detection metadata ---
-    poll_interval = 0.100  # 100ms = 10Hz, matching RECOGNITION_FPS
+    poll_interval = 0.066  # 66ms ≈ 15Hz, matching RECOGNITION_FPS
     last_seq = -1
     last_send_time = asyncio.get_event_loop().time()
     heartbeat_interval = 5.0  # send heartbeat every 5s even when no detections change
@@ -407,7 +407,7 @@ async def _webrtc_mode(
     receive_task = asyncio.create_task(_receive_loop())
 
     # --- Push detection metadata ---
-    poll_interval = 0.100  # 100ms = 10Hz, matching RECOGNITION_FPS
+    poll_interval = 0.066  # 66ms ≈ 15Hz, matching RECOGNITION_FPS
     last_seq = -1
     last_send_time = asyncio.get_event_loop().time()
     heartbeat_interval = 5.0  # send heartbeat every 5s even when no detections change
