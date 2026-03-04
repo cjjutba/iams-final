@@ -4,24 +4,36 @@
  * Dashboard showing:
  * - Greeting with student's name
  * - Today's date
+ * - Face registration status card
+ * - Attendance overview (segmented bar + stats)
  * - Current class highlight (if ongoing)
+ * - Upcoming class (if no current class but classes remain today)
  * - Today's classes with attendance status
+ * - Recent activity feed (last 5 attendance records)
  * - Loading, error, and empty states
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, StyleSheet, FlatList, RefreshControl, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, FlatList, RefreshControl } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
-import { RefreshCw, Camera } from 'lucide-react-native';
+import { RefreshCw } from 'lucide-react-native';
 import { useAuth, useSchedule } from '../../hooks';
 import { useToast } from '../../hooks/useToast';
-import { faceService } from '../../services';
+import { faceService, attendanceService } from '../../services';
 import { theme, strings } from '../../constants';
-import { formatDate, formatTime, formatTimeRange, getDayName } from '../../utils';
-import type { StudentStackParamList, Schedule, ScheduleWithAttendance } from '../../types';
+import { formatDate, formatTime, getDayName } from '../../utils';
+import type {
+  StudentStackParamList,
+  ScheduleWithAttendance,
+  AttendanceSummary,
+  AttendanceRecord,
+} from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
 import { Text, Card, Badge, Button } from '../../components/ui';
+import { FaceStatusCard } from '../../components/cards/FaceStatusCard';
+import { AttendanceOverviewCard } from '../../components/cards/AttendanceOverviewCard';
+import { ActivityFeedItem } from '../../components/cards/ActivityFeedItem';
 
 type StudentHomeNavigationProp = StackNavigationProp<StudentStackParamList, 'StudentTabs'>;
 
@@ -29,11 +41,13 @@ export const StudentHomeScreen: React.FC = () => {
   const navigation = useNavigation<StudentHomeNavigationProp>();
   const { fullName } = useAuth();
   const {
+    schedules,
     todaySchedules,
     isLoading,
     error,
     fetchMySchedules,
     getCurrentClass,
+    getNextClass,
     getNextDayWithClasses,
     totalSchedules,
     clearError,
@@ -42,16 +56,58 @@ export const StudentHomeScreen: React.FC = () => {
   const { showError } = useToast();
 
   const currentClass = getCurrentClass();
+  const nextClass = getNextClass();
 
-  // Face registration status check — re-checks on focus (after returning from FaceRegister)
-  const [faceRegistered, setFaceRegistered] = useState<boolean | null>(null);
+  // ---------- face registration status ----------
+
+  const [faceStatus, setFaceStatus] = useState<'not_registered' | 'registered' | 'loading'>('loading');
+  const [faceRegisteredAt, setFaceRegisteredAt] = useState<string | undefined>(undefined);
 
   useFocusEffect(
     useCallback(() => {
+      setFaceStatus('loading');
       faceService.getFaceStatus()
-        .then((status) => setFaceRegistered(status.registered))
-        .catch(() => setFaceRegistered(null));
+        .then((status) => {
+          setFaceStatus(status.registered ? 'registered' : 'not_registered');
+          setFaceRegisteredAt(status.registered_at);
+        })
+        .catch(() => {
+          // On error, hide the card rather than showing a broken state
+          setFaceStatus('registered');
+        });
     }, []),
+  );
+
+  // ---------- attendance summary ----------
+
+  const [summary, setSummary] = useState<AttendanceSummary | null>(null);
+
+  const fetchSummary = useCallback(() => {
+    // Fetch summary for the current semester (approximate: last 6 months)
+    const endDate = new Date().toISOString().split('T')[0];
+    const startDate = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    attendanceService.getAttendanceSummary(startDate, endDate)
+      .then(setSummary)
+      .catch(() => setSummary(null));
+  }, []);
+
+  // ---------- recent activity ----------
+
+  const [recentActivity, setRecentActivity] = useState<AttendanceRecord[]>([]);
+
+  const fetchRecentActivity = useCallback(() => {
+    attendanceService.getMyAttendance()
+      .then((records) => setRecentActivity(records.slice(0, 5)))
+      .catch(() => setRecentActivity([]));
+  }, []);
+
+  // Fetch summary + activity on focus
+  useFocusEffect(
+    useCallback(() => {
+      fetchSummary();
+      fetchRecentActivity();
+    }, [fetchSummary, fetchRecentActivity]),
   );
 
   useEffect(() => {
@@ -71,8 +127,6 @@ export const StudentHomeScreen: React.FC = () => {
   };
 
   const handleCardPress = (schedule: ScheduleWithAttendance) => {
-    // Navigate to attendance detail if there is a today_attendance record,
-    // otherwise pass schedule info so the detail screen can look up by scheduleId
     if (schedule.today_attendance?.id) {
       navigation.navigate('AttendanceDetail', {
         attendanceId: schedule.today_attendance.id,
@@ -91,7 +145,17 @@ export const StudentHomeScreen: React.FC = () => {
   const handleRefresh = useCallback(() => {
     clearError();
     fetchMySchedules();
-  }, [fetchMySchedules, clearError]);
+    fetchSummary();
+    fetchRecentActivity();
+  }, [fetchMySchedules, clearError, fetchSummary, fetchRecentActivity]);
+
+  const handleFaceRegisterPress = useCallback(() => {
+    navigation.navigate('FaceRegister', { mode: 'register' });
+  }, [navigation]);
+
+  const handleFaceReregisterPress = useCallback(() => {
+    navigation.navigate('FaceRegister', { mode: 'reregister' });
+  }, [navigation]);
 
   // ---------- schedule card ----------
 
@@ -142,10 +206,6 @@ export const StudentHomeScreen: React.FC = () => {
 
   // ---------- header content ----------
 
-  const handleFaceRegisterPress = useCallback(() => {
-    navigation.navigate('FaceRegister', { mode: 'register' });
-  }, [navigation]);
-
   const renderHeader = () => (
     <View style={styles.headerContent}>
       {/* Greeting */}
@@ -158,23 +218,23 @@ export const StudentHomeScreen: React.FC = () => {
         {formatDate(new Date(), 'EEEE, MMMM d, yyyy')}
       </Text>
 
-      {/* Face registration banner */}
-      {faceRegistered === false && (
-        <TouchableOpacity
-          style={styles.faceRegBanner}
-          onPress={handleFaceRegisterPress}
-          activeOpacity={0.7}
-        >
-          <Camera size={20} color={theme.colors.primary} />
-          <View style={styles.faceRegTextWrap}>
-            <Text variant="body" weight="600">
-              Complete Face Registration
-            </Text>
-            <Text variant="caption" color={theme.colors.text.secondary}>
-              Required for automatic attendance tracking
-            </Text>
-          </View>
-        </TouchableOpacity>
+      {/* Face status card (replaces old banner) */}
+      <FaceStatusCard
+        status={faceStatus}
+        registeredAt={faceRegisteredAt}
+        onRegister={handleFaceRegisterPress}
+        onReregister={handleFaceReregisterPress}
+      />
+
+      {/* Attendance overview card */}
+      {summary && (
+        <AttendanceOverviewCard
+          present={summary.present}
+          late={summary.late}
+          absent={summary.absent}
+          earlyLeave={summary.early_leave}
+          attendanceRate={summary.attendance_rate}
+        />
       )}
 
       {/* Current class highlight */}
@@ -192,11 +252,69 @@ export const StudentHomeScreen: React.FC = () => {
         </View>
       )}
 
+      {/* Upcoming class (shown only when no current class and there is a next class today) */}
+      {!currentClass && nextClass && (
+        <View style={styles.upcomingClassCard}>
+          <Text variant="caption" color={theme.colors.text.secondary} style={styles.upcomingClassLabel}>
+            {strings.schedule.upcomingClass}
+          </Text>
+          <Text variant="h3" weight="600" style={styles.upcomingClassName}>
+            {nextClass.subject_name}
+          </Text>
+          <Text variant="bodySmall" color={theme.colors.text.secondary}>
+            {formatTime(nextClass.start_time)} - {formatTime(nextClass.end_time)}
+            {nextClass.room_name ? ` \u2022 ${nextClass.room_name}` : ''}
+          </Text>
+        </View>
+      )}
+
       {/* Section title */}
       <Text variant="h3" weight="600" style={styles.sectionTitle}>
         {strings.schedule.todayClasses}
       </Text>
     </View>
+  );
+
+  // ---------- footer content (recent activity) ----------
+
+  const renderFooter = () => {
+    if (recentActivity.length === 0) return null;
+
+    return (
+      <View style={styles.footerContent}>
+        <Text variant="h3" weight="600" style={styles.sectionTitle}>
+          Recent Activity
+        </Text>
+        {recentActivity.map((record) => {
+          const info = getScheduleInfoForRecord(record);
+          return (
+            <ActivityFeedItem
+              key={record.id}
+              subjectCode={info.subjectCode}
+              subjectName={info.subjectName}
+              date={formatDate(record.date, 'MMM dd, yyyy')}
+              status={record.status}
+            />
+          );
+        })}
+      </View>
+    );
+  };
+
+  /**
+   * Resolve schedule info for an attendance record.
+   * Matches against the already-loaded schedules from the useSchedule hook;
+   * falls back to truncated identifiers if no match is found.
+   */
+  const getScheduleInfoForRecord = useCallback(
+    (record: AttendanceRecord): { subjectName: string; subjectCode: string } => {
+      const matched = schedules.find((s) => s.id === record.schedule_id);
+      return {
+        subjectName: matched?.subject_name ?? `Class ${record.schedule_id.slice(0, 8)}`,
+        subjectCode: matched?.subject_code ?? record.schedule_id.slice(0, 8),
+      };
+    },
+    [schedules],
   );
 
   // ---------- empty state ----------
@@ -305,6 +423,7 @@ export const StudentHomeScreen: React.FC = () => {
         keyExtractor={(item) => item.id}
         renderItem={renderScheduleItem}
         ListHeaderComponent={renderHeader}
+        ListFooterComponent={renderFooter}
         ListEmptyComponent={renderEmpty}
         contentContainerStyle={styles.listContent}
         alwaysBounceVertical={true}
@@ -333,21 +452,6 @@ const styles = StyleSheet.create({
   date: {
     marginBottom: theme.spacing[6],
   },
-  faceRegBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: theme.colors.secondary,
-    padding: theme.spacing[4],
-    borderRadius: theme.borderRadius.lg,
-    borderLeftWidth: 4,
-    borderLeftColor: theme.colors.primary,
-    marginBottom: theme.spacing[6],
-    gap: theme.spacing[3],
-  },
-  faceRegTextWrap: {
-    flex: 1,
-    gap: 2,
-  },
   currentClassCard: {
     backgroundColor: theme.colors.secondary,
     padding: theme.spacing[4],
@@ -362,6 +466,22 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   currentClassName: {
+    marginBottom: theme.spacing[1],
+  },
+  upcomingClassCard: {
+    backgroundColor: theme.colors.secondary,
+    padding: theme.spacing[4],
+    borderRadius: theme.borderRadius.lg,
+    borderLeftWidth: 4,
+    borderLeftColor: theme.colors.border,
+    marginBottom: theme.spacing[6],
+  },
+  upcomingClassLabel: {
+    marginBottom: theme.spacing[1],
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  upcomingClassName: {
     marginBottom: theme.spacing[1],
   },
   sectionTitle: {
@@ -396,6 +516,9 @@ const styles = StyleSheet.create({
   },
   score: {
     marginLeft: theme.spacing[2],
+  },
+  footerContent: {
+    paddingTop: theme.spacing[6],
   },
   emptyContainer: {
     paddingVertical: theme.spacing[8],

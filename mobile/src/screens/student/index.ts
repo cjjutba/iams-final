@@ -6,6 +6,7 @@ export { StudentHomeScreen } from './StudentHomeScreen';
 export { StudentScheduleScreen } from './StudentScheduleScreen';
 export { StudentHistoryScreen } from './StudentHistoryScreen';
 export { StudentAttendanceDetailScreen } from './StudentAttendanceDetailScreen';
+export { StudentAnalyticsScreen } from './StudentAnalyticsScreen';
 export { StudentProfileScreen } from './StudentProfileScreen';
 export { StudentEditProfileScreen } from './StudentEditProfileScreen';
 export { StudentFaceRegisterScreen } from './StudentFaceRegisterScreen';
