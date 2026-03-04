@@ -16,6 +16,7 @@ from app.repositories.face_repository import FaceRepository
 from app.services.ml.insightface_model import insightface_model
 from app.services.ml.faiss_manager import faiss_manager
 from app.services.ml.face_quality import assess_quality, QualityReport
+from app.services.ml.anti_spoof import anti_spoof_detector
 from app.utils.exceptions import ValidationError, FaceRecognitionError, NotFoundError
 from app.config import settings, logger
 
@@ -77,6 +78,7 @@ class FaceService:
 
         # Generate embeddings for each image
         embeddings = []
+        face_crops = []  # Collected for anti-spoof check
         quality_reports: List[QualityReport] = []
         for i, image_file in enumerate(images):
             try:
@@ -91,6 +93,7 @@ class FaceService:
                 if settings.QUALITY_GATE_ENABLED and hasattr(self.facenet, 'get_face_with_quality'):
                     face_data = self.facenet.get_face_with_quality(image_bytes)
                     embedding = face_data["embedding"]
+                    face_crops.append(face_data["image_bgr"])
                     quality = assess_quality(
                         image_bgr=face_data["image_bgr"],
                         det_score=face_data["det_score"],
@@ -125,6 +128,25 @@ class FaceService:
         for emb in embeddings:
             n = emb / np.linalg.norm(emb)
             normed.append(n)
+
+        # Anti-spoof check (registration-time, uses embedding variance + texture)
+        if settings.ANTISPOOF_ENABLED and settings.ANTISPOOF_REGISTRATION_STRICT:
+            spoof_result = anti_spoof_detector.check_registration_set(
+                face_crops=face_crops if face_crops else [],
+                embeddings=normed,
+            )
+            if not spoof_result.is_live:
+                reasons = spoof_result.details.get("rejection_reasons", ["spoof detected"])
+                logger.warning(
+                    f"Anti-spoof rejected registration for user {user_id}: {reasons}"
+                )
+                raise ValidationError(
+                    f"Registration rejected: possible presentation attack. {'; '.join(reasons)}"
+                )
+            logger.debug(
+                f"Anti-spoof passed for user {user_id} "
+                f"(score={spoof_result.spoof_score:.3f})"
+            )
 
         # Add all embeddings to FAISS (one per angle, all mapped to same user)
         all_embs = np.stack(normed).astype(np.float32)
