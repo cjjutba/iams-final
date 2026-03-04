@@ -195,10 +195,10 @@ class InsightFaceModel:
                 cy2 = min(h, y2)
                 result.append(
                     DetectedFace(
-                        x=cx1,
-                        y=cy1,
-                        width=max(1, cx2 - cx1),
-                        height=max(1, cy2 - cy1),
+                        x=int(cx1),
+                        y=int(cy1),
+                        width=int(max(1, cx2 - cx1)),
+                        height=int(max(1, cy2 - cy1)),
                         confidence=float(face.det_score),
                         embedding=face.normed_embedding.copy(),
                     )

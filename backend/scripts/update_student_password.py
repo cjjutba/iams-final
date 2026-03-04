@@ -1,7 +1,7 @@
 """
 Update Student Password Script
 
-Updates the password for the seed student (21-A-02177) to the new password.
+Updates the password for the seed student (21-A-012345) to the new password.
 
 Run from backend directory:
     python -m scripts.update_student_password
@@ -20,7 +20,7 @@ from app.config import logger
 
 
 def update_password():
-    """Update the password for student 21-A-02177."""
+    """Update the password for student 21-A-012345."""
     db = SessionLocal()
 
     try:
@@ -30,11 +30,11 @@ def update_password():
 
         # Find the student
         student = db.query(User).filter(
-            User.student_id == "21-A-02177"
+            User.student_id == "21-A-012345"
         ).first()
 
         if not student:
-            print("\nERROR: Student 21-A-02177 not found in database.")
+            print("\nERROR: Student 21-A-012345 not found in database.")
             print("Please run the seed script first: python -m scripts.seed_data")
             return
 

@@ -75,7 +75,7 @@ docker compose down
 | Faculty | faculty@gmail.com | password123 |
 | Student | (register via app) | (set during registration) |
 
-**Test Student ID:** `21-A-02177`
+**Test Student ID:** `21-A-012345`
 
 ---
 

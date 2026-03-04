@@ -178,7 +178,6 @@ class FAISSManager:
             raise RuntimeError("Index not initialized")
 
         if self.index.ntotal == 0:
-            logger.warning("FAISS index is empty")
             return []
 
         # Ensure 2D array [1, 512]

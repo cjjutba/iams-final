@@ -182,7 +182,7 @@
         "schedule_id": "uuid",
         "student_id": "uuid",
         "student_name": "John Doe",
-        "student_id_number": "21-A-02177",
+        "student_id_number": "21-A-012345",
         "flagged_at": "2026-02-12T08:15:00+08:00",
         "consecutive_misses": 3
       }

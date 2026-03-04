@@ -339,7 +339,7 @@ class RecognitionService:
             new_w, new_h = int(w * scale), int(h * scale)
             frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-        frame_h, frame_w = frame.shape[:2]
+        frame_h, frame_w = int(frame.shape[0]), int(frame.shape[1])
 
         if not self._ml_available:
             return [], frame_w, frame_h
@@ -348,11 +348,6 @@ class RecognitionService:
             insight_faces = self._insight.get_faces(frame)
             if not insight_faces:
                 return [], frame_w, frame_h
-
-            logger.info(
-                f"Recognition: detected {len(insight_faces)} face(s) "
-                f"in {frame_w}x{frame_h} frame"
-            )
 
             detections = []
             for face in insight_faces:

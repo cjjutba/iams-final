@@ -72,7 +72,7 @@ Ready for development/testing.
 
 Faculty login: faculty@gmail.com / password123
 
-Student registration: use mobile app with Student ID 21-A-02177
+Student registration: use mobile app with Student ID 21-A-012345
 ```
 
 ---
@@ -89,7 +89,7 @@ Student registration: use mobile app with Student ID 21-A-02177
 ### Test Student Record
 | Field | Value |
 |-------|-------|
-| Student ID | 21-A-02177 |
+| Student ID | 21-A-012345 |
 | Name | Christian Jerald Jutba |
 | Course | BSCPE |
 | Year Level | 4 |

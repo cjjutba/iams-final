@@ -66,7 +66,7 @@ def create(self, data: dict) -> Model:
 - Fixtures: `db_session`, `test_student`, `test_schedule`, `test_enrollment` for presence tests
 
 ## Seed Data (see `backend/scripts/seed_data.py`)
-- Student: cjjutbaofficial@gmail.com / password123 / student_id=21-A-02177
+- Student: cjjutbaofficial@gmail.com / password123 / student_id=21-A-012345
 - Faculty: faculty@gmail.com / 123 (bypasses validation intentionally)
 - Room: Room 301, Engineering Building, capacity 40
 - Schedules: CPE 301 Mon-Fri 07:00-22:00 (wide window for testing)

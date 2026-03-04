@@ -9,13 +9,14 @@
  * - Loading, error, and empty states
  */
 
-import React, { useCallback, useEffect } from 'react';
-import { View, StyleSheet, FlatList, RefreshControl, ActivityIndicator } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, StyleSheet, FlatList, RefreshControl, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
-import { RefreshCw } from 'lucide-react-native';
+import { RefreshCw, Camera } from 'lucide-react-native';
 import { useAuth, useSchedule } from '../../hooks';
 import { useToast } from '../../hooks/useToast';
+import { faceService } from '../../services';
 import { theme, strings } from '../../constants';
 import { formatDate, formatTime, formatTimeRange, getDayName } from '../../utils';
 import type { StudentStackParamList, Schedule, ScheduleWithAttendance } from '../../types';
@@ -41,6 +42,17 @@ export const StudentHomeScreen: React.FC = () => {
   const { showError } = useToast();
 
   const currentClass = getCurrentClass();
+
+  // Face registration status check — re-checks on focus (after returning from FaceRegister)
+  const [faceRegistered, setFaceRegistered] = useState<boolean | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      faceService.getFaceStatus()
+        .then((status) => setFaceRegistered(status.registered))
+        .catch(() => setFaceRegistered(null));
+    }, []),
+  );
 
   useEffect(() => {
     if (error) showError(error, 'Load Failed');
@@ -130,6 +142,10 @@ export const StudentHomeScreen: React.FC = () => {
 
   // ---------- header content ----------
 
+  const handleFaceRegisterPress = useCallback(() => {
+    navigation.navigate('FaceRegister', { mode: 'register' });
+  }, [navigation]);
+
   const renderHeader = () => (
     <View style={styles.headerContent}>
       {/* Greeting */}
@@ -141,6 +157,25 @@ export const StudentHomeScreen: React.FC = () => {
       <Text variant="body" color={theme.colors.text.secondary} style={styles.date}>
         {formatDate(new Date(), 'EEEE, MMMM d, yyyy')}
       </Text>
+
+      {/* Face registration banner */}
+      {faceRegistered === false && (
+        <TouchableOpacity
+          style={styles.faceRegBanner}
+          onPress={handleFaceRegisterPress}
+          activeOpacity={0.7}
+        >
+          <Camera size={20} color={theme.colors.primary} />
+          <View style={styles.faceRegTextWrap}>
+            <Text variant="body" weight="600">
+              Complete Face Registration
+            </Text>
+            <Text variant="caption" color={theme.colors.text.secondary}>
+              Required for automatic attendance tracking
+            </Text>
+          </View>
+        </TouchableOpacity>
+      )}
 
       {/* Current class highlight */}
       {currentClass && (
@@ -297,6 +332,21 @@ const styles = StyleSheet.create({
   },
   date: {
     marginBottom: theme.spacing[6],
+  },
+  faceRegBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.secondary,
+    padding: theme.spacing[4],
+    borderRadius: theme.borderRadius.lg,
+    borderLeftWidth: 4,
+    borderLeftColor: theme.colors.primary,
+    marginBottom: theme.spacing[6],
+    gap: theme.spacing[3],
+  },
+  faceRegTextWrap: {
+    flex: 1,
+    gap: 2,
   },
   currentClassCard: {
     backgroundColor: theme.colors.secondary,

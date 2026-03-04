@@ -29,7 +29,7 @@ Students **do not have pre-made accounts**. They must register through the mobil
 
 1. Open the IAMS app on the student's phone
 2. Tap **"Register as Student"**
-3. Enter the **Student ID** (e.g., `21-A-02177`)
+3. Enter the **Student ID** (e.g., `21-A-012345`)
 4. The app verifies the ID against the school registry and auto-fills:
    - Full name
    - Course
@@ -44,7 +44,7 @@ Students **do not have pre-made accounts**. They must register through the mobil
 
 | Field | Value |
 |-------|-------|
-| **Student ID** | 21-A-02177 |
+| **Student ID** | 21-A-012345 |
 | **Name** | Christian Jerald Jutba |
 | **Course** | BSCPE |
 | **Year Level** | 4 |

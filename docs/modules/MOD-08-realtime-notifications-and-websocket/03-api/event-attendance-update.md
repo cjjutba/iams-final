@@ -35,7 +35,7 @@ Attendance status change produced by attendance logic (MOD-06).
 | Field | Type | Notes |
 |---|---|---|
 | `data.student_name` | string | Display name for UI convenience |
-| `data.student_id_number` | string | Student ID number (e.g., `21-A-02177`) |
+| `data.student_id_number` | string | Student ID number (e.g., `21-A-012345`) |
 
 ## Timezone Note
 `timestamp` field uses ISO-8601 format with timezone offset based on `TIMEZONE` env var (default: Asia/Manila, +08:00).

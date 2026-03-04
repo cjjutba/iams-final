@@ -20,7 +20,7 @@ class StudentRecord(Base):
 
     __tablename__ = "student_records"
 
-    # Primary key: the school-issued student ID (e.g., "21-A-02177")
+    # Primary key: the school-issued student ID (e.g., "21-A-012345")
     student_id = Column(String(50), primary_key=True, nullable=False)
 
     first_name = Column(String(100), nullable=False)

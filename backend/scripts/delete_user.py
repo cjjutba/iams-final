@@ -4,7 +4,7 @@ Delete User Script
 Removes a user account by student ID or email for testing purposes.
 
 Usage:
-    python -m scripts.delete_user 21-A-02177
+    python -m scripts.delete_user 21-A-012345
     python -m scripts.delete_user cjjutbaofficial@gmail.com
 """
 
@@ -64,7 +64,7 @@ def delete_user(identifier: str) -> None:
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python -m scripts.delete_user <student_id_or_email>")
-        print("Example: python -m scripts.delete_user 21-A-02177")
+        print("Example: python -m scripts.delete_user 21-A-012345")
         sys.exit(1)
 
     identifier = sys.argv[1]

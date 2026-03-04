@@ -117,6 +117,9 @@ const FADE_OUT_CONFIG = {
 // AnimatedDetectionBox
 // ---------------------------------------------------------------------------
 
+// Height reserved for the name label above the bounding box.
+const LABEL_HEIGHT = 22;
+
 interface TrackedBoxProps {
   bbox: DetectionBBox;
   isKnown: boolean;
@@ -136,10 +139,19 @@ const AnimatedDetectionBox: React.FC<TrackedBoxProps> = ({
 }) => {
   const { scale, offsetX, offsetY } = scaleInfo;
 
-  const targetLeft = bbox.x * scale + offsetX;
-  const targetTop = bbox.y * scale + offsetY;
-  const targetWidth = bbox.width * scale;
-  const targetHeight = bbox.height * scale;
+  const hasLabel = label.length > 0;
+
+  // The wrapper includes the label area above the box so that everything
+  // stays inside the Animated.View bounds (avoids Android overflow clipping).
+  const boxLeft = bbox.x * scale + offsetX;
+  const boxTop = bbox.y * scale + offsetY;
+  const boxWidth = bbox.width * scale;
+  const boxHeight = bbox.height * scale;
+
+  const targetLeft = boxLeft;
+  const targetTop = hasLabel ? boxTop - LABEL_HEIGHT : boxTop;
+  const targetWidth = boxWidth;
+  const targetHeight = hasLabel ? boxHeight + LABEL_HEIGHT : boxHeight;
 
   const left = useSharedValue(targetLeft);
   const top = useSharedValue(targetTop);
@@ -167,18 +179,18 @@ const AnimatedDetectionBox: React.FC<TrackedBoxProps> = ({
   }));
 
   const borderColor = isKnown ? '#00E676' : '#FFD600';
-  const hasLabel = label.length > 0;
 
   return (
-    <Animated.View style={[styles.box, { borderColor }, animatedStyle]}>
+    <Animated.View style={[styles.wrapper, animatedStyle]}>
+      {/* Label sits inside the wrapper, above the box border area */}
       {hasLabel && (
         <View
           style={[
             styles.labelContainer,
             {
               backgroundColor: isKnown
-                ? 'rgba(0,0,0,0.72)'
-                : 'rgba(60,40,0,0.80)',
+                ? 'rgba(0,0,0,0.80)'
+                : 'rgba(60,40,0,0.85)',
             },
           ]}
         >
@@ -191,6 +203,8 @@ const AnimatedDetectionBox: React.FC<TrackedBoxProps> = ({
           </Text>
         </View>
       )}
+      {/* Box border fills remaining space */}
+      <View style={[styles.box, { borderColor }]} />
     </Animated.View>
   );
 };
@@ -280,22 +294,24 @@ export const DetectionOverlay: React.FC<DetectionOverlayProps> = React.memo(
 // ---------------------------------------------------------------------------
 
 const styles = StyleSheet.create({
-  box: {
+  wrapper: {
     position: 'absolute',
-    borderWidth: 1.5,
+  },
+  box: {
+    flex: 1,
+    borderWidth: 2,
     borderRadius: 2,
   },
   labelContainer: {
-    position: 'absolute',
-    top: -20,
-    left: -1,
+    alignSelf: 'flex-start',
     paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 2,
+    paddingVertical: 2,
+    borderRadius: 3,
+    marginBottom: 1,
   },
   labelText: {
-    fontSize: 10,
-    fontWeight: '700',
+    fontSize: 11,
+    fontWeight: '800',
   },
   unknownBadge: {
     position: 'absolute',

@@ -52,7 +52,7 @@ class AuthService:
         entering random student IDs.
 
         Args:
-            student_id: Student ID to verify (e.g. "21-A-02177")
+            student_id: Student ID to verify (e.g. "21-A-012345")
             birthdate: Student's birthdate for identity verification
 
         Returns:

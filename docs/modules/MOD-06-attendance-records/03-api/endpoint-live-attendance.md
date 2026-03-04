@@ -26,7 +26,7 @@
       {
         "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
         "name": "Juan Dela Cruz",
-        "student_id_number": "21-A-02177",
+        "student_id_number": "21-A-012345",
         "status": "present",
         "last_seen": "2026-02-12T08:45:00+08:00",
         "consecutive_misses": 0

@@ -38,5 +38,5 @@
 - Faculty accounts are pre-seeded only (no self-registration in MVP)
 
 ## JRMSU Student ID Format
-- Example: `21-A-02177` (XX-X-XXXXX pattern)
+- Example: `21-A-012345` (XX-X-XXXXX pattern)
 - MVP does not enforce strict format validation - accepts any string >= 3 chars

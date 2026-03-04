@@ -6,12 +6,13 @@
  */
 
 import React, { useState, useCallback } from 'react';
-import { View, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, ActivityIndicator } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import { Camera as VisionCamera } from 'react-native-vision-camera';
 import { Camera } from 'lucide-react-native';
 import { faceService } from '../../services';
+import { useToast } from '../../hooks/useToast';
 import { theme, strings } from '../../constants';
 import { getErrorMessage } from '../../utils';
 import type { StudentStackParamList } from '../../types';
@@ -26,6 +27,7 @@ export const StudentFaceRegisterScreen: React.FC = () => {
   const route = useRoute<FaceRegisterRouteProp>();
   const mode = route.params?.mode || 'reregister';
 
+  const { showSuccess, showError } = useToast();
   const [permissionGranted, setPermissionGranted] = useState<boolean | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -52,22 +54,21 @@ export const StudentFaceRegisterScreen: React.FC = () => {
         await faceService.reregisterFace(images);
       }
 
-      Alert.alert(
-        'Success',
+      navigation.goBack();
+      showSuccess(
         mode === 'register'
           ? 'Face registered successfully'
           : 'Face re-registered successfully',
-        [{ text: 'OK', onPress: () => navigation.goBack() }],
+        'Success',
       );
     } catch (error: unknown) {
       const message = getErrorMessage(error);
-      Alert.alert('Error', message, [
-        { text: 'OK', onPress: () => navigation.goBack() },
-      ]);
+      navigation.goBack();
+      showError(message, 'Registration Failed');
     } finally {
       setIsSubmitting(false);
     }
-  }, [mode, navigation]);
+  }, [mode, navigation, showSuccess, showError]);
 
   // ── Permission loading ─────────────────────────────────────
 

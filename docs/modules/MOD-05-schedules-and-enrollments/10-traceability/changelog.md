@@ -15,7 +15,7 @@
 - **MOD-02 user deletion coordination added:** Documented cascade deletion of enrollments when student is deleted. Added to api-boundary-notes.md, data-model-inventory.md, business-rules.md.
 - **Cross-module coordination section added:** New section in module-specification.md covering MOD-04, MOD-06, MOD-07, MOD-11, and MOD-02 coordination.
 - **Query parameters expanded:** GET /schedules now documents `day`, `room_id`, `faculty_id`, `active_only` query params. Added to endpoint-list-schedules.md, function-specifications.md.
-- **Roster response fields documented:** Response includes `id` (users.id), `student_id` (users.student_id), `first_name`, `last_name`. Updated student_id example from "2024-0001" to "21-A-02177" to match seed data format. Documented in endpoint-get-schedule-students.md.
+- **Roster response fields documented:** Response includes `id` (users.id), `student_id` (users.student_id), `first_name`, `last_name`. Updated student_id example from "2024-0001" to "21-A-012345" to match seed data format. Documented in endpoint-get-schedule-students.md.
 - **Error models enhanced:** Removed `details` array from error shape. Added Error Code column to status mapping. Added Error Scenarios by Function table.
 - **Environment config expanded:** From 3 generic variables to 5 specific variables in table format (DATABASE_URL, SUPABASE_URL, SUPABASE_ANON_KEY, JWT_SECRET_KEY, TIMEZONE). Added security rules and validation checklist.
 - **Screen state matrix expanded:** Added Auth Error (401) and Permission Error (403) columns. Added pull-to-refresh and auth error handling to UX rules.
