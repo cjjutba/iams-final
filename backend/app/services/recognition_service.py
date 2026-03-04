@@ -357,6 +357,16 @@ class RecognitionService:
                     if matches:
                         user_id, similarity = matches[0]
 
+                # Record similarity for re-enrollment monitoring
+                if user_id and similarity is not None and settings.REENROLL_CHECK_ENABLED:
+                    try:
+                        from app.services.reenrollment_service import reenrollment_monitor
+                        needs_reenroll = reenrollment_monitor.record_similarity(user_id, similarity)
+                        if needs_reenroll:
+                            self._queue_reenroll_notification(user_id)
+                    except Exception:
+                        pass  # Non-critical
+
                 detections.append(Detection(
                     x=face.x,
                     y=face.y,
@@ -371,6 +381,35 @@ class RecognitionService:
         except Exception as exc:
             logger.error(f"Recognition: InsightFace error: {exc}")
             return [], frame_w, frame_h
+
+    # ------------------------------------------------------------------
+    # Re-enrollment notification helper
+    # ------------------------------------------------------------------
+
+    def _queue_reenroll_notification(self, user_id: str) -> None:
+        """Create a re-enrollment notification for a user (fire-and-forget)."""
+        try:
+            from app.database import SessionLocal
+            from app.services.notification_service import NotificationService
+            from app.routers.websocket import manager as ws_manager
+
+            db = SessionLocal()
+            try:
+                svc = NotificationService(ws_manager, db)
+                svc.create_persisted_notification(
+                    user_id=user_id,
+                    title="Face Re-registration Recommended",
+                    message=(
+                        "Your face recognition accuracy has decreased. "
+                        "Please re-register your face for better attendance tracking."
+                    ),
+                    notification_type="reenrollment",
+                    data={"action": "reenroll"},
+                )
+            finally:
+                db.close()
+        except Exception as e:
+            logger.debug(f"Failed to create re-enrollment notification: {e}")
 
     # ------------------------------------------------------------------
     # Enrichment helper (requires DB session — called from router layer)

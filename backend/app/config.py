@@ -119,6 +119,11 @@ class Settings(BaseSettings):
     RECOGNITION_RTSP_URL: str = ""  # High-res RTSP URL for recognition (empty = use DEFAULT_RTSP_URL)
     RECOGNITION_MAX_DIM: int = 1280  # Cap frame dimension for detection (balances accuracy vs speed)
 
+    # Re-enrollment Monitoring
+    REENROLL_CHECK_ENABLED: bool = True
+    REENROLL_SIMILARITY_THRESHOLD: float = 0.55  # Mean similarity below this triggers re-enroll prompt
+    REENROLL_WINDOW_SIZE: int = 20               # Rolling window of recent similarity scores
+
     # File Storage
     UPLOAD_DIR: str = "data/uploads/faces"
     MAX_UPLOAD_SIZE_MB: int = 10
