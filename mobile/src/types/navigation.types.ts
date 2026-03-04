@@ -101,6 +101,7 @@ export type StudentStackParamList = {
 export type FacultyTabParamList = {
   FacultyHome: undefined;
   FacultySchedule: undefined;
+  FacultyAnalytics: undefined;
   FacultyAlerts: undefined;
   FacultyProfile: undefined;
 };

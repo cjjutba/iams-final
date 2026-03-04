@@ -3,7 +3,12 @@
  *
  * App settings and preferences used by both students and faculty.
  * Implements:
- * - Notification preference toggles (persisted locally)
+ * - Notification preference toggles (persisted locally via SecureStore)
+ *   - Attendance Confirmations
+ *   - Early Leave Alerts
+ *   - Anomaly Alerts (faculty only)
+ *   - Low Attendance Warning
+ *   - Weekly Digest
  * - Theme display (read-only for now)
  * - Password change navigation
  * - About section with real app version
@@ -22,6 +27,7 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { ChevronRight, Info } from 'lucide-react-native';
+import { useAuth } from '../../hooks';
 import { theme, config } from '../../constants';
 import { ScreenLayout, Header } from '../../components/layouts';
 import { Text, Card, Divider } from '../../components/ui';
@@ -31,15 +37,29 @@ const PREF_KEYS = {
   NOTIF_ATTENDANCE: '@iams/pref_notif_attendance',
   NOTIF_ALERTS: '@iams/pref_notif_alerts',
   NOTIF_SCHEDULE: '@iams/pref_notif_schedule',
+  NOTIF_ATTENDANCE_CONFIRM: '@iams/pref_notif_attendance_confirm',
+  NOTIF_EARLY_LEAVE: '@iams/pref_notif_early_leave',
+  NOTIF_ANOMALY: '@iams/pref_notif_anomaly',
+  NOTIF_LOW_ATTENDANCE: '@iams/pref_notif_low_attendance',
+  NOTIF_WEEKLY_DIGEST: '@iams/pref_notif_weekly_digest',
 } as const;
 
 export const SettingsScreen: React.FC = () => {
   const navigation = useNavigation();
+  const { isFaculty } = useAuth();
 
-  // Notification preferences (defaults to true)
+  // Legacy notification preferences (kept for backwards compatibility)
   const [attendanceNotifs, setAttendanceNotifs] = useState(true);
   const [alertNotifs, setAlertNotifs] = useState(true);
   const [scheduleNotifs, setScheduleNotifs] = useState(true);
+
+  // New notification preferences
+  const [attendanceConfirmNotifs, setAttendanceConfirmNotifs] = useState(true);
+  const [earlyLeaveNotifs, setEarlyLeaveNotifs] = useState(true);
+  const [anomalyNotifs, setAnomalyNotifs] = useState(true);
+  const [lowAttendanceNotifs, setLowAttendanceNotifs] = useState(true);
+  const [weeklyDigestNotifs, setWeeklyDigestNotifs] = useState(true);
+
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Load saved preferences on mount
@@ -48,6 +68,7 @@ export const SettingsScreen: React.FC = () => {
       // SecureStore only stores strings, so we check for 'false'
       const SecureStore = await import('expo-secure-store');
 
+      // Legacy preferences
       const attVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_ATTENDANCE);
       if (attVal !== null) setAttendanceNotifs(attVal !== 'false');
 
@@ -56,6 +77,22 @@ export const SettingsScreen: React.FC = () => {
 
       const schedVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_SCHEDULE);
       if (schedVal !== null) setScheduleNotifs(schedVal !== 'false');
+
+      // New notification preferences
+      const confirmVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_ATTENDANCE_CONFIRM);
+      if (confirmVal !== null) setAttendanceConfirmNotifs(confirmVal !== 'false');
+
+      const earlyVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_EARLY_LEAVE);
+      if (earlyVal !== null) setEarlyLeaveNotifs(earlyVal !== 'false');
+
+      const anomalyVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_ANOMALY);
+      if (anomalyVal !== null) setAnomalyNotifs(anomalyVal !== 'false');
+
+      const lowAttVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_LOW_ATTENDANCE);
+      if (lowAttVal !== null) setLowAttendanceNotifs(lowAttVal !== 'false');
+
+      const digestVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_WEEKLY_DIGEST);
+      if (digestVal !== null) setWeeklyDigestNotifs(digestVal !== 'false');
     } catch (err) {
       // Silently fail -- defaults are fine
       console.error('Failed to load preferences:', err);
@@ -134,6 +171,74 @@ export const SettingsScreen: React.FC = () => {
             value={scheduleNotifs}
             onToggle={(v) =>
               togglePreference(PREF_KEYS.NOTIF_SCHEDULE, v, setScheduleNotifs)
+            }
+            isLast
+          />
+        </Card>
+
+        {/* Notification Preferences (detailed) */}
+        <Card style={styles.card}>
+          <Text variant="h4" weight="600" style={styles.sectionTitle}>
+            Notification Preferences
+          </Text>
+
+          <ToggleItem
+            label="Attendance Confirmations"
+            description="Confirm when your attendance is successfully recorded each session"
+            value={attendanceConfirmNotifs}
+            onToggle={(v) =>
+              togglePreference(
+                PREF_KEYS.NOTIF_ATTENDANCE_CONFIRM,
+                v,
+                setAttendanceConfirmNotifs,
+              )
+            }
+          />
+
+          <ToggleItem
+            label="Early Leave Alerts"
+            description="Get notified when an early leave is detected for you or your students"
+            value={earlyLeaveNotifs}
+            onToggle={(v) =>
+              togglePreference(PREF_KEYS.NOTIF_EARLY_LEAVE, v, setEarlyLeaveNotifs)
+            }
+          />
+
+          {/* Anomaly alerts - faculty only */}
+          {isFaculty && (
+            <ToggleItem
+              label="Anomaly Alerts"
+              description="Receive alerts about unusual attendance patterns in your classes"
+              value={anomalyNotifs}
+              onToggle={(v) =>
+                togglePreference(PREF_KEYS.NOTIF_ANOMALY, v, setAnomalyNotifs)
+              }
+            />
+          )}
+
+          <ToggleItem
+            label="Low Attendance Warning"
+            description="Get warned when attendance drops below the required threshold"
+            value={lowAttendanceNotifs}
+            onToggle={(v) =>
+              togglePreference(
+                PREF_KEYS.NOTIF_LOW_ATTENDANCE,
+                v,
+                setLowAttendanceNotifs,
+              )
+            }
+          />
+
+          <ToggleItem
+            label="Weekly Digest"
+            description="Receive a weekly summary of attendance activity"
+            value={weeklyDigestNotifs}
+            onToggle={(v) =>
+              togglePreference(
+                PREF_KEYS.NOTIF_WEEKLY_DIGEST,
+                v,
+                setWeeklyDigestNotifs,
+              )
             }
             isLast
           />
