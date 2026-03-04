@@ -9,13 +9,12 @@ def test_recognition_batch_size_default():
 
 def test_recognition_fps_default():
     """
-    Recognition FPS should be low (2–5) to avoid log spam and CPU pressure.
+    Recognition FPS should be reasonable for real-time detection overlay.
 
-    10 FPS generated a downscale debug log every 100ms which drowned out
-    meaningful events.  2 FPS is sufficient for continuous presence tracking.
+    15 FPS balances smooth bounding-box updates with CPU pressure.
     """
     from app.config import settings
-    assert 1.0 <= settings.RECOGNITION_FPS <= 5.0
+    assert 1.0 <= settings.RECOGNITION_FPS <= 30.0
 
 
 def test_hls_segment_duration_is_low_latency():
