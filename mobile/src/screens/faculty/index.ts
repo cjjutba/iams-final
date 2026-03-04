@@ -10,6 +10,7 @@ export { FacultyClassDetailScreen } from './FacultyClassDetailScreen';
 export { FacultyStudentDetailScreen } from './FacultyStudentDetailScreen';
 export { FacultyManualEntryScreen } from './FacultyManualEntryScreen';
 export { FacultyAlertsScreen } from './FacultyAlertsScreen';
+export { FacultyAnalyticsDashboardScreen } from './FacultyAnalyticsDashboardScreen';
 export { FacultyReportsScreen } from './FacultyReportsScreen';
 export { FacultyProfileScreen } from './FacultyProfileScreen';
 export { FacultyNotificationsScreen } from './FacultyNotificationsScreen';

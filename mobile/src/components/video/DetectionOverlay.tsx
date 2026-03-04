@@ -120,9 +120,43 @@ const FADE_OUT_CONFIG = {
 // Height reserved for the name label above the bounding box.
 const LABEL_HEIGHT = 22;
 
+// ---------------------------------------------------------------------------
+// Confidence-based color tiers
+// ---------------------------------------------------------------------------
+
+/** High confidence: similarity >= 0.8 */
+const COLOR_HIGH = '#22C55E';
+/** Medium confidence: similarity >= 0.6 */
+const COLOR_MEDIUM = '#06B6D4';
+/** Low confidence / unknown: similarity < 0.6 or null */
+const COLOR_LOW = '#EAB308';
+
+/**
+ * Determine bounding box border color based on a 3-tier confidence system.
+ * - similarity >= 0.8  -> green  (high confidence match)
+ * - similarity >= 0.6  -> cyan   (acceptable match)
+ * - similarity < 0.6 or null (unknown face) -> yellow
+ */
+function getConfidenceColor(similarity: number | null): string {
+  if (similarity == null) return COLOR_LOW;
+  if (similarity >= 0.8) return COLOR_HIGH;
+  if (similarity >= 0.6) return COLOR_MEDIUM;
+  return COLOR_LOW;
+}
+
+/**
+ * Background color for the label container, matched to the confidence tier.
+ */
+function getLabelBackground(similarity: number | null): string {
+  if (similarity == null) return 'rgba(60,40,0,0.85)';
+  if (similarity >= 0.8) return 'rgba(0,0,0,0.80)';
+  if (similarity >= 0.6) return 'rgba(0,20,30,0.80)';
+  return 'rgba(60,40,0,0.85)';
+}
+
 interface TrackedBoxProps {
   bbox: DetectionBBox;
-  isKnown: boolean;
+  similarity: number | null;
   label: string;
   simText: string;
   staleFrames: number;
@@ -131,7 +165,7 @@ interface TrackedBoxProps {
 
 const AnimatedDetectionBox: React.FC<TrackedBoxProps> = ({
   bbox,
-  isKnown,
+  similarity,
   label,
   simText,
   staleFrames,
@@ -178,7 +212,8 @@ const AnimatedDetectionBox: React.FC<TrackedBoxProps> = ({
     opacity: opacity.value,
   }));
 
-  const borderColor = isKnown ? '#00E676' : '#FFD600';
+  const borderColor = getConfidenceColor(similarity);
+  const labelBg = getLabelBackground(similarity);
 
   return (
     <Animated.View style={[styles.wrapper, animatedStyle]}>
@@ -187,11 +222,7 @@ const AnimatedDetectionBox: React.FC<TrackedBoxProps> = ({
         <View
           style={[
             styles.labelContainer,
-            {
-              backgroundColor: isKnown
-                ? 'rgba(0,0,0,0.80)'
-                : 'rgba(60,40,0,0.85)',
-            },
+            { backgroundColor: labelBg },
           ]}
         >
           <Text
@@ -275,7 +306,7 @@ export const DetectionOverlay: React.FC<DetectionOverlayProps> = React.memo(
             <AnimatedDetectionBox
               key={trackId}
               bbox={det.bbox}
-              isKnown={!!det.user_id}
+              similarity={det.similarity}
               label={label}
               simText={simText}
               staleFrames={staleFrames}
@@ -317,15 +348,15 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 8,
     right: 8,
-    backgroundColor: 'rgba(255,214,0,0.18)',
+    backgroundColor: 'rgba(234,179,8,0.18)',
     borderWidth: 1,
-    borderColor: '#FFD600',
+    borderColor: COLOR_LOW,
     borderRadius: 6,
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
   unknownBadgeText: {
-    color: '#FFD600',
+    color: COLOR_LOW,
     fontSize: 11,
     fontWeight: '600',
   },

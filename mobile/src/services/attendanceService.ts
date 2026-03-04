@@ -26,6 +26,7 @@ import type {
   AttendanceSummary,
   EarlyLeaveEvent,
   ManualAttendanceRequest,
+  ScheduleAttendanceSummary,
 } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -293,6 +294,31 @@ export const attendanceService = {
               ...(filters.end_date && { end_date: filters.end_date }),
             }
           : undefined,
+      },
+    );
+    return response.data;
+  },
+
+  /**
+   * Get per-schedule attendance summaries for the faculty's classes.
+   *
+   * Returns present/late/absent counts, attendance rate, and session
+   * status for each of the faculty's schedules on the given date.
+   *
+   * @param date - Optional ISO date string (YYYY-MM-DD). Defaults to today on backend.
+   * @returns Array of per-schedule attendance summaries
+   * @throws AxiosError on network or auth errors
+   *
+   * Backend: GET /attendance/schedule-summaries?date=...
+   * Response: List[ScheduleAttendanceSummaryItem]
+   */
+  async getScheduleSummaries(
+    date?: string,
+  ): Promise<ScheduleAttendanceSummary[]> {
+    const response = await api.get<ScheduleAttendanceSummary[]>(
+      '/attendance/schedule-summaries',
+      {
+        params: date ? { date } : undefined,
       },
     );
     return response.data;

@@ -28,19 +28,23 @@ import {
   View,
   StyleSheet,
   FlatList,
+  SectionList,
   ActivityIndicator,
   LayoutChangeEvent,
   Animated,
+  TouchableOpacity,
+  Alert,
 } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { RTCView } from 'react-native-webrtc';
-import { Wifi, WifiOff, Video, Users, RefreshCw } from 'lucide-react-native';
+import { Wifi, WifiOff, Video, Users, RefreshCw, Play, Square, ClipboardList } from 'lucide-react-native';
 import { theme, strings } from '../../constants';
 import { formatPercentage } from '../../utils/formatters';
-import type { FacultyStackParamList } from '../../types';
+import type { FacultyStackParamList, StudentAttendanceStatus } from '../../types';
+import { AttendanceStatus } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
 import { Text, Card, Button } from '../../components/ui';
 import { DetectionOverlay } from '../../components/video/DetectionOverlay';
@@ -48,6 +52,8 @@ import { useDetectionWebSocket } from '../../hooks/useDetectionWebSocket';
 import type { DetectedStudent } from '../../hooks/useDetectionWebSocket';
 import { useDetectionTracker } from '../../hooks/useDetectionTracker';
 import { useWebRTC } from '../../hooks/useWebRTC';
+import { useSession } from '../../hooks';
+import { attendanceService } from '../../services/attendanceService';
 
 // ---------------------------------------------------------------------------
 // Route typing
@@ -55,6 +61,9 @@ import { useWebRTC } from '../../hooks/useWebRTC';
 
 type LiveFeedRouteProp = RouteProp<FacultyStackParamList, 'LiveFeed'>;
 type LiveFeedNavigationProp = StackNavigationProp<FacultyStackParamList, 'LiveFeed'>;
+
+/** Bottom panel tab options */
+type PanelTab = 'detected' | 'attendance';
 
 // ---------------------------------------------------------------------------
 // LivePulse — animated red dot + LIVE label
@@ -148,6 +157,23 @@ export const FacultyLiveFeedScreen: React.FC = () => {
   const navigation = useNavigation<LiveFeedNavigationProp>();
   const { scheduleId, subjectName } = route.params;
 
+  // Panel tab state
+  const [activeTab, setActiveTab] = useState<PanelTab>('detected');
+
+  // Attendance tab data
+  const [attendanceStudents, setAttendanceStudents] = useState<StudentAttendanceStatus[]>([]);
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
+
+  // Session management
+  const {
+    isSessionActive,
+    startSession,
+    endSession,
+    isLoading: sessionLoading,
+  } = useSession();
+
+  const sessionActive = isSessionActive(scheduleId);
+
   // Detection WebSocket (also extracts HLS URL from connected message)
   const {
     detections,
@@ -235,6 +261,61 @@ export const FacultyLiveFeedScreen: React.FC = () => {
     if (streamMode === 'webrtc') rtcReconnect();
   }, [reconnect, rtcReconnect, streamMode]);
 
+  // --------------------------------------------------
+  // Session control handlers
+  // --------------------------------------------------
+
+  const handleStartSession = useCallback(async () => {
+    const result = await startSession(scheduleId);
+    if (!result) {
+      Alert.alert('Error', 'Failed to start session');
+    }
+  }, [scheduleId, startSession]);
+
+  const handleEndSession = useCallback(() => {
+    Alert.alert(
+      'End Session',
+      `End the session for ${subjectName}? Final attendance scores will be calculated.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'End Session',
+          style: 'destructive',
+          onPress: async () => {
+            const result = await endSession(scheduleId);
+            if (!result) {
+              Alert.alert('Error', 'Failed to end session');
+            }
+          },
+        },
+      ],
+    );
+  }, [scheduleId, subjectName, endSession]);
+
+  // --------------------------------------------------
+  // Attendance tab: fetch enrolled students grouped by status
+  // --------------------------------------------------
+
+  const fetchAttendanceData = useCallback(async () => {
+    setAttendanceLoading(true);
+    try {
+      const data = await attendanceService.getLiveAttendance(scheduleId);
+      setAttendanceStudents(data.students);
+    } catch {
+      // Silently handle; tab will show empty state
+      setAttendanceStudents([]);
+    } finally {
+      setAttendanceLoading(false);
+    }
+  }, [scheduleId]);
+
+  // Refresh attendance data when tab switches to "attendance"
+  useEffect(() => {
+    if (activeTab === 'attendance') {
+      fetchAttendanceData();
+    }
+  }, [activeTab, fetchAttendanceData]);
+
   // Track container dimensions for overlay coordinate scaling
   const [containerLayout, setContainerLayout] = useState({ width: 0, height: 0 });
 
@@ -321,6 +402,97 @@ export const FacultyLiveFeedScreen: React.FC = () => {
   );
 
   const itemSeparator = useCallback(() => <View style={styles.separator} />, []);
+
+  // --------------------------------------------------
+  // Attendance tab: grouped sections
+  // --------------------------------------------------
+
+  const attendanceSections = useMemo(() => {
+    const present: StudentAttendanceStatus[] = [];
+    const absent: StudentAttendanceStatus[] = [];
+    const unknown: StudentAttendanceStatus[] = [];
+
+    for (const s of attendanceStudents) {
+      if (s.status === AttendanceStatus.PRESENT || s.status === AttendanceStatus.LATE) {
+        present.push(s);
+      } else if (s.status === AttendanceStatus.ABSENT) {
+        absent.push(s);
+      } else {
+        unknown.push(s);
+      }
+    }
+
+    const sections: { title: string; data: StudentAttendanceStatus[]; color: string }[] = [];
+
+    if (present.length > 0) {
+      sections.push({
+        title: `Present (${present.length})`,
+        data: present,
+        color: theme.colors.status.present.fg,
+      });
+    }
+    if (absent.length > 0) {
+      sections.push({
+        title: `Absent (${absent.length})`,
+        data: absent,
+        color: theme.colors.status.absent.fg,
+      });
+    }
+    if (unknown.length > 0) {
+      sections.push({
+        title: `Unknown (${unknown.length})`,
+        data: unknown,
+        color: theme.colors.text.tertiary,
+      });
+    }
+
+    return sections;
+  }, [attendanceStudents]);
+
+  const renderAttendanceRow = useCallback(
+    ({ item }: { item: StudentAttendanceStatus }) => (
+      <View style={styles.studentRow}>
+        <View
+          style={[
+            styles.detectionDot,
+            {
+              backgroundColor:
+                item.status === AttendanceStatus.PRESENT || item.status === AttendanceStatus.LATE
+                  ? theme.colors.status.present.fg
+                  : item.status === AttendanceStatus.ABSENT
+                  ? theme.colors.status.absent.fg
+                  : theme.colors.text.disabled,
+            },
+          ]}
+        />
+        <View style={styles.studentInfo}>
+          <Text variant="bodySmall" weight="600" numberOfLines={1}>
+            {item.student_name}
+          </Text>
+          <Text variant="caption" color={theme.colors.text.secondary}>
+            {item.student_id}
+          </Text>
+        </View>
+        {item.presence_score != null && (
+          <Text variant="caption" weight="600" color={theme.colors.text.secondary}>
+            {item.presence_score.toFixed(0)}%
+          </Text>
+        )}
+      </View>
+    ),
+    [],
+  );
+
+  const renderSectionHeader = useCallback(
+    ({ section }: { section: { title: string; color: string } }) => (
+      <View style={styles.sectionHeader}>
+        <Text variant="caption" weight="700" color={section.color}>
+          {section.title}
+        </Text>
+      </View>
+    ),
+    [],
+  );
 
   // --------------------------------------------------
   // Error state
@@ -424,10 +596,74 @@ export const FacultyLiveFeedScreen: React.FC = () => {
                 color={theme.colors.text.secondary}
                 style={styles.detectionCountText}
               >
-                {detectedCount} detected{unknownCount > 0 ? ` · ${unknownCount} unknown` : ''}
+                {detectedCount} detected{unknownCount > 0 ? ` \u00B7 ${unknownCount} unknown` : ''}
               </Text>
             )}
           </View>
+        </View>
+
+        {/* Session control bar */}
+        <View style={styles.sessionControlBar}>
+          {sessionActive ? (
+            <>
+              <View style={styles.sessionActiveLabel}>
+                <View style={styles.sessionActiveDot} />
+                <Text variant="caption" weight="700" color={theme.colors.success}>
+                  SESSION ACTIVE
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.endSessionBtn}
+                onPress={handleEndSession}
+                disabled={sessionLoading}
+                activeOpacity={theme.interaction.activeOpacity}
+              >
+                {sessionLoading ? (
+                  <ActivityIndicator size="small" color={theme.colors.status.absent.fg} />
+                ) : (
+                  <>
+                    <Square size={12} color={theme.colors.status.absent.fg} />
+                    <Text
+                      variant="caption"
+                      weight="600"
+                      color={theme.colors.status.absent.fg}
+                      style={styles.sessionBtnLabel}
+                    >
+                      End Session
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <Text variant="caption" weight="600" color={theme.colors.text.tertiary}>
+                SESSION INACTIVE
+              </Text>
+              <TouchableOpacity
+                style={styles.startSessionBtn}
+                onPress={handleStartSession}
+                disabled={sessionLoading}
+                activeOpacity={theme.interaction.activeOpacity}
+              >
+                {sessionLoading ? (
+                  <ActivityIndicator size="small" color={theme.colors.primaryForeground} />
+                ) : (
+                  <>
+                    <Play size={12} color={theme.colors.primaryForeground} />
+                    <Text
+                      variant="caption"
+                      weight="600"
+                      color={theme.colors.primaryForeground}
+                      style={styles.sessionBtnLabel}
+                    >
+                      Start Session
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </>
+          )}
         </View>
 
         {/* Camera feed: WebRTC or HLS video + detection overlay */}
@@ -484,18 +720,106 @@ export const FacultyLiveFeedScreen: React.FC = () => {
           )}
         </View>
 
-        {/* Bottom panel: detected students */}
+        {/* Bottom panel: tabbed view */}
         <Card style={styles.bottomPanel}>
-          <FlatList
-            data={studentsList}
-            keyExtractor={keyExtractor}
-            renderItem={renderStudentRow}
-            ListHeaderComponent={renderStudentListHeader}
-            ListEmptyComponent={renderStudentListEmpty}
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.studentListContent}
-            ItemSeparatorComponent={itemSeparator}
-          />
+          {/* Tab switcher */}
+          <View style={styles.tabBar}>
+            <TouchableOpacity
+              style={[styles.tab, activeTab === 'detected' && styles.tabActive]}
+              onPress={() => setActiveTab('detected')}
+              activeOpacity={theme.interaction.activeOpacity}
+            >
+              <Users
+                size={14}
+                color={
+                  activeTab === 'detected'
+                    ? theme.colors.text.primary
+                    : theme.colors.text.tertiary
+                }
+              />
+              <Text
+                variant="caption"
+                weight={activeTab === 'detected' ? '700' : '500'}
+                color={
+                  activeTab === 'detected'
+                    ? theme.colors.text.primary
+                    : theme.colors.text.tertiary
+                }
+                style={styles.tabLabel}
+              >
+                Detected
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.tab, activeTab === 'attendance' && styles.tabActive]}
+              onPress={() => setActiveTab('attendance')}
+              activeOpacity={theme.interaction.activeOpacity}
+            >
+              <ClipboardList
+                size={14}
+                color={
+                  activeTab === 'attendance'
+                    ? theme.colors.text.primary
+                    : theme.colors.text.tertiary
+                }
+              />
+              <Text
+                variant="caption"
+                weight={activeTab === 'attendance' ? '700' : '500'}
+                color={
+                  activeTab === 'attendance'
+                    ? theme.colors.text.primary
+                    : theme.colors.text.tertiary
+                }
+                style={styles.tabLabel}
+              >
+                Attendance
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Detected tab content */}
+          {activeTab === 'detected' && (
+            <FlatList
+              data={studentsList}
+              keyExtractor={keyExtractor}
+              renderItem={renderStudentRow}
+              ListHeaderComponent={renderStudentListHeader}
+              ListEmptyComponent={renderStudentListEmpty}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.studentListContent}
+              ItemSeparatorComponent={itemSeparator}
+            />
+          )}
+
+          {/* Attendance tab content */}
+          {activeTab === 'attendance' && (
+            <>
+              {attendanceLoading ? (
+                <View style={styles.emptyDetections}>
+                  <ActivityIndicator size="small" color={theme.colors.primary} />
+                </View>
+              ) : attendanceSections.length === 0 ? (
+                <View style={styles.emptyDetections}>
+                  <Text variant="bodySmall" color={theme.colors.text.tertiary} align="center">
+                    No attendance data available
+                  </Text>
+                </View>
+              ) : (
+                <SectionList
+                  sections={attendanceSections}
+                  keyExtractor={(item) => item.student_id}
+                  renderItem={renderAttendanceRow}
+                  renderSectionHeader={renderSectionHeader}
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={styles.studentListContent}
+                  ItemSeparatorComponent={itemSeparator}
+                  stickySectionHeadersEnabled={false}
+                />
+              )}
+            </>
+          )}
 
           {/* Switch to List View button */}
           <Button
@@ -547,6 +871,48 @@ const styles = StyleSheet.create({
     marginLeft: theme.spacing[1],
   },
 
+  // Session control bar
+  sessionControlBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: theme.spacing[4],
+    paddingVertical: theme.spacing[2],
+    backgroundColor: theme.colors.secondary,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  sessionActiveLabel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  sessionActiveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: theme.colors.success,
+    marginRight: theme.spacing[2],
+  },
+  startSessionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.primary,
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[1],
+    borderRadius: theme.borderRadius.sm,
+  },
+  endSessionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.status.absent.bg,
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[1],
+    borderRadius: theme.borderRadius.sm,
+  },
+  sessionBtnLabel: {
+    marginLeft: theme.spacing[1],
+  },
+
   // Camera feed
   feedContainer: {
     flex: 1,
@@ -588,6 +954,37 @@ const styles = StyleSheet.create({
   },
   studentListContent: {
     flexGrow: 1,
+  },
+
+  // Tab bar
+  tabBar: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+    marginBottom: theme.spacing[3],
+    marginHorizontal: -theme.layout.cardPadding,
+    paddingHorizontal: theme.layout.cardPadding,
+  },
+  tab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: theme.spacing[2],
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+  },
+  tabActive: {
+    borderBottomColor: theme.colors.primary,
+  },
+  tabLabel: {
+    marginLeft: theme.spacing[1],
+  },
+
+  // Section header (attendance tab)
+  sectionHeader: {
+    paddingVertical: theme.spacing[2],
+    backgroundColor: theme.colors.card,
   },
 
   // Student row
