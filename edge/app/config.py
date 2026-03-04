@@ -69,6 +69,14 @@ class Config:
     RETRY_INTERVAL_SECONDS: int = int(os.getenv("RETRY_INTERVAL_SECONDS", "10"))
     RETRY_MAX_ATTEMPTS: int = int(os.getenv("RETRY_MAX_ATTEMPTS", "3"))
 
+    # ===== Image Preprocessing =====
+    CLAHE_ENABLED: bool = os.getenv("CLAHE_ENABLED", "true").lower() in ("true", "1", "yes")
+    CLAHE_CLIP_LIMIT: float = float(os.getenv("CLAHE_CLIP_LIMIT", "2.0"))
+    CLAHE_TILE_SIZE: int = int(os.getenv("CLAHE_TILE_SIZE", "4"))
+    BLUR_DETECTION_ENABLED: bool = os.getenv("BLUR_DETECTION_ENABLED", "true").lower() in ("true", "1", "yes")
+    BLUR_THRESHOLD: float = float(os.getenv("BLUR_THRESHOLD", "50.0"))  # Laplacian variance min
+    DYNAMIC_PADDING_ENABLED: bool = os.getenv("DYNAMIC_PADDING_ENABLED", "true").lower() in ("true", "1", "yes")
+
     # ===== Processing Configuration =====
     SCAN_INTERVAL: int = int(os.getenv("SCAN_INTERVAL", "60"))  # 60 seconds
 

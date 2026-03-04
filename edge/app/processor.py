@@ -51,11 +51,99 @@ class FaceProcessor:
 
     Extracts face regions, resizes to standard dimensions, compresses to JPEG,
     and encodes to Base64 for HTTP transmission.
+
+    Preprocessing enhancements:
+    - CLAHE histogram equalization for consistent lighting
+    - Dynamic crop padding based on face size
+    - On-device blur detection to skip blurry crops
     """
 
     def __init__(self):
         self.crop_size = config.FACE_CROP_SIZE
         self.jpeg_quality = config.JPEG_QUALITY
+        self._clahe = None
+        if config.CLAHE_ENABLED:
+            self._clahe = cv2.createCLAHE(
+                clipLimit=config.CLAHE_CLIP_LIMIT,
+                tileGridSize=(config.CLAHE_TILE_SIZE, config.CLAHE_TILE_SIZE),
+            )
+
+    def enhance_image(self, face_img: np.ndarray) -> np.ndarray:
+        """
+        Apply CLAHE histogram equalization for consistent lighting.
+
+        Converts to LAB color space, equalizes the L (luminance) channel
+        using CLAHE, then converts back to BGR.
+
+        Args:
+            face_img: BGR face image
+
+        Returns:
+            Enhanced BGR image
+        """
+        if self._clahe is None:
+            return face_img
+        try:
+            lab = cv2.cvtColor(face_img, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            l = self._clahe.apply(l)
+            enhanced = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
+            return enhanced
+        except Exception as e:
+            logger.debug(f"CLAHE enhancement failed, returning original: {e}")
+            return face_img
+
+    def is_blurry(self, face_img: np.ndarray) -> bool:
+        """
+        Detect if a face crop is blurry using Laplacian variance.
+
+        Args:
+            face_img: BGR face image
+
+        Returns:
+            True if image is blurry (variance below threshold)
+        """
+        if not config.BLUR_DETECTION_ENABLED:
+            return False
+        try:
+            gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+            variance = cv2.Laplacian(gray, cv2.CV_64F).var()
+            return variance < config.BLUR_THRESHOLD
+        except Exception:
+            return False
+
+    def compute_dynamic_padding(self, face_box: FaceBox, frame_shape: Tuple[int, ...]) -> float:
+        """
+        Compute adaptive crop padding based on face size relative to frame.
+
+        Larger faces need less padding (already fill the crop), smaller faces
+        benefit from more context around them.
+
+        Args:
+            face_box: Detected face bounding box
+            frame_shape: Frame dimensions (H, W, C)
+
+        Returns:
+            Padding ratio (0.1 to 0.4)
+        """
+        if not config.DYNAMIC_PADDING_ENABLED:
+            return 0.2  # Default fixed padding
+
+        frame_h, frame_w = frame_shape[:2]
+        face_area = face_box.width * face_box.height
+        frame_area = frame_w * frame_h
+        ratio = face_area / frame_area if frame_area > 0 else 0
+
+        # Large face (>15% of frame): minimal padding
+        # Small face (<3% of frame): generous padding
+        if ratio > 0.15:
+            return 0.1
+        elif ratio > 0.08:
+            return 0.2
+        elif ratio > 0.03:
+            return 0.3
+        else:
+            return 0.4
 
     def crop_face(
         self,
@@ -189,13 +277,27 @@ class FaceProcessor:
             FaceData object ready for transmission, or None if processing failed
         """
         try:
+            # Compute dynamic padding
+            padding = self.compute_dynamic_padding(face_box, frame.shape)
+
             # Crop face
-            cropped = self.crop_face(frame, face_box)
+            cropped = self.crop_face(frame, face_box, padding=padding)
             if cropped is None:
                 return None
 
+            # Skip blurry crops (saves bandwidth)
+            if self.is_blurry(cropped):
+                logger.debug(
+                    f"Skipping blurry face crop "
+                    f"(bbox={face_box.to_list()}, conf={face_box.confidence:.2f})"
+                )
+                return None
+
+            # Apply CLAHE histogram equalization
+            enhanced = self.enhance_image(cropped)
+
             # Resize
-            resized = self.resize_face(cropped)
+            resized = self.resize_face(enhanced)
             if resized is None:
                 return None
 
@@ -277,5 +379,8 @@ class FaceProcessor:
         """
         return {
             "crop_size": self.crop_size,
-            "jpeg_quality": self.jpeg_quality
+            "jpeg_quality": self.jpeg_quality,
+            "clahe_enabled": config.CLAHE_ENABLED,
+            "blur_detection_enabled": config.BLUR_DETECTION_ENABLED,
+            "dynamic_padding_enabled": config.DYNAMIC_PADDING_ENABLED,
         }
