@@ -331,32 +331,23 @@ class FaceService:
 
     async def rebuild_faiss_index(self):
         """
-        Rebuild FAISS index from active face registrations
+        Rebuild FAISS index from active face embeddings.
 
-        This is necessary after deletions since IndexFlatIP doesn't support native deletion.
+        Prefers multi-embedding rows (face_embeddings table). Falls back to
+        single averaged embedding in face_registrations for backward compat.
         """
         logger.info("Rebuilding FAISS index from active registrations...")
 
-        # Get all active face registrations
-        active_registrations = self.face_repo.get_active_embeddings()
+        embeddings_data = self._collect_embeddings_for_rebuild()
 
-        if not active_registrations:
+        if not embeddings_data:
             logger.warning("No active face registrations found")
             self.faiss.index = self.faiss._create_index()
             self.faiss.user_map = {}
             self.faiss.save()
             return
 
-        # Prepare embeddings data
-        embeddings_data = []
-        for reg in active_registrations:
-            # Convert bytes back to numpy array
-            embedding = np.frombuffer(reg.embedding_vector, dtype=np.float32)
-            embeddings_data.append((embedding, str(reg.user_id)))
-
-        # Rebuild FAISS index
         self.faiss.rebuild(embeddings_data)
-
         logger.info(f"FAISS index rebuilt with {len(embeddings_data)} embeddings")
 
     def get_face_status(self, user_id: str) -> dict:
@@ -413,12 +404,45 @@ class FaceService:
         """
         self.faiss.load_or_create_index()
 
-        # Load user mappings from database
-        active_registrations = self.face_repo.get_active_embeddings()
-        for reg in active_registrations:
-            self.faiss.user_map[reg.embedding_id] = str(reg.user_id)
+        # Load user mappings: prefer multi-embedding table, fallback to legacy
+        multi_embs = self.face_repo.get_all_active_embeddings()
+        if multi_embs:
+            for emb in multi_embs:
+                self.faiss.user_map[emb.faiss_id] = str(emb.registration.user_id)
+        else:
+            active_registrations = self.face_repo.get_active_embeddings()
+            for reg in active_registrations:
+                self.faiss.user_map[reg.embedding_id] = str(reg.user_id)
 
         logger.info(f"Loaded {len(self.faiss.user_map)} user mappings")
+
+    def _collect_embeddings_for_rebuild(self) -> list:
+        """Collect embedding data for FAISS rebuild, preferring multi-embedding table."""
+        return FaceService._collect_embeddings_static(self.face_repo)
+
+    @staticmethod
+    def _collect_embeddings_static(repo: FaceRepository) -> list:
+        """Collect (embedding, user_id) tuples from DB.
+
+        Prefers face_embeddings table (multi-embedding). Falls back to
+        face_registrations.embedding_vector for backward compatibility.
+        """
+        multi_embs = repo.get_all_active_embeddings()
+        if multi_embs:
+            return [
+                (np.frombuffer(e.embedding_vector, dtype=np.float32), str(e.registration.user_id))
+                for e in multi_embs
+            ]
+
+        # Fallback: legacy single-embedding registrations
+        active_regs = repo.get_active_embeddings()
+        if active_regs:
+            return [
+                (np.frombuffer(r.embedding_vector, dtype=np.float32), str(r.user_id))
+                for r in active_regs
+            ]
+
+        return []
 
     def save_faiss_index(self):
         """
@@ -429,14 +453,10 @@ class FaceService:
     @staticmethod
     def reconcile_faiss_index(db: Session) -> bool:
         """
-        Rebuild FAISS user_map from DB on every startup.
+        Rebuild FAISS index and user_map from DB on every startup.
 
-        ``faiss_manager.load_or_create_index()`` restores index vectors from
-        disk but cannot restore ``user_map`` (FAISS files store vectors only).
-        Without user_map every search returns None even when the correct vector
-        is found.  Rebuilding from the DB-stored embedding bytes is the only
-        reliable way to keep the in-memory map consistent after restarts,
-        deregistrations, or re-registrations.
+        Prefers multi-embedding rows (face_embeddings table). Falls back to
+        single averaged embedding in face_registrations for backward compat.
 
         Args:
             db: SQLAlchemy database session
@@ -447,28 +467,21 @@ class FaceService:
         """
         repo = FaceRepository(db)
 
-        active_regs = repo.get_active_embeddings()
-        active_count = len(active_regs)
+        embeddings_data = FaceService._collect_embeddings_static(repo)
+        db_count = len(embeddings_data)
         faiss_count = faiss_manager.index.ntotal if faiss_manager.index else 0
-        was_mismatched = active_count != faiss_count
+        was_mismatched = db_count != faiss_count
 
         if was_mismatched:
             logger.warning(
                 f"FAISS/DB mismatch: FAISS has {faiss_count} vectors, "
-                f"DB has {active_count} active registrations. Rebuilding..."
+                f"DB has {db_count} active embeddings. Rebuilding..."
             )
 
-        if not active_regs:
-            # No registrations yet — leave the (possibly empty) index as-is.
+        if not embeddings_data:
             logger.info("FAISS: no active registrations, skipping rebuild")
             return was_mismatched
 
-        # Always rebuild from DB embedding bytes so that user_map is populated
-        # correctly regardless of whether a crash or deregistration occurred.
-        embeddings_data = [
-            (np.frombuffer(r.embedding_vector, dtype=np.float32), str(r.user_id))
-            for r in active_regs
-        ]
         faiss_manager.rebuild(embeddings_data)
         logger.info(
             f"FAISS index loaded: {len(embeddings_data)} embeddings, "
