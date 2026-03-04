@@ -46,6 +46,7 @@ import { Text, Card, Button } from '../../components/ui';
 import { DetectionOverlay } from '../../components/video/DetectionOverlay';
 import { useDetectionWebSocket } from '../../hooks/useDetectionWebSocket';
 import type { DetectedStudent } from '../../hooks/useDetectionWebSocket';
+import { useDetectionTracker } from '../../hooks/useDetectionTracker';
 import { useWebRTC } from '../../hooks/useWebRTC';
 
 // ---------------------------------------------------------------------------
@@ -160,6 +161,9 @@ export const FacultyLiveFeedScreen: React.FC = () => {
     detectionWidth,
     detectionHeight,
   } = useDetectionWebSocket(scheduleId);
+
+  // Assign stable track IDs for smooth interpolation
+  const trackedDetections = useDetectionTracker(detections);
 
   // WebRTC video (enabled only in webrtc mode)
   const {
@@ -433,16 +437,17 @@ export const FacultyLiveFeedScreen: React.FC = () => {
               <RTCView
                 streamURL={remoteStream.toURL()}
                 style={styles.video}
-                objectFit="cover"
+                objectFit="contain"
                 mirror={false}
                 zOrder={0}
               />
               <DetectionOverlay
-                detections={detections}
+                detections={trackedDetections}
                 videoWidth={detectionWidth}
                 videoHeight={detectionHeight}
                 containerWidth={containerLayout.width}
                 containerHeight={containerLayout.height}
+                resizeMode="contain"
               />
             </>
           ) : (streamMode === 'hls' || streamMode === 'legacy') && hlsUrl ? (
@@ -454,11 +459,12 @@ export const FacultyLiveFeedScreen: React.FC = () => {
                 nativeControls={false}
               />
               <DetectionOverlay
-                detections={detections}
+                detections={trackedDetections}
                 videoWidth={detectionWidth}
                 videoHeight={detectionHeight}
                 containerWidth={containerLayout.width}
                 containerHeight={containerLayout.height}
+                resizeMode="contain"
               />
             </>
           ) : (
