@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     QUALITY_MIN_FACE_SIZE_RATIO: float = 0.05   # Face area / image area minimum
     QUALITY_MIN_DET_SCORE: float = 0.5          # SCRFD detection confidence minimum
 
+    # Anti-Spoofing / Liveness Detection
+    ANTISPOOF_ENABLED: bool = True
+    ANTISPOOF_REGISTRATION_STRICT: bool = True      # Block registration if spoof detected
+    ANTISPOOF_RECOGNITION_LOG_ONLY: bool = True     # Only log during CCTV (no blocking)
+    ANTISPOOF_EMBEDDING_VARIANCE_MIN: float = 0.1   # Min embedding cosine distance variance across angles
+    ANTISPOOF_LBP_THRESHOLD: float = 0.3            # LBP texture uniformity threshold
+    ANTISPOOF_FFT_THRESHOLD: float = 0.4            # FFT high-freq energy threshold
+
     # Presence Tracking
     SCAN_INTERVAL_SECONDS: int = 60  # How often to run presence scans
     EARLY_LEAVE_THRESHOLD: int = 3  # Consecutive misses to flag early leave
