@@ -19,6 +19,7 @@ from app.models.student_record import StudentRecord
 from app.models.faculty_record import FacultyRecord
 from app.models.engagement_score import EngagementScore
 from app.models.attendance_anomaly import AttendanceAnomaly, AnomalyType
+from app.models.attendance_prediction import AttendancePrediction, RiskLevel
 
 __all__ = [
     "Base",
@@ -39,4 +40,6 @@ __all__ = [
     "EngagementScore",
     "AttendanceAnomaly",
     "AnomalyType",
+    "AttendancePrediction",
+    "RiskLevel",
 ]
