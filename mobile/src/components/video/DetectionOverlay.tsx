@@ -1,16 +1,20 @@
 /**
  * Detection Overlay
  *
- * Renders face detection bounding boxes and labels as absolutely-positioned
- * Views on top of the video player. Scales detection coordinates from the
- * backend's processing resolution to the on-screen container dimensions,
- * accounting for letterboxing when the video uses `contain` mode.
+ * Renders face detection bounding boxes with smooth 60 FPS interpolation
+ * using react-native-reanimated. Detection coordinates are received from
+ * the backend at ~15 FPS; reanimated smoothly transitions positions on
+ * the native UI thread between updates.
  */
 
-import React, { useEffect, useRef, useMemo } from 'react';
-import { Animated, View, Text, StyleSheet } from 'react-native';
-
-const FADE_DURATION = 200;
+import React, { useEffect, useMemo } from 'react';
+import { View, Text, StyleSheet } from 'react-native';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  Easing,
+} from 'react-native-reanimated';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -42,10 +46,12 @@ interface DetectionOverlayProps {
   containerWidth: number;
   /** On-screen container height (from onLayout). */
   containerHeight: number;
+  /** How the video is fitted into its container (default: 'contain'). */
+  resizeMode?: 'contain' | 'cover';
 }
 
 // ---------------------------------------------------------------------------
-// Coordinate scaling (handles letterboxing)
+// Coordinate scaling (handles letterboxing / cover)
 // ---------------------------------------------------------------------------
 
 interface ScaleInfo {
@@ -59,6 +65,7 @@ function computeScale(
   videoH: number,
   containerW: number,
   containerH: number,
+  mode: 'contain' | 'cover' = 'contain',
 ): ScaleInfo {
   if (videoW <= 0 || videoH <= 0 || containerW <= 0 || containerH <= 0) {
     return { scale: 1, offsetX: 0, offsetY: 0 };
@@ -71,72 +78,122 @@ function computeScale(
   let offsetX = 0;
   let offsetY = 0;
 
-  if (videoAspect > containerAspect) {
-    // Video wider than container — letterbox top/bottom
-    scale = containerW / videoW;
-    const scaledHeight = videoH * scale;
-    offsetY = (containerH - scaledHeight) / 2;
+  if (mode === 'cover') {
+    if (videoAspect > containerAspect) {
+      scale = containerH / videoH;
+      offsetX = (containerW - videoW * scale) / 2;
+    } else {
+      scale = containerW / videoW;
+      offsetY = (containerH - videoH * scale) / 2;
+    }
   } else {
-    // Video taller than container — pillarbox left/right
-    scale = containerH / videoH;
-    const scaledWidth = videoW * scale;
-    offsetX = (containerW - scaledWidth) / 2;
+    if (videoAspect > containerAspect) {
+      scale = containerW / videoW;
+      offsetY = (containerH - videoH * scale) / 2;
+    } else {
+      scale = containerH / videoH;
+      offsetX = (containerW - videoW * scale) / 2;
+    }
   }
 
   return { scale, offsetX, offsetY };
 }
 
 // ---------------------------------------------------------------------------
-// DetectionBox (animated fade-in)
+// Timing config: fast ease-out for snappy tracking
 // ---------------------------------------------------------------------------
 
-const DetectionBox: React.FC<{
-  detection: DetectionItem;
+const TIMING_CONFIG = {
+  duration: 80,
+  easing: Easing.out(Easing.quad),
+};
+
+const FADE_OUT_CONFIG = {
+  duration: 150,
+  easing: Easing.out(Easing.quad),
+};
+
+// ---------------------------------------------------------------------------
+// AnimatedDetectionBox
+// ---------------------------------------------------------------------------
+
+interface TrackedBoxProps {
+  bbox: DetectionBBox;
+  isKnown: boolean;
+  label: string;
+  simText: string;
+  staleFrames: number;
   scaleInfo: ScaleInfo;
-}> = React.memo(({ detection, scaleInfo }) => {
-  const opacity = useRef(new Animated.Value(0)).current;
+}
+
+const AnimatedDetectionBox: React.FC<TrackedBoxProps> = ({
+  bbox,
+  isKnown,
+  label,
+  simText,
+  staleFrames,
+  scaleInfo,
+}) => {
+  const { scale, offsetX, offsetY } = scaleInfo;
+
+  const targetLeft = bbox.x * scale + offsetX;
+  const targetTop = bbox.y * scale + offsetY;
+  const targetWidth = bbox.width * scale;
+  const targetHeight = bbox.height * scale;
+
+  const left = useSharedValue(targetLeft);
+  const top = useSharedValue(targetTop);
+  const width = useSharedValue(targetWidth);
+  const height = useSharedValue(targetHeight);
+  const opacity = useSharedValue(staleFrames > 0 ? 0 : 1);
 
   useEffect(() => {
-    Animated.timing(opacity, {
-      toValue: 1,
-      duration: FADE_DURATION,
-      useNativeDriver: true,
-    }).start();
-  }, []);
+    left.value = withTiming(targetLeft, TIMING_CONFIG);
+    top.value = withTiming(targetTop, TIMING_CONFIG);
+    width.value = withTiming(targetWidth, TIMING_CONFIG);
+    height.value = withTiming(targetHeight, TIMING_CONFIG);
+  }, [targetLeft, targetTop, targetWidth, targetHeight]);
 
-  const { scale, offsetX, offsetY } = scaleInfo;
-  const left = detection.bbox.x * scale + offsetX;
-  const top = detection.bbox.y * scale + offsetY;
-  const width = detection.bbox.width * scale;
-  const height = detection.bbox.height * scale;
+  useEffect(() => {
+    opacity.value = withTiming(staleFrames > 0 ? 0 : 1, FADE_OUT_CONFIG);
+  }, [staleFrames]);
 
-  const isKnown = !!detection.user_id;
+  const animatedStyle = useAnimatedStyle(() => ({
+    left: left.value,
+    top: top.value,
+    width: width.value,
+    height: height.value,
+    opacity: opacity.value,
+  }));
+
   const borderColor = isKnown ? '#00E676' : '#FFD600';
-  const labelBg = isKnown ? 'rgba(0,0,0,0.72)' : 'rgba(60,40,0,0.80)';
-
-  const label = detection.name || detection.student_id || (detection.user_id?.slice(0, 8) ?? '');
-  const simText = detection.similarity != null ? ` ${(detection.similarity * 100).toFixed(0)}%` : '';
+  const hasLabel = label.length > 0;
 
   return (
-    <Animated.View style={[styles.box, { left, top, width, height, borderColor, opacity }]}>
-      <View style={[styles.labelContainer, { backgroundColor: labelBg }]}>
-        <Text style={[styles.labelText, { color: borderColor }]} numberOfLines={1}>
-          {label}{simText}
-        </Text>
-      </View>
+    <Animated.View style={[styles.box, { borderColor }, animatedStyle]}>
+      {hasLabel && (
+        <View
+          style={[
+            styles.labelContainer,
+            {
+              backgroundColor: isKnown
+                ? 'rgba(0,0,0,0.72)'
+                : 'rgba(60,40,0,0.80)',
+            },
+          ]}
+        >
+          <Text
+            style={[styles.labelText, { color: borderColor }]}
+            numberOfLines={1}
+          >
+            {label}
+            {simText}
+          </Text>
+        </View>
+      )}
     </Animated.View>
   );
-}, (prev, next) =>
-  prev.detection.bbox.x === next.detection.bbox.x &&
-  prev.detection.bbox.y === next.detection.bbox.y &&
-  prev.detection.bbox.width === next.detection.bbox.width &&
-  prev.detection.bbox.height === next.detection.bbox.height &&
-  prev.detection.name === next.detection.name &&
-  prev.detection.similarity === next.detection.similarity &&
-  prev.scaleInfo.scale === next.scaleInfo.scale &&
-  prev.scaleInfo.offsetX === next.scaleInfo.offsetX &&
-  prev.scaleInfo.offsetY === next.scaleInfo.offsetY,
-);
+};
 
 // ---------------------------------------------------------------------------
 // UnknownBadge
@@ -146,26 +203,38 @@ const UnknownBadge: React.FC<{ count: number }> = React.memo(({ count }) => {
   if (count === 0) return null;
   return (
     <View style={styles.unknownBadge}>
-      <Text style={styles.unknownBadgeText}>
-        {count} unrecognized
-      </Text>
+      <Text style={styles.unknownBadgeText}>{count} unrecognized</Text>
     </View>
   );
 });
 
 // ---------------------------------------------------------------------------
-// Component
+// Main Component
 // ---------------------------------------------------------------------------
 
 export const DetectionOverlay: React.FC<DetectionOverlayProps> = React.memo(
-  ({ detections, videoWidth, videoHeight, containerWidth, containerHeight }) => {
+  ({
+    detections,
+    videoWidth,
+    videoHeight,
+    containerWidth,
+    containerHeight,
+    resizeMode = 'contain',
+  }) => {
     const scaleInfo = useMemo(
-      () => computeScale(videoWidth, videoHeight, containerWidth, containerHeight),
-      [videoWidth, videoHeight, containerWidth, containerHeight],
+      () =>
+        computeScale(
+          videoWidth,
+          videoHeight,
+          containerWidth,
+          containerHeight,
+          resizeMode,
+        ),
+      [videoWidth, videoHeight, containerWidth, containerHeight, resizeMode],
     );
 
     const unknownCount = useMemo(
-      () => detections.filter(d => !d.user_id).length,
+      () => detections.filter((d) => !d.user_id).length,
       [detections],
     );
 
@@ -175,13 +244,31 @@ export const DetectionOverlay: React.FC<DetectionOverlayProps> = React.memo(
 
     return (
       <View style={StyleSheet.absoluteFill} pointerEvents="none">
-        {detections.map((det, i) => (
-          <DetectionBox
-            key={det.user_id || `unknown-${i}`}
-            detection={det}
-            scaleInfo={scaleInfo}
-          />
-        ))}
+        {detections.map((det) => {
+          const trackId =
+            (det as any).trackId || det.user_id || `unk-${det.bbox.x}-${det.bbox.y}`;
+          const label =
+            det.name ||
+            det.student_id ||
+            (det.user_id?.slice(0, 8) ?? '');
+          const simText =
+            det.similarity != null
+              ? ` ${(det.similarity * 100).toFixed(0)}%`
+              : '';
+          const staleFrames = (det as any).staleFrames ?? 0;
+
+          return (
+            <AnimatedDetectionBox
+              key={trackId}
+              bbox={det.bbox}
+              isKnown={!!det.user_id}
+              label={label}
+              simText={simText}
+              staleFrames={staleFrames}
+              scaleInfo={scaleInfo}
+            />
+          );
+        })}
         <UnknownBadge count={unknownCount} />
       </View>
     );
@@ -195,19 +282,19 @@ export const DetectionOverlay: React.FC<DetectionOverlayProps> = React.memo(
 const styles = StyleSheet.create({
   box: {
     position: 'absolute',
-    borderWidth: 3,
-    borderRadius: 3,
+    borderWidth: 1.5,
+    borderRadius: 2,
   },
   labelContainer: {
     position: 'absolute',
-    top: -22,
+    top: -20,
     left: -1,
-    paddingHorizontal: 6,
+    paddingHorizontal: 5,
     paddingVertical: 1,
     borderRadius: 2,
   },
   labelText: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '700',
   },
   unknownBadge: {
