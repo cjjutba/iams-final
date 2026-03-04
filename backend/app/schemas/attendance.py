@@ -160,6 +160,30 @@ class AttendanceUpdateRequest(BaseModel):
     remarks: Optional[str] = None
 
 
+class ScheduleAttendanceSummaryItem(BaseModel):
+    """Per-schedule attendance summary for the faculty dashboard"""
+    schedule_id: str
+    subject_code: str
+    subject_name: str
+    start_time: time
+    end_time: time
+    room_name: Optional[str] = None
+    session_active: bool = False
+    total_enrolled: int = 0
+    present_count: int = 0
+    late_count: int = 0
+    absent_count: int = 0
+    attendance_rate: float = Field(0.0, ge=0.0, le=100.0)
+
+    @field_validator("schedule_id", mode="before")
+    @classmethod
+    def coerce_uuid_to_str(cls, v):
+        """Convert UUID to string if needed"""
+        if isinstance(v, UUID):
+            return str(v)
+        return v
+
+
 class AlertResponse(BaseModel):
     """Early leave alert response for faculty dashboard"""
     id: str
