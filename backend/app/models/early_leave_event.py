@@ -2,11 +2,12 @@
 Early Leave Event Model
 
 Records when a student is detected leaving class early.
+Tracks return detection and context-aware severity.
 """
 
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, Integer, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, Boolean, String, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -28,6 +29,10 @@ class EarlyLeaveEvent(Base):
         consecutive_misses: Number of consecutive scans missed
         notified: Whether faculty was notified
         notified_at: When notification was sent
+        returned: Whether student returned after early leave
+        returned_at: When student was re-detected
+        absence_duration_seconds: Duration of absence in seconds
+        context_severity: Severity based on when in class the leave occurred
     """
 
     __tablename__ = "early_leave_events"
@@ -47,8 +52,16 @@ class EarlyLeaveEvent(Base):
     notified = Column(Boolean, default=False, nullable=False)
     notified_at = Column(DateTime, nullable=True)
 
+    # Return tracking
+    returned = Column(Boolean, default=False, nullable=False)
+    returned_at = Column(DateTime, nullable=True)
+    absence_duration_seconds = Column(Integer, nullable=True)
+
+    # Context-aware severity: "low" (near end), "medium" (mid-class), "high" (near start)
+    context_severity = Column(String(20), nullable=True)
+
     # Relationships
     attendance_record = relationship("AttendanceRecord", backref="early_leave_events")
 
     def __repr__(self):
-        return f"<EarlyLeaveEvent(id={self.id}, attendance_id={self.attendance_id}, misses={self.consecutive_misses})>"
+        return f"<EarlyLeaveEvent(id={self.id}, attendance_id={self.attendance_id}, misses={self.consecutive_misses}, severity={self.context_severity})>"

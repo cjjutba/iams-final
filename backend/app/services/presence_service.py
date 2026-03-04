@@ -24,6 +24,36 @@ from app.utils.exceptions import NotFoundError, ValidationError
 from app.config import settings, logger
 
 
+def compute_early_leave_severity(
+    leave_time: datetime,
+    class_start: time,
+    class_end: time,
+) -> str:
+    """Compute context-aware severity based on when in class the leave occurred.
+
+    - Near start (<30% elapsed) → "high"
+    - Mid class (30-85% elapsed) → "medium"
+    - Near end (>85% elapsed) → "low"
+    """
+    now_time = leave_time.time()
+    start_secs = class_start.hour * 3600 + class_start.minute * 60 + class_start.second
+    end_secs = class_end.hour * 3600 + class_end.minute * 60 + class_end.second
+    now_secs = now_time.hour * 3600 + now_time.minute * 60 + now_time.second
+
+    total_duration = end_secs - start_secs
+    if total_duration <= 0:
+        return "medium"
+
+    elapsed = now_secs - start_secs
+    ratio = elapsed / total_duration
+
+    if ratio < 0.30:
+        return "high"
+    elif ratio > 0.85:
+        return "low"
+    return "medium"
+
+
 class SessionState:
     """Represents an active attendance session"""
 
@@ -390,8 +420,11 @@ class PresenceService:
             if attendance.status == AttendanceStatus.ABSENT:
                 continue
 
-            # Skip if already flagged for early leave
+            # Handle return detection for previously flagged students
             if snap["early_leave_flagged"]:
+                is_present_now = student_id in present_user_ids
+                if is_present_now:
+                    await self._handle_early_leave_return(attendance_id, student_id)
                 continue
 
             # Check if student is currently present (detected by tracker)
@@ -488,13 +521,22 @@ class PresenceService:
                 last_seen = log.scan_time
                 break
 
+        # Compute context severity based on schedule
+        severity = "medium"
+        schedule = getattr(attendance, 'schedule', None)
+        if schedule and hasattr(schedule, 'start_time') and hasattr(schedule, 'end_time'):
+            severity = compute_early_leave_severity(
+                datetime.now(), schedule.start_time, schedule.end_time
+            )
+
         # Create early leave event
         event = self.attendance_repo.create_early_leave_event({
             "attendance_id": attendance_id,
             "detected_at": datetime.now(),
             "last_seen_at": last_seen or attendance.check_in_time,
             "consecutive_misses": consecutive_misses,
-            "notified": False
+            "notified": False,
+            "context_severity": severity,
         })
 
         logger.info(f"Early leave event created: {event.id}")
@@ -505,6 +547,49 @@ class PresenceService:
                 await self.notification_service.notify_early_leave(attendance)
             except Exception as e:
                 logger.error(f"Failed to send early leave notification: {e}")
+
+    async def _handle_early_leave_return(self, attendance_id: str, student_id: str):
+        """Handle a student returning after being flagged for early leave.
+
+        Updates the most recent early leave event with return info.
+        """
+        from app.models.early_leave_event import EarlyLeaveEvent
+
+        # Find the most recent unflagged-returned event for this attendance
+        event = (
+            self.db.query(EarlyLeaveEvent)
+            .filter(
+                EarlyLeaveEvent.attendance_id == attendance_id,
+                EarlyLeaveEvent.returned == False,
+            )
+            .order_by(EarlyLeaveEvent.detected_at.desc())
+            .first()
+        )
+
+        if not event:
+            return
+
+        now = datetime.now()
+        event.returned = True
+        event.returned_at = now
+        event.absence_duration_seconds = int((now - event.detected_at).total_seconds())
+        self.db.commit()
+
+        logger.info(
+            f"Student {student_id} returned after early leave "
+            f"(absent {event.absence_duration_seconds}s, severity={event.context_severity})"
+        )
+
+        # Send return notification
+        if self.notification_service:
+            try:
+                attendance = self.attendance_repo.get_by_id(attendance_id)
+                if attendance:
+                    await self.notification_service.notify_early_leave_return(
+                        attendance, event.absence_duration_seconds
+                    )
+            except Exception as e:
+                logger.error(f"Failed to send early leave return notification: {e}")
 
     async def end_session(self, schedule_id: str):
         """

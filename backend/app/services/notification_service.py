@@ -97,6 +97,44 @@ class NotificationService:
         except Exception as e:
             logger.error(f"Failed to send early leave notification: {e}")
 
+    async def notify_early_leave_return(
+        self, attendance: AttendanceRecord, absence_duration_seconds: int
+    ):
+        """Send notification that a student returned after early leave."""
+        try:
+            schedule = self.db.query(Schedule).filter(
+                Schedule.id == attendance.schedule_id
+            ).first()
+            if not schedule:
+                return
+
+            student = self.db.query(User).filter(User.id == attendance.student_id).first()
+            if not student:
+                return
+
+            message = {
+                "event": "early_leave_return",
+                "data": {
+                    "attendance_id": str(attendance.id),
+                    "student_id": str(attendance.student_id),
+                    "student_name": f"{student.first_name} {student.last_name}",
+                    "schedule_id": str(attendance.schedule_id),
+                    "subject_code": schedule.subject_code,
+                    "absence_duration_seconds": absence_duration_seconds,
+                    "returned_at": datetime.now().isoformat(),
+                },
+            }
+
+            faculty_id = str(schedule.faculty_id)
+            await self.ws_manager.send_personal(faculty_id, message)
+
+            logger.info(
+                f"Early leave return notification sent for student {student.student_id} "
+                f"(absent {absence_duration_seconds}s)"
+            )
+        except Exception as e:
+            logger.error(f"Failed to send early leave return notification: {e}")
+
     async def notify_attendance_update(
         self,
         schedule_id: str,
