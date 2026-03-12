@@ -139,7 +139,9 @@ async def live_stream_ws(schedule_id: str, websocket: WebSocket):
         room_id = str(schedule.room_id)
         rtsp_url = get_camera_url(room_id, db)
 
-        if rtsp_url is None:
+        # In push mode (RPi → mediamtx), rtsp_url may be None.
+        # Only error out if WebRTC is also unavailable.
+        if rtsp_url is None and not settings.USE_WEBRTC_STREAMING:
             await websocket.accept()
             await websocket.send_json({
                 "type": "error",
@@ -171,15 +173,26 @@ async def live_stream_ws(schedule_id: str, websocket: WebSocket):
     # so the client always gets video rather than an endless retry loop.
     use_webrtc = False
     if settings.USE_WEBRTC_STREAMING:
-        mediamtx_ok = await webrtc_service.ensure_path(room_id, rtsp_url)
+        if rtsp_url:
+            # Pull mode: tell mediamtx to pull from the camera RTSP URL
+            mediamtx_ok = await webrtc_service.ensure_path(room_id, rtsp_url)
+        else:
+            # Push mode: RPi pushes RTSP to mediamtx, just check path exists
+            mediamtx_ok = await webrtc_service.check_path_exists(room_id)
         if mediamtx_ok:
             use_webrtc = True
         else:
-            logger.warning(
-                f"Live stream: mediamtx unreachable, falling back to "
-                f"{'HLS' if settings.USE_HLS_STREAMING else 'legacy'} "
-                f"for room {room_id}"
-            )
+            if rtsp_url:
+                logger.warning(
+                    f"Live stream: mediamtx unreachable, falling back to "
+                    f"{'HLS' if settings.USE_HLS_STREAMING else 'legacy'} "
+                    f"for room {room_id}"
+                )
+            else:
+                logger.warning(
+                    f"Live stream: no RTSP URL and mediamtx path not found "
+                    f"for room {room_id} — is the edge device streaming?"
+                )
 
     if use_webrtc:
         _mode_label = "webrtc"
@@ -193,6 +206,15 @@ async def live_stream_ws(schedule_id: str, websocket: WebSocket):
         f"schedule={schedule_id}, room={room_id}, "
         f"mode={_mode_label}"
     )
+
+    # If WebRTC failed and we have no rtsp_url, there's nothing to stream
+    if not use_webrtc and rtsp_url is None:
+        await websocket.send_json({
+            "type": "error",
+            "message": "Camera stream not available — edge device may not be active",
+        })
+        await websocket.close(code=4003, reason="No stream available")
+        return
 
     if use_webrtc:
         await _webrtc_mode(websocket, viewer_id, schedule_id, room_id, rtsp_url)

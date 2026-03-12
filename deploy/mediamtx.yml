@@ -1,0 +1,42 @@
+# mediamtx production configuration for IAMS (Docker on VPS)
+#
+# Receives RTSP push from RPi edge devices and serves WebRTC (WHEP) to
+# mobile clients. FastAPI proxies WHEP signaling; media flows directly
+# from mediamtx to phones via WebRTC UDP.
+
+logLevel: warn
+
+# REST API — used by FastAPI backend container to manage paths
+# Listens on all interfaces so the backend container can reach it
+# via Docker network (http://mediamtx:9997).
+api: yes
+apiAddress: :9997
+
+# RTSP — receives push from RPi edge devices over the internet.
+# RPi runs: ffmpeg -i rtsp://camera/sub -c copy -f rtsp rtsp://VPS:8554/room-{id}
+rtsp: yes
+rtspAddress: :8554
+
+# WebRTC (WHEP) — FastAPI proxies WHEP offers here.
+# Mobile clients negotiate via POST /api/v1/webrtc/{schedule_id}/offer
+# which forwards to http://mediamtx:8889/{room_id}/whep.
+webrtc: yes
+webrtcAddress: :8889
+
+# ICE: tell clients to connect to the VPS public IP for media.
+# Without this, ICE candidates would use the container's private IP
+# which is unreachable from the internet.
+webrtcAdditionalHosts:
+  - 167.71.217.44
+
+# Explicit UDP port for WebRTC media (must match docker-compose port mapping).
+webrtcLocalUDPAddress: :8887
+
+# Disable unused protocols
+hls: no
+srt: no
+rtmp: no
+
+# Paths are created automatically when RPi pushes RTSP.
+# No static path config needed.
+paths: {}

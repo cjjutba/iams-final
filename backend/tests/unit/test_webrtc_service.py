@@ -187,3 +187,60 @@ class TestDeletePath:
 
             # Should not raise — cleanup errors are non-fatal
             await svc.delete_path("room-1")
+
+
+class TestCheckPathExists:
+    @pytest.mark.asyncio
+    async def test_returns_true_when_path_exists(self, mock_settings):
+        from app.services.webrtc_service import WebRTCService
+        svc = WebRTCService()
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "name": "room-1",
+            "source": {"type": "rtspSource"},
+        }
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client.get = AsyncMock(return_value=mock_response)
+            mock_client_cls.return_value = mock_client
+
+            result = await svc.check_path_exists("room-1")
+            assert result is True
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_path_not_found(self, mock_settings):
+        from app.services.webrtc_service import WebRTCService
+        svc = WebRTCService()
+
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client.get = AsyncMock(return_value=mock_response)
+            mock_client_cls.return_value = mock_client
+
+            result = await svc.check_path_exists("room-1")
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_returns_false_on_connect_error(self, mock_settings):
+        from app.services.webrtc_service import WebRTCService
+        svc = WebRTCService()
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client.get = AsyncMock(side_effect=httpx.ConnectError("refused"))
+            mock_client_cls.return_value = mock_client
+
+            result = await svc.check_path_exists("room-1")
+            assert result is False

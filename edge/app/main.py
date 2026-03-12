@@ -30,6 +30,7 @@ from app.detector import FaceDetector
 from app.processor import FaceProcessor
 from app.sender import SyncBackendSender
 from app.queue_manager import QueueManager, RetryWorker
+from app.stream_relay import stream_relay
 
 
 class EdgeDevice:
@@ -63,6 +64,9 @@ class EdgeDevice:
         self.scan_interval = config.SCAN_INTERVAL
         self.session_aware = config.SESSION_AWARE
         self.session_poll_interval = config.SESSION_POLL_INTERVAL
+
+        # Stream relay
+        self.stream_relay_enabled = config.STREAM_RELAY_ENABLED
 
     def initialize(self) -> bool:
         """
@@ -111,6 +115,9 @@ class EdgeDevice:
         logger.info("Shutting down edge device...")
 
         self.is_running = False
+
+        # Stop stream relay (safe to call even if never started)
+        stream_relay.stop()
 
         # Stop retry worker
         if self.retry_worker:
@@ -164,6 +171,13 @@ class EdgeDevice:
             logger.info(f"Session became active (schedule_id={schedule_id}), starting scans")
         elif not active and prev_active:
             logger.info("Session ended, pausing scans")
+
+        # Start/stop stream relay on session transitions
+        if self.stream_relay_enabled:
+            if active and not prev_active:
+                stream_relay.start(self.room_id)
+            elif not active and prev_active:
+                stream_relay.stop()
 
         return active
 

@@ -84,6 +84,13 @@ class Config:
     SESSION_AWARE: bool = os.getenv("SESSION_AWARE", "true").lower() in ("true", "1", "yes")
     SESSION_POLL_INTERVAL: int = int(os.getenv("SESSION_POLL_INTERVAL", "10"))  # seconds
 
+    # ===== Stream Relay Configuration =====
+    # When enabled, FFmpeg relays the camera RTSP stream to the VPS mediamtx
+    # so faculty can view live video from any network via WebRTC.
+    STREAM_RELAY_ENABLED: bool = os.getenv("STREAM_RELAY_ENABLED", "false").lower() in ("true", "1", "yes")
+    STREAM_RELAY_URL: str = os.getenv("STREAM_RELAY_URL", "")  # e.g., rtsp://167.71.217.44:8554
+    STREAM_RELAY_RETRY_DELAY: int = int(os.getenv("STREAM_RELAY_RETRY_DELAY", "5"))
+
     # ===== Logging Configuration =====
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_FILE: Optional[str] = os.getenv("LOG_FILE", None)
@@ -160,6 +167,13 @@ class Config:
         # Session poll interval validation
         if cls.SESSION_POLL_INTERVAL <= 0:
             errors.append(f"Invalid session poll interval: {cls.SESSION_POLL_INTERVAL} (must be > 0)")
+
+        # Stream relay validation
+        if cls.STREAM_RELAY_ENABLED and not cls.STREAM_RELAY_URL:
+            errors.append("STREAM_RELAY_URL is required when STREAM_RELAY_ENABLED=true")
+
+        if cls.STREAM_RELAY_URL and not cls.STREAM_RELAY_URL.startswith(("rtsp://", "rtsps://")):
+            errors.append(f"STREAM_RELAY_URL must start with rtsp:// or rtsps:// (got: {cls.STREAM_RELAY_URL[:30]}...)")
 
         if errors:
             raise ValueError(f"Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in errors))

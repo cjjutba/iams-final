@@ -95,6 +95,35 @@ class WebRTCService:
             logger.error(f"WebRTC: unexpected error ensuring path for room {room_id}: {exc}")
             return False
 
+    async def check_path_exists(self, room_id: str) -> bool:
+        """
+        Check if a mediamtx path exists (e.g., an RPi is pushing to it).
+
+        Used in push mode where the edge device publishes RTSP to mediamtx
+        directly, so no source URL needs to be configured via the API.
+
+        Args:
+            room_id: Path name in mediamtx (matches the room UUID).
+
+        Returns:
+            True if the path exists on mediamtx, False otherwise.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(
+                    f"{settings.MEDIAMTX_API_URL}/v3/paths/get/{room_id}",
+                )
+                return resp.status_code == 200
+        except httpx.ConnectError:
+            logger.error(
+                f"WebRTC: cannot reach mediamtx at {settings.MEDIAMTX_API_URL} "
+                f"— is mediamtx running? (room={room_id})"
+            )
+            return False
+        except Exception as exc:
+            logger.error(f"WebRTC: error checking path {room_id}: {exc}")
+            return False
+
     async def forward_whep_offer(
         self, room_id: str, sdp: str
     ) -> tuple[str, str]:

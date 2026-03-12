@@ -103,6 +103,7 @@ class Settings(BaseSettings):
 
     # WebRTC Streaming (mediamtx + WHEP — replaces HLS for <300ms latency)
     USE_WEBRTC_STREAMING: bool = True                        # True=WebRTC, False=fall back to HLS/legacy
+    MEDIAMTX_EXTERNAL: bool = False                         # True = mediamtx runs as separate container (skip subprocess)
     MEDIAMTX_API_URL: str = "http://localhost:9997"          # mediamtx REST API (internal only)
     MEDIAMTX_WEBRTC_URL: str = "http://localhost:8889"       # mediamtx WHEP endpoint (internal only)
     WEBRTC_STUN_URLS: str = "stun:stun.l.google.com:19302"  # Comma-separated STUN URLs (free Google STUN)

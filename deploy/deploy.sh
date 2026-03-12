@@ -40,12 +40,18 @@ echo "[2/4] Syncing deploy configs..."
 rsync -avz \
     "${PROJECT_DIR}/deploy/docker-compose.prod.yml" \
     "${PROJECT_DIR}/deploy/nginx.conf" \
+    "${PROJECT_DIR}/deploy/mediamtx.yml" \
     "${VPS_USER}@${VPS_IP}:${VPS_DIR}/deploy/"
 
 # Step 3: Build and restart on VPS
 echo "[3/4] Building and starting containers on VPS..."
 ssh "${VPS_USER}@${VPS_IP}" << 'REMOTE'
     cd /opt/iams/deploy
+
+    # Open ports for mediamtx (if not already open)
+    echo "Checking firewall rules..."
+    ufw allow 8554/tcp comment "mediamtx RTSP ingest from RPi" 2>/dev/null || true
+    ufw allow 8887/udp comment "mediamtx WebRTC media" 2>/dev/null || true
 
     # Build backend image
     echo "Building Docker image..."

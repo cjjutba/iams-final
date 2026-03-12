@@ -100,21 +100,22 @@ async def create_webrtc_offer(
             )
     # ADMIN: no restriction
 
-    # 3. Resolve camera RTSP URL
+    # 3. Resolve camera RTSP URL (may be None in push mode)
     room_id = str(schedule.room_id)
     rtsp_url = get_camera_url(room_id, db)
-    if rtsp_url is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="No camera configured for this room",
-        )
 
-    # 4. Ensure mediamtx path exists (creates or updates)
-    path_ok = await webrtc_service.ensure_path(room_id, rtsp_url)
+    # 4. Ensure mediamtx path exists
+    if rtsp_url:
+        # Pull mode: tell mediamtx to pull from camera RTSP URL
+        path_ok = await webrtc_service.ensure_path(room_id, rtsp_url)
+    else:
+        # Push mode: RPi pushes RTSP to mediamtx, just check path exists
+        path_ok = await webrtc_service.check_path_exists(room_id)
+
     if not path_ok:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="WebRTC service unavailable — is mediamtx running?",
+            detail="WebRTC stream unavailable — is the edge device streaming?",
         )
 
     # 5. Forward SDP offer to mediamtx WHEP

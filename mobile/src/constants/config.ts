@@ -48,9 +48,11 @@ const devHostIp = isAndroidEmulator ? '10.0.2.2' : metroHostIp;
 
 // Log resolved host in dev so you can verify which IP each device uses
 if (isDev) {
+  const resolvedApi = API_BASE_URL_ENV
+    ?? `http://${devHostIp}:8000/api/v1`;
   console.log(
     `[IAMS Config] Platform=${Platform.OS} emulator=${isAndroidEmulator} ` +
-    `metro=${metroHostIp} → backend=${devHostIp}:8000`,
+    `metro=${metroHostIp} API=${resolvedApi}`,
   );
 }
 

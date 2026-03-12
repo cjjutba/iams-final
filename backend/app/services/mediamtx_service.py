@@ -46,6 +46,21 @@ class MediamtxService:
             True if mediamtx is running and API is ready, False otherwise.
             FastAPI startup continues regardless of the return value.
         """
+        # External mode: skip subprocess, just wait for API
+        if settings.MEDIAMTX_EXTERNAL:
+            logger.info(
+                f"mediamtx external mode: waiting for API at {settings.MEDIAMTX_API_URL}"
+            )
+            api_ready = await self._wait_for_api(timeout=15.0)
+            if api_ready:
+                logger.info("mediamtx external API is ready (WebRTC streaming active)")
+            else:
+                logger.error(
+                    "mediamtx external API did not respond within 15 s. "
+                    "Is the mediamtx container running?"
+                )
+            return api_ready
+
         # Resolve paths relative to the backend/ directory.
         base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         resolved_bin = os.path.abspath(bin_path or os.path.join(base, settings.MEDIAMTX_BIN_PATH))

@@ -17,12 +17,31 @@ services:
       - app_logs:/app/logs
     ports:
       - "127.0.0.1:8000:8000"
+    depends_on:
+      mediamtx:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s  # InsightFace model takes time to load
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: iams-mediamtx
+    restart: unless-stopped
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    ports:
+      # RTSP ingest from RPi edge devices (over internet)
+      - "8554:8554"
+      # WebRTC media UDP (ICE candidates point here)
+      - "8887:8887/udp"
+    # API (9997) and WHEP (8889) are internal only — accessed
+    # by backend and nginx via Docker network, not exposed to host.
+    # No healthcheck: mediamtx image is scratch-based (no shell/wget/curl).
+    # Backend's mediamtx_service.start() polls the API on startup instead.
 
   nginx:
     image: nginx:alpine
@@ -38,6 +57,8 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+      mediamtx:
+        condition: service_started
 
   # Certbot for free HTTPS certificates (run once, then renew via cron)
   certbot:

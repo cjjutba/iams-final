@@ -100,18 +100,21 @@ class TestWebRTCOffer:
             )
         assert resp.status_code == 403
 
-    def test_returns_503_when_no_camera(self, client, auth_headers, sample_schedule):
+    def test_returns_503_when_no_camera_and_no_push(self, client, auth_headers, sample_schedule):
+        """When rtsp_url is None (push mode) and edge device isn't streaming, return 503."""
         with patch("app.routers.webrtc.ScheduleRepository") as mock_repo_cls, \
-             patch("app.routers.webrtc.get_camera_url", return_value=None):
+             patch("app.routers.webrtc.get_camera_url", return_value=None), \
+             patch("app.routers.webrtc.webrtc_service") as mock_svc:
             mock_repo = mock_repo_cls.return_value
             mock_repo.get_by_id.return_value = sample_schedule
+            mock_svc.check_path_exists = AsyncMock(return_value=False)
             resp = client.post(
                 f"/api/v1/webrtc/{sample_schedule.id}/offer",
                 json={"sdp": "v=0\r\n", "type": "offer"},
                 headers=auth_headers,
             )
         assert resp.status_code == 503
-        assert "camera" in resp.json()["detail"].lower()
+        assert "edge device" in resp.json()["detail"].lower()
 
     def test_returns_503_when_mediamtx_down(self, client, auth_headers, sample_schedule):
         with patch("app.routers.webrtc.ScheduleRepository") as mock_repo_cls, \

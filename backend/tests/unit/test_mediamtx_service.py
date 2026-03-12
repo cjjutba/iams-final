@@ -164,3 +164,48 @@ def test_is_healthy_returns_false_when_process_dead(svc):
     mock_proc.poll.return_value = 1  # exited
     svc._process = mock_proc
     assert svc.is_healthy() is False
+
+
+# ---------------------------------------------------------------------------
+# External mode (MEDIAMTX_EXTERNAL=True)
+# ---------------------------------------------------------------------------
+
+def test_start_external_skips_subprocess_and_checks_api(svc):
+    """When MEDIAMTX_EXTERNAL=True, start() must NOT launch a subprocess
+    but still verify the API is reachable."""
+    loop = asyncio.new_event_loop()
+    try:
+        with patch("app.services.mediamtx_service.settings") as mock_settings, \
+             patch("subprocess.Popen") as mock_popen, \
+             patch(
+                 "app.services.mediamtx_service.MediamtxService._wait_for_api",
+                 new_callable=AsyncMock,
+                 return_value=True,
+             ):
+            mock_settings.MEDIAMTX_EXTERNAL = True
+            mock_settings.MEDIAMTX_API_URL = "http://mediamtx:9997"
+            result = loop.run_until_complete(svc.start())
+    finally:
+        loop.close()
+
+    assert result is True
+    mock_popen.assert_not_called()
+
+
+def test_start_external_returns_false_when_api_unreachable(svc):
+    """When MEDIAMTX_EXTERNAL=True and the API is unreachable, return False."""
+    loop = asyncio.new_event_loop()
+    try:
+        with patch("app.services.mediamtx_service.settings") as mock_settings, \
+             patch(
+                 "app.services.mediamtx_service.MediamtxService._wait_for_api",
+                 new_callable=AsyncMock,
+                 return_value=False,
+             ):
+            mock_settings.MEDIAMTX_EXTERNAL = True
+            mock_settings.MEDIAMTX_API_URL = "http://mediamtx:9997"
+            result = loop.run_until_complete(svc.start())
+    finally:
+        loop.close()
+
+    assert result is False
