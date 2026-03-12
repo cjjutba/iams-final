@@ -6,6 +6,30 @@
 
 logLevel: warn
 
+# Authentication: allow Docker-internal containers to use the API
+# and allow anyone to publish/read streams (RPi push + mobile WebRTC).
+authMethod: internal
+authInternalUsers:
+  # Allow any source to publish and read (RPi RTSP push, WebRTC viewers)
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+        path:
+      - action: read
+        path:
+      - action: playback
+        path:
+  # Allow Docker network + localhost to use the API
+  - user: any
+    pass:
+    ips: ['127.0.0.1', '::1', '172.16.0.0/12', '192.168.0.0/16', '10.0.0.0/8']
+    permissions:
+      - action: api
+      - action: metrics
+      - action: pprof
+
 # REST API — used by FastAPI backend container to manage paths
 # Listens on all interfaces so the backend container can reach it
 # via Docker network (http://mediamtx:9997).

@@ -63,6 +63,17 @@
 - **run_single_scan() returns bool** - True if scan performed, False if skipped (drives interval selection)
 - **Disable with SESSION_AWARE=false** - Reverts to original unconditional scanning behavior
 
+### Stream Relay (Added Mar 2026)
+- **FFmpeg `-c copy` relay** - No transcoding, ~2-3% CPU on RPi, ~500 Kbps upload
+- **Session-aware start/stop** - Relay starts on session transition (active && !prev_active), stops on reverse
+- **Background thread with auto-restart** - `_run_loop()` keeps FFmpeg alive, retries on STREAM_RELAY_RETRY_DELAY (5s)
+- **Graceful kill** - terminate() → wait(5) → kill() → wait(3) fallback chain
+- **Module-level singleton** - `stream_relay = StreamRelay()` imported by main.py
+- **Config: STREAM_RELAY_ENABLED, STREAM_RELAY_URL, STREAM_RELAY_RETRY_DELAY**
+- **Validation: URL required when enabled, must start with rtsp://**
+- **Dest path format:** `{STREAM_RELAY_URL}/room-{room_id}` — mediamtx path convention
+- **Shutdown order:** stream_relay.stop() → retry_worker → detector → camera → HTTP client
+
 ## File Structure Implemented
 
 ```
@@ -75,7 +86,8 @@ edge/
 │   ├── detector.py       # MediaPipe face detection
 │   ├── processor.py      # Face cropping and JPEG encoding
 │   ├── sender.py         # HTTP client for backend API
-│   └── queue_manager.py  # Offline queue with retry logic
+│   ├── queue_manager.py  # Offline queue with retry logic
+│   └── stream_relay.py   # FFmpeg RTSP relay to VPS mediamtx
 ├── run.py                # Entry point script
 ├── requirements.txt      # ARM-compatible dependencies
 ├── .env.example          # Configuration template

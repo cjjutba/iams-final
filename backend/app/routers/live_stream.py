@@ -207,11 +207,13 @@ async def live_stream_ws(schedule_id: str, websocket: WebSocket):
         f"mode={_mode_label}"
     )
 
-    # If WebRTC failed and we have no rtsp_url, there's nothing to stream
+    # If WebRTC failed and we have no rtsp_url, there's nothing to stream.
+    # Send a "waiting" status so the mobile app shows a friendly state
+    # instead of a hard error, then close so the client can retry.
     if not use_webrtc and rtsp_url is None:
         await websocket.send_json({
-            "type": "error",
-            "message": "Camera stream not available — edge device may not be active",
+            "type": "waiting",
+            "message": "Waiting for camera — edge device is not streaming yet",
         })
         await websocket.close(code=4003, reason="No stream available")
         return

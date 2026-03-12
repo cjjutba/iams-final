@@ -221,6 +221,10 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
           }
         } else if (message.type === 'pong' || message.type === 'heartbeat') {
           // Keep-alive responses — no action needed
+        } else if (message.type === 'waiting') {
+          // Camera not streaming yet — keep retrying automatically
+          setConnectionError(null);
+          setIsConnecting(true);
         } else if (message.type === 'error') {
           const errMsg = message as { type: string; message?: string };
           hasErrorRef.current = true;

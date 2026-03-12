@@ -128,6 +128,30 @@ JWT_SECRET_KEY=xxxxx...
 BACKEND_URL=http://localhost:8000
 ```
 
+## Production Deployment (DigitalOcean VPS)
+
+The backend runs on a DigitalOcean droplet at `167.71.217.44`. After making any backend changes (routers, services, schemas, models, config, requirements, etc.), **always ask the user if they want to deploy to the VPS**.
+
+### Deploy command
+```bash
+bash deploy/deploy.sh
+```
+
+### Key files
+- `backend/Dockerfile` — multi-stage Docker build
+- `deploy/docker-compose.prod.yml` — production orchestration (backend + nginx)
+- `deploy/nginx.conf` — reverse proxy with WebSocket support
+- `backend/.env.production` — production environment variables
+- `deploy/deploy.sh` — rsync + Docker rebuild script
+
+### What triggers a deploy prompt
+Any change to files under `backend/` should prompt: "Do you want to deploy this to the VPS?" This includes but is not limited to:
+- API endpoint changes (routers/)
+- Business logic changes (services/, repositories/)
+- Schema/model changes (schemas/, models/)
+- Config or dependency changes (config.py, requirements.txt)
+- Database migrations
+
 ## Documentation
 
 Detailed docs in `/docs/main/`:
