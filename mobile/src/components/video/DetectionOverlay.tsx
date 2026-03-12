@@ -134,42 +134,26 @@ const FADE_OUT_CONFIG = {
 const LABEL_OFFSET = 10; // px above the box top
 
 // ---------------------------------------------------------------------------
-// Confidence-based color tiers
+// Detection color scheme
 // ---------------------------------------------------------------------------
 
-/** High confidence: similarity >= 0.8 */
-const COLOR_HIGH = '#22C55E';
-/** Medium confidence: similarity >= 0.6 */
-const COLOR_MEDIUM = '#06B6D4';
-/** Low confidence / unknown: similarity < 0.6 or null */
-const COLOR_LOW = '#EAB308';
+/** Recognized student: green bounding box */
+const COLOR_RECOGNIZED = '#22C55E';
+/** Unknown / unrecognized face: muted red-orange */
+const COLOR_UNKNOWN = '#EF4444';
 
 /**
- * Determine bounding box border color based on a 3-tier confidence system.
- * - similarity >= 0.8  -> green  (high confidence match)
- * - similarity >= 0.6  -> cyan   (acceptable match)
- * - similarity < 0.6 or null (unknown face) -> yellow
+ * Determine bounding box color: green for recognized students, red for unknown.
+ * A face is "recognized" when the backend returns a non-null user_id,
+ * which only happens when similarity passes threshold + margin checks.
  */
-function getConfidenceColor(similarity: number | null): string {
-  if (similarity == null) return COLOR_LOW;
-  if (similarity >= 0.8) return COLOR_HIGH;
-  if (similarity >= 0.6) return COLOR_MEDIUM;
-  return COLOR_LOW;
-}
-
-/**
- * Background color for the label container, matched to the confidence tier.
- */
-function getLabelBackground(similarity: number | null): string {
-  if (similarity == null) return 'rgba(60,40,0,0.85)';
-  if (similarity >= 0.8) return 'rgba(0,0,0,0.80)';
-  if (similarity >= 0.6) return 'rgba(0,20,30,0.80)';
-  return 'rgba(60,40,0,0.85)';
+function getDetectionColor(userId: string | null): string {
+  return userId ? COLOR_RECOGNIZED : COLOR_UNKNOWN;
 }
 
 interface TrackedBoxProps {
   bbox: DetectionBBox;
-  similarity: number | null;
+  userId: string | null;
   label: string;
   staleFrames: number;
   scaleInfo: ScaleInfo;
@@ -177,7 +161,7 @@ interface TrackedBoxProps {
 
 const AnimatedDetectionBox: React.FC<TrackedBoxProps> = ({
   bbox,
-  similarity,
+  userId,
   label,
   staleFrames,
   scaleInfo,
@@ -224,7 +208,7 @@ const AnimatedDetectionBox: React.FC<TrackedBoxProps> = ({
     opacity: opacity.value,
   }));
 
-  const borderColor = getConfidenceColor(similarity);
+  const borderColor = getDetectionColor(userId);
 
   return (
     <>
@@ -233,20 +217,16 @@ const AnimatedDetectionBox: React.FC<TrackedBoxProps> = ({
       {/* Name label (separate element — not clipped by box width) */}
       {hasLabel && (
         <Animated.View style={[styles.labelAnchor, labelStyle]}>
-          {/* Stroke: dark text behind, offset by ~0.5px in each direction */}
+          {/* Stroke: dark text behind for readability */}
           <Text
             style={[styles.labelText, styles.labelStroke]}
             numberOfLines={1}
           >
             {label}
           </Text>
-          {/* Fill: white (known) or yellow (unknown) on top */}
+          {/* Fill: always white for readability */}
           <Text
-            style={[
-              styles.labelText,
-              styles.labelFill,
-              { color: similarity != null && similarity >= 0.6 ? '#FFFFFF' : '#FFD600' },
-            ]}
+            style={[styles.labelText, styles.labelFill, { color: '#FFFFFF' }]}
             numberOfLines={1}
           >
             {label}
@@ -320,7 +300,7 @@ export const DetectionOverlay: React.FC<DetectionOverlayProps> = React.memo(
             <AnimatedDetectionBox
               key={trackId}
               bbox={det.bbox}
-              similarity={det.similarity}
+              userId={det.user_id}
               label={label}
               staleFrames={staleFrames}
               scaleInfo={scaleInfo}
@@ -367,15 +347,15 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 8,
     right: 8,
-    backgroundColor: 'rgba(234,179,8,0.18)',
+    backgroundColor: 'rgba(239,68,68,0.18)',
     borderWidth: 1,
-    borderColor: COLOR_LOW,
+    borderColor: COLOR_UNKNOWN,
     borderRadius: 6,
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
   unknownBadgeText: {
-    color: COLOR_LOW,
+    color: COLOR_UNKNOWN,
     fontSize: 11,
     fontWeight: '600',
   },

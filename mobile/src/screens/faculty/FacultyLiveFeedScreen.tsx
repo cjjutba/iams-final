@@ -356,7 +356,19 @@ export const FacultyLiveFeedScreen: React.FC = () => {
     [studentsList],
   );
 
-  const detectedCount = useMemo(() => detections.length, [detections]);
+  const detectedCount = useMemo(() => {
+    // Count unique recognized faces (by user_id) + unknown faces
+    const recognizedIds = new Set<string>();
+    let unknowns = 0;
+    for (const d of detections) {
+      if (d.user_id) {
+        recognizedIds.add(d.user_id);
+      } else {
+        unknowns++;
+      }
+    }
+    return recognizedIds.size + unknowns;
+  }, [detections]);
   const unknownCount = useMemo(
     () => detections.filter(d => !d.user_id).length,
     [detections],
@@ -470,7 +482,7 @@ export const FacultyLiveFeedScreen: React.FC = () => {
             {item.student_name}
           </Text>
           <Text variant="caption" color={theme.colors.text.secondary}>
-            {item.student_id}
+            {item.student_number || item.student_id}
           </Text>
         </View>
         {item.presence_score != null && (

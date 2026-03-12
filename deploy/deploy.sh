@@ -1,0 +1,99 @@
+#!/bin/bash
+# =============================================================================
+# IAMS Deploy Script
+# Run from your MacBook to deploy/update the backend on the VPS
+# Usage: ./deploy/deploy.sh
+# =============================================================================
+
+set -euo pipefail
+
+VPS_IP="167.71.217.44"
+VPS_USER="root"
+VPS_DIR="/opt/iams"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+echo "=========================================="
+echo "  IAMS Deploy → ${VPS_IP}"
+echo "=========================================="
+
+# Step 1: Sync backend code to VPS
+echo "[1/4] Syncing backend code to VPS..."
+rsync -avz --delete \
+    --exclude 'venv/' \
+    --exclude '__pycache__/' \
+    --exclude '*.pyc' \
+    --exclude '.pytest_cache/' \
+    --exclude 'data/faiss/' \
+    --exclude 'data/uploads/' \
+    --exclude 'data/hls/' \
+    --exclude 'data/.models/' \
+    --exclude 'logs/' \
+    --exclude 'bin/ffmpeg.exe' \
+    --exclude 'bin/mediamtx' \
+    --exclude 'test.db' \
+    --exclude 'nul' \
+    --exclude '.env' \
+    "${PROJECT_DIR}/backend/" "${VPS_USER}@${VPS_IP}:${VPS_DIR}/backend/"
+
+# Step 2: Sync deploy configs
+echo "[2/4] Syncing deploy configs..."
+rsync -avz \
+    "${PROJECT_DIR}/deploy/docker-compose.prod.yml" \
+    "${PROJECT_DIR}/deploy/nginx.conf" \
+    "${VPS_USER}@${VPS_IP}:${VPS_DIR}/deploy/"
+
+# Step 3: Build and restart on VPS
+echo "[3/4] Building and starting containers on VPS..."
+ssh "${VPS_USER}@${VPS_IP}" << 'REMOTE'
+    cd /opt/iams/deploy
+
+    # Build backend image
+    echo "Building Docker image..."
+    docker compose -f docker-compose.prod.yml build --no-cache
+
+    # Stop old containers (if running)
+    docker compose -f docker-compose.prod.yml down || true
+
+    # Start fresh
+    echo "Starting containers..."
+    docker compose -f docker-compose.prod.yml up -d
+
+    # Wait for health check
+    echo "Waiting for backend to be healthy..."
+    for i in $(seq 1 30); do
+        if docker compose -f docker-compose.prod.yml ps | grep -q "healthy"; then
+            echo "Backend is healthy!"
+            break
+        fi
+        echo "  Waiting... ($i/30)"
+        sleep 5
+    done
+
+    # Show status
+    echo ""
+    docker compose -f docker-compose.prod.yml ps
+REMOTE
+
+# Step 4: Verify
+echo ""
+echo "[4/4] Verifying deployment..."
+sleep 3
+HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "http://${VPS_IP}/api/v1/health" || echo "000")
+
+if [ "$HEALTH" = "200" ]; then
+    echo ""
+    echo "=========================================="
+    echo "  Deployment successful!"
+    echo "=========================================="
+    echo ""
+    echo "  API:     http://${VPS_IP}/api/v1"
+    echo "  Docs:    http://${VPS_IP}/api/v1/docs"
+    echo "  Health:  http://${VPS_IP}/api/v1/health"
+    echo ""
+else
+    echo ""
+    echo "=========================================="
+    echo "  WARNING: Health check returned ${HEALTH}"
+    echo "  Check logs: ssh root@${VPS_IP} 'cd /opt/iams/deploy && docker compose -f docker-compose.prod.yml logs backend'"
+    echo "=========================================="
+fi

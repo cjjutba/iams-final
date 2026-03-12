@@ -59,12 +59,12 @@ export const config = {
   API_BASE_URL: API_BASE_URL_ENV
     ?? (isDev
       ? `http://${devHostIp}:8000/api/v1`
-      : 'https://api.iams.com/api/v1'),
+      : 'http://167.71.217.44/api/v1'),
 
   WS_URL: WS_BASE_URL_ENV
     ?? (isDev
       ? `ws://${devHostIp}:8000/api/v1/ws`
-      : 'wss://api.iams.com/api/v1/ws'),
+      : 'ws://167.71.217.44/api/v1/ws'),
 
   // Supabase
   SUPABASE_URL: SUPABASE_URL_ENV,
@@ -107,7 +107,7 @@ export const config = {
       API_BASE_URL_ENV
         ?? (isDev
           ? `http://${devHostIp}:8000/api/v1`
-          : 'https://api.iams.com/api/v1')
+          : 'http://167.71.217.44/api/v1')
     }/hls/${roomId}/playlist.m3u8`,
 
   // App info

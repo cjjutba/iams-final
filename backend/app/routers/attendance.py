@@ -410,6 +410,7 @@ async def get_live_attendance(
     for record in records:
         student_statuses.append(StudentAttendanceStatus(
             student_id=str(record.student_id),
+            student_number=getattr(record.student, 'student_id', None),
             student_name=f"{record.student.first_name} {record.student.last_name}",
             status=record.status,
             check_in_time=record.check_in_time,

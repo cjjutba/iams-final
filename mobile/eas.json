@@ -13,8 +13,8 @@
         "simulator": true
       },
       "env": {
-        "API_BASE_URL": "http://192.168.1.100:8000/api/v1",
-        "WS_BASE_URL": "ws://192.168.1.100:8000/api/v1/ws"
+        "API_BASE_URL": "http://167.71.217.44/api/v1",
+        "WS_BASE_URL": "ws://167.71.217.44/api/v1/ws"
       }
     },
     "preview": {
@@ -26,8 +26,8 @@
         "simulator": false
       },
       "env": {
-        "API_BASE_URL": "http://192.168.1.100:8000/api/v1",
-        "WS_BASE_URL": "ws://192.168.1.100:8000/api/v1/ws"
+        "API_BASE_URL": "http://167.71.217.44/api/v1",
+        "WS_BASE_URL": "ws://167.71.217.44/api/v1/ws"
       }
     },
     "pilot": {
@@ -39,8 +39,8 @@
         "simulator": false
       },
       "env": {
-        "API_BASE_URL": "http://YOUR_BACKEND_IP:8000/api/v1",
-        "WS_BASE_URL": "ws://YOUR_BACKEND_IP:8000/api/v1/ws"
+        "API_BASE_URL": "http://167.71.217.44/api/v1",
+        "WS_BASE_URL": "ws://167.71.217.44/api/v1/ws"
       }
     },
     "production": {
@@ -51,8 +51,8 @@
         "simulator": false
       },
       "env": {
-        "API_BASE_URL": "https://api.yourdomain.com/api/v1",
-        "WS_BASE_URL": "wss://api.yourdomain.com/api/v1/ws"
+        "API_BASE_URL": "http://167.71.217.44/api/v1",
+        "WS_BASE_URL": "ws://167.71.217.44/api/v1/ws"
       }
     }
   },

@@ -243,7 +243,7 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
             </View>
 
             <Text variant="bodySmall" color={theme.colors.text.secondary}>
-              {item.student_id}
+              {item.student_number || item.student_id}
             </Text>
 
             {item.presence_score !== undefined && (

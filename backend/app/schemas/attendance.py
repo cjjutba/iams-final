@@ -129,6 +129,7 @@ class AttendanceSummary(BaseModel):
 class StudentAttendanceStatus(BaseModel):
     """Individual student's current attendance status"""
     student_id: str
+    student_number: Optional[str] = None  # School ID (e.g. "21-A-02177")
     student_name: str
     status: AttendanceStatus
     check_in_time: Optional[datetime]

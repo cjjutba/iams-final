@@ -1,0 +1,14 @@
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/hls/
+data/.models/
+logs/
+bin/ffmpeg.exe
+bin/mediamtx
+test.db
+nul
+.env
+.env.production
+tests/

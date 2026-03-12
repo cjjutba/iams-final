@@ -37,7 +37,7 @@ class Config:
     """Edge device configuration"""
 
     # ===== Backend Configuration =====
-    BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:8000")
+    BACKEND_URL: str = os.getenv("BACKEND_URL", "http://167.71.217.44")
     ROOM_ID: str = os.getenv("ROOM_ID", "")
 
     # ===== Camera Configuration =====

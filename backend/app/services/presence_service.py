@@ -416,8 +416,55 @@ class PresenceService:
             if not attendance:
                 continue
 
-            # Skip if student never checked in (still absent)
+            # Handle students who are still ABSENT: check if they were just detected
             if attendance.status == AttendanceStatus.ABSENT:
+                if student_id in present_user_ids:
+                    # First detection → check in as PRESENT or LATE
+                    current_time = datetime.now().time()
+                    grace_time = (
+                        datetime.combine(date.today(), session.schedule.start_time)
+                        + timedelta(minutes=settings.GRACE_PERIOD_MINUTES)
+                    ).time()
+
+                    new_status = AttendanceStatus.PRESENT if current_time <= grace_time else AttendanceStatus.LATE
+                    check_in_time = datetime.now()
+
+                    self.attendance_repo.update(attendance_id, {
+                        "status": new_status,
+                        "check_in_time": check_in_time,
+                        "scans_present": 1,
+                        "total_scans": 1,
+                        "presence_score": 100.0
+                    })
+
+                    # Log initial presence
+                    track = identified_users.get(student_id)
+                    confidence = track.recognition_confidence if track else None
+                    self.attendance_repo.log_presence(attendance_id, {
+                        "scan_number": scan_count,
+                        "scan_time": check_in_time,
+                        "detected": True,
+                        "confidence": confidence
+                    })
+
+                    # Update session state
+                    async with self._lock:
+                        if schedule_id in self.active_sessions:
+                            self.active_sessions[schedule_id].update_student(student_id, detected=True)
+
+                    # Send WebSocket notification if available
+                    if self.notification_service:
+                        try:
+                            await self.notification_service.notify_attendance_update(
+                                schedule_id=schedule_id,
+                                student_id=student_id,
+                                status=new_status.value,
+                                check_in_time=check_in_time
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to send check-in notification: {e}")
+
+                    logger.info(f"Student {student_id} checked in via scan cycle: {new_status.value}")
                 continue
 
             # Handle return detection for previously flagged students

@@ -325,6 +325,65 @@ class RecognitionService:
         """
         return self._process_frame_ml(frame)
 
+    # ------------------------------------------------------------------
+    # Face deduplication (IoU-based NMS)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _compute_iou(a, b) -> float:
+        """Compute Intersection over Union between two DetectedFace objects."""
+        ax1, ay1 = a.x, a.y
+        ax2, ay2 = a.x + a.width, a.y + a.height
+        bx1, by1 = b.x, b.y
+        bx2, by2 = b.x + b.width, b.y + b.height
+
+        ix1 = max(ax1, bx1)
+        iy1 = max(ay1, by1)
+        ix2 = min(ax2, bx2)
+        iy2 = min(ay2, by2)
+
+        inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+        if inter == 0:
+            return 0.0
+
+        area_a = a.width * a.height
+        area_b = b.width * b.height
+        union = area_a + area_b - inter
+        return inter / union if union > 0 else 0.0
+
+    @classmethod
+    def _deduplicate_faces(cls, faces, iou_threshold: float = 0.3):
+        """
+        Remove overlapping face detections using Non-Maximum Suppression.
+
+        When two faces overlap with IoU > threshold, keep the one with
+        higher detection confidence. This prevents the same person from
+        being detected multiple times by SCRFD's multi-scale anchors.
+        """
+        if len(faces) <= 1:
+            return faces
+
+        # Sort by confidence descending — higher confidence faces are kept first
+        sorted_faces = sorted(faces, key=lambda f: f.confidence, reverse=True)
+        keep = []
+
+        for face in sorted_faces:
+            is_duplicate = False
+            for kept in keep:
+                if cls._compute_iou(face, kept) > iou_threshold:
+                    is_duplicate = True
+                    break
+            if not is_duplicate:
+                keep.append(face)
+
+        if len(keep) < len(faces):
+            logger.debug(
+                f"Recognition: deduplicated {len(faces)} -> {len(keep)} faces "
+                f"(removed {len(faces) - len(keep)} overlapping)"
+            )
+
+        return keep
+
     def _process_frame_ml(self, frame: np.ndarray) -> tuple:
         """
         Run InsightFace detection + recognition on one frame.
@@ -349,13 +408,17 @@ class RecognitionService:
             if not insight_faces:
                 return [], frame_w, frame_h
 
+            # Deduplicate overlapping detections from SCRFD multi-scale anchors
+            insight_faces = self._deduplicate_faces(insight_faces)
+
             detections = []
             for face in insight_faces:
                 user_id, similarity = None, None
                 if self._faiss is not None:
-                    matches = self._faiss.search(face.embedding, k=1)
-                    if matches:
-                        user_id, similarity = matches[0]
+                    result = self._faiss.search_with_margin(face.embedding)
+                    if result["user_id"] is not None and not result["is_ambiguous"]:
+                        user_id = result["user_id"]
+                        similarity = result["confidence"]
 
                 # Record similarity for re-enrollment monitoring
                 if user_id and similarity is not None and settings.REENROLL_CHECK_ENABLED:
