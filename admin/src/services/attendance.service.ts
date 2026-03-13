@@ -2,7 +2,7 @@ import api from './api'
 import type { AttendanceRecord, ScheduleAttendanceSummary, LiveAttendanceResponse, EarlyLeaveAlert } from '@/types'
 
 export const attendanceService = {
-  list: (params?: { schedule_id?: string; start_date?: string; end_date?: string; status?: string; skip?: number; limit?: number }) =>
+  list: (params?: { schedule_id?: string; student_id?: string; start_date?: string; end_date?: string; status?: string; skip?: number; limit?: number }) =>
     api.get<AttendanceRecord[]>('/attendance', { params }).then(r => r.data),
   getById: (id: string) =>
     api.get<AttendanceRecord>(`/attendance/${id}`).then(r => r.data),
