@@ -21,6 +21,7 @@ class BatchProcessor:
     def __init__(self):
         self._task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
+        self._threshold_event = asyncio.Event()
 
     # ------------------------------------------------------------------
     # Public API
@@ -38,7 +39,13 @@ class BatchProcessor:
         queue_key = f"{settings.REDIS_BATCH_QUEUE_PREFIX}:{room_id}"
         payload = json.dumps(face_data)
         await r.rpush(queue_key, payload.encode())
-        logger.debug(f"Enqueued face to {queue_key}")
+
+        # Check if batch threshold reached — trigger immediate processing
+        queue_len = await r.llen(queue_key)
+        if queue_len >= settings.REDIS_BATCH_THRESHOLD:
+            self._threshold_event.set()
+
+        logger.debug(f"Enqueued face to {queue_key} (queue_len={queue_len})")
 
     async def start(self) -> None:
         """Start the background batch-processing loop."""
@@ -70,20 +77,25 @@ class BatchProcessor:
     # ------------------------------------------------------------------
 
     async def _batch_loop(self) -> None:
-        """Main loop: sleep up to REDIS_BATCH_INTERVAL, then try to process."""
+        """Main loop: process on timer or threshold trigger."""
         while not self._stop_event.is_set():
             try:
-                # Wait for the configured interval (or until stopped)
-                try:
-                    await asyncio.wait_for(
-                        self._stop_event.wait(),
-                        timeout=settings.REDIS_BATCH_INTERVAL,
-                    )
-                    # If we get here, the stop event was set
+                # Wait for: threshold trigger, stop event, or timer expiry
+                self._threshold_event.clear()
+                done, _ = await asyncio.wait(
+                    [
+                        asyncio.create_task(self._stop_event.wait()),
+                        asyncio.create_task(self._threshold_event.wait()),
+                    ],
+                    timeout=settings.REDIS_BATCH_INTERVAL,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                # Cancel pending tasks from the wait set
+                for task in _:
+                    task.cancel()
+
+                if self._stop_event.is_set():
                     break
-                except asyncio.TimeoutError:
-                    # Normal timeout — time to check for work
-                    pass
 
                 r = await get_redis()
                 await self._try_process_batch(r)
@@ -188,7 +200,6 @@ class BatchProcessor:
                     )
 
             if images_bytes:
-                # Use batch recognition if available, else fall back to sequential
                 recognition_results = await face_service.recognize_batch(images_bytes)
 
                 for rec in recognition_results:
@@ -197,13 +208,18 @@ class BatchProcessor:
                         "confidence": rec.get("confidence"),
                         "error": rec.get("error"),
                     })
+
+            # Build matched list
+            matched = [br for br in batch_results if br.get("user_id")]
+
+            # Feed detections to presence/attendance tracking
+            if matched:
+                await self._log_presence(db, room_id, matched)
+
         finally:
             db.close()
 
         elapsed_ms = int((time.time() - start) * 1000)
-
-        # Build result summary
-        matched = [br for br in batch_results if br.get("user_id")]
 
         # Publish results to Redis ws_broadcast channel
         broadcast_payload = {
@@ -228,6 +244,56 @@ class BatchProcessor:
             f"Batch complete for room {room_id}: "
             f"{len(matched)}/{batch_size} matched in {elapsed_ms}ms"
         )
+
+
+    async def _log_presence(self, db, room_id: str, matched: list[dict]) -> None:
+        """Feed matched detections to the presence/attendance tracking system."""
+        from datetime import datetime
+
+        from app.repositories.schedule_repository import ScheduleRepository
+        from app.services.presence_service import PresenceService
+
+        try:
+            schedule_repo = ScheduleRepository(db)
+            presence_service = PresenceService(db)
+
+            now = datetime.utcnow()
+            scan_time = now.time()
+            scan_day = now.weekday()
+
+            try:
+                current_schedule = schedule_repo.get_current_schedule(
+                    room_id, scan_day, scan_time
+                )
+            except (ValueError, Exception) as e:
+                logger.warning(f"Schedule lookup failed for room {room_id}: {e}")
+                current_schedule = None
+
+            if current_schedule:
+                schedule_id = str(current_schedule.id)
+                logged = 0
+                for result in matched:
+                    try:
+                        await presence_service.feed_detection(
+                            schedule_id=schedule_id,
+                            user_id=result["user_id"],
+                            confidence=result.get("confidence", 0.0),
+                        )
+                        logged += 1
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to log presence for user {result['user_id']}: {e}"
+                        )
+                logger.info(
+                    f"Logged {logged}/{len(matched)} detections to schedule {schedule_id}"
+                )
+            else:
+                logger.warning(
+                    f"No active schedule for room {room_id} at {scan_time}. "
+                    "Recognition completed but presence not logged."
+                )
+        except Exception:
+            logger.exception("Failed to log presence in batch processor")
 
 
 # Singleton instance
