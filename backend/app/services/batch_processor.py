@@ -8,6 +8,7 @@ acquires a Redis lock, processes the batch, and publishes results.
 """
 
 import asyncio
+import contextlib
 import json
 import time
 
@@ -65,10 +66,8 @@ class BatchProcessor:
             return
         self._stop_event.set()
         self._task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await self._task
-        except asyncio.CancelledError:
-            pass
         self._task = None
         logger.info("BatchProcessor stopped")
 
@@ -195,19 +194,19 @@ class BatchProcessor:
                     valid_indices.append(i)
                 except Exception as e:
                     logger.warning(f"Batch face {i}: invalid image data: {e}")
-                    batch_results.append(
-                        {"index": i, "user_id": None, "confidence": None, "error": str(e)}
-                    )
+                    batch_results.append({"index": i, "user_id": None, "confidence": None, "error": str(e)})
 
             if images_bytes:
                 recognition_results = await face_service.recognize_batch(images_bytes)
 
                 for rec in recognition_results:
-                    batch_results.append({
-                        "user_id": rec.get("user_id"),
-                        "confidence": rec.get("confidence"),
-                        "error": rec.get("error"),
-                    })
+                    batch_results.append(
+                        {
+                            "user_id": rec.get("user_id"),
+                            "confidence": rec.get("confidence"),
+                            "error": rec.get("error"),
+                        }
+                    )
 
             # Build matched list
             matched = [br for br in batch_results if br.get("user_id")]
@@ -240,11 +239,7 @@ class BatchProcessor:
         except Exception:
             logger.exception("Failed to publish batch results to Redis channel")
 
-        logger.info(
-            f"Batch complete for room {room_id}: "
-            f"{len(matched)}/{batch_size} matched in {elapsed_ms}ms"
-        )
-
+        logger.info(f"Batch complete for room {room_id}: {len(matched)}/{batch_size} matched in {elapsed_ms}ms")
 
     async def _log_presence(self, db, room_id: str, matched: list[dict]) -> None:
         """Feed matched detections to the presence/attendance tracking system."""
@@ -262,9 +257,7 @@ class BatchProcessor:
             scan_day = now.weekday()
 
             try:
-                current_schedule = schedule_repo.get_current_schedule(
-                    room_id, scan_day, scan_time
-                )
+                current_schedule = schedule_repo.get_current_schedule(room_id, scan_day, scan_time)
             except (ValueError, Exception) as e:
                 logger.warning(f"Schedule lookup failed for room {room_id}: {e}")
                 current_schedule = None
@@ -281,12 +274,8 @@ class BatchProcessor:
                         )
                         logged += 1
                     except Exception as e:
-                        logger.error(
-                            f"Failed to log presence for user {result['user_id']}: {e}"
-                        )
-                logger.info(
-                    f"Logged {logged}/{len(matched)} detections to schedule {schedule_id}"
-                )
+                        logger.error(f"Failed to log presence for user {result['user_id']}: {e}")
+                logger.info(f"Logged {logged}/{len(matched)} detections to schedule {schedule_id}")
             else:
                 logger.warning(
                     f"No active schedule for room {room_id} at {scan_time}. "
