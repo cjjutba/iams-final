@@ -33,18 +33,28 @@ rsync -avz --delete \
     --exclude 'test.db' \
     --exclude 'nul' \
     --exclude '.env' \
+    --exclude '.env.production' \
     "${PROJECT_DIR}/backend/" "${VPS_USER}@${VPS_IP}:${VPS_DIR}/backend/"
 
-# Step 2: Sync deploy configs
-echo "[2/4] Syncing deploy configs..."
+# Step 2: Sync admin dashboard code to VPS
+echo "[2/5] Syncing admin dashboard code to VPS..."
+rsync -avz --delete \
+    --exclude 'node_modules/' \
+    --exclude 'dist/' \
+    --exclude '.env.local' \
+    --exclude '.env.development' \
+    "${PROJECT_DIR}/admin/" "${VPS_USER}@${VPS_IP}:${VPS_DIR}/admin/"
+
+# Step 3: Sync deploy configs
+echo "[3/5] Syncing deploy configs..."
 rsync -avz \
     "${PROJECT_DIR}/deploy/docker-compose.prod.yml" \
     "${PROJECT_DIR}/deploy/nginx.conf" \
     "${PROJECT_DIR}/deploy/mediamtx.yml" \
     "${VPS_USER}@${VPS_IP}:${VPS_DIR}/deploy/"
 
-# Step 3: Build and restart on VPS
-echo "[3/4] Building and starting containers on VPS..."
+# Step 4: Build and restart on VPS
+echo "[4/5] Building and starting containers on VPS..."
 ssh "${VPS_USER}@${VPS_IP}" << 'REMOTE'
     cd /opt/iams/deploy
 
@@ -83,9 +93,9 @@ ssh "${VPS_USER}@${VPS_IP}" << 'REMOTE'
     docker compose -f docker-compose.prod.yml ps
 REMOTE
 
-# Step 4: Verify
+# Step 5: Verify
 echo ""
-echo "[4/4] Verifying deployment..."
+echo "[5/5] Verifying deployment..."
 sleep 3
 HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "http://${VPS_IP}/api/v1/health" || echo "000")
 
@@ -95,6 +105,7 @@ if [ "$HEALTH" = "200" ]; then
     echo "  Deployment successful!"
     echo "=========================================="
     echo ""
+    echo "  Admin:   http://${VPS_IP}/admin"
     echo "  API:     http://${VPS_IP}/api/v1"
     echo "  Docs:    http://${VPS_IP}/api/v1/docs"
     echo "  Health:  http://${VPS_IP}/api/v1/health"
