@@ -154,6 +154,26 @@ def seed():
         if existing_faculty:
             print("\nSeed data already exists. Skipping...")
             print(f"  Faculty: {existing_faculty.email} (ID: {existing_faculty.id})")
+
+            # Ensure admin account exists even if seed was run before admin was added
+            existing_admin = db.query(User).filter(User.email == "admin@iams.local").first()
+            if not existing_admin:
+                print("\n  Admin account missing — creating now...")
+                admin = User(
+                    email="admin@iams.local",
+                    password_hash=hash_password("admin123"),
+                    role=UserRole.ADMIN,
+                    first_name="System",
+                    last_name="Admin",
+                    is_active=True,
+                    email_verified=True,
+                )
+                db.add(admin)
+                db.commit()
+                print(f"  Created: admin@iams.local (ID: {admin.id})")
+            else:
+                print(f"  Admin: {existing_admin.email} (ID: {existing_admin.id})")
+
             room_count = db.query(Room).count()
             schedule_count = db.query(Schedule).count()
             print(f"  Rooms: {room_count}")
@@ -162,9 +182,9 @@ def seed():
             return
 
         # ------------------------------------------------------------------
-        # 1. Create Faculty User
+        # 1. Create Faculty User + Admin User
         # ------------------------------------------------------------------
-        print("\n[1/3] Creating faculty user...")
+        print("\n[1/3] Creating faculty and admin users...")
         faculty = User(
             email="faculty@gmail.com",
             password_hash=hash_password("password123"),
@@ -191,6 +211,22 @@ def seed():
             faculty.supabase_user_id = sb_user_id
             db.flush()
             print(f"  Linked supabase_user_id: {sb_user_id}")
+
+        # Create Admin User
+        admin = User(
+            email="admin@iams.local",
+            password_hash=hash_password("admin123"),
+            role=UserRole.ADMIN,
+            first_name="System",
+            last_name="Admin",
+            is_active=True,
+            email_verified=True,
+        )
+        db.add(admin)
+        db.flush()
+        print(f"  Created: {admin.first_name} {admin.last_name}")
+        print(f"  Email:   {admin.email}")
+        print(f"  DB ID:   {admin.id}")
 
         # ------------------------------------------------------------------
         # 2. Create Rooms
@@ -254,6 +290,9 @@ def seed():
         print("\n" + "=" * 60)
         print("SEED DATA COMPLETE")
         print("=" * 60)
+        print(f"\nAdmin Login (web dashboard):")
+        print(f"  Email:      admin@iams.local")
+        print(f"  Password:   admin123")
         print(f"\nFaculty Login:")
         print(f"  Email:      faculty@gmail.com")
         print(f"  Password:   password123")

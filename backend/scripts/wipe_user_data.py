@@ -54,12 +54,14 @@ from app.utils.security import hash_password
 from app.config import settings, logger
 
 
-def _wipe_supabase_auth_users(keep_email: str = "faculty@gmail.com") -> int:
-    """Delete all Supabase Auth users except *keep_email*.
+def _wipe_supabase_auth_users(keep_emails: list[str] | None = None) -> int:
+    """Delete all Supabase Auth users except those in *keep_emails*.
 
     Returns the number of users deleted.  Silently skips if Supabase
     Auth is disabled or the admin API is unreachable.
     """
+    if keep_emails is None:
+        keep_emails = ["faculty@gmail.com", "admin@iams.local"]
     if not settings.USE_SUPABASE_AUTH:
         print("  Supabase Auth disabled — skipping Auth user cleanup.")
         return 0
@@ -84,8 +86,9 @@ def _wipe_supabase_auth_users(keep_email: str = "faculty@gmail.com") -> int:
 
         users = resp.json().get("users", [])
         deleted = 0
+        keep_lower = [e.lower() for e in keep_emails]
         for u in users:
-            if u.get("email", "").lower() == keep_email.lower():
+            if u.get("email", "").lower() in keep_lower:
                 continue
             del_resp = httpx.delete(
                 f"{settings.SUPABASE_URL}/auth/v1/admin/users/{u['id']}",
@@ -135,13 +138,14 @@ def wipe_user_data(confirm: bool = False):
         print("=" * 60)
         print("\nThis will DELETE all registered users and transactional data.")
 
-        # STEP 1: Get or create the new default faculty account FIRST
-        # (We need this to reassign schedules before deleting old users)
-        print("\n[1/3] Preparing new default faculty account...")
+        # STEP 1: Get or create the default faculty + admin accounts FIRST
+        # (We need faculty to reassign schedules before deleting old users)
+        print("\n[1/3] Preparing default accounts...")
+
+        # --- Faculty account ---
         existing_faculty = db.query(User).filter(User.email == "faculty@gmail.com").first()
 
         if existing_faculty:
-            # Use the existing faculty account and update its password
             new_faculty = existing_faculty
             new_faculty.password_hash = hash_password("password123")
             new_faculty.is_active = True
@@ -149,7 +153,6 @@ def wipe_user_data(confirm: bool = False):
             db.flush()
             print(f"  Using existing: faculty@gmail.com (ID: {new_faculty.id})")
         else:
-            # Create a brand new faculty account
             new_faculty = User(
                 email="faculty@gmail.com",
                 password_hash=hash_password("password123"),
@@ -163,6 +166,32 @@ def wipe_user_data(confirm: bool = False):
             db.add(new_faculty)
             db.flush()
             print(f"  Created: faculty@gmail.com (ID: {new_faculty.id})")
+
+        # --- Admin account ---
+        existing_admin = db.query(User).filter(User.email == "admin@iams.local").first()
+
+        if existing_admin:
+            new_admin = existing_admin
+            new_admin.password_hash = hash_password("admin123")
+            new_admin.is_active = True
+            new_admin.email_verified = True
+            db.flush()
+            print(f"  Using existing: admin@iams.local (ID: {new_admin.id})")
+        else:
+            new_admin = User(
+                email="admin@iams.local",
+                password_hash=hash_password("admin123"),
+                role=UserRole.ADMIN,
+                first_name="System",
+                last_name="Admin",
+                is_active=True,
+                email_verified=True,
+            )
+            db.add(new_admin)
+            db.flush()
+            print(f"  Created: admin@iams.local (ID: {new_admin.id})")
+
+        keep_user_ids = {new_faculty.id, new_admin.id}
 
         # STEP 2: Reassign all schedules to the new faculty
         # (This removes the FK dependency on old faculty users)
@@ -192,8 +221,8 @@ def wipe_user_data(confirm: bool = False):
         total_deleted = 0
         for model, table_name in tables:
             if model == User:
-                # Only delete users that are NOT the new faculty we just created
-                count = db.query(model).filter(model.id != new_faculty.id).delete(synchronize_session=False)
+                # Keep both faculty and admin accounts
+                count = db.query(model).filter(model.id.notin_(keep_user_ids)).delete(synchronize_session=False)
             else:
                 count = db.query(model).delete(synchronize_session=False)
             total_deleted += count
@@ -205,8 +234,8 @@ def wipe_user_data(confirm: bool = False):
         db.commit()
         logger.info("User data wiped successfully")
 
-        # STEP 4: Clean up Supabase Auth users (except faculty@gmail.com)
-        sb_deleted = _wipe_supabase_auth_users(keep_email="faculty@gmail.com")
+        # STEP 4: Clean up Supabase Auth users (except faculty and admin)
+        sb_deleted = _wipe_supabase_auth_users(keep_emails=["faculty@gmail.com", "admin@iams.local"])
 
         # STEP 5: Delete FAISS index file for a clean start
         faiss_deleted = _delete_faiss_index()
@@ -219,6 +248,9 @@ def wipe_user_data(confirm: bool = False):
         print(f"FAISS index deleted: {faiss_deleted}")
         print("\nReference data (student_records, faculty_records, rooms, schedules) preserved.")
         print(f"All {schedule_count} schedules have been reassigned to the new faculty account.")
+        print("\nDefault Admin Account (web dashboard):")
+        print("  Email:    admin@iams.local")
+        print("  Password: admin123")
         print("\nDefault Faculty Account:")
         print("  Email:    faculty@gmail.com")
         print("  Password: password123")

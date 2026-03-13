@@ -19,7 +19,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   isAuthenticated: false,
 
   login: async (email, password) => {
-    const response = await authService.login({ email, password })
+    const response = await authService.login({ identifier: email, password })
     const { access_token, user } = response
     if (user.role !== 'admin') {
       throw new Error('Access denied. Admin role required.')

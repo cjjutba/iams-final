@@ -16,7 +16,7 @@ import {
 } from '@/components/ui/card'
 
 const loginSchema = z.object({
-  email: z.string().email('Please enter a valid email address'),
+  identifier: z.string().min(1, 'Email is required'),
   password: z.string().min(1, 'Password is required'),
 })
 
@@ -38,7 +38,7 @@ export default function LoginPage() {
   const onSubmit = async (data: LoginForm) => {
     setError(null)
     try {
-      await login(data.email, data.password)
+      await login(data.identifier, data.password)
       navigate('/', { replace: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed. Please try again.')
@@ -62,16 +62,16 @@ export default function LoginPage() {
               </div>
             )}
             <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="identifier">Email</Label>
               <Input
-                id="email"
-                type="email"
-                placeholder="admin@jrmsu.edu.ph"
+                id="identifier"
+                type="text"
+                placeholder="admin@iams.local"
                 autoComplete="email"
-                {...register('email')}
+                {...register('identifier')}
               />
-              {errors.email && (
-                <p className="text-sm text-destructive">{errors.email.message}</p>
+              {errors.identifier && (
+                <p className="text-sm text-destructive">{errors.identifier.message}</p>
               )}
             </div>
             <div className="space-y-2">
