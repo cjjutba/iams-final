@@ -1,0 +1,73 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "deploy/**"
+      - ".github/workflows/deploy.yml"
+
+jobs:
+  deploy:
+    name: Deploy Backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Sync backend code
+        run: |
+          rsync -avz --delete \
+            --exclude 'venv/' \
+            --exclude '__pycache__/' \
+            --exclude '*.pyc' \
+            --exclude '.pytest_cache/' \
+            --exclude 'data/faiss/' \
+            --exclude 'data/uploads/' \
+            --exclude 'data/hls/' \
+            --exclude 'data/.models/' \
+            --exclude 'logs/' \
+            --exclude 'test.db' \
+            --exclude '.env' \
+            backend/ ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/iams/backend/
+
+      - name: Sync deploy configs
+        run: |
+          rsync -avz \
+            deploy/docker-compose.prod.yml \
+            deploy/nginx.conf \
+            deploy/mediamtx.yml \
+            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/iams/deploy/
+
+      - name: Build and restart containers
+        run: |
+          ssh ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'EOF'
+            cd /opt/iams/deploy
+            echo "Building Docker image..."
+            docker compose -f docker-compose.prod.yml build --no-cache
+            echo "Restarting containers..."
+            docker compose -f docker-compose.prod.yml down || true
+            docker compose -f docker-compose.prod.yml up -d
+          EOF
+
+      - name: Wait for health check
+        run: |
+          echo "Waiting for backend to be healthy..."
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://${{ secrets.VPS_HOST }}/api/v1/health" || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "Backend is healthy! (attempt $i)"
+              exit 0
+            fi
+            echo "  Waiting... ($i/30) - status: $STATUS"
+            sleep 5
+          done
+          echo "ERROR: Health check failed after 150s"
+          exit 1
