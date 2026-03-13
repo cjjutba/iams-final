@@ -244,6 +244,8 @@ class EdgeDevice:
                         f"Smart sampler: {len(gone_track_ids)} face(s) gone "
                         f"(track_ids={gone_track_ids})"
                     )
+                    if self.sender:
+                        self.sender.send_face_gone(self.room_id, gone_track_ids)
             logger.info("No faces detected, skipping transmission")
             self.scan_count += 1
             return True
@@ -270,6 +272,8 @@ class EdgeDevice:
                     f"Smart sampler: {len(gone_track_ids)} face(s) gone "
                     f"(track_ids={gone_track_ids})"
                 )
+                if self.sender:
+                    self.sender.send_face_gone(self.room_id, gone_track_ids)
 
             logger.info(
                 f"Smart sampler: sending {len(faces_to_send)}/{len(face_data_list)} faces "

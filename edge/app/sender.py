@@ -98,17 +98,23 @@ class BackendSender:
             # Send POST request
             response = await client.post(url, json=payload)
 
-            # Raise for HTTP errors
-            response.raise_for_status()
+            # Accept both 200 (immediate) and 202 (batch-queued) as success
+            if response.status_code not in (200, 202):
+                response.raise_for_status()
 
             # Parse response
             result = response.json()
 
-            logger.info(
-                f"Backend response: processed={result.get('data', {}).get('processed', 0)}, "
-                f"matched={len(result.get('data', {}).get('matched', []))}, "
-                f"unmatched={result.get('data', {}).get('unmatched', 0)}"
-            )
+            if response.status_code == 202:
+                logger.info(
+                    f"Backend accepted batch (202): {len(faces)} faces queued for processing"
+                )
+            else:
+                logger.info(
+                    f"Backend response: processed={result.get('data', {}).get('processed', 0)}, "
+                    f"matched={len(result.get('data', {}).get('matched', []))}, "
+                    f"unmatched={result.get('data', {}).get('unmatched', 0)}"
+                )
 
             return result
 
@@ -127,6 +133,24 @@ class BackendSender:
         except Exception as e:
             logger.error(f"Unexpected error sending faces: {e}")
             raise
+
+    async def send_face_gone(self, room_id: str, track_ids: list):
+        """Notify backend that tracked faces have disappeared."""
+        payload = {
+            "room_id": room_id,
+            "event": "face_gone",
+            "track_ids": track_ids,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+        try:
+            client = await self._get_client()
+            await client.post(
+                f"{self.base_url}/api/v1/face/gone",
+                json=payload,
+                timeout=5,
+            )
+        except Exception:
+            pass  # Non-critical, presence service handles via timeout
 
     async def send_with_retry(
         self,
@@ -330,14 +354,39 @@ class SyncBackendSender:
         url = config.get_api_endpoint(self.endpoint)
         client = self._get_client()
         response = client.post(url, json=payload)
-        response.raise_for_status()
+        # Accept both 200 (immediate) and 202 (batch-queued) as success
+        if response.status_code not in (200, 202):
+            response.raise_for_status()
         result = response.json()
-        logger.info(
-            f"Backend response: processed={result.get('data', {}).get('processed', 0)}, "
-            f"matched={len(result.get('data', {}).get('matched', []))}, "
-            f"unmatched={result.get('data', {}).get('unmatched', 0)}"
-        )
+        if response.status_code == 202:
+            logger.info(
+                f"Backend accepted batch (202): {len(faces)} faces queued for processing"
+            )
+        else:
+            logger.info(
+                f"Backend response: processed={result.get('data', {}).get('processed', 0)}, "
+                f"matched={len(result.get('data', {}).get('matched', []))}, "
+                f"unmatched={result.get('data', {}).get('unmatched', 0)}"
+            )
         return result
+
+    def send_face_gone(self, room_id: str, track_ids: list):
+        """Notify backend that tracked faces have disappeared."""
+        payload = {
+            "room_id": room_id,
+            "event": "face_gone",
+            "track_ids": track_ids,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+        try:
+            client = self._get_client()
+            client.post(
+                f"{self.base_url}/api/v1/face/gone",
+                json=payload,
+                timeout=5,
+            )
+        except Exception:
+            pass  # Non-critical, presence service handles via timeout
 
     def send_with_retry(
         self,
