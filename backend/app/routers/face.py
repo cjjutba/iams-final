@@ -6,47 +6,45 @@ API endpoints for face registration, recognition, and Edge API for Raspberry Pi.
 CRITICAL: Contains Edge API contract for continuous presence tracking.
 """
 
-from typing import List
-from datetime import datetime, timedelta
+import base64
 import io
 import time
-import asyncio
-from fastapi import APIRouter, Depends, UploadFile, File, status
-from sqlalchemy.orm import Session
-import base64
+from datetime import datetime, timedelta
 
+from fastapi import APIRouter, Depends, File, UploadFile, status
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
+
+from app.config import logger, settings
 from app.database import get_db
 from app.models.user import User
+from app.repositories.schedule_repository import ScheduleRepository
 from app.schemas.face import (
-    FaceRegisterResponse,
-    QualityScoreResponse,
-    ImageQualityResponse,
-    FaceStatusResponse,
-    FaceRecognizeRequest,
-    FaceRecognizeResponse,
     EdgeProcessRequest,
     EdgeProcessResponse,
     EdgeProcessResponseData,
-    MatchedUser
+    FaceRecognizeRequest,
+    FaceRecognizeResponse,
+    FaceRegisterResponse,
+    FaceStatusResponse,
+    ImageQualityResponse,
+    MatchedUser,
+    QualityScoreResponse,
 )
 from app.services.face_service import FaceService
-from app.services.presence_service import PresenceService
-from app.repositories.schedule_repository import ScheduleRepository
-from app.services.ml.insightface_model import insightface_model
 from app.services.ml.face_quality import assess_quality
-from app.utils.dependencies import get_current_user, get_current_student, get_optional_user
-from app.utils.exceptions import EdgeAPIError, ValidationError
-from app.config import settings, logger
-
+from app.services.ml.insightface_model import insightface_model
+from app.services.presence_service import PresenceService
+from app.utils.dependencies import get_current_student, get_current_user, get_optional_user
 
 router = APIRouter()
 
 
 @router.post("/register", response_model=FaceRegisterResponse, status_code=status.HTTP_201_CREATED)
 async def register_face(
-    images: List[UploadFile] = File(..., description="3-5 face images"),
+    images: list[UploadFile] = File(..., description="3-5 face images"),
     current_user: User = Depends(get_current_student),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     **Register Face (Step 3 of Student Registration)**
@@ -100,9 +98,9 @@ async def register_face(
 
 @router.post("/reregister", response_model=FaceRegisterResponse, status_code=status.HTTP_200_OK)
 async def reregister_face(
-    images: List[UploadFile] = File(..., description="3-5 face images"),
+    images: list[UploadFile] = File(..., description="3-5 face images"),
     current_user: User = Depends(get_current_student),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     **Re-register Face (Update)**
@@ -150,10 +148,7 @@ async def reregister_face(
 
 
 @router.get("/status", response_model=FaceStatusResponse, status_code=status.HTTP_200_OK)
-async def get_face_status(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+async def get_face_status(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
     **Check Face Registration Status**
 
@@ -228,10 +223,7 @@ async def validate_image(
 
 
 @router.post("/recognize", response_model=FaceRecognizeResponse, status_code=status.HTTP_200_OK)
-async def recognize_face(
-    request: FaceRecognizeRequest,
-    db: Session = Depends(get_db)
-):
+async def recognize_face(request: FaceRecognizeRequest, db: Session = Depends(get_db)):
     """
     **Recognize Single Face (Testing)**
 
@@ -251,19 +243,14 @@ async def recognize_face(
     try:
         # Decode Base64 directly to bytes (skip PIL round-trip)
         b64_str = request.image
-        if ',' in b64_str:
-            b64_str = b64_str.split(',', 1)[1]
+        if "," in b64_str:
+            b64_str = b64_str.split(",", 1)[1]
         img_bytes = base64.b64decode(b64_str, validate=True)
 
         # Recognize
         user_id, confidence = await face_service.recognize_face(img_bytes)
 
-        return FaceRecognizeResponse(
-            success=True,
-            matched=user_id is not None,
-            user_id=user_id,
-            confidence=confidence
-        )
+        return FaceRecognizeResponse(success=True, matched=user_id is not None, user_id=user_id, confidence=confidence)
 
     except Exception as e:
         logger.error(f"Face recognition failed: {e}")
@@ -275,6 +262,7 @@ async def recognize_face(
 # In-memory cache for request deduplication (simple implementation)
 # In production: use Redis with TTL
 _request_cache = {}
+
 
 def _is_duplicate_request(request_id: str, room_id: str, timestamp: datetime) -> bool:
     """
@@ -290,10 +278,7 @@ def _is_duplicate_request(request_id: str, room_id: str, timestamp: datetime) ->
 
     # Clean expired entries (older than 5 minutes)
     now = datetime.now()
-    expired_keys = [
-        k for k, v in _request_cache.items()
-        if now - v > timedelta(minutes=5)
-    ]
+    expired_keys = [k for k, v in _request_cache.items() if now - v > timedelta(minutes=5)]
     for k in expired_keys:
         del _request_cache[k]
 
@@ -308,10 +293,7 @@ def _is_duplicate_request(request_id: str, room_id: str, timestamp: datetime) ->
 
 
 @router.post("/process", response_model=EdgeProcessResponse, status_code=status.HTTP_200_OK)
-async def process_faces(
-    request: EdgeProcessRequest,
-    db: Session = Depends(get_db)
-):
+async def process_faces(request: EdgeProcessRequest, db: Session = Depends(get_db)):
     """
     **Edge API: Process Faces from Raspberry Pi**
 
@@ -390,19 +372,35 @@ async def process_faces(
         logger.warning(f"Duplicate request ignored: request_id={request.request_id}")
         return EdgeProcessResponse(
             success=True,
-            data=EdgeProcessResponseData(
-                processed=0,
-                matched=[],
-                unmatched=0,
-                processing_time_ms=0,
-                presence_logged=0
-            )
+            data=EdgeProcessResponseData(processed=0, matched=[], unmatched=0, processing_time_ms=0, presence_logged=0),
         )
 
+    # --- Async batch path: queue faces and return 202 immediately ---
+    if settings.USE_BATCH_PROCESSING:
+        from app.services.batch_processor import batch_processor
+
+        queued = 0
+        for face_data in request.faces:
+            face_dict = {
+                "image": face_data.image,
+                "bbox": face_data.bbox,
+                "request_id": request.request_id,
+                "timestamp": request.timestamp.isoformat(),
+            }
+            await batch_processor.enqueue_face(request.room_id, face_dict)
+            queued += 1
+
+        logger.info(f"Batch mode: queued {queued} faces for room {request.room_id}")
+        return JSONResponse(
+            status_code=202,
+            content={"status": "queued", "faces_queued": queued},
+        )
+
+    # --- Synchronous path (original behaviour) ---
     face_service = FaceService(db)
 
     processed_count = 0
-    matched_users: List[MatchedUser] = []
+    matched_users: list[MatchedUser] = []
     unmatched_count = 0
     face_errors = []
 
@@ -416,25 +414,18 @@ async def process_faces(
         try:
             # Decode Base64 image with validation
             try:
-                image = face_service.facenet.decode_base64_image(
-                    face_data.image,
-                    validate_size=True
-                )
+                image = face_service.facenet.decode_base64_image(face_data.image, validate_size=True)
             except ValueError as e:
                 # Invalid image format - don't retry
-                error_msg = f"Face {i+1}: {str(e)}"
+                error_msg = f"Face {i + 1}: {str(e)}"
                 logger.warning(error_msg)
-                face_errors.append({
-                    "face_index": i,
-                    "error": "INVALID_IMAGE_FORMAT",
-                    "message": str(e)
-                })
+                face_errors.append({"face_index": i, "error": "INVALID_IMAGE_FORMAT", "message": str(e)})
                 unmatched_count += 1
                 continue
 
             # Convert to bytes
             img_bytes = io.BytesIO()
-            image.save(img_bytes, format='JPEG')
+            image.save(img_bytes, format="JPEG")
             img_bytes = img_bytes.getvalue()
 
             # Recognize face using margin-aware search
@@ -450,42 +441,34 @@ async def process_faces(
 
                 if match_result["user_id"]:
                     # Face matched
-                    matched_users.append(MatchedUser(
-                        user_id=match_result["user_id"],
-                        confidence=match_result["confidence"],
-                    ))
-                    if match_result["is_ambiguous"]:
-                        logger.warning(
-                            f"Ambiguous match for face {i+1} in room {request.room_id}"
+                    matched_users.append(
+                        MatchedUser(
+                            user_id=match_result["user_id"],
+                            confidence=match_result["confidence"],
                         )
+                    )
+                    if match_result["is_ambiguous"]:
+                        logger.warning(f"Ambiguous match for face {i + 1} in room {request.room_id}")
                     logger.debug(
-                        f"Face {i+1} matched: user {match_result['user_id']}, "
+                        f"Face {i + 1} matched: user {match_result['user_id']}, "
                         f"confidence {match_result['confidence']:.3f}"
                     )
                 else:
                     # Face not matched
                     unmatched_count += 1
-                    logger.debug(f"Face {i+1} not matched")
+                    logger.debug(f"Face {i + 1} not matched")
 
             except Exception as e:
                 # Recognition failed - can retry
-                error_msg = f"Face {i+1}: Recognition failed: {str(e)}"
+                error_msg = f"Face {i + 1}: Recognition failed: {str(e)}"
                 logger.error(error_msg)
-                face_errors.append({
-                    "face_index": i,
-                    "error": "RECOGNITION_FAILED",
-                    "message": str(e)
-                })
+                face_errors.append({"face_index": i, "error": "RECOGNITION_FAILED", "message": str(e)})
                 unmatched_count += 1
 
         except Exception as e:
             # Unexpected error
-            logger.exception(f"Unexpected error processing face {i+1}: {e}")
-            face_errors.append({
-                "face_index": i,
-                "error": "PROCESSING_FAILED",
-                "message": str(e)
-            })
+            logger.exception(f"Unexpected error processing face {i + 1}: {e}")
+            face_errors.append({"face_index": i, "error": "PROCESSING_FAILED", "message": str(e)})
             unmatched_count += 1
 
     # Log presence to attendance system for matched users
@@ -513,9 +496,7 @@ async def process_faces(
                 for matched_user in matched_users:
                     try:
                         await presence_service.feed_detection(
-                            schedule_id=schedule_id,
-                            user_id=matched_user.user_id,
-                            confidence=matched_user.confidence
+                            schedule_id=schedule_id, user_id=matched_user.user_id, confidence=matched_user.confidence
                         )
                         presence_logged += 1
                         logger.debug(
@@ -556,16 +537,13 @@ async def process_faces(
             matched=[user.model_dump() for user in matched_users],
             unmatched=unmatched_count,
             processing_time_ms=processing_time_ms,
-            presence_logged=presence_logged
-        )
+            presence_logged=presence_logged,
+        ),
     )
 
 
 @router.get("/statistics", status_code=status.HTTP_200_OK)
-async def get_face_statistics(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+async def get_face_statistics(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
     **Get Face Recognition Statistics**
 
@@ -581,18 +559,11 @@ async def get_face_statistics(
     face_service = FaceService(db)
     stats = face_service.get_statistics()
 
-    return {
-        "success": True,
-        "data": stats
-    }
+    return {"success": True, "data": stats}
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_200_OK)
-async def deregister_face(
-    user_id: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+async def deregister_face(user_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
     **Deregister Face**
 
@@ -606,19 +577,14 @@ async def deregister_face(
     Requires authentication.
     """
     from fastapi import HTTPException
+
     from app.models.user import UserRole
 
     # Students can only deregister their own face
     if current_user.role == UserRole.STUDENT and str(current_user.id) != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Students can only deregister their own face"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Students can only deregister their own face")
 
     face_service = FaceService(db)
     await face_service.deregister_face(user_id)
 
-    return {
-        "success": True,
-        "message": "Face deregistered successfully"
-    }
+    return {"success": True, "message": "Face deregistered successfully"}

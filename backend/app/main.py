@@ -258,6 +258,16 @@ async def startup_event():
         os.makedirs(settings.HLS_SEGMENT_DIR, exist_ok=True)
         logger.info(f"HLS streaming enabled (segment dir: {settings.HLS_SEGMENT_DIR})")
 
+    # Start batch face processor (if enabled)
+    if settings.USE_BATCH_PROCESSING:
+        try:
+            from app.services.batch_processor import batch_processor
+
+            await batch_processor.start()
+            logger.info("Batch face processor started")
+        except Exception as e:
+            logger.error(f"Failed to start batch processor: {e}")
+
     logger.info(f"{settings.APP_NAME} startup complete")
 
 
@@ -302,6 +312,16 @@ async def shutdown_event():
             mediamtx_service.stop()
         except Exception as e:
             logger.error(f"Failed to stop mediamtx: {e}")
+
+    # Stop batch face processor
+    if settings.USE_BATCH_PROCESSING:
+        try:
+            from app.services.batch_processor import batch_processor
+
+            await batch_processor.stop()
+            logger.info("Batch face processor stopped")
+        except Exception as e:
+            logger.error(f"Failed to stop batch processor: {e}")
 
     # Close Redis connection pool
     try:
