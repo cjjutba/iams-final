@@ -9,6 +9,13 @@ import { Platform } from 'react-native';
 
 const isDev = __DEV__;
 
+// ── Backend toggle ──────────────────────────────────────────────────────
+// Set to `true`  → dev builds hit your local backend (auto-detected LAN IP)
+// Set to `false` → dev builds hit the DigitalOcean VPS (same as production)
+// Has no effect on production builds — they always use the VPS.
+const USE_LOCAL_BACKEND = true;
+// ────────────────────────────────────────────────────────────────────────
+
 // Read from EXPO_PUBLIC_ env vars if set, otherwise fall back to defaults.
 // To override: set EXPO_PUBLIC_API_BASE_URL in your .env file.
 const API_BASE_URL_ENV = process.env.EXPO_PUBLIC_API_BASE_URL;
@@ -46,27 +53,31 @@ const isAndroidEmulator =
 // Emulator → 10.0.2.2 (maps to host localhost), real device → LAN IP from Metro
 const devHostIp = isAndroidEmulator ? '10.0.2.2' : metroHostIp;
 
+// Resolve backend host: local (LAN IP) vs VPS (DigitalOcean)
+const VPS_IP = '167.71.217.44';
+const useLocal = isDev && USE_LOCAL_BACKEND;
+
 // Log resolved host in dev so you can verify which IP each device uses
 if (isDev) {
   const resolvedApi = API_BASE_URL_ENV
-    ?? `http://${devHostIp}:8000/api/v1`;
+    ?? (useLocal ? `http://${devHostIp}:8000/api/v1` : `http://${VPS_IP}/api/v1`);
   console.log(
     `[IAMS Config] Platform=${Platform.OS} emulator=${isAndroidEmulator} ` +
-    `metro=${metroHostIp} API=${resolvedApi}`,
+    `metro=${metroHostIp} local=${USE_LOCAL_BACKEND} API=${resolvedApi}`,
   );
 }
 
 export const config = {
-  // API URLs — prefer env var, then auto-detect from Metro host in dev
+  // API URLs — prefer env var, then toggle between local/VPS in dev
   API_BASE_URL: API_BASE_URL_ENV
-    ?? (isDev
+    ?? (useLocal
       ? `http://${devHostIp}:8000/api/v1`
-      : 'http://167.71.217.44/api/v1'),
+      : `http://${VPS_IP}/api/v1`),
 
   WS_URL: WS_BASE_URL_ENV
-    ?? (isDev
+    ?? (useLocal
       ? `ws://${devHostIp}:8000/api/v1/ws`
-      : 'ws://167.71.217.44/api/v1/ws'),
+      : `ws://${VPS_IP}/api/v1/ws`),
 
   // Supabase
   SUPABASE_URL: SUPABASE_URL_ENV,
@@ -107,9 +118,9 @@ export const config = {
   getHlsUrl: (roomId: string) =>
     `${
       API_BASE_URL_ENV
-        ?? (isDev
+        ?? (useLocal
           ? `http://${devHostIp}:8000/api/v1`
-          : 'http://167.71.217.44/api/v1')
+          : `http://${VPS_IP}/api/v1`)
     }/hls/${roomId}/playlist.m3u8`,
 
   // App info

@@ -56,11 +56,20 @@ webrtcAdditionalHosts:
 # Explicit UDP port for WebRTC media (must match docker-compose port mapping).
 webrtcLocalUDPAddress: :8887
 
+# ICE servers advertised to clients in the SDP answer.
+# Includes our own TURN server for phones behind symmetric NAT.
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+  - url: turn:167.71.217.44:3478
+    username: iams
+    password: iams-turn-secret-2026
+
 # Disable unused protocols
 hls: no
 srt: no
 rtmp: no
 
-# Paths are created automatically when RPi pushes RTSP.
-# No static path config needed.
-paths: {}
+# Accept any path — RPi pushes RTSP dynamically.
+# "all_others" is mediamtx's catch-all for unconfigured paths.
+paths:
+  all_others:

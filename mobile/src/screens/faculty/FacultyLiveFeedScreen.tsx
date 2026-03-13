@@ -717,17 +717,51 @@ export const FacultyLiveFeedScreen: React.FC = () => {
             </>
           ) : (
             <View style={styles.noFeedPlaceholder}>
-              <Video size={48} color={theme.colors.text.disabled} />
-              <Text
-                variant="bodySmall"
-                color={theme.colors.text.tertiary}
-                align="center"
-                style={styles.noFeedText}
-              >
-                {rtcConnectionState === 'failed'
-                  ? 'WebRTC connection failed — tap retry'
-                  : 'Connecting to camera...'}
-              </Text>
+              {rtcConnectionState === 'failed' ? (
+                <>
+                  <RefreshCw size={48} color={theme.colors.text.disabled} />
+                  <Text
+                    variant="bodySmall"
+                    color={theme.colors.text.tertiary}
+                    align="center"
+                    style={styles.noFeedText}
+                  >
+                    WebRTC connection failed
+                  </Text>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onPress={handleReconnect}
+                    style={styles.noFeedRetryButton}
+                  >
+                    Retry
+                  </Button>
+                </>
+              ) : rtcConnectionState === 'disconnected' ? (
+                <>
+                  <ActivityIndicator size="large" color={theme.colors.text.tertiary} />
+                  <Text
+                    variant="bodySmall"
+                    color={theme.colors.text.tertiary}
+                    align="center"
+                    style={styles.noFeedText}
+                  >
+                    Reconnecting to camera...
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <ActivityIndicator size="large" color={theme.colors.text.tertiary} />
+                  <Text
+                    variant="bodySmall"
+                    color={theme.colors.text.tertiary}
+                    align="center"
+                    style={styles.noFeedText}
+                  >
+                    Connecting to camera...
+                  </Text>
+                </>
+              )}
             </View>
           )}
         </View>
@@ -939,6 +973,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   noFeedText: {
+    marginTop: theme.spacing[3],
+  },
+  noFeedRetryButton: {
     marginTop: theme.spacing[3],
   },
 

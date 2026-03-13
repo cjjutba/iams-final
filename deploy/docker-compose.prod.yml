@@ -43,6 +43,28 @@ services:
     # No healthcheck: mediamtx image is scratch-based (no shell/wget/curl).
     # Backend's mediamtx_service.start() polls the API on startup instead.
 
+  # TURN relay server — ensures WebRTC connectivity when mobile phones
+  # are behind symmetric NATs (where STUN alone fails).
+  coturn:
+    image: coturn/coturn:latest
+    container_name: iams-coturn
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - "--listening-port=3478"
+      - "--external-ip=167.71.217.44"
+      - "--relay-ip=167.71.217.44"
+      - "--min-port=49152"
+      - "--max-port=49252"
+      - "--user=iams:iams-turn-secret-2026"
+      - "--realm=iams.local"
+      - "--lt-cred-mech"
+      - "--fingerprint"
+      - "--no-cli"
+      - "--no-tls"
+      - "--no-dtls"
+      - "--log-file=stdout"
+
   nginx:
     image: nginx:alpine
     container_name: iams-nginx

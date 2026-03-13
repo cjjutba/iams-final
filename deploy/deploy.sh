@@ -48,10 +48,13 @@ echo "[3/4] Building and starting containers on VPS..."
 ssh "${VPS_USER}@${VPS_IP}" << 'REMOTE'
     cd /opt/iams/deploy
 
-    # Open ports for mediamtx (if not already open)
+    # Open ports for mediamtx + coturn (if not already open)
     echo "Checking firewall rules..."
     ufw allow 8554/tcp comment "mediamtx RTSP ingest from RPi" 2>/dev/null || true
     ufw allow 8887/udp comment "mediamtx WebRTC media" 2>/dev/null || true
+    ufw allow 3478/tcp comment "coturn TURN listening" 2>/dev/null || true
+    ufw allow 3478/udp comment "coturn TURN listening" 2>/dev/null || true
+    ufw allow 49152:49252/udp comment "coturn TURN relay range" 2>/dev/null || true
 
     # Build backend image
     echo "Building Docker image..."

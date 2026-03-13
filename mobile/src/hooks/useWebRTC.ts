@@ -49,6 +49,7 @@ export interface UseWebRTCReturn {
 
 const BASE_RECONNECT_MS = 1_000;   // 1s initial backoff
 const MAX_RECONNECT_MS = 30_000;   // 30s max backoff
+const DISCONNECTED_GRACE_MS = 15_000; // 15s grace period before treating 'disconnected' as failure
 
 // ---------------------------------------------------------------------------
 // Hook
@@ -65,6 +66,7 @@ export function useWebRTC(scheduleId: string, enabled: boolean): UseWebRTCReturn
   const isMountedRef = useRef(true);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const disconnectedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Ref so scheduleReconnect (empty-deps callback) always calls the latest connect.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const connectRef = useRef<() => Promise<void>>(null as any);
@@ -94,6 +96,10 @@ export function useWebRTC(scheduleId: string, enabled: boolean): UseWebRTCReturn
     if (!isMountedRef.current || !enabled) return;
 
     // Tear down any previous peer connection
+    if (disconnectedTimerRef.current) {
+      clearTimeout(disconnectedTimerRef.current);
+      disconnectedTimerRef.current = null;
+    }
     if (pcRef.current) {
       (pcRef.current as any).ontrack = null;
       (pcRef.current as any).oniceconnectionstatechange = null;
@@ -131,11 +137,19 @@ export function useWebRTC(scheduleId: string, enabled: boolean): UseWebRTCReturn
       pc.addTransceiver('video', { direction: 'recvonly' });
       pc.addTransceiver('audio', { direction: 'recvonly' });
 
-      // Step 4a: Handle incoming video track
+      // Step 4a: Handle incoming tracks
+      // Build a single MediaStream from all received tracks.
+      // react-native-webrtc may not populate event.streams, so we
+      // accumulate tracks into our own stream.
+      const stream = new MediaStream();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (pc as any).addEventListener('track', (event: any) => {
-        if (event.streams?.[0] && isMountedRef.current) {
-          setRemoteStream(event.streams[0]);
+        if (!isMountedRef.current) return;
+        const track = event.track ?? event.streams?.[0]?.getTracks()?.[0];
+        if (track) {
+          stream.addTrack(track);
+          // Update state on every track so the first (video) renders immediately
+          setRemoteStream(stream);
         }
       });
 
@@ -144,14 +158,49 @@ export function useWebRTC(scheduleId: string, enabled: boolean): UseWebRTCReturn
       (pc as any).addEventListener('iceconnectionstatechange', () => {
         if (!isMountedRef.current) return;
         const state = pc.iceConnectionState as RTCIceConnectionState;
+        console.log(`[WebRTC] ICE state: ${state}, tracks: ${stream.getTracks().length}`);
         setConnectionState(state);
 
         if (state === 'connected' || state === 'completed') {
           reconnectAttemptRef.current = 0;
           setError(null);
+          // Cancel any pending reconnect or disconnected-grace timers —
+          // the connection recovered, so we must NOT tear it down.
+          if (disconnectedTimerRef.current) {
+            clearTimeout(disconnectedTimerRef.current);
+            disconnectedTimerRef.current = null;
+          }
+          if (reconnectTimerRef.current) {
+            clearTimeout(reconnectTimerRef.current);
+            reconnectTimerRef.current = null;
+          }
         }
 
-        if (state === 'failed' || state === 'disconnected') {
+        if (state === 'disconnected') {
+          // ICE 'disconnected' is transient — the peer connection often
+          // recovers on its own (e.g., network blip, route change).  Give it
+          // a grace period before tearing down and reconnecting.
+          if (!disconnectedTimerRef.current) {
+            disconnectedTimerRef.current = setTimeout(() => {
+              disconnectedTimerRef.current = null;
+              if (
+                isMountedRef.current &&
+                pcRef.current === pc &&
+                pc.iceConnectionState === 'disconnected'
+              ) {
+                console.log('[WebRTC] disconnected grace period expired — reconnecting');
+                scheduleReconnect();
+              }
+            }, DISCONNECTED_GRACE_MS);
+          }
+        }
+
+        if (state === 'failed') {
+          // ICE 'failed' is terminal — reconnect immediately.
+          if (disconnectedTimerRef.current) {
+            clearTimeout(disconnectedTimerRef.current);
+            disconnectedTimerRef.current = null;
+          }
           scheduleReconnect();
         }
       });
@@ -218,6 +267,11 @@ export function useWebRTC(scheduleId: string, enabled: boolean): UseWebRTCReturn
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
+      }
+
+      if (disconnectedTimerRef.current) {
+        clearTimeout(disconnectedTimerRef.current);
+        disconnectedTimerRef.current = null;
       }
 
       if (pcRef.current) {

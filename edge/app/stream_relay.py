@@ -143,7 +143,8 @@ class StreamRelay:
             "-loglevel", "warning",
             "-rtsp_transport", config.RTSP_TRANSPORT,
             "-i", config.RTSP_URL,
-            "-c", "copy",
+            "-an",              # Drop audio (avoids codec issues with mediamtx)
+            "-c:v", "copy",
             "-f", "rtsp",
             dest,
         ]
