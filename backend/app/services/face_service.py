@@ -19,7 +19,6 @@ from app.services.ml.anti_spoof import anti_spoof_detector
 from app.services.ml.embedding_pipeline import (
     embed_face,
     validate_registration_embeddings,
-    average_embeddings,
 )
 from app.services.ml.face_quality import QualityReport, assess_quality
 from app.services.ml.faiss_manager import faiss_manager

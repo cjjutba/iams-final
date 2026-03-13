@@ -9,7 +9,6 @@ Guarantees identical preprocessing for both paths:
 """
 
 import logging
-from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -18,7 +17,7 @@ from app.services.ml.insightface_model import insightface_model
 logger = logging.getLogger(__name__)
 
 
-async def embed_face(image_bytes: bytes) -> Optional[np.ndarray]:
+async def embed_face(image_bytes: bytes) -> np.ndarray | None:
     """Generate a 512-dim L2-normalized embedding from face image bytes.
 
     Used by both registration and recognition paths.
@@ -34,7 +33,7 @@ async def embed_face(image_bytes: bytes) -> Optional[np.ndarray]:
     return result["embedding"]
 
 
-async def embed_faces_batch(images: List[bytes]) -> List[Optional[np.ndarray]]:
+async def embed_faces_batch(images: list[bytes]) -> list[np.ndarray | None]:
     """Batch version of embed_face."""
     results = []
     for img_bytes in images:
@@ -44,9 +43,9 @@ async def embed_faces_batch(images: List[bytes]) -> List[Optional[np.ndarray]]:
 
 
 def validate_registration_embeddings(
-    embeddings: List[np.ndarray],
+    embeddings: list[np.ndarray],
     min_cross_similarity: float = 0.7,
-) -> Tuple[bool, str]:
+) -> tuple[bool, str]:
     """Validate that all registration embeddings are from the same person.
 
     Checks pairwise cosine similarity between all embeddings.
@@ -66,7 +65,7 @@ def validate_registration_embeddings(
     return True, "All embeddings are consistent"
 
 
-def average_embeddings(embeddings: List[np.ndarray]) -> np.ndarray:
+def average_embeddings(embeddings: list[np.ndarray]) -> np.ndarray:
     """Average and L2-normalize embeddings for FAISS storage."""
     avg = np.mean(embeddings, axis=0)
     norm = np.linalg.norm(avg)

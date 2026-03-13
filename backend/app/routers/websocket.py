@@ -4,6 +4,7 @@ WebSocket Router
 Real-time communication for attendance updates and early-leave alerts.
 """
 
+import contextlib
 import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -173,44 +174,47 @@ class ConnectionManager:
         for result in results:
             user_id = result.get("user_id")
             if user_id and user_id in self.active_connections:
-                await self.send_personal(user_id, {
-                    "event": "student_checked_in",
-                    "data": {
-                        "user_id": user_id,
-                        "room_id": room_id,
-                        "confidence": result.get("confidence"),
-                        "timestamp": data.get("timestamp"),
+                await self.send_personal(
+                    user_id,
+                    {
+                        "event": "student_checked_in",
+                        "data": {
+                            "user_id": user_id,
+                            "room_id": room_id,
+                            "confidence": result.get("confidence"),
+                            "timestamp": data.get("timestamp"),
+                        },
                     },
-                })
+                )
 
         # Broadcast attendance update to all schedule subscribers
         # (faculty watching this room)
-        for schedule_id, user_ids in self.schedule_connections.items():
+        for _schedule_id, user_ids in self.schedule_connections.items():
             for uid in list(user_ids):
                 if uid in self.active_connections:
-                    try:
-                        await self.send_personal(uid, {
-                            "event": "attendance_update",
-                            "data": {
-                                "room_id": room_id,
-                                "results": results,
-                                "processing_time_ms": data.get("processing_time_ms"),
-                                "batch_size": data.get("batch_size"),
+                    with contextlib.suppress(Exception):
+                        await self.send_personal(
+                            uid,
+                            {
+                                "event": "attendance_update",
+                                "data": {
+                                    "room_id": room_id,
+                                    "results": results,
+                                    "processing_time_ms": data.get("processing_time_ms"),
+                                    "batch_size": data.get("batch_size"),
+                                },
                             },
-                        })
-                    except Exception:
-                        pass
+                        )
 
     async def stop_redis_listener(self):
         """Stop the Redis pub/sub listener."""
         import asyncio
+        import contextlib
 
         if hasattr(self, "_listener_task") and self._listener_task:
             self._listener_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._listener_task
-            except asyncio.CancelledError:
-                pass
         if hasattr(self, "_pubsub") and self._pubsub:
             await self._pubsub.unsubscribe()
         logger.info("Redis WS listener stopped")

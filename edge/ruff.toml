@@ -1,6 +1,7 @@
 # Ruff linting configuration for IAMS edge device
 target-version = "py311"
 line-length = 120
+extend-exclude = ["tests/"]
 
 [lint]
 select = [

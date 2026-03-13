@@ -715,20 +715,25 @@ class PresenceService:
 
     async def _redis_update_presence(self, room_id: str, student_id: str, timestamp: float):
         """Update student presence state in Redis."""
-        from app.redis_client import get_redis
         from app.config import settings
+        from app.redis_client import get_redis
+
         r = await get_redis()
         key = f"{settings.REDIS_PRESENCE_PREFIX}:{room_id}:{student_id}"
-        await r.hset(key, mapping={
-            "last_seen": str(timestamp),
-            "miss_count": "0",
-        })
+        await r.hset(
+            key,
+            mapping={
+                "last_seen": str(timestamp),
+                "miss_count": "0",
+            },
+        )
         await r.hincrby(key, "present_count", 1)
 
     async def _redis_get_presence(self, room_id: str, student_id: str) -> dict:
         """Get student presence state from Redis."""
-        from app.redis_client import get_redis
         from app.config import settings
+        from app.redis_client import get_redis
+
         r = await get_redis()
         key = f"{settings.REDIS_PRESENCE_PREFIX}:{room_id}:{student_id}"
         data = await r.hgetall(key)
@@ -743,24 +748,27 @@ class PresenceService:
 
     async def _redis_increment_miss(self, room_id: str, student_id: str) -> int:
         """Increment miss counter, return new value."""
-        from app.redis_client import get_redis
         from app.config import settings
+        from app.redis_client import get_redis
+
         r = await get_redis()
         key = f"{settings.REDIS_PRESENCE_PREFIX}:{room_id}:{student_id}"
         return await r.hincrby(key, "miss_count", 1)
 
     async def _redis_increment_total_scans(self, room_id: str, student_id: str):
         """Increment total scan count."""
-        from app.redis_client import get_redis
         from app.config import settings
+        from app.redis_client import get_redis
+
         r = await get_redis()
         key = f"{settings.REDIS_PRESENCE_PREFIX}:{room_id}:{student_id}"
         await r.hincrby(key, "total_scans", 1)
 
     async def _redis_clear_room(self, room_id: str):
         """Clear all presence state for a room (on session end)."""
-        from app.redis_client import get_redis
         from app.config import settings
+        from app.redis_client import get_redis
+
         r = await get_redis()
         async for key in r.scan_iter(match=f"{settings.REDIS_PRESENCE_PREFIX}:{room_id}:*"):
             await r.delete(key)
