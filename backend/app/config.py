@@ -8,7 +8,7 @@ Includes Supabase, JWT, Face Recognition, and Presence Tracking settings.
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import List
+
 from pydantic_settings import BaseSettings
 
 
@@ -43,9 +43,14 @@ class Settings(BaseSettings):
     RATE_LIMIT_ENABLED: bool = True
 
     # CORS
-    CORS_ORIGINS: List[str] = ["*"]  # In production, specify exact origins
+    CORS_ORIGINS: list[str] = ["*"]  # In production, specify exact origins
+
+    # ONNX Runtime (thread control for multi-worker CPU efficiency)
+    ONNX_INTRA_OP_THREADS: int = 2  # threads within a single op (per worker)
+    ONNX_INTER_OP_THREADS: int = 1  # threads between ops (per worker)
 
     # Face Recognition
+    USE_BATCH_PROCESSING: bool = False  # batch mode toggle (Task 4)
     INSIGHTFACE_MODEL: str = "buffalo_l"
     INSIGHTFACE_DET_SIZE: int = 640
     FAISS_INDEX_PATH: str = "data/faiss/faces.index"
@@ -58,27 +63,27 @@ class Settings(BaseSettings):
 
     # Face Quality Gating
     QUALITY_GATE_ENABLED: bool = True
-    QUALITY_BLUR_THRESHOLD: float = 100.0       # Laplacian variance minimum (CCTV)
+    QUALITY_BLUR_THRESHOLD: float = 100.0  # Laplacian variance minimum (CCTV)
     QUALITY_BLUR_THRESHOLD_MOBILE: float = 35.0  # Laplacian variance minimum (mobile selfie)
-    QUALITY_BRIGHTNESS_MIN: float = 40.0        # Mean pixel intensity minimum
-    QUALITY_BRIGHTNESS_MAX: float = 220.0       # Mean pixel intensity maximum
-    QUALITY_MIN_FACE_SIZE_RATIO: float = 0.05   # Face area / image area minimum
-    QUALITY_MIN_DET_SCORE: float = 0.5          # SCRFD detection confidence minimum
+    QUALITY_BRIGHTNESS_MIN: float = 40.0  # Mean pixel intensity minimum
+    QUALITY_BRIGHTNESS_MAX: float = 220.0  # Mean pixel intensity maximum
+    QUALITY_MIN_FACE_SIZE_RATIO: float = 0.05  # Face area / image area minimum
+    QUALITY_MIN_DET_SCORE: float = 0.5  # SCRFD detection confidence minimum
 
     # Adaptive Threshold
     ADAPTIVE_THRESHOLD_ENABLED: bool = True
-    ADAPTIVE_THRESHOLD_FLOOR: float = 0.35      # Minimum allowed threshold
-    ADAPTIVE_THRESHOLD_CEILING: float = 0.65    # Maximum allowed threshold
-    ADAPTIVE_THRESHOLD_MIN_SAMPLES: int = 50    # Min samples before adapting
-    ADAPTIVE_THRESHOLD_WINDOW: int = 500        # Rolling window size
+    ADAPTIVE_THRESHOLD_FLOOR: float = 0.35  # Minimum allowed threshold
+    ADAPTIVE_THRESHOLD_CEILING: float = 0.65  # Maximum allowed threshold
+    ADAPTIVE_THRESHOLD_MIN_SAMPLES: int = 50  # Min samples before adapting
+    ADAPTIVE_THRESHOLD_WINDOW: int = 500  # Rolling window size
 
     # Anti-Spoofing / Liveness Detection
     ANTISPOOF_ENABLED: bool = True
-    ANTISPOOF_REGISTRATION_STRICT: bool = True      # Block registration if spoof detected
-    ANTISPOOF_RECOGNITION_LOG_ONLY: bool = True     # Only log during CCTV (no blocking)
-    ANTISPOOF_EMBEDDING_VARIANCE_MIN: float = 0.1   # Min embedding cosine distance variance across angles
-    ANTISPOOF_LBP_THRESHOLD: float = 0.15            # LBP texture uniformity threshold (lowered for mobile selfie)
-    ANTISPOOF_FFT_THRESHOLD: float = 0.20            # FFT high-freq energy threshold (lowered for mobile selfie)
+    ANTISPOOF_REGISTRATION_STRICT: bool = True  # Block registration if spoof detected
+    ANTISPOOF_RECOGNITION_LOG_ONLY: bool = True  # Only log during CCTV (no blocking)
+    ANTISPOOF_EMBEDDING_VARIANCE_MIN: float = 0.1  # Min embedding cosine distance variance across angles
+    ANTISPOOF_LBP_THRESHOLD: float = 0.15  # LBP texture uniformity threshold (lowered for mobile selfie)
+    ANTISPOOF_FFT_THRESHOLD: float = 0.20  # FFT high-freq energy threshold (lowered for mobile selfie)
 
     # Presence Tracking
     SCAN_INTERVAL_SECONDS: int = 60  # How often to run presence scans
@@ -107,23 +112,23 @@ class Settings(BaseSettings):
     USE_HLS_STREAMING: bool = True  # Feature flag: True=HLS+WS metadata, False=legacy JPEG WS
     HLS_SEGMENT_DURATION: float = 0.2  # Seconds per HLS segment — 0.2 s forces keyframes at 0.2 s boundaries
     HLS_PLAYLIST_SIZE: int = 3  # 3 × 0.2 s = 0.6 s window; ExoPlayer targets ~0.6 s behind live edge
-    HLS_TRANSCODE: bool = True   # True = libx264 ultrafast with forced keyframes; False = copy
+    HLS_TRANSCODE: bool = True  # True = libx264 ultrafast with forced keyframes; False = copy
     HLS_SEGMENT_DIR: str = "data/hls"  # Directory for .m3u8 and .ts files
     HLS_FFMPEG_PATH: str = "bin/ffmpeg.exe"  # Path to FFmpeg binary (relative to backend/)
 
     # WebRTC Streaming (mediamtx + WHEP — replaces HLS for <300ms latency)
-    USE_WEBRTC_STREAMING: bool = True                        # True=WebRTC, False=fall back to HLS/legacy
-    MEDIAMTX_EXTERNAL: bool = False                         # True = mediamtx runs as separate container (skip subprocess)
-    MEDIAMTX_API_URL: str = "http://localhost:9997"          # mediamtx REST API (internal only)
-    MEDIAMTX_WEBRTC_URL: str = "http://localhost:8889"       # mediamtx WHEP endpoint (internal only)
+    USE_WEBRTC_STREAMING: bool = True  # True=WebRTC, False=fall back to HLS/legacy
+    MEDIAMTX_EXTERNAL: bool = False  # True = mediamtx runs as separate container (skip subprocess)
+    MEDIAMTX_API_URL: str = "http://localhost:9997"  # mediamtx REST API (internal only)
+    MEDIAMTX_WEBRTC_URL: str = "http://localhost:8889"  # mediamtx WHEP endpoint (internal only)
     WEBRTC_STUN_URLS: str = "stun:stun.l.google.com:19302"  # Comma-separated STUN URLs (free Google STUN)
-    WEBRTC_TURN_URL: str = ""                                # Optional: "turn:your-server:3478"
-    WEBRTC_TURN_USERNAME: str = ""                           # TURN username (empty = no TURN)
-    WEBRTC_TURN_CREDENTIAL: str = ""                         # TURN credential
+    WEBRTC_TURN_URL: str = ""  # Optional: "turn:your-server:3478"
+    WEBRTC_TURN_USERNAME: str = ""  # TURN username (empty = no TURN)
+    WEBRTC_TURN_CREDENTIAL: str = ""  # TURN credential
 
     # mediamtx subprocess settings
-    MEDIAMTX_BIN_PATH: str = "bin/mediamtx"       # Path to mediamtx binary (relative to backend/)
-    MEDIAMTX_CONFIG_PATH: str = "mediamtx.yml"    # Path to mediamtx config (relative to backend/)
+    MEDIAMTX_BIN_PATH: str = "bin/mediamtx"  # Path to mediamtx binary (relative to backend/)
+    MEDIAMTX_CONFIG_PATH: str = "mediamtx.yml"  # Path to mediamtx config (relative to backend/)
 
     # Recognition (decoupled from video, runs at lower FPS)
     RECOGNITION_FPS: float = 15.0  # Frames/sec to sample for face recognition
@@ -134,7 +139,7 @@ class Settings(BaseSettings):
     # Re-enrollment Monitoring
     REENROLL_CHECK_ENABLED: bool = True
     REENROLL_SIMILARITY_THRESHOLD: float = 0.55  # Mean similarity below this triggers re-enroll prompt
-    REENROLL_WINDOW_SIZE: int = 20               # Rolling window of recent similarity scores
+    REENROLL_WINDOW_SIZE: int = 20  # Rolling window of recent similarity scores
 
     # File Storage
     UPLOAD_DIR: str = "data/uploads/faces"
@@ -203,19 +208,14 @@ def setup_logging() -> logging.Logger:
 
     # File handler with rotation
     file_handler = RotatingFileHandler(
-        settings.LOG_FILE,
-        maxBytes=settings.LOG_MAX_BYTES,
-        backupCount=settings.LOG_BACKUP_COUNT
+        settings.LOG_FILE, maxBytes=settings.LOG_MAX_BYTES, backupCount=settings.LOG_BACKUP_COUNT
     )
 
     # Console handler
     console_handler = logging.StreamHandler()
 
     # Format: [timestamp] [level] [module] message
-    formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(name)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
     file_handler.setFormatter(formatter)
     console_handler.setFormatter(formatter)
