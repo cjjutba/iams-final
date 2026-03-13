@@ -84,6 +84,13 @@ class Config:
     SESSION_AWARE: bool = os.getenv("SESSION_AWARE", "true").lower() in ("true", "1", "yes")
     SESSION_POLL_INTERVAL: int = int(os.getenv("SESSION_POLL_INTERVAL", "10"))  # seconds
 
+    # ===== Smart Sampler Configuration =====
+    SEND_INTERVAL: float = float(os.getenv("SEND_INTERVAL", "3"))
+    DEDUP_WINDOW: float = float(os.getenv("DEDUP_WINDOW", "5"))
+    FACE_GONE_TIMEOUT: float = float(os.getenv("FACE_GONE_TIMEOUT", "10"))
+    IOU_MATCH_THRESHOLD: float = float(os.getenv("IOU_MATCH_THRESHOLD", "0.3"))
+    USE_SMART_SAMPLER: bool = os.getenv("USE_SMART_SAMPLER", "true").lower() == "true"
+
     # ===== Stream Relay Configuration =====
     # When enabled, FFmpeg relays the camera RTSP stream to the VPS mediamtx
     # so faculty can view live video from any network via WebRTC.

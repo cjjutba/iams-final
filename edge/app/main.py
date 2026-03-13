@@ -31,6 +31,7 @@ from app.processor import FaceProcessor
 from app.sender import SyncBackendSender
 from app.queue_manager import QueueManager, RetryWorker
 from app.stream_relay import stream_relay
+from app.smart_sampler import SmartSampler
 
 
 class EdgeDevice:
@@ -65,6 +66,12 @@ class EdgeDevice:
         self.session_aware = config.SESSION_AWARE
         self.session_poll_interval = config.SESSION_POLL_INTERVAL
 
+        # Smart sampler
+        self.use_smart_sampler = config.USE_SMART_SAMPLER
+        self.smart_sampler: Optional[SmartSampler] = None
+        if self.use_smart_sampler:
+            self.smart_sampler = SmartSampler(config)
+
         # Stream relay
         self.stream_relay_enabled = config.STREAM_RELAY_ENABLED
 
@@ -82,6 +89,14 @@ class EdgeDevice:
         logger.info(f"Session-aware: {self.session_aware}")
         if self.session_aware:
             logger.info(f"Session poll interval: {self.session_poll_interval}s")
+        logger.info(f"Smart sampler: {self.use_smart_sampler}")
+        if self.use_smart_sampler:
+            logger.info(
+                f"Smart sampler config: send_interval={config.SEND_INTERVAL}s, "
+                f"dedup_window={config.DEDUP_WINDOW}s, "
+                f"face_gone_timeout={config.FACE_GONE_TIMEOUT}s, "
+                f"iou_threshold={config.IOU_MATCH_THRESHOLD}"
+            )
 
         # Validate configuration
         try:
@@ -220,6 +235,15 @@ class EdgeDevice:
         logger.info(f"Detected {face_count} faces")
 
         if face_count == 0:
+            # Even with no detections, update smart sampler so it can
+            # detect gone faces (tracks that timed out).
+            if self.smart_sampler is not None:
+                _, gone_track_ids = self.smart_sampler.update([], [])
+                if gone_track_ids:
+                    logger.info(
+                        f"Smart sampler: {len(gone_track_ids)} face(s) gone "
+                        f"(track_ids={gone_track_ids})"
+                    )
             logger.info("No faces detected, skipping transmission")
             self.scan_count += 1
             return True
@@ -234,26 +258,52 @@ class EdgeDevice:
 
         logger.info(f"Processed {len(face_data_list)}/{face_count} faces")
 
+        # Smart sampler: filter to only new/changed faces
+        if self.smart_sampler is not None:
+            detections = [fd.bbox for fd in face_data_list]
+            faces_to_send, gone_track_ids = self.smart_sampler.update(
+                detections, face_data_list
+            )
+
+            if gone_track_ids:
+                logger.info(
+                    f"Smart sampler: {len(gone_track_ids)} face(s) gone "
+                    f"(track_ids={gone_track_ids})"
+                )
+
+            logger.info(
+                f"Smart sampler: sending {len(faces_to_send)}/{len(face_data_list)} faces "
+                f"(active_tracks={self.smart_sampler.active_tracks})"
+            )
+
+            if not faces_to_send:
+                self.scan_count += 1
+                scan_duration = time.time() - scan_start
+                logger.info(f"Scan completed in {scan_duration:.2f}s (nothing to send)")
+                return True
+        else:
+            faces_to_send = face_data_list
+
         # Send to backend
         try:
             result = self.sender.send_with_retry(
-                faces=face_data_list,
+                faces=faces_to_send,
                 room_id=self.room_id,
                 timestamp=scan_timestamp
             )
 
             if result is not None:
                 # Success
-                self.total_faces_sent += len(face_data_list)
+                self.total_faces_sent += len(faces_to_send)
                 logger.info(
-                    f"Successfully sent {len(face_data_list)} faces to backend. "
+                    f"Successfully sent {len(faces_to_send)} faces to backend. "
                     f"Response: {result.get('data', {})}"
                 )
             else:
                 # Failed after retries - queue for later
                 logger.warning("Failed to send faces after retries, queueing for retry...")
                 self.queue_manager.enqueue(
-                    faces=face_data_list,
+                    faces=faces_to_send,
                     room_id=self.room_id,
                     timestamp=scan_timestamp,
                     error_msg="Backend unreachable after retries"
@@ -263,7 +313,7 @@ class EdgeDevice:
             logger.error(f"Error sending faces: {e}")
             # Queue for retry
             self.queue_manager.enqueue(
-                faces=face_data_list,
+                faces=faces_to_send,
                 room_id=self.room_id,
                 timestamp=scan_timestamp,
                 error_msg=str(e)
@@ -310,6 +360,13 @@ class EdgeDevice:
                         sleep_interval = self.session_poll_interval
                         logger.debug(
                             f"No active session, polling again in {sleep_interval}s"
+                        )
+                    elif self.smart_sampler is not None and scan_performed:
+                        # Smart sampler active + session running: scan at
+                        # SEND_INTERVAL (default 3s) for responsive tracking
+                        sleep_interval = config.SEND_INTERVAL
+                        logger.debug(
+                            f"Smart sampler active, next scan in {sleep_interval}s"
                         )
                     else:
                         # Active session or session-aware disabled -- use scan interval
