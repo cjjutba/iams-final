@@ -47,12 +47,13 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
     CMD curl -f http://localhost:8000/api/v1/health || exit 1
 
-# Run with uvicorn (single worker for ML model - shared memory)
-# Using 1 worker because InsightFace model + FAISS index are loaded in-process
-CMD ["python", "-m", "uvicorn", "app.main:app", \
+# Run with uvicorn (4 workers for production concurrency)
+# Each worker loads its own ONNX session (shared pages via fork),
+# FAISS index with mmap (shared pages), and batch processor (Redis lock ensures single processor)
+CMD ["uvicorn", "app.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
-     "--workers", "1", \
+     "--workers", "4", \
      "--proxy-headers", \
      "--forwarded-allow-ips", "*", \
      "--log-level", "info"]
