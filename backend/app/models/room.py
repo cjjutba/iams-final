@@ -5,7 +5,8 @@ Represents classrooms/rooms where attendance is monitored.
 """
 
 import uuid
-from sqlalchemy import Column, String, Integer, Boolean
+
+from sqlalchemy import Boolean, Column, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 
 from app.database import Base

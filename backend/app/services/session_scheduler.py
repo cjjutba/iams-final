@@ -10,18 +10,15 @@ Dual-mode design:
 - Override: Manual actions take priority; scheduler won't restart a manually-ended session
 """
 
-from datetime import datetime, date, time, timedelta
-from typing import Set
+from datetime import date, datetime
 
 from app.config import logger
 from app.database import SessionLocal
 from app.repositories.schedule_repository import ScheduleRepository
 from app.services.presence_service import PresenceService
-from app.services import session_manager
-
 
 # Track sessions that were manually ended today so the scheduler doesn't restart them
-_manually_ended_today: Set[str] = {}  # schedule_id → set
+_manually_ended_today: set[str] = {}  # schedule_id → set
 _last_reset_date: date = date.today()
 
 
@@ -104,9 +101,7 @@ async def auto_manage_sessions():
                     await presence_service.start_session(schedule_id)
                     logger.info(f"Auto-session started: {schedule.subject_code}")
                 except Exception as e:
-                    logger.error(
-                        f"Failed to auto-start session for {schedule.subject_code}: {e}"
-                    )
+                    logger.error(f"Failed to auto-start session for {schedule.subject_code}: {e}")
 
             # --- Auto-end logic ---
             elif is_active and current_time >= schedule.end_time:
@@ -118,9 +113,7 @@ async def auto_manage_sessions():
                     await presence_service.end_session(schedule_id)
                     logger.info(f"Auto-session ended: {schedule.subject_code}")
                 except Exception as e:
-                    logger.error(
-                        f"Failed to auto-end session for {schedule.subject_code}: {e}"
-                    )
+                    logger.error(f"Failed to auto-end session for {schedule.subject_code}: {e}")
 
     except Exception as e:
         logger.error(f"Error in auto_manage_sessions: {e}")

@@ -10,28 +10,29 @@ Key Features:
 - Real-time tracking statistics
 """
 
-from typing import List, Optional
 from datetime import date, datetime
-from fastapi import APIRouter, Depends, Query, HTTPException, status
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.config import logger
 from app.database import get_db
+from app.models.user import User, UserRole
 from app.repositories.attendance_repository import AttendanceRepository
 from app.repositories.schedule_repository import ScheduleRepository
+from app.schemas.attendance import EarlyLeaveEventResponse, PresenceLogResponse
 from app.services.presence_service import PresenceService
-from app.services.tracking_service import get_tracking_service
 from app.services.session_scheduler import mark_manually_ended
+from app.services.tracking_service import get_tracking_service
 from app.utils.dependencies import get_current_user
 from app.utils.exceptions import NotFoundError
-from app.models.user import User, UserRole
-from app.schemas.attendance import PresenceLogResponse, EarlyLeaveEventResponse
-from pydantic import BaseModel
 
 router = APIRouter()
 
 
 # ===== Schemas =====
+
 
 class SessionStartRequest(BaseModel):
     schedule_id: str
@@ -62,27 +63,26 @@ class TrackingStatsResponse(BaseModel):
 
 
 class ActiveSessionsResponse(BaseModel):
-    active_sessions: List[str]
+    active_sessions: list[str]
     count: int
 
 
 class RoomStatusResponse(BaseModel):
     active: bool
-    schedule_id: Optional[str] = None
+    schedule_id: str | None = None
 
 
 # ===== Session Management Endpoints =====
+
 
 @router.post(
     "/sessions/start",
     response_model=SessionStartResponse,
     summary="Start Attendance Session",
-    description="Start a new attendance tracking session for a schedule"
+    description="Start a new attendance tracking session for a schedule",
 )
 async def start_session(
-    request: SessionStartRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    request: SessionStartRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
 ):
     """
     Start attendance session
@@ -94,10 +94,7 @@ async def start_session(
     """
     # Check permissions - only faculty/admin can start sessions
     if current_user.role not in [UserRole.FACULTY, UserRole.ADMIN]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only faculty and admins can start sessions"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only faculty and admins can start sessions")
 
     try:
         presence_service = PresenceService(db)
@@ -107,28 +104,27 @@ async def start_session(
             schedule_id=session_state.schedule_id,
             started_at=session_state.start_time,
             student_count=len(session_state.student_states),
-            message=f"Session started with {len(session_state.student_states)} students"
+            message=f"Session started with {len(session_state.student_states)} students",
         )
 
     except NotFoundError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to start session: {str(e)}"
-        )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to start session: {str(e)}"
+        ) from e
 
 
 @router.post(
     "/sessions/end",
     response_model=SessionEndResponse,
     summary="End Attendance Session",
-    description="End an active attendance tracking session"
+    description="End an active attendance tracking session",
 )
 async def end_session(
     schedule_id: str = Query(..., description="Schedule UUID"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
     """
     End attendance session
@@ -139,10 +135,7 @@ async def end_session(
     """
     # Check permissions
     if current_user.role not in [UserRole.FACULTY, UserRole.ADMIN]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only faculty and admins can end sessions"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only faculty and admins can end sessions")
 
     try:
         presence_service = PresenceService(db)
@@ -151,8 +144,7 @@ async def end_session(
         session_state = presence_service.get_session_state(schedule_id)
         if not session_state:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"No active session for schedule {schedule_id}"
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"No active session for schedule {schedule_id}"
             )
 
         # End session
@@ -166,34 +158,24 @@ async def end_session(
             schedule_id=schedule_id,
             total_scans=session_state.scan_count,
             total_students=len(session_state.student_states),
-            present_count=sum(
-                1 for s in session_state.student_states.values()
-                if not s.get("early_leave_flagged")
-            ),
-            early_leave_count=sum(
-                1 for s in session_state.student_states.values()
-                if s.get("early_leave_flagged")
-            ),
-            message="Session ended successfully"
+            present_count=sum(1 for s in session_state.student_states.values() if not s.get("early_leave_flagged")),
+            early_leave_count=sum(1 for s in session_state.student_states.values() if s.get("early_leave_flagged")),
+            message="Session ended successfully",
         )
 
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to end session: {str(e)}"
-        )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to end session: {str(e)}"
+        ) from e
 
 
 @router.get(
     "/sessions/active",
     response_model=ActiveSessionsResponse,
     summary="Get Active Sessions",
-    description="Get list of currently active attendance sessions"
+    description="Get list of currently active attendance sessions",
 )
-async def get_active_sessions(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
+async def get_active_sessions(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Get active sessions
 
@@ -203,39 +185,30 @@ async def get_active_sessions(
     """
     # Check permissions
     if current_user.role not in [UserRole.FACULTY, UserRole.ADMIN]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only faculty and admins can view sessions"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only faculty and admins can view sessions")
 
     try:
         presence_service = PresenceService(db)
         active_sessions = presence_service.get_active_sessions()
 
-        return ActiveSessionsResponse(
-            active_sessions=active_sessions,
-            count=len(active_sessions)
-        )
+        return ActiveSessionsResponse(active_sessions=active_sessions, count=len(active_sessions))
 
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get active sessions: {str(e)}"
-        )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get active sessions: {str(e)}"
+        ) from e
 
 
 # ===== Room Status Endpoint (for Edge Device) =====
+
 
 @router.get(
     "/sessions/room-status",
     response_model=RoomStatusResponse,
     summary="Check Room Session Status",
-    description="Check if there is an active session for a given room. Used by edge devices."
+    description="Check if there is an active session for a given room. Used by edge devices.",
 )
-async def get_room_session_status(
-    room_id: str = Query(..., description="Room UUID"),
-    db: Session = Depends(get_db)
-):
+async def get_room_session_status(room_id: str = Query(..., description="Room UUID"), db: Session = Depends(get_db)):
     """
     Check if a room has an active attendance session.
 
@@ -263,16 +236,15 @@ async def get_room_session_status(
 
 # ===== Presence Log Endpoints =====
 
+
 @router.get(
     "/{attendance_id}/logs",
-    response_model=List[PresenceLogResponse],
+    response_model=list[PresenceLogResponse],
     summary="Get Presence Logs",
-    description="Get all presence scan logs for an attendance record"
+    description="Get all presence scan logs for an attendance record",
 )
 async def get_presence_logs(
-    attendance_id: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    attendance_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
 ):
     """
     Get presence logs
@@ -291,8 +263,7 @@ async def get_presence_logs(
         attendance = attendance_repo.get_by_id(attendance_id)
         if not attendance:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Attendance record not found: {attendance_id}"
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Attendance record not found: {attendance_id}"
             )
 
         # Check permissions
@@ -300,8 +271,7 @@ async def get_presence_logs(
             # Students can only view their own logs
             if str(attendance.student_id) != str(current_user.id):
                 raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You can only view your own attendance logs"
+                    status_code=status.HTTP_403_FORBIDDEN, detail="You can only view your own attendance logs"
                 )
         elif current_user.role == UserRole.FACULTY:
             # Faculty can view logs for their classes
@@ -318,7 +288,7 @@ async def get_presence_logs(
                 scan_number=log.scan_number,
                 scan_time=log.scan_time,
                 detected=log.detected,
-                confidence=log.confidence
+                confidence=log.confidence,
             )
             for log in logs
         ]
@@ -327,25 +297,25 @@ async def get_presence_logs(
         raise
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get presence logs: {str(e)}"
-        )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get presence logs: {str(e)}"
+        ) from e
 
 
 # ===== Early Leave Event Endpoints =====
 
+
 @router.get(
     "/early-leaves",
-    response_model=List[EarlyLeaveEventResponse],
+    response_model=list[EarlyLeaveEventResponse],
     summary="Get Early Leave Events",
-    description="Get early leave events with optional filters"
+    description="Get early leave events with optional filters",
 )
 async def get_early_leave_events(
-    schedule_id: Optional[str] = Query(None, description="Filter by schedule"),
-    start_date: Optional[date] = Query(None, description="Filter by start date"),
-    end_date: Optional[date] = Query(None, description="Filter by end date"),
+    schedule_id: str | None = Query(None, description="Filter by schedule"),
+    start_date: date | None = Query(None, description="Filter by start date"),
+    end_date: date | None = Query(None, description="Filter by end date"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get early leave events
@@ -359,19 +329,14 @@ async def get_early_leave_events(
     """
     # Check permissions
     if current_user.role == UserRole.STUDENT:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Students cannot access early leave reports"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Students cannot access early leave reports")
 
     try:
         attendance_repo = AttendanceRepository(db)
 
         # Get early leave events
         events = attendance_repo.get_early_leave_events(
-            schedule_id=schedule_id,
-            start_date=start_date,
-            end_date=end_date
+            schedule_id=schedule_id, start_date=start_date, end_date=end_date
         )
 
         return [
@@ -382,30 +347,27 @@ async def get_early_leave_events(
                 last_seen_at=event.last_seen_at,
                 consecutive_misses=event.consecutive_misses,
                 notified=event.notified,
-                notified_at=event.notified_at
+                notified_at=event.notified_at,
             )
             for event in events
         ]
 
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get early leave events: {str(e)}"
-        )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get early leave events: {str(e)}"
+        ) from e
 
 
 # ===== Tracking Statistics Endpoints =====
+
 
 @router.get(
     "/tracking/stats/{schedule_id}",
     response_model=TrackingStatsResponse,
     summary="Get Tracking Statistics",
-    description="Get real-time tracking statistics for a session"
+    description="Get real-time tracking statistics for a session",
 )
-async def get_tracking_stats(
-    schedule_id: str,
-    current_user: User = Depends(get_current_user)
-):
+async def get_tracking_stats(schedule_id: str, current_user: User = Depends(get_current_user)):
     """
     Get tracking stats
 
@@ -417,21 +379,16 @@ async def get_tracking_stats(
     # Check permissions
     if current_user.role not in [UserRole.FACULTY, UserRole.ADMIN]:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only faculty and admins can view tracking stats"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Only faculty and admins can view tracking stats"
         )
 
     try:
         tracking_service = get_tracking_service()
         stats = tracking_service.get_session_stats(schedule_id)
 
-        return TrackingStatsResponse(
-            schedule_id=schedule_id,
-            **stats
-        )
+        return TrackingStatsResponse(schedule_id=schedule_id, **stats)
 
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get tracking stats: {str(e)}"
-        )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get tracking stats: {str(e)}"
+        ) from e

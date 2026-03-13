@@ -8,7 +8,8 @@ consistency, punctuality, sustained presence, and recognition confidence.
 
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, Float, DateTime, ForeignKey, Index
+
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -56,12 +57,7 @@ class EngagementScore(Base):
     # Relationships
     attendance = relationship("AttendanceRecord", backref="engagement")
 
-    __table_args__ = (
-        Index("ix_engagement_scores_attendance_id", "attendance_id"),
-    )
+    __table_args__ = (Index("ix_engagement_scores_attendance_id", "attendance_id"),)
 
     def __repr__(self):
-        return (
-            f"<EngagementScore(id={self.id}, attendance_id={self.attendance_id}, "
-            f"score={self.engagement_score:.1f})>"
-        )
+        return f"<EngagementScore(id={self.id}, attendance_id={self.attendance_id}, score={self.engagement_score:.1f})>"

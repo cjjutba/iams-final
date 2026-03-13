@@ -6,13 +6,12 @@ This module provides a global registry of active sessions that can be accessed
 by both the APScheduler background tasks and API routers.
 """
 
-from typing import Dict, Optional
 from datetime import datetime
 
 # Global registry of active sessions
 # Key: schedule_id (UUID string)
 # Value: dict with session metadata (start_time, scan_count, etc.)
-_active_sessions: Dict[str, dict] = {}
+_active_sessions: dict[str, dict] = {}
 
 
 def register_session(schedule_id: str, metadata: dict = None):
@@ -23,11 +22,7 @@ def register_session(schedule_id: str, metadata: dict = None):
         schedule_id: Schedule UUID
         metadata: Optional session metadata
     """
-    _active_sessions[schedule_id] = {
-        "started_at": datetime.now(),
-        "scan_count": 0,
-        **(metadata or {})
-    }
+    _active_sessions[schedule_id] = {"started_at": datetime.now(), "scan_count": 0, **(metadata or {})}
 
 
 def unregister_session(schedule_id: str):
@@ -54,7 +49,7 @@ def is_session_active(schedule_id: str) -> bool:
     return schedule_id in _active_sessions
 
 
-def get_session_info(schedule_id: str) -> Optional[dict]:
+def get_session_info(schedule_id: str) -> dict | None:
     """
     Get session metadata
 

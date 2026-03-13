@@ -12,6 +12,7 @@ Endpoints:
 """
 
 import uuid
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -126,19 +127,16 @@ async def create_webrtc_offer(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="WebRTC stream unavailable — camera may be offline",
-        )
+        ) from exc
     except Exception as exc:
         logger.error(f"Unexpected WHEP error for room {room_id}: {exc}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal error during WebRTC setup",
-        )
+        ) from exc
 
     # 6. Return SDP answer
-    logger.info(
-        f"WebRTC offer forwarded: schedule={schedule_id}, room={room_id}, "
-        f"user={current_user.id}"
-    )
+    logger.info(f"WebRTC offer forwarded: schedule={schedule_id}, room={room_id}, user={current_user.id}")
     return {
         "success": True,
         "data": {

@@ -7,9 +7,8 @@ a re-registration notification.
 """
 
 from collections import defaultdict, deque
-from typing import Dict, Optional
 
-from app.config import settings, logger
+from app.config import logger, settings
 
 
 class ReenrollmentMonitor:
@@ -27,13 +26,11 @@ class ReenrollmentMonitor:
     ):
         self.threshold = threshold or settings.REENROLL_SIMILARITY_THRESHOLD
         self.window_size = window_size or settings.REENROLL_WINDOW_SIZE
-        self._scores: Dict[str, deque] = defaultdict(
-            lambda: deque(maxlen=self.window_size)
-        )
+        self._scores: dict[str, deque] = defaultdict(lambda: deque(maxlen=self.window_size))
         # Track which users have been notified to avoid spam
         self._notified: set = set()
 
-    def record_similarity(self, user_id: str, similarity: float) -> Optional[str]:
+    def record_similarity(self, user_id: str, similarity: float) -> str | None:
         """
         Record a similarity score for a recognized user.
 
@@ -51,10 +48,7 @@ class ReenrollmentMonitor:
 
         if mean_sim < self.threshold and user_id not in self._notified:
             self._notified.add(user_id)
-            logger.info(
-                f"Re-enrollment prompt for user {user_id}: "
-                f"mean similarity {mean_sim:.3f} < {self.threshold}"
-            )
+            logger.info(f"Re-enrollment prompt for user {user_id}: mean similarity {mean_sim:.3f} < {self.threshold}")
             return user_id
 
         # If similarity recovers (e.g. after re-registration), reset notification
@@ -63,7 +57,7 @@ class ReenrollmentMonitor:
 
         return None
 
-    def get_mean_similarity(self, user_id: str) -> Optional[float]:
+    def get_mean_similarity(self, user_id: str) -> float | None:
         """Get current mean similarity for a user, or None if insufficient data."""
         window = self._scores.get(user_id)
         if not window or len(window) < self.window_size:

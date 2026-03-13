@@ -6,28 +6,28 @@ and role-based access control.
 """
 
 import uuid
-from typing import List
+
 from fastapi import Depends, Header, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from app.config import logger, settings
 from app.database import get_db
-from app.config import settings, logger
 from app.models.user import User, UserRole
-from app.utils.security import (
-    verify_token,
-    extract_bearer_token,
-    verify_supabase_token,
-    is_supabase_token,
-)
 from app.utils.exceptions import AuthenticationError, AuthorizationError, NotFoundError
-
+from app.utils.security import (
+    extract_bearer_token,
+    is_supabase_token,
+    verify_supabase_token,
+    verify_token,
+)
 
 # HTTP Bearer token scheme
 security = HTTPBearer()
 
 
 # ===== Database Session Dependency =====
+
 
 def get_database() -> Session:
     """
@@ -43,9 +43,9 @@ def get_database() -> Session:
 
 # ===== Authentication Dependencies =====
 
+
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db)
+    credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)
 ) -> User:
     """
     Get current authenticated user from JWT token.
@@ -97,7 +97,7 @@ async def get_current_user(
         try:
             user_uuid = uuid.UUID(user_id)
         except ValueError:
-            raise AuthenticationError("Invalid user identifier format")
+            raise AuthenticationError("Invalid user identifier format") from None
 
         user = db.query(User).filter(User.id == user_uuid).first()
 
@@ -121,26 +121,24 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=e.message,
-        )
+        ) from e
     except (AuthenticationError, NotFoundError) as e:
         logger.error(f"Authentication failed: {e.message}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=e.message,
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from e
     except Exception as e:
         logger.exception(f"Unexpected authentication error: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication failed",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from e
 
 
-async def get_current_active_user(
-    current_user: User = Depends(get_current_user)
-) -> User:
+async def get_current_active_user(current_user: User = Depends(get_current_user)) -> User:
     """
     Get current active user (additional check for is_active)
 
@@ -154,14 +152,12 @@ async def get_current_active_user(
         AuthenticationError: If user is inactive
     """
     if not current_user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User account is inactive"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User account is inactive")
     return current_user
 
 
 # ===== Role-Based Access Control =====
+
 
 def require_role(*allowed_roles: UserRole):
     """
@@ -182,6 +178,7 @@ def require_role(*allowed_roles: UserRole):
     Returns:
         Dependency function that checks user role
     """
+
     async def check_role(current_user: User = Depends(get_current_user)) -> User:
         if current_user.role not in allowed_roles:
             logger.warning(
@@ -190,7 +187,7 @@ def require_role(*allowed_roles: UserRole):
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied. Required role: {', '.join([r.value for r in allowed_roles])}"
+                detail=f"Access denied. Required role: {', '.join([r.value for r in allowed_roles])}",
             )
         return current_user
 
@@ -199,9 +196,8 @@ def require_role(*allowed_roles: UserRole):
 
 # ===== Specific Role Dependencies =====
 
-async def get_current_student(
-    current_user: User = Depends(get_current_user)
-) -> User:
+
+async def get_current_student(current_user: User = Depends(get_current_user)) -> User:
     """
     Get current user and verify they are a student
 
@@ -216,15 +212,12 @@ async def get_current_student(
     """
     if current_user.role != UserRole.STUDENT:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This endpoint is only accessible to students"
+            status_code=status.HTTP_403_FORBIDDEN, detail="This endpoint is only accessible to students"
         )
     return current_user
 
 
-async def get_current_faculty(
-    current_user: User = Depends(get_current_user)
-) -> User:
+async def get_current_faculty(current_user: User = Depends(get_current_user)) -> User:
     """
     Get current user and verify they are faculty
 
@@ -238,16 +231,11 @@ async def get_current_faculty(
         AuthorizationError: If user is not faculty
     """
     if current_user.role != UserRole.FACULTY:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This endpoint is only accessible to faculty"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This endpoint is only accessible to faculty")
     return current_user
 
 
-async def get_current_admin(
-    current_user: User = Depends(get_current_user)
-) -> User:
+async def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
     """
     Get current user and verify they are admin
 
@@ -262,18 +250,15 @@ async def get_current_admin(
     """
     if current_user.role != UserRole.ADMIN:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This endpoint is only accessible to administrators"
+            status_code=status.HTTP_403_FORBIDDEN, detail="This endpoint is only accessible to administrators"
         )
     return current_user
 
 
 # ===== Optional Authentication =====
 
-async def get_optional_user(
-    authorization: str = Header(None),
-    db: Session = Depends(get_db)
-) -> User | None:
+
+async def get_optional_user(authorization: str = Header(None), db: Session = Depends(get_db)) -> User | None:
     """
     Get current user if authenticated, None otherwise
 

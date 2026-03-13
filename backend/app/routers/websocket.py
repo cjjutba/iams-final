@@ -5,10 +5,10 @@ Real-time communication for attendance updates and early-leave alerts.
 """
 
 import json
-from typing import Dict, Set
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from app.config import logger
 
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+from app.config import logger
 
 router = APIRouter()
 
@@ -22,10 +22,10 @@ class ConnectionManager:
 
     def __init__(self):
         # Active connections: user_id → WebSocket
-        self.active_connections: Dict[str, WebSocket] = {}
+        self.active_connections: dict[str, WebSocket] = {}
 
         # Schedule subscriptions: schedule_id → set of user_ids
-        self.schedule_connections: Dict[str, Set[str]] = {}
+        self.schedule_connections: dict[str, set[str]] = {}
 
     async def connect(self, user_id: str, websocket: WebSocket):
         """
@@ -132,8 +132,7 @@ class ConnectionManager:
                     failed_count += 1
 
         logger.info(
-            f"Broadcast to schedule {schedule_id} ({message.get('event')}): "
-            f"{sent_count} sent, {failed_count} failed"
+            f"Broadcast to schedule {schedule_id} ({message.get('event')}): {sent_count} sent, {failed_count} failed"
         )
 
     def get_connection_count(self) -> int:
@@ -268,13 +267,12 @@ async def websocket_endpoint(user_id: str, websocket: WebSocket):
 
     try:
         # Send welcome message
-        await websocket.send_json({
-            "event": "connected",
-            "data": {
-                "user_id": user_id,
-                "timestamp": str(__import__('datetime').datetime.now())
+        await websocket.send_json(
+            {
+                "event": "connected",
+                "data": {"user_id": user_id, "timestamp": str(__import__("datetime").datetime.now())},
             }
-        })
+        )
 
         # Keep connection alive and listen for incoming messages
         while True:
@@ -285,10 +283,7 @@ async def websocket_endpoint(user_id: str, websocket: WebSocket):
             try:
                 message = json.loads(data)
                 if message.get("event") == "ping":
-                    await websocket.send_json({
-                        "event": "pong",
-                        "data": {}
-                    })
+                    await websocket.send_json({"event": "pong", "data": {}})
                     continue
             except (json.JSONDecodeError, TypeError):
                 pass
@@ -310,10 +305,4 @@ async def websocket_status():
     Returns:
         dict: Status information
     """
-    return {
-        "success": True,
-        "data": {
-            "active_connections": manager.get_connection_count(),
-            "status": "running"
-        }
-    }
+    return {"success": True, "data": {"active_connections": manager.get_connection_count(), "status": "running"}}

@@ -10,18 +10,15 @@ Scoring formula (configurable weights):
 - Confidence (10%): Mean recognition confidence across all presence logs
 """
 
-from datetime import datetime, timedelta
-from typing import List, Optional
+from datetime import datetime
 
 import numpy as np
 from sqlalchemy.orm import Session
 
-from app.models.attendance_record import AttendanceRecord
-from app.models.presence_log import PresenceLog
-from app.models.engagement_score import EngagementScore
-from app.repositories.engagement_repository import EngagementRepository
 from app.config import logger
-
+from app.models.engagement_score import EngagementScore
+from app.models.presence_log import PresenceLog
+from app.repositories.engagement_repository import EngagementRepository
 
 # Scoring weights (must sum to 1.0)
 W_CONSISTENCY = 0.4
@@ -30,7 +27,7 @@ W_SUSTAINED = 0.3
 W_CONFIDENCE = 0.1
 
 
-def compute_consistency_score(scan_times: List[datetime]) -> float:
+def compute_consistency_score(scan_times: list[datetime]) -> float:
     """Score based on regularity of detection gaps.
 
     Perfect consistency (equal gaps) = 100. High variance = lower score.
@@ -66,7 +63,7 @@ def compute_consistency_score(scan_times: List[datetime]) -> float:
 
 
 def compute_punctuality_score(
-    first_detection: Optional[datetime],
+    first_detection: datetime | None,
     class_start: datetime,
     grace_minutes: int = 15,
 ) -> float:
@@ -101,7 +98,7 @@ def compute_punctuality_score(
 
 
 def compute_sustained_presence_score(
-    detected_flags: List[bool],
+    detected_flags: list[bool],
 ) -> float:
     """Score based on longest consecutive detection streak.
 
@@ -130,7 +127,7 @@ def compute_sustained_presence_score(
     return float(100.0 * max_streak / total)
 
 
-def compute_confidence_score(confidences: List[float]) -> float:
+def compute_confidence_score(confidences: list[float]) -> float:
     """Score based on average recognition confidence.
 
     Maps mean confidence to 0-100 scale.

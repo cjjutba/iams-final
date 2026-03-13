@@ -114,13 +114,12 @@ class InsightFaceModel:
                     patched += 1
 
             logger.info(
-                f"InsightFace '{self._model_name}' loaded successfully "
-                f"({patched} ORT session(s) thread-configured)"
+                f"InsightFace '{self._model_name}' loaded successfully ({patched} ORT session(s) thread-configured)"
             )
 
         except ImportError:
             logger.error("insightface not installed. Run: pip install insightface onnxruntime")
-            raise RuntimeError("InsightFace dependencies not installed")
+            raise RuntimeError("InsightFace dependencies not installed") from None
         except Exception as exc:
             logger.exception(f"Failed to load InsightFace model: {exc}")
             raise
@@ -315,7 +314,7 @@ class InsightFaceModel:
             try:
                 image_bytes = base64.b64decode(base64_string, validate=True)
             except Exception as exc:
-                raise ValueError(f"Invalid Base64 encoding: {exc}")
+                raise ValueError(f"Invalid Base64 encoding: {exc}") from exc
 
             if validate_size and len(image_bytes) > 10_000_000:
                 raise ValueError(f"Decoded image too large: {len(image_bytes)} bytes (max 10MB)")
@@ -323,7 +322,7 @@ class InsightFaceModel:
             try:
                 image = Image.open(io.BytesIO(image_bytes))
             except Exception as exc:
-                raise ValueError(f"Invalid image format: {exc}")
+                raise ValueError(f"Invalid image format: {exc}") from exc
 
             if image.format not in ("JPEG", "PNG"):
                 raise ValueError(f"Unsupported image format: {image.format} (expected JPEG or PNG)")
@@ -340,7 +339,7 @@ class InsightFaceModel:
             raise
         except Exception as exc:
             logger.error(f"Failed to decode Base64 image: {exc}")
-            raise ValueError(f"Image decoding failed: {exc}")
+            raise ValueError(f"Image decoding failed: {exc}") from exc
 
 
 # Global instance — initialized during FastAPI startup via load_model()

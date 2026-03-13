@@ -4,22 +4,25 @@ Attendance Prediction Model
 Stores weekly predicted attendance rates and risk classifications.
 """
 
-import uuid
 import enum
-from datetime import datetime, date
-from sqlalchemy import Column, String, Float, Date, DateTime, ForeignKey, Enum as SQLEnum
+import uuid
+from datetime import datetime
+
+from sqlalchemy import Column, Date, DateTime, Float, ForeignKey, String
+from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from app.database import Base
 
 
-class RiskLevel(str, enum.Enum):
+class RiskLevel(enum.StrEnum):
     """Risk classification for attendance predictions."""
-    CRITICAL = "critical"    # <50% predicted rate
-    HIGH = "high"            # 50-65%
-    MODERATE = "moderate"    # 65-80%
-    LOW = "low"              # >80%
+
+    CRITICAL = "critical"  # <50% predicted rate
+    HIGH = "high"  # 50-65%
+    MODERATE = "moderate"  # 65-80%
+    LOW = "low"  # >80%
 
 
 class AttendancePrediction(Base):

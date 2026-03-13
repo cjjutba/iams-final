@@ -5,15 +5,13 @@ Maps room IDs to RTSP camera URLs for live streaming.
 Supports per-room camera_endpoint from the database and a fallback default URL.
 """
 
-from typing import Optional
-
 from sqlalchemy.orm import Session
 
-from app.config import settings, logger
+from app.config import logger, settings
 from app.models.room import Room
 
 
-def get_camera_url(room_id: str, db: Session) -> Optional[str]:
+def get_camera_url(room_id: str, db: Session) -> str | None:
     """
     Get the RTSP camera URL for a given room.
 

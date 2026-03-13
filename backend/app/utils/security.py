@@ -6,19 +6,19 @@ and Supabase Auth token validation.
 """
 
 from datetime import datetime, timedelta
-from typing import Optional, Dict
-from passlib.context import CryptContext
+
 from jose import JWTError, jwt
+from passlib.context import CryptContext
 
-from app.config import settings, logger
+from app.config import logger, settings
 from app.utils.exceptions import AuthenticationError
-
 
 # Password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 # ===== Password Hashing =====
+
 
 def hash_password(password: str) -> str:
     """
@@ -49,7 +49,8 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 # ===== JWT Token Management (Custom JWT) =====
 
-def create_access_token(data: Dict, expires_delta: Optional[timedelta] = None) -> str:
+
+def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
     """
     Create a JWT access token
 
@@ -75,7 +76,7 @@ def create_access_token(data: Dict, expires_delta: Optional[timedelta] = None) -
     return encoded_jwt
 
 
-def create_refresh_token(data: Dict) -> str:
+def create_refresh_token(data: dict) -> str:
     """
     Create a JWT refresh token (longer expiration)
 
@@ -93,7 +94,7 @@ def create_refresh_token(data: Dict) -> str:
     return encoded_jwt
 
 
-def verify_token(token: str) -> Dict:
+def verify_token(token: str) -> dict:
     """
     Verify and decode a JWT token
 
@@ -111,19 +112,20 @@ def verify_token(token: str) -> Dict:
         return payload
     except JWTError as e:
         logger.error(f"JWT verification failed: {e}")
-        raise AuthenticationError("Invalid or expired token")
+        raise AuthenticationError("Invalid or expired token") from e
 
 
 # ===== Supabase Auth Token Verification =====
 
 # Cached JWKS keys from Supabase (fetched once, refreshed on kid miss)
-_jwks_cache: Dict = {}
+_jwks_cache: dict = {}
 _jwks_cache_time: float = 0
 
 
-def _fetch_supabase_jwks() -> Dict:
+def _fetch_supabase_jwks() -> dict:
     """Fetch and cache the Supabase JWKS public keys."""
     import time
+
     global _jwks_cache, _jwks_cache_time
 
     now = time.time()
@@ -133,6 +135,7 @@ def _fetch_supabase_jwks() -> Dict:
 
     try:
         import httpx
+
         resp = httpx.get(
             f"{settings.SUPABASE_URL}/auth/v1/.well-known/jwks.json",
             headers={"apikey": settings.SUPABASE_ANON_KEY},
@@ -151,7 +154,7 @@ def _fetch_supabase_jwks() -> Dict:
     return _jwks_cache  # Return stale cache on failure
 
 
-def verify_supabase_token(token: str) -> Dict:
+def verify_supabase_token(token: str) -> dict:
     """
     Verify a Supabase Auth JWT token.
 
@@ -221,7 +224,7 @@ def verify_supabase_token(token: str) -> Dict:
 
     except JWTError as e:
         logger.error(f"Supabase token verification failed: {e}")
-        raise AuthenticationError("Invalid Supabase token")
+        raise AuthenticationError("Invalid Supabase token") from e
 
 
 def is_supabase_token(token: str) -> bool:
@@ -242,6 +245,7 @@ def is_supabase_token(token: str) -> bool:
 
 
 # ===== Utility Functions =====
+
 
 def validate_password_strength(password: str) -> tuple[bool, str]:
     """

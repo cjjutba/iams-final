@@ -5,33 +5,30 @@ API endpoints for authentication: register, login, token refresh,
 email verification, password reset, and Supabase webhook handling.
 """
 
-import hmac
-import hashlib
-from fastapi import APIRouter, Depends, Request, status, Header
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi import APIRouter, Depends, Header, Request, status
+from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy.orm import Session
 
-from app.config import settings, logger
+from app.config import logger, settings
 from app.database import get_db
 from app.models.user import User
 from app.rate_limiter import limiter
 from app.schemas.auth import (
+    ForgotPasswordRequest,
     LoginRequest,
-    TokenResponse,
+    ProfileUpdateRequest,
     RefreshRequest,
-    VerifyStudentIDRequest,
-    VerifyStudentIDResponse,
     RegisterRequest,
     RegisterResponse,
-    ForgotPasswordRequest,
     ResendVerificationRequest,
-    ProfileUpdateRequest,
     SupabaseWebhookPayload,
+    TokenResponse,
+    VerifyStudentIDRequest,
+    VerifyStudentIDResponse,
 )
-from app.schemas.user import UserResponse, PasswordChange
+from app.schemas.user import PasswordChange, UserResponse
 from app.services.auth_service import AuthService
 from app.utils.dependencies import get_current_user
-
 
 router = APIRouter()
 
@@ -39,6 +36,7 @@ router = APIRouter()
 # ===================================================================
 # FUN-01-01: Verify Student Identity
 # ===================================================================
+
 
 @router.post(
     "/verify-student-id",
@@ -66,6 +64,7 @@ def verify_student_id(
 # ===================================================================
 # FUN-01-02: Register Student Account
 # ===================================================================
+
 
 @router.post(
     "/register",
@@ -114,6 +113,7 @@ def register(
 # Resolve Student ID to Email (for Supabase login)
 # ===================================================================
 
+
 @router.post("/resolve-email", status_code=status.HTTP_200_OK)
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 def resolve_student_email(
@@ -149,6 +149,7 @@ def resolve_student_email(
 # FUN-01-03: Login (custom JWT — kept for dual-auth transition)
 # ===================================================================
 
+
 @router.post("/login", response_model=TokenResponse, status_code=status.HTTP_200_OK)
 def login(
     request_obj: Request,
@@ -177,6 +178,7 @@ def login(
 # FUN-01-04: Refresh Token (custom JWT)
 # ===================================================================
 
+
 @router.post("/refresh", status_code=status.HTTP_200_OK)
 def refresh_token(
     body: RefreshRequest,
@@ -196,6 +198,7 @@ def refresh_token(
 # FUN-01-05: Get Current User
 # ===================================================================
 
+
 @router.get("/me", response_model=UserResponse, status_code=status.HTTP_200_OK)
 def get_current_user_info(
     current_user: User = Depends(get_current_user),
@@ -212,6 +215,7 @@ def get_current_user_info(
 # ===================================================================
 # FUN-01-06: Request Password Reset
 # ===================================================================
+
 
 @router.post("/forgot-password", status_code=status.HTTP_200_OK)
 def forgot_password(
@@ -234,6 +238,7 @@ def forgot_password(
 # ===================================================================
 # Email Verification
 # ===================================================================
+
 
 @router.post("/resend-verification", status_code=status.HTTP_200_OK)
 def resend_verification(
@@ -500,6 +505,7 @@ def email_confirmed_page():
 # Supabase Webhook
 # ===================================================================
 
+
 @router.post("/webhook/supabase", status_code=status.HTTP_200_OK)
 async def supabase_webhook(
     payload: SupabaseWebhookPayload,
@@ -518,13 +524,12 @@ async def supabase_webhook(
 
     # Verify webhook secret
     expected_secret = settings.SUPABASE_WEBHOOK_SECRET
-    if expected_secret:
-        if not x_webhook_secret or x_webhook_secret != expected_secret:
-            logger.warning("Supabase webhook: invalid or missing secret")
-            return JSONResponse(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                content={"error": "Invalid webhook secret"},
-            )
+    if expected_secret and (not x_webhook_secret or x_webhook_secret != expected_secret):
+        logger.warning("Supabase webhook: invalid or missing secret")
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"error": "Invalid webhook secret"},
+        )
 
     logger.info(f"Supabase webhook received: type={payload.type}")
 
@@ -547,6 +552,7 @@ async def supabase_webhook(
 # ===================================================================
 # Password & Profile Management
 # ===================================================================
+
 
 @router.post("/change-password", status_code=status.HTTP_200_OK)
 def change_password(

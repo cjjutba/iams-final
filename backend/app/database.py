@@ -5,14 +5,13 @@ Provides SQLAlchemy engine, session factory, and base class for models.
 Connects to Supabase PostgreSQL using async SQLAlchemy.
 """
 
+from collections.abc import Generator
+
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import StaticPool
-from typing import Generator
+from sqlalchemy.orm import Session, sessionmaker
 
-from app.config import settings, logger
-
+from app.config import logger, settings
 
 # Create SQLAlchemy engine
 # Using synchronous engine for simplicity (can upgrade to async later if needed)
@@ -23,11 +22,7 @@ engine = create_engine(
 )
 
 # Create session factory
-SessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine
-)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Base class for all models
 Base = declarative_base()

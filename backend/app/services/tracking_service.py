@@ -16,12 +16,12 @@ Architecture:
 - Tracks are associated with recognized users (user_id) for presence logging
 """
 
-from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timedelta
 from dataclasses import dataclass
+from datetime import datetime
+
 import numpy as np
 
-from app.config import settings, logger
+from app.config import logger, settings
 
 
 @dataclass
@@ -36,18 +36,19 @@ class Detection:
         recognition_confidence: Optional recognition confidence (0-1)
         frame_id: Frame number or timestamp
     """
-    bbox: List[float]  # [x1, y1, x2, y2]
-    confidence: float
-    user_id: Optional[str] = None
-    recognition_confidence: Optional[float] = None
-    frame_id: Optional[int] = None
 
-    def to_ltwh(self) -> List[float]:
+    bbox: list[float]  # [x1, y1, x2, y2]
+    confidence: float
+    user_id: str | None = None
+    recognition_confidence: float | None = None
+    frame_id: int | None = None
+
+    def to_ltwh(self) -> list[float]:
         """Convert bbox from [x1,y1,x2,y2] to [left,top,width,height]"""
         x1, y1, x2, y2 = self.bbox
         return [x1, y1, x2 - x1, y2 - y1]
 
-    def to_tlbr(self) -> List[float]:
+    def to_tlbr(self) -> list[float]:
         """Convert bbox to [top,left,bottom,right]"""
         x1, y1, x2, y2 = self.bbox
         return [y1, x1, y2, x2]
@@ -68,13 +69,14 @@ class Track:
         bbox: Current bounding box [x1, y1, x2, y2]
         is_confirmed: Whether track is confirmed (passed n_init threshold)
     """
+
     track_id: int
-    user_id: Optional[str] = None
-    recognition_confidence: Optional[float] = None
+    user_id: str | None = None
+    recognition_confidence: float | None = None
     first_seen: datetime = None
     last_seen: datetime = None
     detection_count: int = 0
-    bbox: Optional[List[float]] = None
+    bbox: list[float] | None = None
     is_confirmed: bool = False
 
     def __post_init__(self):
@@ -129,14 +131,13 @@ class TrackingService:
         # Active tracks by session
         # Key: session_id (schedule_id)
         # Value: Dict[track_id, Track]
-        self.session_tracks: Dict[str, Dict[int, Track]] = {}
+        self.session_tracks: dict[str, dict[int, Track]] = {}
 
         # Track ID counter (global across all sessions)
         self.next_track_id = 1
 
         logger.info(
-            f"TrackingService initialized (max_age={max_age}s, "
-            f"min_hits={min_hits}, iou_threshold={iou_threshold})"
+            f"TrackingService initialized (max_age={max_age}s, min_hits={min_hits}, iou_threshold={iou_threshold})"
         )
 
     def start_session(self, session_id: str):
@@ -172,11 +173,7 @@ class TrackingService:
         else:
             logger.warning(f"No active tracking session: {session_id}")
 
-    def update(
-        self,
-        session_id: str,
-        detections: List[Detection]
-    ) -> List[Track]:
+    def update(self, session_id: str, detections: list[Detection]) -> list[Track]:
         """
         Update tracks with new detections
 
@@ -206,19 +203,13 @@ class TrackingService:
             age_seconds = (current_time - track.last_seen).total_seconds()
             if age_seconds > self.max_age:
                 stale_track_ids.append(track_id)
-                logger.debug(
-                    f"Removing stale track {track_id} "
-                    f"(age: {age_seconds:.1f}s, user: {track.user_id})"
-                )
+                logger.debug(f"Removing stale track {track_id} (age: {age_seconds:.1f}s, user: {track.user_id})")
 
         for track_id in stale_track_ids:
             del tracks[track_id]
 
         # Step 2: Associate detections with tracks
-        matched_tracks, unmatched_detections = self._associate_detections_to_tracks(
-            tracks,
-            detections
-        )
+        matched_tracks, unmatched_detections = self._associate_detections_to_tracks(tracks, detections)
 
         # Step 3: Update matched tracks
         updated_tracks = []
@@ -242,10 +233,8 @@ class TrackingService:
         return updated_tracks
 
     def _associate_detections_to_tracks(
-        self,
-        tracks: Dict[int, Track],
-        detections: List[Detection]
-    ) -> Tuple[List[Tuple[int, Detection]], List[Detection]]:
+        self, tracks: dict[int, Track], detections: list[Detection]
+    ) -> tuple[list[tuple[int, Detection]], list[Detection]]:
         """
         Associate detections with existing tracks using Hungarian matching
 
@@ -291,7 +280,7 @@ class TrackingService:
         # Find best match for each detection
         for j in range(len(detections)):
             best_track_idx = None
-            best_cost = float('inf')
+            best_cost = float("inf")
 
             for i in range(len(track_list)):
                 if i in matched_track_indices:
@@ -315,11 +304,7 @@ class TrackingService:
 
         return matched_tracks, unmatched_detections
 
-    def _compute_iou(
-        self,
-        bbox1: Optional[List[float]],
-        bbox2: List[float]
-    ) -> float:
+    def _compute_iou(self, bbox1: list[float] | None, bbox2: list[float]) -> float:
         """
         Compute Intersection over Union (IoU) between two bounding boxes
 
@@ -373,25 +358,17 @@ class TrackingService:
             last_seen=current_time,
             detection_count=1,
             bbox=detection.bbox,
-            is_confirmed=(self.min_hits <= 1)  # Confirm immediately if min_hits=1
+            is_confirmed=(self.min_hits <= 1),  # Confirm immediately if min_hits=1
         )
 
         self.next_track_id += 1
 
         conf_str = f"{track.recognition_confidence:.3f}" if track.recognition_confidence else "N/A"
-        logger.debug(
-            f"Created track {track.track_id} "
-            f"(user: {track.user_id}, conf: {conf_str})"
-        )
+        logger.debug(f"Created track {track.track_id} (user: {track.user_id}, conf: {conf_str})")
 
         return track
 
-    def _update_track(
-        self,
-        track: Track,
-        detection: Detection,
-        current_time: datetime
-    ):
+    def _update_track(self, track: Track, detection: Detection, current_time: datetime):
         """
         Update existing track with new detection
 
@@ -416,8 +393,8 @@ class TrackingService:
             elif track.user_id == detection.user_id:
                 # Same user, update confidence if higher
                 if detection.recognition_confidence and (
-                    track.recognition_confidence is None or
-                    detection.recognition_confidence > track.recognition_confidence
+                    track.recognition_confidence is None
+                    or detection.recognition_confidence > track.recognition_confidence
                 ):
                     track.recognition_confidence = detection.recognition_confidence
             else:
@@ -433,7 +410,7 @@ class TrackingService:
             track.is_confirmed = True
             logger.debug(f"Track {track.track_id} confirmed")
 
-    def get_active_tracks(self, session_id: str) -> List[Track]:
+    def get_active_tracks(self, session_id: str) -> list[Track]:
         """
         Get all active tracks for a session
 
@@ -448,7 +425,7 @@ class TrackingService:
 
         return list(self.session_tracks[session_id].values())
 
-    def get_confirmed_tracks(self, session_id: str) -> List[Track]:
+    def get_confirmed_tracks(self, session_id: str) -> list[Track]:
         """
         Get confirmed tracks for a session
 
@@ -461,7 +438,7 @@ class TrackingService:
         tracks = self.get_active_tracks(session_id)
         return [t for t in tracks if t.is_confirmed]
 
-    def get_identified_users(self, session_id: str) -> Dict[str, Track]:
+    def get_identified_users(self, session_id: str) -> dict[str, Track]:
         """
         Get map of identified users to their tracks
 
@@ -497,12 +474,7 @@ class TrackingService:
             Dict with tracking stats
         """
         if session_id not in self.session_tracks:
-            return {
-                "total_tracks": 0,
-                "confirmed_tracks": 0,
-                "identified_tracks": 0,
-                "unidentified_tracks": 0
-            }
+            return {"total_tracks": 0, "confirmed_tracks": 0, "identified_tracks": 0, "unidentified_tracks": 0}
 
         tracks = self.get_active_tracks(session_id)
         confirmed = [t for t in tracks if t.is_confirmed]
@@ -512,13 +484,13 @@ class TrackingService:
             "total_tracks": len(tracks),
             "confirmed_tracks": len(confirmed),
             "identified_tracks": len(identified),
-            "unidentified_tracks": len(confirmed) - len(identified)
+            "unidentified_tracks": len(confirmed) - len(identified),
         }
 
 
 # Global tracking service instance (singleton)
 # This is initialized in main.py during startup
-tracking_service: Optional[TrackingService] = None
+tracking_service: TrackingService | None = None
 
 
 def get_tracking_service() -> TrackingService:
@@ -538,7 +510,7 @@ def get_tracking_service() -> TrackingService:
         tracking_service = TrackingService(
             max_age=settings.EARLY_LEAVE_THRESHOLD * settings.SCAN_INTERVAL_SECONDS,
             min_hits=1,  # Single detection confirms track (for 60s interval scans)
-            iou_threshold=0.3
+            iou_threshold=0.3,
         )
 
     return tracking_service

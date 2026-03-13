@@ -6,10 +6,10 @@ Data access layer for AttendanceAnomaly operations.
 
 import uuid
 from datetime import datetime
-from typing import Optional, List
+
 from sqlalchemy.orm import Session
 
-from app.models.attendance_anomaly import AttendanceAnomaly, AnomalyType
+from app.models.attendance_anomaly import AnomalyType, AttendanceAnomaly
 
 
 class AnomalyRepository:
@@ -24,9 +24,9 @@ class AnomalyRepository:
         anomaly_type: AnomalyType,
         severity: str,
         description: str,
-        schedule_id: Optional[str] = None,
-        details: Optional[str] = None,
-        confidence: Optional[float] = None,
+        schedule_id: str | None = None,
+        details: str | None = None,
+        confidence: float | None = None,
     ) -> AttendanceAnomaly:
         """Create a new anomaly record."""
         anomaly = AttendanceAnomaly(
@@ -43,15 +43,11 @@ class AnomalyRepository:
         self.db.refresh(anomaly)
         return anomaly
 
-    def get_by_id(self, anomaly_id: str) -> Optional[AttendanceAnomaly]:
+    def get_by_id(self, anomaly_id: str) -> AttendanceAnomaly | None:
         """Get anomaly by ID."""
-        return self.db.query(AttendanceAnomaly).filter(
-            AttendanceAnomaly.id == uuid.UUID(anomaly_id)
-        ).first()
+        return self.db.query(AttendanceAnomaly).filter(AttendanceAnomaly.id == uuid.UUID(anomaly_id)).first()
 
-    def get_unresolved(
-        self, limit: int = 50, anomaly_type: Optional[AnomalyType] = None
-    ) -> List[AttendanceAnomaly]:
+    def get_unresolved(self, limit: int = 50, anomaly_type: AnomalyType | None = None) -> list[AttendanceAnomaly]:
         """Get unresolved anomalies, optionally filtered by type."""
         q = self.db.query(AttendanceAnomaly).filter(
             AttendanceAnomaly.resolved == False  # noqa: E712
@@ -60,9 +56,7 @@ class AnomalyRepository:
             q = q.filter(AttendanceAnomaly.anomaly_type == anomaly_type)
         return q.order_by(AttendanceAnomaly.detected_at.desc()).limit(limit).all()
 
-    def get_by_student(
-        self, student_id: str, limit: int = 20
-    ) -> List[AttendanceAnomaly]:
+    def get_by_student(self, student_id: str, limit: int = 20) -> list[AttendanceAnomaly]:
         """Get anomalies for a student."""
         return (
             self.db.query(AttendanceAnomaly)
@@ -72,9 +66,7 @@ class AnomalyRepository:
             .all()
         )
 
-    def resolve(
-        self, anomaly_id: str, resolved_by: str
-    ) -> Optional[AttendanceAnomaly]:
+    def resolve(self, anomaly_id: str, resolved_by: str) -> AttendanceAnomaly | None:
         """Mark an anomaly as resolved."""
         anomaly = self.get_by_id(anomaly_id)
         if anomaly:

@@ -4,32 +4,37 @@ Common Schemas
 Shared response formats used across the API.
 """
 
-from typing import Optional, Any, Dict, List
+from typing import Any
+
 from pydantic import BaseModel
 
 
 class SuccessResponse(BaseModel):
     """Standard success response"""
+
     success: bool = True
     message: str
-    data: Optional[Dict[str, Any]] = None
+    data: dict[str, Any] | None = None
 
 
 class ErrorResponse(BaseModel):
     """Standard error response"""
+
     success: bool = False
-    error: Dict[str, Any]
+    error: dict[str, Any]
 
 
 class MessageResponse(BaseModel):
     """Simple message response"""
+
     message: str
 
 
 class PaginatedResponse(BaseModel):
     """Paginated list response"""
+
     success: bool = True
-    data: List[Any]
+    data: list[Any]
     total: int
     page: int
     page_size: int

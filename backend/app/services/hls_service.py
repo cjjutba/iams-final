@@ -12,23 +12,24 @@ Key design decisions:
 """
 
 import asyncio
+import contextlib
 import glob
 import os
 import signal
 import subprocess
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Set
 
-from app.config import settings, logger
+from app.config import logger, settings
 
 
 @dataclass
 class HLSStream:
     """State for a single room's FFmpeg HLS process."""
+
     room_id: str
     rtsp_url: str
-    process: Optional[subprocess.Popen] = None
-    viewers: Set[str] = field(default_factory=set)
+    process: subprocess.Popen | None = None
+    viewers: set[str] = field(default_factory=set)
     segment_dir: str = ""
 
 
@@ -41,7 +42,7 @@ class HLSService:
     segment files are cleaned up.
     """
 
-    _active: Dict[str, HLSStream] = {}
+    _active: dict[str, HLSStream] = {}
 
     def _ensure_segment_dir(self, room_id: str) -> str:
         """Create and return the segment directory for a room."""
@@ -67,10 +68,7 @@ class HLSService:
         if room_id in self._active:
             stream = self._active[room_id]
             stream.viewers.add(viewer_id)
-            logger.info(
-                f"HLS: viewer {viewer_id} joined room {room_id} "
-                f"({len(stream.viewers)} viewers)"
-            )
+            logger.info(f"HLS: viewer {viewer_id} joined room {room_id} ({len(stream.viewers)} viewers)")
             return True
 
         # New stream — purge any stale segments from previous sessions
@@ -112,16 +110,12 @@ class HLSService:
 
         # Process died — log its return code and restart
         rc = stream.process.returncode if stream.process else "N/A"
-        logger.warning(
-            f"HLS: FFmpeg died for room {room_id} (rc={rc}), restarting..."
-        )
+        logger.warning(f"HLS: FFmpeg died for room {room_id} (rc={rc}), restarting...")
 
         # Clean up the dead process handle
         if stream.process:
-            try:
+            with contextlib.suppress(Exception):
                 stream.process.wait(timeout=1)
-            except Exception:
-                pass
             stream.process = None
 
         # Purge stale segments so the player gets a clean init.mp4
@@ -157,13 +151,19 @@ class HLSService:
 
         if settings.HLS_TRANSCODE:
             video_args = [
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-tune", "zerolatency",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-tune",
+                "zerolatency",
                 # Force IDR every segment so split_by_time works exactly.
-                "-g", str(gop),
-                "-keyint_min", str(gop),
-                "-sc_threshold", "0",  # disable scene-change extra keyframes
+                "-g",
+                str(gop),
+                "-keyint_min",
+                str(gop),
+                "-sc_threshold",
+                "0",  # disable scene-change extra keyframes
             ]
         else:
             video_args = ["-c:v", "copy"]
@@ -171,24 +171,38 @@ class HLSService:
         return [
             ffmpeg_path,
             # Low-latency input flags — minimize RTSP buffering
-            "-fflags", "nobuffer+genpts",
-            "-flags", "low_delay",
-            "-probesize", "131072",        # 128 KB — fast codec detection
-            "-analyzeduration", "100000",  # 100 ms — minimal probe window
-            "-rtsp_transport", "tcp",
-            "-i", rtsp_url,
+            "-fflags",
+            "nobuffer+genpts",
+            "-flags",
+            "low_delay",
+            "-probesize",
+            "131072",  # 128 KB — fast codec detection
+            "-analyzeduration",
+            "100000",  # 100 ms — minimal probe window
+            "-rtsp_transport",
+            "tcp",
+            "-i",
+            rtsp_url,
             *video_args,
-            "-an",             # No audio
+            "-an",  # No audio
             # Flush every packet to disk immediately so segments are available
             # the moment FFmpeg finishes writing them, not after an OS buffer flush.
-            "-flush_packets", "1",
-            "-f", "hls",
-            "-hls_time", str(settings.HLS_SEGMENT_DURATION),
-            "-hls_list_size", str(settings.HLS_PLAYLIST_SIZE),
-            "-hls_flags", "delete_segments+append_list+split_by_time+omit_endlist",
-            "-hls_segment_type", "fmp4",            # fMP4 segments (better decoder compat)
-            "-hls_fmp4_init_filename", "init.mp4",  # Init segment for fMP4
-            "-hls_segment_filename", segment_pattern,
+            "-flush_packets",
+            "1",
+            "-f",
+            "hls",
+            "-hls_time",
+            str(settings.HLS_SEGMENT_DURATION),
+            "-hls_list_size",
+            str(settings.HLS_PLAYLIST_SIZE),
+            "-hls_flags",
+            "delete_segments+append_list+split_by_time+omit_endlist",
+            "-hls_segment_type",
+            "fmp4",  # fMP4 segments (better decoder compat)
+            "-hls_fmp4_init_filename",
+            "init.mp4",  # Init segment for fMP4
+            "-hls_segment_filename",
+            segment_pattern,
             playlist_path,
         ]
 
@@ -212,11 +226,7 @@ class HLSService:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 # On Windows, CREATE_NEW_PROCESS_GROUP allows clean termination
-                creationflags=(
-                    subprocess.CREATE_NEW_PROCESS_GROUP
-                    if os.name == "nt"
-                    else 0
-                ),
+                creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0),
             )
         except FileNotFoundError:
             logger.error(
@@ -235,10 +245,7 @@ class HLSService:
 
         # Check that the process didn't exit immediately
         if process.poll() is not None:
-            logger.error(
-                f"HLS: FFmpeg exited immediately for room {room_id} "
-                f"(rc={process.returncode})"
-            )
+            logger.error(f"HLS: FFmpeg exited immediately for room {room_id} (rc={process.returncode})")
             stream.process = None
             return False
 
@@ -256,7 +263,7 @@ class HLSService:
         logger.warning(f"HLS: playlist did not appear within {timeout}s: {path}")
         return False
 
-    async def stop_stream(self, room_id: str, viewer_id: Optional[str] = None) -> None:
+    async def stop_stream(self, room_id: str, viewer_id: str | None = None) -> None:
         """
         Remove a viewer.  If no viewers remain, stop the FFmpeg process
         and clean up segment files.
@@ -267,10 +274,7 @@ class HLSService:
 
         if viewer_id is not None:
             stream.viewers.discard(viewer_id)
-            logger.info(
-                f"HLS: viewer {viewer_id} left room {room_id} "
-                f"({len(stream.viewers)} remaining)"
-            )
+            logger.info(f"HLS: viewer {viewer_id} left room {room_id} ({len(stream.viewers)} remaining)")
             if stream.viewers:
                 return  # other viewers still watching
 

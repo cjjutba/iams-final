@@ -4,18 +4,21 @@ Attendance Record Model
 Represents daily attendance for a student in a specific class.
 """
 
+import enum
 import uuid
-from datetime import datetime, date
-from sqlalchemy import Column, String, Integer, Float, DateTime, Date, ForeignKey, UniqueConstraint, Text, Enum as SQLEnum
+from datetime import date
+
+from sqlalchemy import Column, Date, DateTime, Float, ForeignKey, Integer, Text, UniqueConstraint
+from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
-import enum
 
 from app.database import Base
 
 
-class AttendanceStatus(str, enum.Enum):
+class AttendanceStatus(enum.StrEnum):
     """Attendance status enumeration"""
+
     PRESENT = "present"
     LATE = "late"
     ABSENT = "absent"
@@ -78,9 +81,7 @@ class AttendanceRecord(Base):
     # early_leave_events = relationship("EarlyLeaveEvent", back_populates="attendance_record")
 
     # Unique constraint (one record per student per schedule per date)
-    __table_args__ = (
-        UniqueConstraint('student_id', 'schedule_id', 'date', name='uq_student_schedule_date'),
-    )
+    __table_args__ = (UniqueConstraint("student_id", "schedule_id", "date", name="uq_student_schedule_date"),)
 
     def __repr__(self):
         return f"<AttendanceRecord(id={self.id}, student_id={self.student_id}, date={self.date}, status={self.status})>"

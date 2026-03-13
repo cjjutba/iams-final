@@ -17,23 +17,22 @@ import asyncio
 import os
 import signal
 import subprocess
-from typing import Optional
 
 import httpx
 
-from app.config import settings, logger
+from app.config import logger, settings
 
 
 class MediamtxService:
     """Lifecycle manager for the mediamtx subprocess."""
 
     def __init__(self) -> None:
-        self._process: Optional[subprocess.Popen] = None
+        self._process: subprocess.Popen | None = None
 
     async def start(
         self,
-        bin_path: Optional[str] = None,
-        config_path: Optional[str] = None,
+        bin_path: str | None = None,
+        config_path: str | None = None,
     ) -> bool:
         """
         Launch mediamtx and wait for its REST API to become ready.
@@ -48,17 +47,12 @@ class MediamtxService:
         """
         # External mode: skip subprocess, just wait for API
         if settings.MEDIAMTX_EXTERNAL:
-            logger.info(
-                f"mediamtx external mode: waiting for API at {settings.MEDIAMTX_API_URL}"
-            )
+            logger.info(f"mediamtx external mode: waiting for API at {settings.MEDIAMTX_API_URL}")
             api_ready = await self._wait_for_api(timeout=15.0)
             if api_ready:
                 logger.info("mediamtx external API is ready (WebRTC streaming active)")
             else:
-                logger.error(
-                    "mediamtx external API did not respond within 15 s. "
-                    "Is the mediamtx container running?"
-                )
+                logger.error("mediamtx external API did not respond within 15 s. Is the mediamtx container running?")
             return api_ready
 
         # Resolve paths relative to the backend/ directory.
@@ -67,10 +61,7 @@ class MediamtxService:
         resolved_cfg = os.path.abspath(config_path or os.path.join(base, settings.MEDIAMTX_CONFIG_PATH))
 
         if not os.path.isfile(resolved_bin):
-            logger.error(
-                f"mediamtx binary not found at {resolved_bin}. "
-                "Run: bash backend/scripts/download_mediamtx.sh"
-            )
+            logger.error(f"mediamtx binary not found at {resolved_bin}. Run: bash backend/scripts/download_mediamtx.sh")
             return False
 
         logger.info(f"Starting mediamtx: {resolved_bin} {resolved_cfg}")
@@ -100,10 +91,7 @@ class MediamtxService:
         api_ready = await self._wait_for_api(timeout=5.0)
 
         if not api_ready:
-            logger.error(
-                "mediamtx started but REST API did not respond within 5 s. "
-                "Falling back to HLS streaming."
-            )
+            logger.error("mediamtx started but REST API did not respond within 5 s. Falling back to HLS streaming.")
             self.stop()
             return False
 
@@ -121,10 +109,10 @@ class MediamtxService:
             logger.info("mediamtx stopped")
         except subprocess.TimeoutExpired:
             proc.kill()
-            try:
+            import contextlib
+
+            with contextlib.suppress(subprocess.TimeoutExpired):
                 proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                pass  # kernel will reap the zombie when FastAPI exits
             logger.info("mediamtx killed (SIGTERM timeout)")
         except Exception as exc:
             logger.warning(f"Error stopping mediamtx: {exc}")

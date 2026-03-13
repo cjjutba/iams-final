@@ -23,21 +23,21 @@ Supports three modes, selected in priority order:
 """
 
 import asyncio
-import time as _time
+import contextlib
 import threading as _threading
+import time as _time
 import uuid as uuid_mod
-from datetime import datetime, timezone
-from typing import Dict, Optional
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
-from app.config import settings, logger
+from app.config import logger, settings
 from app.database import SessionLocal
 from app.repositories.schedule_repository import ScheduleRepository
 from app.services.camera_config import get_camera_url
-from app.services.recognition_service import recognition_service
 from app.services.hls_service import hls_service
+from app.services.recognition_service import recognition_service
 from app.services.webrtc_service import webrtc_service
 
 router = APIRouter()
@@ -49,7 +49,7 @@ class NameCache:
     def __init__(self, ttl_seconds: float = 300.0):
         self._lock = _threading.Lock()
         # uid → ((name, student_id), inserted_at_monotonic)
-        self._store: Dict[str, tuple] = {}
+        self._store: dict[str, tuple] = {}
         self._ttl = ttl_seconds
 
     def get(self, user_id: str):
@@ -81,14 +81,14 @@ def _enrich_and_cache(detections_dicts: list, detections_objects, db_session_fac
     Thread-safe via NameCache.
     """
     needs_lookup = [
-        d for d in detections_dicts
-        if d.get("user_id") and not d.get("name") and _name_cache.get(d["user_id"]) is None
+        d for d in detections_dicts if d.get("user_id") and not d.get("name") and _name_cache.get(d["user_id"]) is None
     ]
 
     if needs_lookup:
         db = db_session_factory()
         try:
             from app.services.recognition_service import recognition_service
+
             recognition_service.enrich_detections(detections_objects, db)
             # Populate cache from enriched objects
             for det in detections_objects:
@@ -129,10 +129,12 @@ async def live_stream_ws(schedule_id: str, websocket: WebSocket):
 
         if schedule is None:
             await websocket.accept()
-            await websocket.send_json({
-                "type": "error",
-                "message": f"Schedule not found: {schedule_id}",
-            })
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": f"Schedule not found: {schedule_id}",
+                }
+            )
             await websocket.close(code=4004, reason="Schedule not found")
             return
 
@@ -143,10 +145,12 @@ async def live_stream_ws(schedule_id: str, websocket: WebSocket):
         # Only error out if WebRTC is also unavailable.
         if rtsp_url is None and not settings.USE_WEBRTC_STREAMING:
             await websocket.accept()
-            await websocket.send_json({
-                "type": "error",
-                "message": "No camera configured for this room",
-            })
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": "No camera configured for this room",
+                }
+            )
             await websocket.close(code=4003, reason="No camera configured")
             return
 
@@ -154,10 +158,12 @@ async def live_stream_ws(schedule_id: str, websocket: WebSocket):
         logger.error(f"Live stream setup error: {exc}")
         try:
             await websocket.accept()
-            await websocket.send_json({
-                "type": "error",
-                "message": "Internal server error during setup",
-            })
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": "Internal server error during setup",
+                }
+            )
             await websocket.close(code=4500, reason="Internal error")
         except Exception:
             pass
@@ -202,19 +208,19 @@ async def live_stream_ws(schedule_id: str, websocket: WebSocket):
         _mode_label = "legacy"
 
     logger.info(
-        f"Live stream WS connected: viewer={viewer_id}, "
-        f"schedule={schedule_id}, room={room_id}, "
-        f"mode={_mode_label}"
+        f"Live stream WS connected: viewer={viewer_id}, schedule={schedule_id}, room={room_id}, mode={_mode_label}"
     )
 
     # If WebRTC failed and we have no rtsp_url, there's nothing to stream.
     # Send a "waiting" status so the mobile app shows a friendly state
     # instead of a hard error, then close so the client can retry.
     if not use_webrtc and rtsp_url is None:
-        await websocket.send_json({
-            "type": "waiting",
-            "message": "Waiting for camera — edge device is not streaming yet",
-        })
+        await websocket.send_json(
+            {
+                "type": "waiting",
+                "message": "Waiting for camera — edge device is not streaming yet",
+            }
+        )
         await websocket.close(code=4003, reason="No stream available")
         return
 
@@ -230,6 +236,7 @@ async def live_stream_ws(schedule_id: str, websocket: WebSocket):
 # HLS mode: metadata-only WebSocket
 # ---------------------------------------------------------------------------
 
+
 async def _hls_mode(
     websocket: WebSocket,
     viewer_id: str,
@@ -244,10 +251,12 @@ async def _hls_mode(
     # Start HLS stream
     hls_ok = await hls_service.start_stream(room_id, rtsp_url, viewer_id)
     if not hls_ok:
-        await websocket.send_json({
-            "type": "error",
-            "message": "Failed to start HLS stream (is FFmpeg installed?)",
-        })
+        await websocket.send_json(
+            {
+                "type": "error",
+                "message": "Failed to start HLS stream (is FFmpeg installed?)",
+            }
+        )
         await websocket.close(code=4002, reason="HLS unavailable")
         return
 
@@ -261,15 +270,17 @@ async def _hls_mode(
     hls_url = f"{settings.API_PREFIX}/hls/{room_id}/playlist.m3u8"
 
     # Send initial connected message with HLS URL
-    await websocket.send_json({
-        "type": "connected",
-        "schedule_id": schedule_id,
-        "room_id": room_id,
-        "hls_url": hls_url,
-        "stream_fps": settings.STREAM_FPS,
-        "stream_resolution": f"{settings.STREAM_WIDTH}x{settings.STREAM_HEIGHT}",
-        "mode": "hls",
-    })
+    await websocket.send_json(
+        {
+            "type": "connected",
+            "schedule_id": schedule_id,
+            "room_id": room_id,
+            "hls_url": hls_url,
+            "stream_fps": settings.STREAM_FPS,
+            "stream_resolution": f"{settings.STREAM_WIDTH}x{settings.STREAM_HEIGHT}",
+            "mode": "hls",
+        }
+    )
 
     # --- Receive task (handle pings/close) ---
     stop_event = asyncio.Event()
@@ -302,9 +313,7 @@ async def _hls_mode(
             if now - last_health_check >= health_check_interval:
                 last_health_check = now
                 if not hls_service.is_active(room_id):
-                    logger.info(
-                        f"HLS: health check detected dead FFmpeg for room {room_id}, restarting..."
-                    )
+                    logger.info(f"HLS: health check detected dead FFmpeg for room {room_id}, restarting...")
                     await hls_service.ensure_healthy(room_id)
 
             result = recognition_service.get_latest_detections(room_id)
@@ -319,45 +328,46 @@ async def _hls_mode(
                     # Enrich with cached names
                     if any(d.get("user_id") for d in detections_dicts):
                         det_objects = recognition_service.get_detections_objects(room_id)
-                        detections_dicts = _enrich_and_cache(
-                            detections_dicts, det_objects, SessionLocal
-                        )
+                        detections_dicts = _enrich_and_cache(detections_dicts, det_objects, SessionLocal)
 
-                    ts = datetime.now(timezone.utc).isoformat()
-                    await websocket.send_json({
-                        "type": "detections",
-                        "timestamp": ts,
-                        "detections": detections_dicts,
-                        "detection_width": det_w,
-                        "detection_height": det_h,
-                    })
+                    ts = datetime.now(UTC).isoformat()
+                    await websocket.send_json(
+                        {
+                            "type": "detections",
+                            "timestamp": ts,
+                            "detections": detections_dicts,
+                            "detection_width": det_w,
+                            "detection_height": det_h,
+                        }
+                    )
                     last_send_time = now
 
                 elif (now - last_send_time) >= heartbeat_interval:
                     # Heartbeat keeps client connection alive
-                    await websocket.send_json({
-                        "type": "heartbeat",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "heartbeat",
+                            "timestamp": datetime.now(UTC).isoformat(),
+                        }
+                    )
                     last_send_time = now
             else:
                 # Recognition service not running for this room
                 stale_count += 1
                 if stale_count >= 100:  # ~10s of no recognition service (100 × 100ms)
-                    logger.warning(
-                        f"Live stream: recognition service gone for room {room_id}, "
-                        "attempting restart"
-                    )
+                    logger.warning(f"Live stream: recognition service gone for room {room_id}, attempting restart")
                     recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
                     await recognition_service.start(room_id, recog_url, viewer_id)
                     stale_count = 0
 
                 # Still send heartbeat
                 if (now - last_send_time) >= heartbeat_interval:
-                    await websocket.send_json({
-                        "type": "heartbeat",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "heartbeat",
+                            "timestamp": datetime.now(UTC).isoformat(),
+                        }
+                    )
                     last_send_time = now
 
             await asyncio.sleep(poll_interval)
@@ -369,24 +379,21 @@ async def _hls_mode(
     finally:
         stop_event.set()
         receive_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             await receive_task
-        except (asyncio.CancelledError, Exception):
-            pass
 
         await hls_service.stop_stream(room_id, viewer_id)
         await recognition_service.stop(room_id, viewer_id)
 
         if websocket.client_state == WebSocketState.CONNECTED:
-            try:
+            with contextlib.suppress(Exception):
                 await websocket.close()
-            except Exception:
-                pass
 
 
 # ---------------------------------------------------------------------------
 # WebRTC mode: metadata-only WebSocket (no HLS, no JPEG frames)
 # ---------------------------------------------------------------------------
+
 
 async def _webrtc_mode(
     websocket: WebSocket,
@@ -407,14 +414,16 @@ async def _webrtc_mode(
         logger.warning("Recognition service failed to start — WebRTC stream will have no overlays")
 
     # Send initial connected message (no hls_url)
-    await websocket.send_json({
-        "type": "connected",
-        "schedule_id": schedule_id,
-        "room_id": room_id,
-        "mode": "webrtc",
-        "stream_fps": settings.STREAM_FPS,
-        "stream_resolution": f"{settings.STREAM_WIDTH}x{settings.STREAM_HEIGHT}",
-    })
+    await websocket.send_json(
+        {
+            "type": "connected",
+            "schedule_id": schedule_id,
+            "room_id": room_id,
+            "mode": "webrtc",
+            "stream_fps": settings.STREAM_FPS,
+            "stream_resolution": f"{settings.STREAM_WIDTH}x{settings.STREAM_HEIGHT}",
+        }
+    )
 
     # --- Receive task (handle pings/close) ---
     stop_event = asyncio.Event()
@@ -452,45 +461,46 @@ async def _webrtc_mode(
                     # Enrich with cached names
                     if any(d.get("user_id") for d in detections_dicts):
                         det_objects = recognition_service.get_detections_objects(room_id)
-                        detections_dicts = _enrich_and_cache(
-                            detections_dicts, det_objects, SessionLocal
-                        )
+                        detections_dicts = _enrich_and_cache(detections_dicts, det_objects, SessionLocal)
 
-                    ts = datetime.now(timezone.utc).isoformat()
-                    await websocket.send_json({
-                        "type": "detections",
-                        "timestamp": ts,
-                        "detections": detections_dicts,
-                        "detection_width": det_w,
-                        "detection_height": det_h,
-                    })
+                    ts = datetime.now(UTC).isoformat()
+                    await websocket.send_json(
+                        {
+                            "type": "detections",
+                            "timestamp": ts,
+                            "detections": detections_dicts,
+                            "detection_width": det_w,
+                            "detection_height": det_h,
+                        }
+                    )
                     last_send_time = now
 
                 elif (now - last_send_time) >= heartbeat_interval:
                     # Heartbeat keeps client connection alive
-                    await websocket.send_json({
-                        "type": "heartbeat",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "heartbeat",
+                            "timestamp": datetime.now(UTC).isoformat(),
+                        }
+                    )
                     last_send_time = now
             else:
                 # Recognition service not running for this room
                 stale_count += 1
                 if stale_count >= 100:  # ~10s of no recognition service (100 × 100ms)
-                    logger.warning(
-                        f"Live stream: recognition service gone for room {room_id}, "
-                        "attempting restart"
-                    )
+                    logger.warning(f"Live stream: recognition service gone for room {room_id}, attempting restart")
                     recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
                     await recognition_service.start(room_id, recog_url, viewer_id)
                     stale_count = 0
 
                 # Still send heartbeat
                 if (now - last_send_time) >= heartbeat_interval:
-                    await websocket.send_json({
-                        "type": "heartbeat",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "heartbeat",
+                            "timestamp": datetime.now(UTC).isoformat(),
+                        }
+                    )
                     last_send_time = now
 
             await asyncio.sleep(poll_interval)
@@ -502,23 +512,20 @@ async def _webrtc_mode(
     finally:
         stop_event.set()
         receive_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             await receive_task
-        except (asyncio.CancelledError, Exception):
-            pass
 
         await recognition_service.stop(room_id, viewer_id)
 
         if websocket.client_state == WebSocketState.CONNECTED:
-            try:
+            with contextlib.suppress(Exception):
                 await websocket.close()
-            except Exception:
-                pass
 
 
 # ---------------------------------------------------------------------------
 # Legacy mode: base64 JPEG frames over WebSocket
 # ---------------------------------------------------------------------------
+
 
 async def _legacy_mode(
     websocket: WebSocket,
@@ -534,22 +541,26 @@ async def _legacy_mode(
     from app.services.live_stream_service import live_stream_service
 
     # Send initial metadata
-    await websocket.send_json({
-        "type": "connected",
-        "schedule_id": schedule_id,
-        "room_id": room_id,
-        "stream_fps": settings.STREAM_FPS,
-        "stream_resolution": f"{settings.STREAM_WIDTH}x{settings.STREAM_HEIGHT}",
-        "mode": "legacy",
-    })
+    await websocket.send_json(
+        {
+            "type": "connected",
+            "schedule_id": schedule_id,
+            "room_id": room_id,
+            "stream_fps": settings.STREAM_FPS,
+            "stream_resolution": f"{settings.STREAM_WIDTH}x{settings.STREAM_HEIGHT}",
+            "mode": "legacy",
+        }
+    )
 
     # Start or join stream
     started = await live_stream_service.start_stream(room_id, rtsp_url, viewer_id)
     if not started:
-        await websocket.send_json({
-            "type": "error",
-            "message": "Failed to open camera stream",
-        })
+        await websocket.send_json(
+            {
+                "type": "error",
+                "message": "Failed to open camera stream",
+            }
+        )
         await websocket.close(code=4002, reason="Camera unavailable")
         return
 
@@ -585,16 +596,16 @@ async def _legacy_mode(
                     state = live_stream_service._active_streams.get(room_id)
                     if state and any(d.get("user_id") for d in detections_dicts):
                         det_objects = state.last_detections
-                        detections_dicts = _enrich_and_cache(
-                            detections_dicts, det_objects, SessionLocal
-                        )
+                        detections_dicts = _enrich_and_cache(detections_dicts, det_objects, SessionLocal)
 
-                    await websocket.send_json({
-                        "type": "frame",
-                        "data": b64_jpeg,
-                        "timestamp": timestamp,
-                        "detections": detections_dicts,
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "frame",
+                            "data": b64_jpeg,
+                            "timestamp": timestamp,
+                            "detections": detections_dicts,
+                        }
+                    )
 
             await asyncio.sleep(poll_interval)
 
@@ -605,23 +616,20 @@ async def _legacy_mode(
     finally:
         stop_event.set()
         receive_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             await receive_task
-        except (asyncio.CancelledError, Exception):
-            pass
 
         await live_stream_service.stop_stream(room_id, viewer_id)
 
         if websocket.client_state == WebSocketState.CONNECTED:
-            try:
+            with contextlib.suppress(Exception):
                 await websocket.close()
-            except Exception:
-                pass
 
 
 # ---------------------------------------------------------------------------
 # Status endpoint
 # ---------------------------------------------------------------------------
+
 
 @router.get("/status")
 async def stream_status():
@@ -640,6 +648,7 @@ async def stream_status():
         }
     elif settings.USE_HLS_STREAMING:
         from app.services.hls_service import hls_service
+
         active_rooms = hls_service.get_active_rooms()
         rooms = [
             {
@@ -651,6 +660,7 @@ async def stream_status():
         mode = "hls"
     else:
         from app.services.live_stream_service import live_stream_service
+
         active_rooms = live_stream_service.get_active_rooms()
         rooms = [
             {

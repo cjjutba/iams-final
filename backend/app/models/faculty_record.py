@@ -11,7 +11,9 @@ For development/pilot testing, it is populated with mock data.
 """
 
 from datetime import datetime
-from sqlalchemy import Column, String, Boolean, DateTime
+
+from sqlalchemy import Boolean, Column, DateTime, String
+
 from app.database import Base
 
 
@@ -29,7 +31,7 @@ class FacultyRecord(Base):
     # Official school email
     email = Column(String(255), nullable=False, unique=True)
 
-    department = Column(String(100), nullable=True)   # e.g., "Computer Engineering"
+    department = Column(String(100), nullable=True)  # e.g., "Computer Engineering"
 
     # Whether this faculty member is currently active
     is_active = Column(Boolean, nullable=False, default=True)
@@ -37,7 +39,4 @@ class FacultyRecord(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     def __repr__(self) -> str:
-        return (
-            f"<FacultyRecord faculty_id={self.faculty_id!r} "
-            f"name={self.first_name!r} {self.last_name!r}>"
-        )
+        return f"<FacultyRecord faculty_id={self.faculty_id!r} name={self.first_name!r} {self.last_name!r}>"

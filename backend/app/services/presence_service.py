@@ -8,20 +8,21 @@ continuous attendance tracking throughout the class session.
 """
 
 import asyncio
-from typing import Dict, List, Optional
-from datetime import datetime, date, time, timedelta
+import contextlib
+from datetime import date, datetime, time, timedelta
+
 from sqlalchemy.orm import Session
 
-from app.models.attendance_record import AttendanceRecord, AttendanceStatus
+from app.config import logger, settings
+from app.models.attendance_record import AttendanceStatus
 from app.models.schedule import Schedule
 from app.repositories.attendance_repository import AttendanceRepository
 from app.repositories.schedule_repository import ScheduleRepository
 from app.repositories.user_repository import UserRepository
-from app.services.notification_service import NotificationService
-from app.services.tracking_service import get_tracking_service, Detection
 from app.services import session_manager
-from app.utils.exceptions import NotFoundError, ValidationError
-from app.config import settings, logger
+from app.services.notification_service import NotificationService
+from app.services.tracking_service import Detection, get_tracking_service
+from app.utils.exceptions import NotFoundError
 
 
 def compute_early_leave_severity(
@@ -62,7 +63,7 @@ class SessionState:
         self.schedule = schedule
         self.start_time = datetime.now()
         self.scan_count = 0
-        self.student_states: Dict[str, Dict] = {}  # student_id → state
+        self.student_states: dict[str, dict] = {}  # student_id → state
         self.is_active = True
 
     def add_student(self, student_id: str, attendance_id: str):
@@ -71,7 +72,7 @@ class SessionState:
             "attendance_id": attendance_id,
             "consecutive_misses": 0,
             "last_seen": None,
-            "early_leave_flagged": False
+            "early_leave_flagged": False,
         }
 
     def update_student(self, student_id: str, detected: bool):
@@ -83,7 +84,7 @@ class SessionState:
             else:
                 self.student_states[student_id]["consecutive_misses"] += 1
 
-    def get_student_state(self, student_id: str) -> Optional[Dict]:
+    def get_student_state(self, student_id: str) -> dict | None:
         """Get student state"""
         return self.student_states.get(student_id)
 
@@ -101,7 +102,7 @@ class PresenceService:
     """
 
     # Class-level shared state: sessions persist across all instances/requests
-    _active_sessions: Dict[str, SessionState] = {}
+    _active_sessions: dict[str, SessionState] = {}
     _lock = asyncio.Lock()
 
     def __init__(self, db: Session, ws_manager=None):
@@ -160,23 +161,21 @@ class PresenceService:
             today = date.today()
             for student in students:
                 # Check if record already exists
-                existing = self.attendance_repo.get_by_student_date(
-                    str(student.id),
-                    schedule_id,
-                    today
-                )
+                existing = self.attendance_repo.get_by_student_date(str(student.id), schedule_id, today)
 
                 if not existing:
                     # Create new attendance record
-                    record = self.attendance_repo.create({
-                        "student_id": str(student.id),
-                        "schedule_id": schedule_id,
-                        "date": today,
-                        "status": AttendanceStatus.ABSENT,
-                        "total_scans": 0,
-                        "scans_present": 0,
-                        "presence_score": 0.0
-                    })
+                    record = self.attendance_repo.create(
+                        {
+                            "student_id": str(student.id),
+                            "schedule_id": schedule_id,
+                            "date": today,
+                            "status": AttendanceStatus.ABSENT,
+                            "total_scans": 0,
+                            "scans_present": 0,
+                            "presence_score": 0.0,
+                        }
+                    )
                     attendance_id = str(record.id)
                 else:
                     attendance_id = str(existing.id)
@@ -191,11 +190,14 @@ class PresenceService:
             self.tracking_service.start_session(schedule_id)
 
             # Register in global session manager for cross-module access
-            session_manager.register_session(schedule_id, {
-                "subject_code": schedule.subject_code,
-                "subject_name": schedule.subject_name,
-                "student_count": len(students)
-            })
+            session_manager.register_session(
+                schedule_id,
+                {
+                    "subject_code": schedule.subject_code,
+                    "subject_name": schedule.subject_name,
+                    "student_count": len(students),
+                },
+            )
 
         # Notify faculty via WebSocket (outside lock — no session mutation)
         if self.notification_service:
@@ -208,13 +210,7 @@ class PresenceService:
 
         return session
 
-    async def feed_detection(
-        self,
-        schedule_id: str,
-        user_id: str,
-        confidence: float,
-        bbox: Optional[List[float]] = None
-    ):
+    async def feed_detection(self, schedule_id: str, user_id: str, confidence: float, bbox: list[float] | None = None):
         """Feed a detection into the tracking service without updating attendance.
         Attendance updates happen solely in run_scan_cycle()."""
         async with self._lock:
@@ -231,13 +227,7 @@ class PresenceService:
         self.tracking_service.update(schedule_id, [detection])
         logger.debug(f"Fed detection to tracking: user={user_id}, schedule={schedule_id}")
 
-    async def log_detection(
-        self,
-        schedule_id: str,
-        user_id: str,
-        confidence: float,
-        bbox: Optional[List[float]] = None
-    ):
+    async def log_detection(self, schedule_id: str, user_id: str, confidence: float, bbox: list[float] | None = None):
         """
         Log student detection during active session
 
@@ -284,7 +274,7 @@ class PresenceService:
                 bbox=bbox,
                 confidence=1.0,  # Detection confidence (assume 1.0 for now)
                 user_id=user_id,
-                recognition_confidence=confidence
+                recognition_confidence=confidence,
             )
             self.tracking_service.update(schedule_id, [detection])
 
@@ -304,10 +294,7 @@ class PresenceService:
 
             # Update attendance record
             check_in_time = datetime.now()
-            self.attendance_repo.update(attendance_id, {
-                "status": status,
-                "check_in_time": check_in_time
-            })
+            self.attendance_repo.update(attendance_id, {"status": status, "check_in_time": check_in_time})
 
             logger.info(f"Student {user_id} checked in: {status}")
 
@@ -318,7 +305,7 @@ class PresenceService:
                         schedule_id=str(attendance.schedule_id),
                         student_id=user_id,
                         status=status.value,
-                        check_in_time=check_in_time
+                        check_in_time=check_in_time,
                     )
                 except Exception as e:
                     logger.error(f"Failed to send attendance update notification: {e}")
@@ -330,12 +317,10 @@ class PresenceService:
                 session.update_student(user_id, detected=True)
 
         # Log presence
-        self.attendance_repo.log_presence(attendance_id, {
-            "scan_number": scan_number,
-            "scan_time": datetime.now(),
-            "detected": True,
-            "confidence": confidence
-        })
+        self.attendance_repo.log_presence(
+            attendance_id,
+            {"scan_number": scan_number, "scan_time": datetime.now(), "detected": True, "confidence": confidence},
+        )
 
         # Update attendance metrics
         attendance = self.attendance_repo.get_by_id(attendance_id)
@@ -343,11 +328,10 @@ class PresenceService:
         total_scans = attendance.total_scans + 1
         presence_score = self.calculate_presence_score(total_scans, scans_present)
 
-        self.attendance_repo.update(attendance_id, {
-            "scans_present": scans_present,
-            "total_scans": total_scans,
-            "presence_score": presence_score
-        })
+        self.attendance_repo.update(
+            attendance_id,
+            {"scans_present": scans_present, "total_scans": total_scans, "presence_score": presence_score},
+        )
 
     async def run_scan_cycle(self):
         """
@@ -363,7 +347,7 @@ class PresenceService:
 
         logger.debug(f"Running scan cycle for {len(self.active_sessions)} active sessions")
 
-        for schedule_id, session in list(self.active_sessions.items()):
+        for schedule_id, _session in list(self.active_sessions.items()):
             try:
                 await self.process_session_scan(schedule_id)
             except Exception as e:
@@ -429,23 +413,29 @@ class PresenceService:
                     new_status = AttendanceStatus.PRESENT if current_time <= grace_time else AttendanceStatus.LATE
                     check_in_time = datetime.now()
 
-                    self.attendance_repo.update(attendance_id, {
-                        "status": new_status,
-                        "check_in_time": check_in_time,
-                        "scans_present": 1,
-                        "total_scans": 1,
-                        "presence_score": 100.0
-                    })
+                    self.attendance_repo.update(
+                        attendance_id,
+                        {
+                            "status": new_status,
+                            "check_in_time": check_in_time,
+                            "scans_present": 1,
+                            "total_scans": 1,
+                            "presence_score": 100.0,
+                        },
+                    )
 
                     # Log initial presence
                     track = identified_users.get(student_id)
                     confidence = track.recognition_confidence if track else None
-                    self.attendance_repo.log_presence(attendance_id, {
-                        "scan_number": scan_count,
-                        "scan_time": check_in_time,
-                        "detected": True,
-                        "confidence": confidence
-                    })
+                    self.attendance_repo.log_presence(
+                        attendance_id,
+                        {
+                            "scan_number": scan_count,
+                            "scan_time": check_in_time,
+                            "detected": True,
+                            "confidence": confidence,
+                        },
+                    )
 
                     # Update session state
                     async with self._lock:
@@ -459,7 +449,7 @@ class PresenceService:
                                 schedule_id=schedule_id,
                                 student_id=student_id,
                                 status=new_status.value,
-                                check_in_time=check_in_time
+                                check_in_time=check_in_time,
                             )
                         except Exception as e:
                             logger.error(f"Failed to send check-in notification: {e}")
@@ -483,48 +473,49 @@ class PresenceService:
                 confidence = track.recognition_confidence
 
                 # Log presence
-                self.attendance_repo.log_presence(attendance_id, {
-                    "scan_number": scan_count,
-                    "scan_time": datetime.now(),
-                    "detected": True,
-                    "confidence": confidence
-                })
+                self.attendance_repo.log_presence(
+                    attendance_id,
+                    {
+                        "scan_number": scan_count,
+                        "scan_time": datetime.now(),
+                        "detected": True,
+                        "confidence": confidence,
+                    },
+                )
 
                 # Update attendance metrics
                 scans_present = attendance.scans_present + 1
                 total_scans = attendance.total_scans + 1
                 presence_score = self.calculate_presence_score(total_scans, scans_present)
 
-                self.attendance_repo.update(attendance_id, {
-                    "scans_present": scans_present,
-                    "total_scans": total_scans,
-                    "presence_score": presence_score
-                })
+                self.attendance_repo.update(
+                    attendance_id,
+                    {"scans_present": scans_present, "total_scans": total_scans, "presence_score": presence_score},
+                )
 
             else:
                 # Log as not detected
-                self.attendance_repo.log_presence(attendance_id, {
-                    "scan_number": scan_count,
-                    "scan_time": datetime.now(),
-                    "detected": False,
-                    "confidence": None
-                })
+                self.attendance_repo.log_presence(
+                    attendance_id,
+                    {"scan_number": scan_count, "scan_time": datetime.now(), "detected": False, "confidence": None},
+                )
 
                 # Update total scans
                 total_scans = attendance.total_scans + 1
                 presence_score = self.calculate_presence_score(total_scans, attendance.scans_present)
 
-                self.attendance_repo.update(attendance_id, {
-                    "total_scans": total_scans,
-                    "presence_score": presence_score
-                })
+                self.attendance_repo.update(
+                    attendance_id, {"total_scans": total_scans, "presence_score": presence_score}
+                )
 
             # Update session state under lock after DB ops
             async with self._lock:
                 if schedule_id in self.active_sessions:
                     self.active_sessions[schedule_id].update_student(student_id, detected=is_present)
                     if not is_present:
-                        consecutive_misses = self.active_sessions[schedule_id].student_states[student_id]["consecutive_misses"]
+                        consecutive_misses = self.active_sessions[schedule_id].student_states[student_id][
+                            "consecutive_misses"
+                        ]
                         if consecutive_misses >= settings.EARLY_LEAVE_THRESHOLD:
                             early_leave_candidates.append((attendance_id, student_id, consecutive_misses))
                             self.active_sessions[schedule_id].student_states[student_id]["early_leave_flagged"] = True
@@ -533,12 +524,7 @@ class PresenceService:
         for attendance_id, student_id, consecutive_misses in early_leave_candidates:
             await self.flag_early_leave(attendance_id, student_id, consecutive_misses)
 
-    async def flag_early_leave(
-        self,
-        attendance_id: str,
-        student_id: str,
-        consecutive_misses: int
-    ):
+    async def flag_early_leave(self, attendance_id: str, student_id: str, consecutive_misses: int):
         """
         Flag student for early leave
 
@@ -553,9 +539,7 @@ class PresenceService:
         logger.warning(f"Early leave detected: student {student_id}, {consecutive_misses} consecutive misses")
 
         # Update attendance status
-        self.attendance_repo.update(attendance_id, {
-            "status": AttendanceStatus.EARLY_LEAVE
-        })
+        self.attendance_repo.update(attendance_id, {"status": AttendanceStatus.EARLY_LEAVE})
 
         # Get attendance record for last seen time
         attendance = self.attendance_repo.get_by_id(attendance_id)
@@ -570,27 +554,25 @@ class PresenceService:
 
         # Compute context severity based on schedule
         severity = "medium"
-        schedule = getattr(attendance, 'schedule', None)
+        schedule = getattr(attendance, "schedule", None)
         if schedule:
-            s_time = getattr(schedule, 'start_time', None)
-            e_time = getattr(schedule, 'end_time', None)
-            if s_time and e_time and hasattr(s_time, 'hour') and hasattr(e_time, 'hour'):
-                try:
-                    severity = compute_early_leave_severity(
-                        datetime.now(), s_time, e_time
-                    )
-                except (TypeError, AttributeError):
-                    pass
+            s_time = getattr(schedule, "start_time", None)
+            e_time = getattr(schedule, "end_time", None)
+            if s_time and e_time and hasattr(s_time, "hour") and hasattr(e_time, "hour"):
+                with contextlib.suppress(TypeError, AttributeError):
+                    severity = compute_early_leave_severity(datetime.now(), s_time, e_time)
 
         # Create early leave event
-        event = self.attendance_repo.create_early_leave_event({
-            "attendance_id": attendance_id,
-            "detected_at": datetime.now(),
-            "last_seen_at": last_seen or attendance.check_in_time,
-            "consecutive_misses": consecutive_misses,
-            "notified": False,
-            "context_severity": severity,
-        })
+        event = self.attendance_repo.create_early_leave_event(
+            {
+                "attendance_id": attendance_id,
+                "detected_at": datetime.now(),
+                "last_seen_at": last_seen or attendance.check_in_time,
+                "consecutive_misses": consecutive_misses,
+                "notified": False,
+                "context_severity": severity,
+            }
+        )
 
         logger.info(f"Early leave event created: {event.id}")
 
@@ -613,7 +595,7 @@ class PresenceService:
             self.db.query(EarlyLeaveEvent)
             .filter(
                 EarlyLeaveEvent.attendance_id == attendance_id,
-                EarlyLeaveEvent.returned == False,
+                not EarlyLeaveEvent.returned,
             )
             .order_by(EarlyLeaveEvent.detected_at.desc())
             .first()
@@ -663,7 +645,7 @@ class PresenceService:
             logger.info(f"Ending session for schedule {schedule_id} (Total scans: {session.scan_count})")
 
             # Update final check-out times and presence scores
-            for student_id, student_state in session.student_states.items():
+            for _student_id, student_state in session.student_states.items():
                 attendance_id = student_state["attendance_id"]
 
                 attendance = self.attendance_repo.get_by_id(attendance_id)
@@ -672,18 +654,14 @@ class PresenceService:
 
                 # Set check-out time
                 if attendance.status != AttendanceStatus.ABSENT:
-                    self.attendance_repo.update(attendance_id, {
-                        "check_out_time": datetime.now()
-                    })
+                    self.attendance_repo.update(attendance_id, {"check_out_time": datetime.now()})
 
             # Build session summary
             summary = {
                 "total_scans": session.scan_count,
                 "total_students": len(session.student_states),
-                "present_count": sum(1 for s in session.student_states.values()
-                                    if not s.get("early_leave_flagged")),
-                "early_leave_count": sum(1 for s in session.student_states.values()
-                                        if s.get("early_leave_flagged"))
+                "present_count": sum(1 for s in session.student_states.values() if not s.get("early_leave_flagged")),
+                "early_leave_count": sum(1 for s in session.student_states.values() if s.get("early_leave_flagged")),
             }
 
             # Remove from active sessions
@@ -721,7 +699,7 @@ class PresenceService:
         score = (scans_present / total_scans) * 100.0
         return round(score, 2)
 
-    def get_session_state(self, schedule_id: str) -> Optional[SessionState]:
+    def get_session_state(self, schedule_id: str) -> SessionState | None:
         """
         Get current session state
 
@@ -737,7 +715,7 @@ class PresenceService:
         """Check if session is active"""
         return schedule_id in self.active_sessions
 
-    def get_active_sessions(self) -> List[str]:
+    def get_active_sessions(self) -> list[str]:
         """Get list of active schedule IDs"""
         return list(self.active_sessions.keys())
 

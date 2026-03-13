@@ -4,13 +4,12 @@ User Service
 Business logic for user management operations.
 """
 
-from typing import List, Optional
 from sqlalchemy.orm import Session
 
+from app.config import logger
 from app.models.user import User, UserRole
 from app.repositories.user_repository import UserRepository
 from app.utils.exceptions import NotFoundError, ValidationError
-from app.config import logger
 
 
 class UserService:
@@ -74,7 +73,7 @@ class UserService:
             raise NotFoundError(f"User not found with student ID: {student_id}")
         return user
 
-    def get_all_users(self, skip: int = 0, limit: int = 100) -> List[User]:
+    def get_all_users(self, skip: int = 0, limit: int = 100) -> list[User]:
         """
         Get all users with pagination
 
@@ -87,7 +86,7 @@ class UserService:
         """
         return self.user_repo.get_all(skip, limit)
 
-    def get_users_by_role(self, role: UserRole, skip: int = 0, limit: int = 100) -> List[User]:
+    def get_users_by_role(self, role: UserRole, skip: int = 0, limit: int = 100) -> list[User]:
         """
         Get users by role
 
@@ -177,5 +176,5 @@ class UserService:
             "total_users": self.user_repo.count(),
             "students": self.user_repo.count_by_role(UserRole.STUDENT),
             "faculty": self.user_repo.count_by_role(UserRole.FACULTY),
-            "admins": self.user_repo.count_by_role(UserRole.ADMIN)
+            "admins": self.user_repo.count_by_role(UserRole.ADMIN),
         }

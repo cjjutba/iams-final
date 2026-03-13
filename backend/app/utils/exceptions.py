@@ -5,61 +5,71 @@ Defines application-specific exceptions and FastAPI exception handlers.
 """
 
 from fastapi import Request, status
-from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
-from app.config import logger
+from fastapi.responses import JSONResponse
 
+from app.config import logger
 
 # ===== Custom Exception Classes =====
 
-class IAMSException(Exception):
+
+class IAMSError(Exception):
     """Base exception for all IAMS-specific errors"""
+
     def __init__(self, message: str):
         self.message = message
         super().__init__(self.message)
 
 
-class AuthenticationError(IAMSException):
+class AuthenticationError(IAMSError):
     """Raised when authentication fails (401)"""
+
     pass
 
 
-class AuthorizationError(IAMSException):
+class AuthorizationError(IAMSError):
     """Raised when user doesn't have permission (403)"""
+
     pass
 
 
-class NotFoundError(IAMSException):
+class NotFoundError(IAMSError):
     """Raised when resource not found (404)"""
+
     pass
 
 
-class ValidationError(IAMSException):
+class ValidationError(IAMSError):
     """Raised when validation fails (400)"""
+
     pass
 
 
-class DuplicateError(IAMSException):
+class DuplicateError(IAMSError):
     """Raised when trying to create duplicate resource (409)"""
+
     pass
 
 
-class FaceRecognitionError(IAMSException):
+class FaceRecognitionError(IAMSError):
     """Raised when face recognition fails"""
+
     pass
 
 
-class DatabaseError(IAMSException):
+class DatabaseError(IAMSError):
     """Raised when database operation fails"""
+
     pass
 
 
-class EdgeAPIError(IAMSException):
+class EdgeAPIError(IAMSError):
     """
     Raised when Edge API processing fails
 
     Includes error_code and retry flag for edge device retry logic.
     """
+
     def __init__(self, message: str, error_code: str, retry: bool = False):
         super().__init__(message)
         self.error_code = error_code
@@ -68,7 +78,8 @@ class EdgeAPIError(IAMSException):
 
 # ===== Exception Handlers =====
 
-async def iams_exception_handler(request: Request, exc: IAMSException):
+
+async def iams_exception_handler(request: Request, exc: IAMSError):
     """
     Global exception handler for IAMS custom exceptions
 
@@ -94,25 +105,12 @@ async def iams_exception_handler(request: Request, exc: IAMSException):
     if isinstance(exc, EdgeAPIError):
         return JSONResponse(
             status_code=status_code,
-            content={
-                "success": False,
-                "error": {
-                    "code": exc.error_code,
-                    "message": exc.message,
-                    "retry": exc.retry
-                }
-            }
+            content={"success": False, "error": {"code": exc.error_code, "message": exc.message, "retry": exc.retry}},
         )
 
     return JSONResponse(
         status_code=status_code,
-        content={
-            "success": False,
-            "error": {
-                "code": exc.__class__.__name__,
-                "message": exc.message
-            }
-        }
+        content={"success": False, "error": {"code": exc.__class__.__name__, "message": exc.message}},
     )
 
 
@@ -132,7 +130,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "type": error.get("type"),
             "loc": error.get("loc"),
             "msg": error.get("msg"),
-            "input": str(error.get("input")) if error.get("input") is not None else None
+            "input": str(error.get("input")) if error.get("input") is not None else None,
         }
         # Skip ctx field as it may contain non-serializable objects
         serializable_errors.append(error_dict)
@@ -144,9 +142,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "error": {
                 "code": "ValidationError",
                 "message": "Request validation failed",
-                "details": serializable_errors
-            }
-        }
+                "details": serializable_errors,
+            },
+        },
     )
 
 
@@ -160,11 +158,5 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={
-            "success": False,
-            "error": {
-                "code": "InternalServerError",
-                "message": "An unexpected error occurred"
-            }
-        }
+        content={"success": False, "error": {"code": "InternalServerError", "message": "An unexpected error occurred"}},
     )

@@ -10,29 +10,30 @@ detection metadata that is pushed to mobile clients via WebSocket.
 """
 
 import asyncio
+import contextlib
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
 
 import cv2
 import numpy as np
 
-from app.config import settings, logger
+from app.config import logger, settings
 
 
 @dataclass
 class Detection:
     """Single face detection/recognition result."""
+
     x: int
     y: int
     width: int
     height: int
     confidence: float
-    user_id: Optional[str] = None
-    student_id: Optional[str] = None
-    name: Optional[str] = None
-    similarity: Optional[float] = None
+    user_id: str | None = None
+    student_id: str | None = None
+    name: str | None = None
+    similarity: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -48,18 +49,19 @@ class Detection:
 @dataclass
 class RecognitionState:
     """Mutable state for a single room's recognition pipeline."""
+
     room_id: str
     rtsp_url: str
-    capture: Optional[cv2.VideoCapture] = None
+    capture: cv2.VideoCapture | None = None
     stop_event: threading.Event = field(default_factory=threading.Event)
-    viewers: Set[str] = field(default_factory=set)
-    last_detections: List[Detection] = field(default_factory=list)
-    last_detections_dicts: List[dict] = field(default_factory=list)
+    viewers: set[str] = field(default_factory=set)
+    last_detections: list[Detection] = field(default_factory=list)
+    last_detections_dicts: list[dict] = field(default_factory=list)
     last_timestamp: float = 0.0
     update_seq: int = 0
     frame_width: int = 0
     frame_height: int = 0
-    reconnect_backoff: float = 0.0    # seconds to sleep before next reconnect (exponential)
+    reconnect_backoff: float = 0.0  # seconds to sleep before next reconnect (exponential)
 
 
 class RecognitionService:
@@ -70,7 +72,7 @@ class RecognitionService:
     and stores latest results for the WebSocket push loop to read.
     """
 
-    _active: Dict[str, RecognitionState] = {}
+    _active: dict[str, RecognitionState] = {}
     _lock = threading.Lock()
     _BACKOFF_BASE: float = 2.0
     _BACKOFF_MAX: float = 30.0
@@ -88,8 +90,8 @@ class RecognitionService:
     def _ensure_ml(self):
         if not self._ml_checked:
             try:
-                from app.services.ml.insightface_model import insightface_model
                 from app.services.ml.faiss_manager import faiss_manager
+                from app.services.ml.insightface_model import insightface_model
 
                 if insightface_model.app is not None and faiss_manager.index is not None:
                     self._insight = insightface_model
@@ -112,10 +114,7 @@ class RecognitionService:
             if room_id in self._active:
                 state = self._active[room_id]
                 state.viewers.add(viewer_id)
-                logger.info(
-                    f"Recognition: viewer {viewer_id} joined room {room_id} "
-                    f"({len(state.viewers)} viewers)"
-                )
+                logger.info(f"Recognition: viewer {viewer_id} joined room {room_id} ({len(state.viewers)} viewers)")
                 return True
 
             state = RecognitionState(room_id=room_id, rtsp_url=rtsp_url)
@@ -138,12 +137,11 @@ class RecognitionService:
         # Mask password in log
         masked_url = rtsp_url.split("@")[-1] if "@" in rtsp_url else rtsp_url
         logger.info(
-            f"Recognition: started for room {room_id} at {settings.RECOGNITION_FPS} FPS "
-            f"(stream: ...@{masked_url})"
+            f"Recognition: started for room {room_id} at {settings.RECOGNITION_FPS} FPS (stream: ...@{masked_url})"
         )
         return True
 
-    async def stop(self, room_id: str, viewer_id: Optional[str] = None) -> None:
+    async def stop(self, room_id: str, viewer_id: str | None = None) -> None:
         """Remove a viewer. If none remain, stop the recognition pipeline."""
         with self._lock:
             state = self._active.get(room_id)
@@ -152,10 +150,7 @@ class RecognitionService:
 
             if viewer_id is not None:
                 state.viewers.discard(viewer_id)
-                logger.info(
-                    f"Recognition: viewer {viewer_id} left room {room_id} "
-                    f"({len(state.viewers)} remaining)"
-                )
+                logger.info(f"Recognition: viewer {viewer_id} left room {room_id} ({len(state.viewers)} remaining)")
                 if state.viewers:
                     return
 
@@ -164,7 +159,7 @@ class RecognitionService:
 
         logger.info(f"Recognition: stopped for room {room_id}")
 
-    def get_latest_detections(self, room_id: str) -> Optional[tuple]:
+    def get_latest_detections(self, room_id: str) -> tuple | None:
         """
         Return (detections_dicts, update_seq, frame_width, frame_height) or None.
         """
@@ -173,7 +168,7 @@ class RecognitionService:
             return None
         return state.last_detections_dicts, state.update_seq, state.frame_width, state.frame_height
 
-    def get_detections_objects(self, room_id: str) -> List[Detection]:
+    def get_detections_objects(self, room_id: str) -> list[Detection]:
         """Return the raw Detection objects (for name enrichment)."""
         state = self._active.get(room_id)
         return state.last_detections if state else []
@@ -215,32 +210,23 @@ class RecognitionService:
                 frame_start = time.monotonic()
 
                 # Read freshest frame
-                success, frame = await loop.run_in_executor(
-                    None, self._read_frame, state
-                )
+                success, frame = await loop.run_in_executor(None, self._read_frame, state)
 
                 if success and first_frame and frame is not None:
                     h, w = frame.shape[:2]
-                    logger.info(
-                        f"Recognition: first frame from RTSP is {w}x{h} "
-                        f"(room={state.room_id})"
-                    )
+                    logger.info(f"Recognition: first frame from RTSP is {w}x{h} (room={state.room_id})")
                     first_frame = False
 
                 if not success:
                     # Try reconnecting
-                    reconnected = await loop.run_in_executor(
-                        None, self._reconnect, state
-                    )
+                    reconnected = await loop.run_in_executor(None, self._reconnect, state)
                     if not reconnected:
                         logger.error(f"Recognition: stream lost for room {state.room_id}")
                         break
                     continue
 
                 # Process frame (detect + recognize)
-                detections, fw, fh = await loop.run_in_executor(
-                    None, self._process_frame, frame
-                )
+                detections, fw, fh = await loop.run_in_executor(None, self._process_frame, frame)
 
                 # Store results
                 state.last_detections = detections
@@ -262,10 +248,8 @@ class RecognitionService:
             logger.exception(f"Recognition: loop error for room {state.room_id}: {exc}")
         finally:
             if state.capture is not None:
-                try:
+                with contextlib.suppress(Exception):
                     state.capture.release()
-                except Exception:
-                    pass
                 state.capture = None
             with self._lock:
                 self._active.pop(state.room_id, None)
@@ -289,20 +273,15 @@ class RecognitionService:
     def _reconnect(self, state: RecognitionState) -> bool:
         """Attempt to reconnect using exponential backoff."""
         if state.capture is not None:
-            try:
+            with contextlib.suppress(Exception):
                 state.capture.release()
-            except Exception:
-                pass
             state.capture = None
 
         # Determine delay for this attempt
         delay = state.reconnect_backoff if state.reconnect_backoff > 0 else self._BACKOFF_BASE
         delay = min(delay, self._BACKOFF_MAX)
 
-        logger.warning(
-            f"Recognition: reconnecting for room {state.room_id} "
-            f"(backoff={delay:.1f}s)"
-        )
+        logger.warning(f"Recognition: reconnecting for room {state.room_id} (backoff={delay:.1f}s)")
         time.sleep(delay)
 
         success = self._open_capture(state)
@@ -424,21 +403,24 @@ class RecognitionService:
                 if user_id and similarity is not None and settings.REENROLL_CHECK_ENABLED:
                     try:
                         from app.services.reenrollment_service import reenrollment_monitor
+
                         needs_reenroll = reenrollment_monitor.record_similarity(user_id, similarity)
                         if needs_reenroll:
                             self._queue_reenroll_notification(user_id)
                     except Exception:
                         pass  # Non-critical
 
-                detections.append(Detection(
-                    x=face.x,
-                    y=face.y,
-                    width=face.width,
-                    height=face.height,
-                    confidence=face.confidence,
-                    user_id=user_id,
-                    similarity=similarity,
-                ))
+                detections.append(
+                    Detection(
+                        x=face.x,
+                        y=face.y,
+                        width=face.width,
+                        height=face.height,
+                        confidence=face.confidence,
+                        user_id=user_id,
+                        similarity=similarity,
+                    )
+                )
             return detections, frame_w, frame_h
 
         except Exception as exc:
@@ -453,8 +435,8 @@ class RecognitionService:
         """Create a re-enrollment notification for a user (fire-and-forget)."""
         try:
             from app.database import SessionLocal
-            from app.services.notification_service import NotificationService
             from app.routers.websocket import manager as ws_manager
+            from app.services.notification_service import NotificationService
 
             db = SessionLocal()
             try:
@@ -479,7 +461,7 @@ class RecognitionService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def enrich_detections(detections: List[Detection], db) -> None:
+    def enrich_detections(detections: list[Detection], db) -> None:
         """Populate name/student_id on detections that have a user_id."""
         from app.repositories.user_repository import UserRepository
 

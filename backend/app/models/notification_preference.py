@@ -4,8 +4,7 @@ Notification Preference Model
 Per-user notification preferences controlling which alerts they receive.
 """
 
-import uuid
-from sqlalchemy import Column, Float, Boolean, ForeignKey
+from sqlalchemy import Boolean, Column, Float, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 

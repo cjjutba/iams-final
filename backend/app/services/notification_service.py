@@ -5,7 +5,8 @@ Handles real-time notifications via WebSocket for attendance events.
 """
 
 from datetime import datetime
-from typing import Dict, Any
+from typing import Any
+
 from sqlalchemy.orm import Session
 
 from app.config import logger
@@ -43,9 +44,10 @@ class NotificationService:
     def _check_preference(self, user_id: str, pref_field: str) -> bool:
         """Check if a user has a specific notification preference enabled."""
         import uuid
-        pref = self.db.query(NotificationPreference).filter(
-            NotificationPreference.user_id == uuid.UUID(user_id)
-        ).first()
+
+        pref = (
+            self.db.query(NotificationPreference).filter(NotificationPreference.user_id == uuid.UUID(user_id)).first()
+        )
         if pref is None:
             return True  # Default to enabled if no preference record
         return getattr(pref, pref_field, True)
@@ -56,12 +58,13 @@ class NotificationService:
         title: str,
         message: str,
         notification_type: str = "system",
-        data: Dict[str, Any] = None,
+        data: dict[str, Any] = None,
         reference_id: str = None,
         reference_type: str = None,
     ) -> Notification:
         """Create a notification in the DB and push via WebSocket."""
         import uuid
+
         notif = Notification(
             user_id=uuid.UUID(user_id),
             title=title,
@@ -90,6 +93,7 @@ class NotificationService:
 
         try:
             import asyncio
+
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 asyncio.ensure_future(self.ws_manager.send_personal(user_id, ws_message))
@@ -111,9 +115,7 @@ class NotificationService:
         """
         try:
             # Get schedule to find faculty
-            schedule = self.db.query(Schedule).filter(
-                Schedule.id == attendance.schedule_id
-            ).first()
+            schedule = self.db.query(Schedule).filter(Schedule.id == attendance.schedule_id).first()
 
             if not schedule:
                 logger.error(f"Schedule not found for attendance {attendance.id}")
@@ -138,8 +140,8 @@ class NotificationService:
                     "subject_name": schedule.subject_name,
                     "detected_at": datetime.now().isoformat(),
                     "last_seen_at": None,  # Will be populated from presence logs
-                    "consecutive_misses": 3  # From settings.EARLY_LEAVE_THRESHOLD
-                }
+                    "consecutive_misses": 3,  # From settings.EARLY_LEAVE_THRESHOLD
+                },
             }
 
             # Get last seen time from recent logs
@@ -153,22 +155,15 @@ class NotificationService:
             faculty_id = str(schedule.faculty_id)
             await self.ws_manager.send_personal(faculty_id, message)
 
-            logger.info(
-                f"Early leave notification sent to faculty {faculty_id} "
-                f"for student {student.student_id}"
-            )
+            logger.info(f"Early leave notification sent to faculty {faculty_id} for student {student.student_id}")
 
         except Exception as e:
             logger.error(f"Failed to send early leave notification: {e}")
 
-    async def notify_early_leave_return(
-        self, attendance: AttendanceRecord, absence_duration_seconds: int
-    ):
+    async def notify_early_leave_return(self, attendance: AttendanceRecord, absence_duration_seconds: int):
         """Send notification that a student returned after early leave."""
         try:
-            schedule = self.db.query(Schedule).filter(
-                Schedule.id == attendance.schedule_id
-            ).first()
+            schedule = self.db.query(Schedule).filter(Schedule.id == attendance.schedule_id).first()
             if not schedule:
                 return
 
@@ -200,11 +195,7 @@ class NotificationService:
             logger.error(f"Failed to send early leave return notification: {e}")
 
     async def notify_attendance_update(
-        self,
-        schedule_id: str,
-        student_id: str,
-        status: str,
-        check_in_time: datetime = None
+        self, schedule_id: str, student_id: str, status: str, check_in_time: datetime = None
     ):
         """
         Send attendance update notification to faculty
@@ -241,8 +232,8 @@ class NotificationService:
                     "subject_code": schedule.subject_code,
                     "status": status,
                     "check_in_time": check_in_time.isoformat() if check_in_time else None,
-                    "timestamp": datetime.now().isoformat()
-                }
+                    "timestamp": datetime.now().isoformat(),
+                },
             }
 
             # Send to faculty
@@ -250,8 +241,7 @@ class NotificationService:
             await self.ws_manager.send_personal(faculty_id, message)
 
             logger.debug(
-                f"Attendance update sent to faculty {faculty_id}: "
-                f"Student {student.student_id} marked {status}"
+                f"Attendance update sent to faculty {faculty_id}: Student {student.student_id} marked {status}"
             )
 
         except Exception as e:
@@ -275,8 +265,8 @@ class NotificationService:
                     "schedule_id": str(schedule_id),
                     "subject_code": schedule.subject_code,
                     "subject_name": schedule.subject_name,
-                    "start_time": datetime.now().isoformat()
-                }
+                    "start_time": datetime.now().isoformat(),
+                },
             }
 
             faculty_id = str(schedule.faculty_id)
@@ -287,7 +277,7 @@ class NotificationService:
         except Exception as e:
             logger.error(f"Failed to send session start notification: {e}")
 
-    async def notify_session_end(self, schedule_id: str, summary: Dict[str, Any]):
+    async def notify_session_end(self, schedule_id: str, summary: dict[str, Any]):
         """
         Notify faculty that attendance session has ended
 
@@ -307,8 +297,8 @@ class NotificationService:
                     "subject_code": schedule.subject_code,
                     "subject_name": schedule.subject_name,
                     "end_time": datetime.now().isoformat(),
-                    "summary": summary
-                }
+                    "summary": summary,
+                },
             }
 
             faculty_id = str(schedule.faculty_id)
@@ -319,7 +309,7 @@ class NotificationService:
         except Exception as e:
             logger.error(f"Failed to send session end notification: {e}")
 
-    async def broadcast_session_summary(self, schedule_id: str, summary: Dict[str, Any]):
+    async def broadcast_session_summary(self, schedule_id: str, summary: dict[str, Any]):
         """
         Broadcast session summary to all participants in a schedule
 
@@ -330,11 +320,7 @@ class NotificationService:
         try:
             message = {
                 "event": "session_summary",
-                "data": {
-                    "schedule_id": str(schedule_id),
-                    "summary": summary,
-                    "timestamp": datetime.now().isoformat()
-                }
+                "data": {"schedule_id": str(schedule_id), "summary": summary, "timestamp": datetime.now().isoformat()},
             }
 
             # Use ConnectionManager's broadcast_to_schedule if implemented
@@ -347,9 +333,7 @@ class NotificationService:
         except Exception as e:
             logger.error(f"Failed to broadcast session summary: {e}")
 
-    async def notify_anomaly_detected(
-        self, faculty_id: str, anomaly_type: str, student_name: str, severity: str
-    ):
+    async def notify_anomaly_detected(self, faculty_id: str, anomaly_type: str, student_name: str, severity: str):
         """Send anomaly detection alert to faculty (if preference allows)."""
         if not self._check_preference(faculty_id, "anomaly_alerts"):
             return

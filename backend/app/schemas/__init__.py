@@ -4,73 +4,54 @@ Schemas Package
 Exports all Pydantic schemas for request/response validation.
 """
 
-from app.schemas.common import (
-    SuccessResponse,
-    ErrorResponse,
-    MessageResponse,
-    PaginatedResponse
+from app.schemas.attendance import (
+    AlertResponse,
+    AttendanceRecordBase,
+    AttendanceRecordResponse,
+    AttendanceSummary,
+    AttendanceUpdateRequest,
+    EarlyLeaveResponse,
+    LiveAttendanceResponse,
+    ManualAttendanceRequest,
+    PresenceLogResponse,
+    StudentAttendanceStatus,
 )
-
-from app.schemas.user import (
-    UserBase,
-    UserCreate,
-    UserUpdate,
-    PasswordChange,
-    UserResponse,
-    UserInDB
-)
-
 from app.schemas.auth import (
+    ForgotPasswordRequest,
     LoginRequest,
-    TokenResponse,
+    ProfileUpdateRequest,
     RefreshRequest,
-    VerifyStudentIDRequest,
-    StudentInfo,
-    VerifyStudentIDResponse,
     RegisterRequest,
     RegisterResponse,
-    ForgotPasswordRequest,
-    ProfileUpdateRequest
+    StudentInfo,
+    TokenResponse,
+    VerifyStudentIDRequest,
+    VerifyStudentIDResponse,
 )
-
+from app.schemas.common import ErrorResponse, MessageResponse, PaginatedResponse, SuccessResponse
 from app.schemas.face import (
-    FaceData,
     EdgeProcessRequest,
     EdgeProcessResponse,
-    MatchedUser,
+    FaceData,
+    FaceRecognizeRequest,
+    FaceRecognizeResponse,
     FaceRegisterResponse,
     FaceStatusResponse,
-    FaceRecognizeRequest,
-    FaceRecognizeResponse
+    MatchedUser,
 )
-
+from app.schemas.notification import NotificationCreate, NotificationResponse
 from app.schemas.schedule import (
+    RoomInfo,
     ScheduleBase,
     ScheduleCreate,
-    ScheduleUpdate,
     ScheduleResponse,
+    ScheduleUpdate,
     ScheduleWithStudents,
-    RoomInfo,
-    StudentInfo
 )
-
-from app.schemas.attendance import (
-    AttendanceRecordBase,
-    ManualAttendanceRequest,
-    AttendanceRecordResponse,
-    AttendanceUpdateRequest,
-    PresenceLogResponse,
-    EarlyLeaveResponse,
-    AlertResponse,
-    AttendanceSummary,
-    StudentAttendanceStatus,
-    LiveAttendanceResponse
+from app.schemas.schedule import (
+    StudentInfo as ScheduleStudentInfo,
 )
-
-from app.schemas.notification import (
-    NotificationResponse,
-    NotificationCreate
-)
+from app.schemas.user import PasswordChange, UserBase, UserCreate, UserInDB, UserResponse, UserUpdate
 
 __all__ = [
     # Common
@@ -112,6 +93,7 @@ __all__ = [
     "ScheduleResponse",
     "ScheduleWithStudents",
     "RoomInfo",
+    "ScheduleStudentInfo",
     # Attendance
     "AttendanceRecordBase",
     "ManualAttendanceRequest",

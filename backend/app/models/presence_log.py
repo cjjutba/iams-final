@@ -5,8 +5,9 @@ Stores individual scan results for continuous presence tracking.
 """
 
 from datetime import datetime
-from sqlalchemy import Column, BigInteger, Integer, Boolean, Float, DateTime, ForeignKey
-from sqlalchemy.dialects.postgresql import UUID, BIGINT
+
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer
+from sqlalchemy.dialects.postgresql import BIGINT, UUID
 from sqlalchemy.orm import relationship
 
 from app.database import Base

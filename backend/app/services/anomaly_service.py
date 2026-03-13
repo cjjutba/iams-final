@@ -10,29 +10,27 @@ Detects unusual attendance patterns:
 
 import json
 from datetime import date, timedelta
-from typing import List, Optional, Dict, Tuple
 
 import numpy as np
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 
 from app.config import logger
+from app.models.attendance_anomaly import AnomalyType, AttendanceAnomaly
 from app.models.attendance_record import AttendanceRecord, AttendanceStatus
-from app.models.attendance_anomaly import AttendanceAnomaly, AnomalyType
 from app.models.presence_log import PresenceLog
 from app.models.schedule import Schedule
 from app.repositories.anomaly_repository import AnomalyRepository
-
 
 # ---------------------------------------------------------------------------
 # Pure detector functions (stateless, easily testable)
 # ---------------------------------------------------------------------------
 
+
 def detect_sudden_absence(
     historical_rate: float,
     is_absent_today: bool,
     min_history_rate: float = 80.0,
-) -> Optional[Dict]:
+) -> dict | None:
     """
     Detect when a student with strong attendance history is suddenly absent.
 
@@ -54,9 +52,7 @@ def detect_sudden_absence(
         "anomaly_type": AnomalyType.SUDDEN_ABSENCE,
         "severity": severity,
         "confidence": min(historical_rate / 100.0, 1.0),
-        "description": (
-            f"Student with {historical_rate:.0f}% attendance rate is unexpectedly absent"
-        ),
+        "description": (f"Student with {historical_rate:.0f}% attendance rate is unexpectedly absent"),
         "details": {
             "historical_rate": historical_rate,
         },
@@ -64,8 +60,8 @@ def detect_sudden_absence(
 
 
 def detect_proxy_suspect(
-    concurrent_sessions: List[Tuple[str, str]],
-) -> Optional[Dict]:
+    concurrent_sessions: list[tuple[str, str]],
+) -> dict | None:
     """
     Detect when the same user appears in multiple active sessions simultaneously.
 
@@ -84,25 +80,19 @@ def detect_proxy_suspect(
         "anomaly_type": AnomalyType.PROXY_SUSPECT,
         "severity": "high",
         "confidence": 0.9,
-        "description": (
-            f"Student detected in {len(concurrent_sessions)} rooms simultaneously: "
-            f"{', '.join(rooms)}"
-        ),
+        "description": (f"Student detected in {len(concurrent_sessions)} rooms simultaneously: {', '.join(rooms)}"),
         "details": {
-            "sessions": [
-                {"schedule_id": sid, "room": room}
-                for sid, room in concurrent_sessions
-            ],
+            "sessions": [{"schedule_id": sid, "room": room} for sid, room in concurrent_sessions],
         },
     }
 
 
 def detect_pattern_break(
-    weekly_rates: List[float],
+    weekly_rates: list[float],
     current_week_rate: float,
     std_dev_threshold: float = 2.0,
     min_weeks: int = 3,
-) -> Optional[Dict]:
+) -> dict | None:
     """
     Detect when current week significantly deviates from personal history.
 
@@ -154,7 +144,7 @@ def detect_low_confidence(
     threshold: float = 0.5,
     scan_count: int = 0,
     min_scans: int = 3,
-) -> Optional[Dict]:
+) -> dict | None:
     """
     Detect consistently low recognition confidence across a session.
 
@@ -192,6 +182,7 @@ def detect_low_confidence(
 # Orchestrator service (DB-aware)
 # ---------------------------------------------------------------------------
 
+
 class AnomalyService:
     """Orchestrates anomaly detection using DB data."""
 
@@ -204,7 +195,7 @@ class AnomalyService:
         student_id: str,
         schedule_id: str,
         attendance_record: AttendanceRecord,
-    ) -> List[AttendanceAnomaly]:
+    ) -> list[AttendanceAnomaly]:
         """
         Run all anomaly detectors after a session ends.
 
@@ -229,9 +220,7 @@ class AnomalyService:
 
         return created
 
-    def check_proxy(
-        self, student_id: str, current_schedule_id: str
-    ) -> Optional[AttendanceAnomaly]:
+    def check_proxy(self, student_id: str, current_schedule_id: str) -> AttendanceAnomaly | None:
         """
         Check if student is detected in multiple active sessions.
         Called during live scanning, not post-session.
@@ -244,10 +233,12 @@ class AnomalyService:
                 .filter(
                     AttendanceRecord.student_id == student_id,
                     AttendanceRecord.date == today,
-                    AttendanceRecord.status.in_([
-                        AttendanceStatus.PRESENT,
-                        AttendanceStatus.LATE,
-                    ]),
+                    AttendanceRecord.status.in_(
+                        [
+                            AttendanceStatus.PRESENT,
+                            AttendanceStatus.LATE,
+                        ]
+                    ),
                 )
                 .all()
             )
@@ -258,14 +249,14 @@ class AnomalyService:
             # Check for overlapping schedules
             concurrent = []
             for rec in records:
-                schedule = self.db.query(Schedule).filter(
-                    Schedule.id == rec.schedule_id
-                ).first()
+                schedule = self.db.query(Schedule).filter(Schedule.id == rec.schedule_id).first()
                 if schedule:
-                    concurrent.append((
-                        str(rec.schedule_id),
-                        schedule.room_name if hasattr(schedule, 'room_name') else str(schedule.room_id),
-                    ))
+                    concurrent.append(
+                        (
+                            str(rec.schedule_id),
+                            schedule.room_name if hasattr(schedule, "room_name") else str(schedule.room_id),
+                        )
+                    )
 
             result = detect_proxy_suspect(concurrent)
             if result:
@@ -287,7 +278,7 @@ class AnomalyService:
         student_id: str,
         schedule_id: str,
         attendance: AttendanceRecord,
-    ) -> Optional[AttendanceAnomaly]:
+    ) -> AttendanceAnomaly | None:
         """Check for sudden absence anomaly."""
         try:
             is_absent = attendance.status == AttendanceStatus.ABSENT
@@ -311,10 +302,7 @@ class AnomalyService:
             if len(history) < 3:
                 return None
 
-            present_count = sum(
-                1 for r in history
-                if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
-            )
+            present_count = sum(1 for r in history if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE))
             rate = (present_count / len(history)) * 100.0
 
             result = detect_sudden_absence(rate, is_absent)
@@ -332,9 +320,7 @@ class AnomalyService:
             logger.error(f"Sudden absence check failed: {e}")
         return None
 
-    def _check_low_confidence(
-        self, student_id: str, attendance: AttendanceRecord
-    ) -> Optional[AttendanceAnomaly]:
+    def _check_low_confidence(self, student_id: str, attendance: AttendanceRecord) -> AttendanceAnomaly | None:
         """Check for low recognition confidence anomaly."""
         try:
             # Get presence logs for this attendance
@@ -350,10 +336,7 @@ class AnomalyService:
             if not logs:
                 return None
 
-            confidences = [
-                log.confidence for log in logs
-                if log.confidence is not None
-            ]
+            confidences = [log.confidence for log in logs if log.confidence is not None]
 
             if not confidences:
                 return None
@@ -375,9 +358,7 @@ class AnomalyService:
             logger.error(f"Low confidence check failed: {e}")
         return None
 
-    def _check_pattern_break(
-        self, student_id: str
-    ) -> Optional[AttendanceAnomaly]:
+    def _check_pattern_break(self, student_id: str) -> AttendanceAnomaly | None:
         """Check for weekly pattern break anomaly."""
         try:
             today = date.today()
@@ -396,10 +377,7 @@ class AnomalyService:
                     .all()
                 )
                 if records:
-                    present = sum(
-                        1 for r in records
-                        if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
-                    )
+                    present = sum(1 for r in records if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE))
                     weekly_rates.append((present / len(records)) * 100.0)
 
             # Current week
@@ -418,8 +396,7 @@ class AnomalyService:
                 return None
 
             current_present = sum(
-                1 for r in current_records
-                if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
+                1 for r in current_records if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
             )
             current_rate = (current_present / len(current_records)) * 100.0
 

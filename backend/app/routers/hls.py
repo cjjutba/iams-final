@@ -16,7 +16,7 @@ import os
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from app.config import settings, logger
+from app.config import settings
 from app.services.hls_service import hls_service
 
 router = APIRouter()

@@ -8,19 +8,22 @@ No ML dependencies required — uses only numpy (already installed).
 """
 
 from datetime import date, timedelta
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from app.config import logger
 from app.models.attendance_prediction import RiskLevel
 
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 # ---------------------------------------------------------------------------
 # Pure prediction functions (stateless, testable)
 # ---------------------------------------------------------------------------
 
-def compute_ewma(rates: List[float], alpha: float = 0.3) -> float:
+
+def compute_ewma(rates: list[float], alpha: float = 0.3) -> float:
     """
     Compute exponentially weighted moving average.
 
@@ -42,7 +45,7 @@ def compute_ewma(rates: List[float], alpha: float = 0.3) -> float:
     return float(ewma)
 
 
-def compute_trend(rates: List[float], min_points: int = 3) -> Tuple[str, float]:
+def compute_trend(rates: list[float], min_points: int = 3) -> tuple[str, float]:
     """
     Compute trend direction via simple linear regression on weekly rates.
 
@@ -101,9 +104,7 @@ def classify_risk(predicted_rate: float) -> RiskLevel:
     return RiskLevel.LOW
 
 
-def predict_next_week(
-    weekly_rates: List[float], alpha: float = 0.3
-) -> dict:
+def predict_next_week(weekly_rates: list[float], alpha: float = 0.3) -> dict:
     """
     Generate a prediction for the next week.
 
@@ -132,11 +133,12 @@ def predict_next_week(
 # Orchestrator (DB-aware)
 # ---------------------------------------------------------------------------
 
+
 class PredictionService:
     """Orchestrates weekly prediction generation."""
 
     def __init__(self, db):
-        from sqlalchemy.orm import Session
+
         from app.models.attendance_record import AttendanceRecord, AttendanceStatus
         from app.models.enrollment import Enrollment
         from app.models.schedule import Schedule
@@ -149,7 +151,7 @@ class PredictionService:
         self._Enrollment = Enrollment
         self._Schedule = Schedule
 
-    def run_weekly_predictions(self, target_week_start: Optional[date] = None):
+    def run_weekly_predictions(self, target_week_start: date | None = None):
         """
         Generate predictions for all active enrollments.
 
@@ -169,20 +171,14 @@ class PredictionService:
 
         for schedule in schedules:
             # Get enrolled students
-            enrollments = (
-                self.db.query(self._Enrollment)
-                .filter(self._Enrollment.schedule_id == schedule.id)
-                .all()
-            )
+            enrollments = self.db.query(self._Enrollment).filter(self._Enrollment.schedule_id == schedule.id).all()
 
             for enrollment in enrollments:
                 student_id = str(enrollment.student_id)
                 schedule_id = str(schedule.id)
 
                 # Get weekly rates for last 8 weeks
-                weekly_rates = self._get_weekly_rates(
-                    student_id, schedule_id, weeks=8
-                )
+                weekly_rates = self._get_weekly_rates(student_id, schedule_id, weeks=8)
 
                 if len(weekly_rates) < 2:
                     continue  # Not enough history
@@ -202,11 +198,10 @@ class PredictionService:
         logger.info(f"Generated {created} attendance predictions for week {target_week_start}")
         return created
 
-    def _get_weekly_rates(
-        self, student_id: str, schedule_id: str, weeks: int = 8
-    ) -> List[float]:
+    def _get_weekly_rates(self, student_id: str, schedule_id: str, weeks: int = 8) -> list[float]:
         """Get weekly attendance rates for a student in a schedule."""
         import uuid
+
         today = date.today()
         rates = []
 
@@ -227,8 +222,10 @@ class PredictionService:
 
             if records:
                 present = sum(
-                    1 for r in records
-                    if r.status in (
+                    1
+                    for r in records
+                    if r.status
+                    in (
                         self._AttendanceStatus.PRESENT,
                         self._AttendanceStatus.LATE,
                     )

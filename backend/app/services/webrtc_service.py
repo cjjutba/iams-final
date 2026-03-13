@@ -13,7 +13,7 @@ FastAPI calls this service to:
 
 import httpx
 
-from app.config import settings, logger
+from app.config import logger, settings
 
 
 class WebRTCService:
@@ -26,21 +26,19 @@ class WebRTCService:
         Returns a list ready to pass into RTCPeerConnection({ iceServers }).
         Always includes STUN; optionally includes TURN when configured.
         """
-        stun_urls = [
-            u.strip()
-            for u in settings.WEBRTC_STUN_URLS.split(",")
-            if u.strip()
-        ]
+        stun_urls = [u.strip() for u in settings.WEBRTC_STUN_URLS.split(",") if u.strip()]
         servers: list[dict] = []
         if stun_urls:
             servers.append({"urls": stun_urls})
 
         if settings.WEBRTC_TURN_URL:
-            servers.append({
-                "urls": [settings.WEBRTC_TURN_URL],
-                "username": settings.WEBRTC_TURN_USERNAME,
-                "credential": settings.WEBRTC_TURN_CREDENTIAL,
-            })
+            servers.append(
+                {
+                    "urls": [settings.WEBRTC_TURN_URL],
+                    "username": settings.WEBRTC_TURN_USERNAME,
+                    "credential": settings.WEBRTC_TURN_CREDENTIAL,
+                }
+            )
 
         return servers
 
@@ -87,8 +85,7 @@ class WebRTCService:
                 return ok
         except httpx.ConnectError:
             logger.error(
-                f"WebRTC: cannot reach mediamtx at {settings.MEDIAMTX_API_URL} "
-                f"— is mediamtx running? (room={room_id})"
+                f"WebRTC: cannot reach mediamtx at {settings.MEDIAMTX_API_URL} — is mediamtx running? (room={room_id})"
             )
             return False
         except Exception as exc:
@@ -116,17 +113,14 @@ class WebRTCService:
                 return resp.status_code == 200
         except httpx.ConnectError:
             logger.error(
-                f"WebRTC: cannot reach mediamtx at {settings.MEDIAMTX_API_URL} "
-                f"— is mediamtx running? (room={room_id})"
+                f"WebRTC: cannot reach mediamtx at {settings.MEDIAMTX_API_URL} — is mediamtx running? (room={room_id})"
             )
             return False
         except Exception as exc:
             logger.error(f"WebRTC: error checking path {room_id}: {exc}")
             return False
 
-    async def forward_whep_offer(
-        self, room_id: str, sdp: str
-    ) -> tuple[str, str]:
+    async def forward_whep_offer(self, room_id: str, sdp: str) -> tuple[str, str]:
         """
         Forward the mobile app's SDP offer to mediamtx's WHEP endpoint.
 
@@ -164,9 +158,7 @@ class WebRTCService:
         """
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                await client.delete(
-                    f"{settings.MEDIAMTX_API_URL}/v3/config/paths/delete/{room_id}"
-                )
+                await client.delete(f"{settings.MEDIAMTX_API_URL}/v3/config/paths/delete/{room_id}")
         except Exception as exc:
             logger.warning(f"WebRTC: failed to delete mediamtx path {room_id}: {exc}")
 

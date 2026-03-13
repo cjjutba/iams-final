@@ -4,22 +4,25 @@ Attendance Anomaly Model
 Records detected anomalies in attendance patterns.
 """
 
-import uuid
 import enum
+import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Float, Boolean, DateTime, ForeignKey, Text, Enum as SQLEnum
+
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, String, Text
+from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from app.database import Base
 
 
-class AnomalyType(str, enum.Enum):
+class AnomalyType(enum.StrEnum):
     """Types of attendance anomalies."""
-    SUDDEN_ABSENCE = "sudden_absence"      # Strong-history student suddenly absent
-    PROXY_SUSPECT = "proxy_suspect"        # Same face in 2 rooms simultaneously
-    PATTERN_BREAK = "pattern_break"        # Significant deviation from personal mean
-    LOW_CONFIDENCE = "low_confidence"      # Consistently low recognition confidence
+
+    SUDDEN_ABSENCE = "sudden_absence"  # Strong-history student suddenly absent
+    PROXY_SUSPECT = "proxy_suspect"  # Same face in 2 rooms simultaneously
+    PATTERN_BREAK = "pattern_break"  # Significant deviation from personal mean
+    LOW_CONFIDENCE = "low_confidence"  # Consistently low recognition confidence
 
 
 class AttendanceAnomaly(Base):

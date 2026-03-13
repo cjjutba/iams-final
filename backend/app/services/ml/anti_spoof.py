@@ -9,12 +9,11 @@ Detects presentation attacks (printed photos, screen replays) using:
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional
 
 import cv2
 import numpy as np
 
-from app.config import settings, logger
+from app.config import settings
 
 
 @dataclass
@@ -48,12 +47,17 @@ def compute_lbp_score(face_bgr: np.ndarray) -> float:
     # Simple LBP: compare each pixel to its 8 neighbors
     lbp = np.zeros_like(gray, dtype=np.uint8)
     for dy, dx, bit in [
-        (-1, -1, 0), (-1, 0, 1), (-1, 1, 2),
-        (0, 1, 3), (1, 1, 4), (1, 0, 5),
-        (1, -1, 6), (0, -1, 7),
+        (-1, -1, 0),
+        (-1, 0, 1),
+        (-1, 1, 2),
+        (0, 1, 3),
+        (1, 1, 4),
+        (1, 0, 5),
+        (1, -1, 6),
+        (0, -1, 7),
     ]:
         shifted = np.roll(np.roll(gray, dy, axis=0), dx, axis=1)
-        lbp |= ((shifted >= gray).astype(np.uint8) << bit)
+        lbp |= (shifted >= gray).astype(np.uint8) << bit
 
     # Crop border pixels affected by roll wrapping
     lbp = lbp[1:-1, 1:-1]
@@ -101,7 +105,7 @@ def compute_fft_score(face_bgr: np.ndarray) -> float:
     # Low freq: center 25% of spectrum
     r_low = min(h, w) // 4
     y, x = np.ogrid[:h, :w]
-    low_mask = ((y - cy) ** 2 + (x - cx) ** 2) <= r_low ** 2
+    low_mask = ((y - cy) ** 2 + (x - cx) ** 2) <= r_low**2
 
     total_energy = magnitude.sum() + 1e-8
     low_energy = magnitude[low_mask].sum()
@@ -117,7 +121,7 @@ def compute_fft_score(face_bgr: np.ndarray) -> float:
     return float(max(0.0, min(1.0, score)))
 
 
-def check_embedding_variance(embeddings: List[np.ndarray]) -> float:
+def check_embedding_variance(embeddings: list[np.ndarray]) -> float:
     """Check variance of embeddings across registration angles.
 
     Real faces at 5 different angles produce moderate pairwise cosine
@@ -163,10 +167,7 @@ class AntiSpoofDetector:
         # Weighted combination
         combined = 0.6 * lbp_score + 0.4 * fft_score
 
-        is_live = (
-            lbp_score >= settings.ANTISPOOF_LBP_THRESHOLD
-            and fft_score >= settings.ANTISPOOF_FFT_THRESHOLD
-        )
+        is_live = lbp_score >= settings.ANTISPOOF_LBP_THRESHOLD and fft_score >= settings.ANTISPOOF_FFT_THRESHOLD
 
         return SpoofResult(
             is_live=is_live,
@@ -180,8 +181,8 @@ class AntiSpoofDetector:
 
     def check_registration_set(
         self,
-        face_crops: List[np.ndarray],
-        embeddings: List[np.ndarray],
+        face_crops: list[np.ndarray],
+        embeddings: list[np.ndarray],
     ) -> SpoofResult:
         """Check a set of registration images for spoofing.
 
@@ -212,26 +213,19 @@ class AntiSpoofDetector:
             "avg_image_score": round(float(avg_image_score), 4),
             "embedding_variance": round(variance, 4),
             "variance_passed": variance_passed,
-            "per_image": [
-                {"lbp": s.details["lbp_score"], "fft": s.details["fft_score"]}
-                for s in image_scores
-            ],
+            "per_image": [{"lbp": s.details["lbp_score"], "fft": s.details["fft_score"]} for s in image_scores],
         }
 
         if not is_live:
             reasons = []
             if not variance_passed:
                 reasons.append(
-                    f"embedding variance too low ({variance:.3f} < "
-                    f"{settings.ANTISPOOF_EMBEDDING_VARIANCE_MIN})"
+                    f"embedding variance too low ({variance:.3f} < {settings.ANTISPOOF_EMBEDDING_VARIANCE_MIN})"
                 )
             if not majority_passed:
-                failed_indices = [
-                    i for i, s in enumerate(image_scores) if not s.is_live
-                ]
+                failed_indices = [i for i, s in enumerate(image_scores) if not s.is_live]
                 reasons.append(
-                    f"majority of images ({len(failed_indices)}/{len(image_scores)}) "
-                    f"failed texture/frequency check"
+                    f"majority of images ({len(failed_indices)}/{len(image_scores)}) failed texture/frequency check"
                 )
             details["rejection_reasons"] = reasons
 

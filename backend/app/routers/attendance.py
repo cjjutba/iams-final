@@ -5,42 +5,41 @@ API endpoints for attendance tracking and management.
 Includes live attendance monitoring for continuous presence tracking.
 """
 
-from typing import List, Optional
 from datetime import date, datetime
-from fastapi import APIRouter, Depends, status, Query
+
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
+from app.config import logger
 from app.database import get_db
 from app.models.user import User, UserRole
-from app.schemas.attendance import (
-    ManualAttendanceRequest,
-    AttendanceRecordResponse,
-    AttendanceSummary,
-    PresenceLogResponse,
-    EarlyLeaveResponse,
-    LiveAttendanceResponse,
-    StudentAttendanceStatus,
-    AttendanceUpdateRequest,
-    AlertResponse,
-    ScheduleAttendanceSummaryItem,
-)
 from app.repositories.attendance_repository import AttendanceRepository
 from app.repositories.schedule_repository import ScheduleRepository
+from app.schemas.attendance import (
+    AlertResponse,
+    AttendanceRecordResponse,
+    AttendanceSummary,
+    AttendanceUpdateRequest,
+    EarlyLeaveResponse,
+    LiveAttendanceResponse,
+    ManualAttendanceRequest,
+    PresenceLogResponse,
+    ScheduleAttendanceSummaryItem,
+    StudentAttendanceStatus,
+)
 from app.services import session_manager
-from app.utils.dependencies import get_current_user, get_current_student, get_current_faculty
-from app.config import logger
-
+from app.utils.dependencies import get_current_faculty, get_current_student, get_current_user
 
 router = APIRouter()
 
 
 @router.get(
     "/schedule-summaries",
-    response_model=List[ScheduleAttendanceSummaryItem],
+    response_model=list[ScheduleAttendanceSummaryItem],
     status_code=status.HTTP_200_OK,
 )
 def get_schedule_summaries(
-    target_date: Optional[date] = Query(None, alias="date", description="Date to summarise (defaults to today)"),
+    target_date: date | None = Query(None, alias="date", description="Date to summarise (defaults to today)"),
     current_user: User = Depends(get_current_faculty),
     db: Session = Depends(get_db),
 ):
@@ -70,7 +69,7 @@ def get_schedule_summaries(
     # Filter to only those that occur on the requested day
     day_schedules = [s for s in all_schedules if s.day_of_week == day_of_week]
 
-    results: List[ScheduleAttendanceSummaryItem] = []
+    results: list[ScheduleAttendanceSummaryItem] = []
 
     for schedule in day_schedules:
         schedule_id = str(schedule.id)
@@ -98,20 +97,22 @@ def get_schedule_summaries(
         # Room name
         room_name = schedule.room.name if schedule.room else None
 
-        results.append(ScheduleAttendanceSummaryItem(
-            schedule_id=schedule_id,
-            subject_code=schedule.subject_code,
-            subject_name=schedule.subject_name,
-            start_time=schedule.start_time,
-            end_time=schedule.end_time,
-            room_name=room_name,
-            session_active=is_active,
-            total_enrolled=total_enrolled,
-            present_count=present_count,
-            late_count=late_count,
-            absent_count=absent_count,
-            attendance_rate=round(attendance_rate, 2),
-        ))
+        results.append(
+            ScheduleAttendanceSummaryItem(
+                schedule_id=schedule_id,
+                subject_code=schedule.subject_code,
+                subject_name=schedule.subject_name,
+                start_time=schedule.start_time,
+                end_time=schedule.end_time,
+                room_name=room_name,
+                session_active=is_active,
+                total_enrolled=total_enrolled,
+                present_count=present_count,
+                late_count=late_count,
+                absent_count=absent_count,
+                attendance_rate=round(attendance_rate, 2),
+            )
+        )
 
     # Sort by start_time
     results.sort(key=lambda x: x.start_time)
@@ -119,11 +120,11 @@ def get_schedule_summaries(
     return results
 
 
-@router.get("/today", response_model=List[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
+@router.get("/today", response_model=list[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
 def get_today_attendance(
     schedule_id: str = Query(..., description="Schedule UUID"),
     current_user: User = Depends(get_current_faculty),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     **Get Today's Attendance** (Faculty Only)
@@ -144,11 +145,9 @@ def get_today_attendance(
     return [AttendanceRecordResponse.model_validate(r) for r in records]
 
 
-@router.get("/today/{schedule_id}", response_model=List[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
+@router.get("/today/{schedule_id}", response_model=list[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
 def get_today_attendance_by_path(
-    schedule_id: str,
-    current_user: User = Depends(get_current_faculty),
-    db: Session = Depends(get_db)
+    schedule_id: str, current_user: User = Depends(get_current_faculty), db: Session = Depends(get_db)
 ):
     """
     **Get Today's Attendance by Schedule** (Faculty Only)
@@ -169,12 +168,12 @@ def get_today_attendance_by_path(
     return [AttendanceRecordResponse.model_validate(r) for r in records]
 
 
-@router.get("/me", response_model=List[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
+@router.get("/me", response_model=list[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
 def get_my_attendance(
-    start_date: Optional[date] = Query(None, description="Start date filter"),
-    end_date: Optional[date] = Query(None, description="End date filter"),
+    start_date: date | None = Query(None, description="Start date filter"),
+    end_date: date | None = Query(None, description="End date filter"),
     current_user: User = Depends(get_current_student),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     **Get My Attendance History** (Student Only)
@@ -190,21 +189,17 @@ def get_my_attendance(
     """
     attendance_repo = AttendanceRepository(db)
 
-    records = attendance_repo.get_student_history(
-        str(current_user.id),
-        start_date,
-        end_date
-    )
+    records = attendance_repo.get_student_history(str(current_user.id), start_date, end_date)
 
     return [AttendanceRecordResponse.model_validate(r) for r in records]
 
 
-@router.get("/my-attendance", response_model=List[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
+@router.get("/my-attendance", response_model=list[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
 def get_my_attendance_alias(
-    start_date: Optional[date] = Query(None, description="Start date filter"),
-    end_date: Optional[date] = Query(None, description="End date filter"),
+    start_date: date | None = Query(None, description="Start date filter"),
+    end_date: date | None = Query(None, description="End date filter"),
     current_user: User = Depends(get_current_student),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     **Get My Attendance History** (Student Only) - Alias endpoint
@@ -222,11 +217,7 @@ def get_my_attendance_alias(
     """
     attendance_repo = AttendanceRepository(db)
 
-    records = attendance_repo.get_student_history(
-        str(current_user.id),
-        start_date,
-        end_date
-    )
+    records = attendance_repo.get_student_history(str(current_user.id), start_date, end_date)
 
     return [AttendanceRecordResponse.model_validate(r) for r in records]
 
@@ -236,7 +227,7 @@ def get_my_attendance_summary(
     start_date: date = Query(..., description="Start date"),
     end_date: date = Query(..., description="End date"),
     current_user: User = Depends(get_current_student),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     **Get My Attendance Summary** (Student Only)
@@ -252,21 +243,17 @@ def get_my_attendance_summary(
     """
     attendance_repo = AttendanceRepository(db)
 
-    summary = attendance_repo.get_summary(
-        str(current_user.id),
-        start_date,
-        end_date
-    )
+    summary = attendance_repo.get_summary(str(current_user.id), start_date, end_date)
 
     return AttendanceSummary(**summary)
 
 
-@router.get("/schedule/{schedule_id}", response_model=List[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
+@router.get("/schedule/{schedule_id}", response_model=list[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
 def get_schedule_attendance(
     schedule_id: str,
-    date: Optional[date] = Query(None, description="Specific date filter (defaults to today)"),
+    date: date | None = Query(None, description="Specific date filter (defaults to today)"),
     current_user: User = Depends(get_current_faculty),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     **Get Schedule Attendance** (Faculty Only)
@@ -291,10 +278,10 @@ def get_schedule_attendance(
 @router.get("/schedule/{schedule_id}/summary", response_model=dict, status_code=status.HTTP_200_OK)
 def get_schedule_attendance_summary(
     schedule_id: str,
-    start_date: Optional[date] = Query(None, description="Start date"),
-    end_date: Optional[date] = Query(None, description="End date"),
+    start_date: date | None = Query(None, description="Start date"),
+    end_date: date | None = Query(None, description="End date"),
     current_user: User = Depends(get_current_faculty),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     **Get Schedule Attendance Summary** (Faculty Only)
@@ -309,8 +296,8 @@ def get_schedule_attendance_summary(
 
     Requires faculty authentication.
     """
-    from app.repositories.schedule_repository import ScheduleRepository
     from app.models.attendance_record import AttendanceStatus
+    from app.repositories.schedule_repository import ScheduleRepository
 
     attendance_repo = AttendanceRepository(db)
     schedule_repo = ScheduleRepository(db)
@@ -319,6 +306,7 @@ def get_schedule_attendance_summary(
     schedule = schedule_repo.get_by_id(schedule_id)
     if not schedule:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
 
     # Default date range
@@ -346,25 +334,20 @@ def get_schedule_attendance_summary(
         "schedule_id": schedule_id,
         "subject_code": schedule.subject_code,
         "subject_name": schedule.subject_name,
-        "date_range": {
-            "start_date": start_date.isoformat(),
-            "end_date": end_date.isoformat()
-        },
+        "date_range": {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
         "total_records": total_records,
         "present_count": present_count,
         "late_count": late_count,
         "absent_count": absent_count,
         "excused_count": excused_count,
         "early_leave_count": early_leave_count,
-        "attendance_rate": round(attendance_rate, 2)
+        "attendance_rate": round(attendance_rate, 2),
     }
 
 
 @router.get("/live/{schedule_id}", response_model=LiveAttendanceResponse, status_code=status.HTTP_200_OK)
 async def get_live_attendance(
-    schedule_id: str,
-    current_user: User = Depends(get_current_faculty),
-    db: Session = Depends(get_db)
+    schedule_id: str, current_user: User = Depends(get_current_faculty), db: Session = Depends(get_db)
 ):
     """
     **Get Live Attendance Status** (Faculty Only)
@@ -390,6 +373,7 @@ async def get_live_attendance(
     schedule = schedule_repo.get_by_id(schedule_id)
     if not schedule:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
 
     # Get today's attendance
@@ -408,19 +392,22 @@ async def get_live_attendance(
     early_leave_count = 0
 
     for record in records:
-        student_statuses.append(StudentAttendanceStatus(
-            student_id=str(record.student_id),
-            student_number=getattr(record.student, 'student_id', None),
-            student_name=f"{record.student.first_name} {record.student.last_name}",
-            status=record.status,
-            check_in_time=record.check_in_time,
-            presence_score=record.presence_score,
-            total_scans=record.total_scans,
-            scans_present=record.scans_present
-        ))
+        student_statuses.append(
+            StudentAttendanceStatus(
+                student_id=str(record.student_id),
+                student_number=getattr(record.student, "student_id", None),
+                student_name=f"{record.student.first_name} {record.student.last_name}",
+                status=record.status,
+                check_in_time=record.check_in_time,
+                presence_score=record.presence_score,
+                total_scans=record.total_scans,
+                scans_present=record.scans_present,
+            )
+        )
 
         # Update counts
         from app.models.attendance_record import AttendanceStatus
+
         if record.status == AttendanceStatus.PRESENT:
             present_count += 1
         elif record.status == AttendanceStatus.LATE:
@@ -446,16 +433,16 @@ async def get_live_attendance(
         late_count=late_count,
         absent_count=absent_count,
         early_leave_count=early_leave_count,
-        students=student_statuses
+        students=student_statuses,
     )
 
 
-@router.get("/alerts", response_model=List[AlertResponse], status_code=status.HTTP_200_OK)
+@router.get("/alerts", response_model=list[AlertResponse], status_code=status.HTTP_200_OK)
 def get_early_leave_alerts(
-    filter: Optional[str] = Query("all", description="Filter: today, week, or all"),
-    schedule_id: Optional[str] = Query(None, description="Filter by schedule"),
+    filter: str | None = Query("all", description="Filter: today, week, or all"),
+    schedule_id: str | None = Query(None, description="Filter by schedule"),
     current_user: User = Depends(get_current_faculty),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     **Get Early Leave Alerts** (Faculty Only)
@@ -470,7 +457,6 @@ def get_early_leave_alerts(
     Requires faculty authentication.
     """
     from datetime import timedelta
-    from fastapi import HTTPException
 
     attendance_repo = AttendanceRepository(db)
     schedule_repo = ScheduleRepository(db)
@@ -489,11 +475,7 @@ def get_early_leave_alerts(
         end_date = today_date
 
     # Get early leave events
-    events = attendance_repo.get_early_leave_events(
-        schedule_id=schedule_id,
-        start_date=start_date,
-        end_date=end_date
-    )
+    events = attendance_repo.get_early_leave_events(schedule_id=schedule_id, start_date=start_date, end_date=end_date)
 
     # Build enriched response with student and schedule info
     alerts = []
@@ -512,21 +494,23 @@ def get_early_leave_alerts(
         if not student:
             continue
 
-        alerts.append(AlertResponse(
-            id=str(event.id),
-            attendance_id=str(event.attendance_id),
-            student_id=str(student.id),
-            student_name=f"{student.first_name} {student.last_name}",
-            student_student_id=student.student_id,
-            schedule_id=str(attendance.schedule_id),
-            subject_code=schedule.subject_code,
-            subject_name=schedule.subject_name,
-            detected_at=event.detected_at,
-            last_seen_at=event.last_seen_at,
-            consecutive_misses=event.consecutive_misses,
-            notified=event.notified,
-            date=attendance.date
-        ))
+        alerts.append(
+            AlertResponse(
+                id=str(event.id),
+                attendance_id=str(event.attendance_id),
+                student_id=str(student.id),
+                student_name=f"{student.first_name} {student.last_name}",
+                student_student_id=student.student_id,
+                schedule_id=str(attendance.schedule_id),
+                subject_code=schedule.subject_code,
+                subject_name=schedule.subject_name,
+                detected_at=event.detected_at,
+                last_seen_at=event.last_seen_at,
+                consecutive_misses=event.consecutive_misses,
+                notified=event.notified,
+                date=attendance.date,
+            )
+        )
 
     return alerts
 
@@ -538,7 +522,7 @@ def export_attendance(
     end_date: date = Query(..., description="End date"),
     format: str = Query("csv", description="Export format: csv or json"),
     current_user: User = Depends(get_current_faculty),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     **Export Attendance Report** (Faculty Only)
@@ -554,10 +538,11 @@ def export_attendance(
 
     Requires faculty authentication.
     """
+    import csv
+    import io
+
     from fastapi import HTTPException
     from fastapi.responses import StreamingResponse
-    import io
-    import csv
 
     attendance_repo = AttendanceRepository(db)
     schedule_repo = ScheduleRepository(db)
@@ -565,15 +550,11 @@ def export_attendance(
     # Verify schedule exists and faculty owns it
     schedule = schedule_repo.get_by_id(schedule_id)
     if not schedule:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Schedule not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
 
     if str(schedule.faculty_id) != str(current_user.id):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only export attendance for your own schedules"
+            status_code=status.HTTP_403_FORBIDDEN, detail="You can only export attendance for your own schedules"
         )
 
     # Get all attendance records in range
@@ -585,29 +566,40 @@ def export_attendance(
         writer = csv.writer(output)
 
         # Header
-        writer.writerow([
-            "Date", "Student ID", "Student Name", "Status",
-            "Check In", "Check Out", "Presence Score",
-            "Total Scans", "Scans Present", "Remarks"
-        ])
+        writer.writerow(
+            [
+                "Date",
+                "Student ID",
+                "Student Name",
+                "Status",
+                "Check In",
+                "Check Out",
+                "Presence Score",
+                "Total Scans",
+                "Scans Present",
+                "Remarks",
+            ]
+        )
 
         for record in records:
             student = db.query(User).filter(User.id == record.student_id).first()
             student_name = f"{student.first_name} {student.last_name}" if student else "Unknown"
             student_sid = student.student_id if student else "N/A"
 
-            writer.writerow([
-                record.date.isoformat(),
-                student_sid,
-                student_name,
-                record.status.value if record.status else "unknown",
-                record.check_in_time.isoformat() if record.check_in_time else "",
-                record.check_out_time.isoformat() if record.check_out_time else "",
-                record.presence_score,
-                record.total_scans,
-                record.scans_present,
-                record.remarks or ""
-            ])
+            writer.writerow(
+                [
+                    record.date.isoformat(),
+                    student_sid,
+                    student_name,
+                    record.status.value if record.status else "unknown",
+                    record.check_in_time.isoformat() if record.check_in_time else "",
+                    record.check_out_time.isoformat() if record.check_out_time else "",
+                    record.presence_score,
+                    record.total_scans,
+                    record.scans_present,
+                    record.remarks or "",
+                ]
+            )
 
         output.seek(0)
         filename = f"attendance_{schedule.subject_code}_{start_date}_{end_date}.csv"
@@ -615,7 +607,7 @@ def export_attendance(
         return StreamingResponse(
             iter([output.getvalue()]),
             media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
 
     else:
@@ -626,39 +618,36 @@ def export_attendance(
             student_name = f"{student.first_name} {student.last_name}" if student else "Unknown"
             student_sid = student.student_id if student else "N/A"
 
-            result.append({
-                "date": record.date.isoformat(),
-                "student_id": student_sid,
-                "student_name": student_name,
-                "status": record.status.value if record.status else "unknown",
-                "check_in_time": record.check_in_time.isoformat() if record.check_in_time else None,
-                "check_out_time": record.check_out_time.isoformat() if record.check_out_time else None,
-                "presence_score": record.presence_score,
-                "total_scans": record.total_scans,
-                "scans_present": record.scans_present,
-                "remarks": record.remarks
-            })
+            result.append(
+                {
+                    "date": record.date.isoformat(),
+                    "student_id": student_sid,
+                    "student_name": student_name,
+                    "status": record.status.value if record.status else "unknown",
+                    "check_in_time": record.check_in_time.isoformat() if record.check_in_time else None,
+                    "check_out_time": record.check_out_time.isoformat() if record.check_out_time else None,
+                    "presence_score": record.presence_score,
+                    "total_scans": record.total_scans,
+                    "scans_present": record.scans_present,
+                    "remarks": record.remarks,
+                }
+            )
 
         return {
             "schedule": {
                 "id": str(schedule.id),
                 "subject_code": schedule.subject_code,
-                "subject_name": schedule.subject_name
+                "subject_name": schedule.subject_name,
             },
-            "date_range": {
-                "start": start_date.isoformat(),
-                "end": end_date.isoformat()
-            },
+            "date_range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
             "total_records": len(result),
-            "records": result
+            "records": result,
         }
 
 
 @router.get("/{attendance_id}", response_model=AttendanceRecordResponse, status_code=status.HTTP_200_OK)
 def get_attendance_record(
-    attendance_id: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    attendance_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
     """
     **Get Attendance Record by ID**
@@ -677,21 +666,21 @@ def get_attendance_record(
 
     if not record:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attendance record not found")
 
     # Permission check
     if current_user.role == UserRole.STUDENT and str(record.student_id) != str(current_user.id):
         from fastapi import HTTPException
+
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     return AttendanceRecordResponse.model_validate(record)
 
 
-@router.get("/{attendance_id}/logs", response_model=List[PresenceLogResponse], status_code=status.HTTP_200_OK)
+@router.get("/{attendance_id}/logs", response_model=list[PresenceLogResponse], status_code=status.HTTP_200_OK)
 def get_presence_logs(
-    attendance_id: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    attendance_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
     """
     **Get Presence Logs**
@@ -710,10 +699,12 @@ def get_presence_logs(
     record = attendance_repo.get_by_id(attendance_id)
     if not record:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attendance record not found")
 
     if current_user.role == UserRole.STUDENT and str(record.student_id) != str(current_user.id):
         from fastapi import HTTPException
+
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     # Get presence logs
@@ -724,9 +715,7 @@ def get_presence_logs(
 
 @router.post("/manual-entry", response_model=AttendanceRecordResponse, status_code=status.HTTP_201_CREATED)
 def manual_attendance_entry(
-    request: ManualAttendanceRequest,
-    current_user: User = Depends(get_current_faculty),
-    db: Session = Depends(get_db)
+    request: ManualAttendanceRequest, current_user: User = Depends(get_current_faculty), db: Session = Depends(get_db)
 ):
     """
     **Manual Attendance Entry** (Faculty Only)
@@ -749,28 +738,23 @@ def manual_attendance_entry(
     attendance_repo = AttendanceRepository(db)
 
     # Check if record already exists
-    existing = attendance_repo.get_by_student_date(
-        request.student_id,
-        request.schedule_id,
-        request.date
-    )
+    existing = attendance_repo.get_by_student_date(request.student_id, request.schedule_id, request.date)
 
     if existing:
         # Update existing record
-        record = attendance_repo.update(str(existing.id), {
-            "status": request.status,
-            "remarks": request.remarks
-        })
+        record = attendance_repo.update(str(existing.id), {"status": request.status, "remarks": request.remarks})
         logger.info(f"Attendance updated manually by {current_user.email}: {existing.id}")
     else:
         # Create new record
-        record = attendance_repo.create({
-            "student_id": request.student_id,
-            "schedule_id": request.schedule_id,
-            "date": request.date,
-            "status": request.status,
-            "remarks": request.remarks
-        })
+        record = attendance_repo.create(
+            {
+                "student_id": request.student_id,
+                "schedule_id": request.schedule_id,
+                "date": request.date,
+                "status": request.status,
+                "remarks": request.remarks,
+            }
+        )
         logger.info(f"Attendance created manually by {current_user.email}: {record.id}")
 
     return AttendanceRecordResponse.model_validate(record)
@@ -781,7 +765,7 @@ def update_attendance_record(
     attendance_id: str,
     update_data: AttendanceUpdateRequest,
     current_user: User = Depends(get_current_faculty),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     **Update Attendance Record** (Faculty Only)
@@ -803,10 +787,8 @@ def update_attendance_record(
 
     if not filtered_data:
         from fastapi import HTTPException
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No fields to update"
-        )
+
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update")
 
     record = attendance_repo.update(attendance_id, filtered_data)
 
@@ -815,75 +797,13 @@ def update_attendance_record(
     return AttendanceRecordResponse.model_validate(record)
 
 
-@router.get("/schedule-summaries", status_code=status.HTTP_200_OK)
-def get_schedule_summaries(
-    target_date: Optional[date] = Query(None, alias="date", description="Date to summarize (defaults to today)"),
+@router.get("/early-leaves/", response_model=list[EarlyLeaveResponse], status_code=status.HTTP_200_OK)
+def get_early_leave_events(
+    schedule_id: str | None = Query(None, description="Filter by schedule"),
+    start_date: date | None = Query(None, description="Start date filter"),
+    end_date: date | None = Query(None, description="End date filter"),
     current_user: User = Depends(get_current_faculty),
     db: Session = Depends(get_db),
-):
-    """
-    **Get Schedule Summaries** (Faculty Only)
-
-    Get attendance summary for all of the faculty's schedules on a given date.
-    Returns per-schedule present/late/absent/early_leave counts and rate.
-    """
-    from app.models.attendance_record import AttendanceStatus
-    from app.models.schedule import Schedule
-    from app.models.enrollment import Enrollment
-    from sqlalchemy import func
-
-    summary_date = target_date or date.today()
-
-    # Get faculty's schedules
-    schedules = db.query(Schedule).filter(
-        Schedule.faculty_id == current_user.id
-    ).all()
-
-    results = []
-    for schedule in schedules:
-        from app.models.attendance_record import AttendanceRecord
-        records = db.query(AttendanceRecord).filter(
-            AttendanceRecord.schedule_id == schedule.id,
-            AttendanceRecord.date == summary_date,
-        ).all()
-
-        enrolled = db.query(func.count(Enrollment.id)).filter(
-            Enrollment.schedule_id == schedule.id
-        ).scalar() or 0
-
-        present = sum(1 for r in records if r.status == AttendanceStatus.PRESENT)
-        late = sum(1 for r in records if r.status == AttendanceStatus.LATE)
-        absent = sum(1 for r in records if r.status == AttendanceStatus.ABSENT)
-        early_leave = sum(1 for r in records if r.status == AttendanceStatus.EARLY_LEAVE)
-        total = len(records)
-        rate = ((present + late) / total * 100.0) if total > 0 else 0.0
-
-        results.append({
-            "schedule_id": str(schedule.id),
-            "subject_code": schedule.subject_code,
-            "subject_name": schedule.subject_name,
-            "start_time": str(schedule.start_time),
-            "end_time": str(schedule.end_time),
-            "room_name": schedule.room.name if schedule.room else None,
-            "total_enrolled": enrolled,
-            "present_count": present,
-            "late_count": late,
-            "absent_count": absent,
-            "early_leave_count": early_leave,
-            "attendance_rate": round(rate, 1),
-            "session_active": session_manager.is_session_active(str(schedule.id)),
-        })
-
-    return results
-
-
-@router.get("/early-leaves/", response_model=List[EarlyLeaveResponse], status_code=status.HTTP_200_OK)
-def get_early_leave_events(
-    schedule_id: Optional[str] = Query(None, description="Filter by schedule"),
-    start_date: Optional[date] = Query(None, description="Start date filter"),
-    end_date: Optional[date] = Query(None, description="End date filter"),
-    current_user: User = Depends(get_current_faculty),
-    db: Session = Depends(get_db)
 ):
     """
     **Get Early Leave Events** (Faculty Only)

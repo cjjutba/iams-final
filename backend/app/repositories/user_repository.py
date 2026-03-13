@@ -5,12 +5,12 @@ Data access layer for User operations.
 """
 
 import uuid as uuid_mod
-from typing import List, Optional
-from sqlalchemy.orm import Session
+
 from sqlalchemy import or_
+from sqlalchemy.orm import Session
 
 from app.models.user import User, UserRole
-from app.utils.exceptions import NotFoundError, DuplicateError
+from app.utils.exceptions import DuplicateError, NotFoundError
 
 
 class UserRepository:
@@ -19,27 +19,25 @@ class UserRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_by_id(self, user_id: str) -> Optional[User]:
+    def get_by_id(self, user_id: str) -> User | None:
         """Get user by ID"""
         if isinstance(user_id, str):
             user_id = uuid_mod.UUID(user_id)
         return self.db.query(User).filter(User.id == user_id).first()
 
-    def get_by_email(self, email: str) -> Optional[User]:
+    def get_by_email(self, email: str) -> User | None:
         """Get user by email"""
         return self.db.query(User).filter(User.email == email).first()
 
-    def get_by_student_id(self, student_id: str) -> Optional[User]:
+    def get_by_student_id(self, student_id: str) -> User | None:
         """Get user by student ID"""
         return self.db.query(User).filter(User.student_id == student_id).first()
 
-    def get_by_student_id_or_email(self, student_id: str, email: str) -> Optional[User]:
+    def get_by_student_id_or_email(self, student_id: str, email: str) -> User | None:
         """Check if a user exists with the given student_id or email (single query)."""
-        return self.db.query(User).filter(
-            or_(User.student_id == student_id, User.email == email)
-        ).first()
+        return self.db.query(User).filter(or_(User.student_id == student_id, User.email == email)).first()
 
-    def get_by_identifier(self, identifier: str) -> Optional[User]:
+    def get_by_identifier(self, identifier: str) -> User | None:
         """
         Get user by email or student ID
 
@@ -49,22 +47,17 @@ class UserRepository:
         Returns:
             User if found, None otherwise
         """
-        return self.db.query(User).filter(
-            or_(
-                User.email == identifier,
-                User.student_id == identifier
-            )
-        ).first()
+        return self.db.query(User).filter(or_(User.email == identifier, User.student_id == identifier)).first()
 
-    def get_all(self, skip: int = 0, limit: int = 100) -> List[User]:
+    def get_all(self, skip: int = 0, limit: int = 100) -> list[User]:
         """Get all users with pagination"""
         return self.db.query(User).offset(skip).limit(limit).all()
 
-    def get_by_role(self, role: UserRole, skip: int = 0, limit: int = 100) -> List[User]:
+    def get_by_role(self, role: UserRole, skip: int = 0, limit: int = 100) -> list[User]:
         """Get users by role"""
         return self.db.query(User).filter(User.role == role).offset(skip).limit(limit).all()
 
-    def get_students_by_schedule(self, schedule_id: str) -> List[User]:
+    def get_students_by_schedule(self, schedule_id: str) -> list[User]:
         """
         Get all students enrolled in a schedule
 
@@ -76,12 +69,12 @@ class UserRepository:
         """
         from app.models.enrollment import Enrollment
 
-        return self.db.query(User).join(
-            Enrollment, Enrollment.student_id == User.id
-        ).filter(
-            Enrollment.schedule_id == schedule_id,
-            User.role == UserRole.STUDENT
-        ).all()
+        return (
+            self.db.query(User)
+            .join(Enrollment, Enrollment.student_id == User.id)
+            .filter(Enrollment.schedule_id == schedule_id, User.role == UserRole.STUDENT)
+            .all()
+        )
 
     def create(self, user_data: dict) -> User:
         """
@@ -97,13 +90,13 @@ class UserRepository:
             DuplicateError: If email or student_id already exists
         """
         # Check for duplicates
-        if user_data.get('email'):
-            existing = self.get_by_email(user_data['email'])
+        if user_data.get("email"):
+            existing = self.get_by_email(user_data["email"])
             if existing:
                 raise DuplicateError(f"Email already exists: {user_data['email']}")
 
-        if user_data.get('student_id'):
-            existing = self.get_by_student_id(user_data['student_id'])
+        if user_data.get("student_id"):
+            existing = self.get_by_student_id(user_data["student_id"])
             if existing:
                 raise DuplicateError(f"Student ID already exists: {user_data['student_id']}")
 

@@ -5,7 +5,8 @@ Represents class schedules (when and where classes meet).
 """
 
 import uuid
-from sqlalchemy import Column, String, Integer, Boolean, Time, ForeignKey, Index
+
+from sqlalchemy import Boolean, Column, ForeignKey, Index, Integer, String, Time
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -56,7 +57,7 @@ class Schedule(Base):
 
     # Target audience (for auto-enrollment matching)
     target_course = Column(String(100), nullable=True, index=True)  # e.g., "BSCPE"
-    target_year_level = Column(Integer, nullable=True)               # e.g., 4
+    target_year_level = Column(Integer, nullable=True)  # e.g., 4
 
     # Status
     is_active = Column(Boolean, default=True, nullable=False)
@@ -69,8 +70,8 @@ class Schedule(Base):
 
     # Indexes
     __table_args__ = (
-        Index('idx_schedule_day_time', 'day_of_week', 'start_time'),
-        Index('idx_schedule_target', 'target_course', 'target_year_level'),
+        Index("idx_schedule_day_time", "day_of_week", "start_time"),
+        Index("idx_schedule_target", "target_course", "target_year_level"),
     )
 
     def __repr__(self):

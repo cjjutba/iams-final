@@ -18,34 +18,35 @@ Frame pipeline:
 
 import asyncio
 import base64
+import contextlib
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Set, Tuple
+from datetime import UTC, datetime
 
 import cv2
 import numpy as np
 
-from app.config import settings, logger
-
+from app.config import logger, settings
 
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Detection:
     """Single face detection result."""
+
     x: int
     y: int
     width: int
     height: int
     confidence: float
-    user_id: Optional[str] = None
-    student_id: Optional[str] = None
-    name: Optional[str] = None
-    similarity: Optional[float] = None
+    user_id: str | None = None
+    student_id: str | None = None
+    name: str | None = None
+    similarity: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -61,16 +62,17 @@ class Detection:
 @dataclass
 class StreamState:
     """Mutable state for a single room's RTSP stream."""
+
     room_id: str
     rtsp_url: str
-    capture: Optional[cv2.VideoCapture] = None
+    capture: cv2.VideoCapture | None = None
     stop_event: threading.Event = field(default_factory=threading.Event)
-    viewers: Set[str] = field(default_factory=set)  # websocket ids
+    viewers: set[str] = field(default_factory=set)  # websocket ids
     # Frame data (written by capture loop, read by push loops)
-    last_jpeg: Optional[bytes] = None
-    last_b64: Optional[str] = None  # pre-computed base64
-    last_detections: List[Detection] = field(default_factory=list)
-    last_detections_dicts: List[dict] = field(default_factory=list)
+    last_jpeg: bytes | None = None
+    last_b64: str | None = None  # pre-computed base64
+    last_detections: list[Detection] = field(default_factory=list)
+    last_detections_dicts: list[dict] = field(default_factory=list)
     last_frame_time: float = 0.0
     frame_seq: int = 0  # monotonically increasing, viewers compare to avoid dups
     # Capture state
@@ -84,6 +86,7 @@ class StreamState:
 # LiveStreamService
 # ---------------------------------------------------------------------------
 
+
 class LiveStreamService:
     """
     Manages RTSP connections and streams annotated frames to WebSocket
@@ -91,7 +94,7 @@ class LiveStreamService:
     """
 
     # Class-level active streams (shared across service instances)
-    _active_streams: Dict[str, StreamState] = {}
+    _active_streams: dict[str, StreamState] = {}
     _lock = threading.Lock()
 
     # Run face detection only every Nth frame (reduces CPU load dramatically).
@@ -114,8 +117,8 @@ class LiveStreamService:
         """Lazy-init InsightFace + FAISS (first call only)."""
         if not self._ml_checked:
             try:
-                from app.services.ml.insightface_model import insightface_model
                 from app.services.ml.faiss_manager import faiss_manager
+                from app.services.ml.insightface_model import insightface_model
 
                 if insightface_model.app is not None and faiss_manager.index is not None:
                     self._insight = insightface_model
@@ -123,9 +126,7 @@ class LiveStreamService:
                     self._ml_available = True
                     logger.info("Live stream: InsightFace + FAISS ready for recognition.")
                 else:
-                    logger.warning(
-                        "Live stream: InsightFace/FAISS not loaded — recognition disabled."
-                    )
+                    logger.warning("Live stream: InsightFace/FAISS not loaded — recognition disabled.")
             except Exception as exc:
                 logger.warning(f"Live stream: ML import failed — recognition disabled: {exc}")
             self._ml_checked = True
@@ -151,8 +152,7 @@ class LiveStreamService:
                 state = self._active_streams[room_id]
                 state.viewers.add(viewer_id)
                 logger.info(
-                    f"Viewer {viewer_id} joined existing stream for room {room_id} "
-                    f"({len(state.viewers)} viewers)"
+                    f"Viewer {viewer_id} joined existing stream for room {room_id} ({len(state.viewers)} viewers)"
                 )
                 return True
 
@@ -175,7 +175,7 @@ class LiveStreamService:
         asyncio.ensure_future(self._capture_loop(state))
         return True
 
-    async def stop_stream(self, room_id: str, viewer_id: Optional[str] = None) -> None:
+    async def stop_stream(self, room_id: str, viewer_id: str | None = None) -> None:
         """
         Remove a viewer.  If no viewers remain, stop the RTSP capture.
         """
@@ -186,10 +186,7 @@ class LiveStreamService:
 
             if viewer_id is not None:
                 state.viewers.discard(viewer_id)
-                logger.info(
-                    f"Viewer {viewer_id} left stream for room {room_id} "
-                    f"({len(state.viewers)} remaining)"
-                )
+                logger.info(f"Viewer {viewer_id} left stream for room {room_id} ({len(state.viewers)} remaining)")
                 if state.viewers:
                     return  # other viewers still watching
 
@@ -199,7 +196,7 @@ class LiveStreamService:
 
         logger.info(f"Stopping stream for room {room_id}")
 
-    def get_latest(self, room_id: str) -> Optional[Tuple[str, List[dict], str, int]]:
+    def get_latest(self, room_id: str) -> tuple[str, list[dict], str, int] | None:
         """
         Return the latest pre-computed frame data for *room_id*.
 
@@ -211,10 +208,10 @@ class LiveStreamService:
         if state is None or state.last_b64 is None:
             return None
 
-        ts = datetime.now(timezone.utc).isoformat()
+        ts = datetime.now(UTC).isoformat()
         return state.last_b64, state.last_detections_dicts, ts, state.frame_seq
 
-    def get_active_rooms(self) -> List[str]:
+    def get_active_rooms(self) -> list[str]:
         """Return list of room_ids with active streams."""
         return list(self._active_streams.keys())
 
@@ -247,18 +244,13 @@ class LiveStreamService:
     def _reconnect(self, state: StreamState) -> bool:
         """Attempt to reconnect to the RTSP stream (blocking)."""
         if state.capture is not None:
-            try:
+            with contextlib.suppress(Exception):
                 state.capture.release()
-            except Exception:
-                pass
             state.capture = None
 
         state.reconnect_attempts += 1
         if state.reconnect_attempts > state.max_reconnect_attempts:
-            logger.error(
-                f"Max reconnect attempts ({state.max_reconnect_attempts}) reached "
-                f"for room {state.room_id}"
-            )
+            logger.error(f"Max reconnect attempts ({state.max_reconnect_attempts}) reached for room {state.room_id}")
             return False
 
         delay = state.reconnect_delay_seconds * state.reconnect_attempts
@@ -294,15 +286,11 @@ class LiveStreamService:
 
                 # Read frame in executor (blocking cv2 call).
                 # _read_frame drains the RTSP buffer to get the freshest frame.
-                success, frame = await loop.run_in_executor(
-                    None, self._read_frame, state
-                )
+                success, frame = await loop.run_in_executor(None, self._read_frame, state)
 
                 if not success:
                     # Try to reconnect
-                    reconnected = await loop.run_in_executor(
-                        None, self._reconnect, state
-                    )
+                    reconnected = await loop.run_in_executor(None, self._reconnect, state)
                     if not reconnected:
                         logger.error(f"Stream ended for room {state.room_id} -- reconnect failed")
                         break
@@ -311,7 +299,7 @@ class LiveStreamService:
                 # Process frame in executor.
                 # Detection only runs every Nth frame; cached results are drawn
                 # on every frame for smooth bounding-box overlays.
-                run_detection = (state.frame_count % self.DETECT_EVERY_N == 0)
+                run_detection = state.frame_count % self.DETECT_EVERY_N == 0
                 jpeg_bytes, detections, b64_str = await loop.run_in_executor(
                     None,
                     self._process_frame,
@@ -343,10 +331,8 @@ class LiveStreamService:
         finally:
             # Release resources
             if state.capture is not None:
-                try:
+                with contextlib.suppress(Exception):
                     state.capture.release()
-                except Exception:
-                    pass
                 state.capture = None
             with self._lock:
                 self._active_streams.pop(state.room_id, None)
@@ -356,7 +342,7 @@ class LiveStreamService:
     # Internal: frame-level operations (all synchronous / blocking)
     # ------------------------------------------------------------------
 
-    def _read_frame(self, state: StreamState) -> Tuple[bool, Optional[np.ndarray]]:
+    def _read_frame(self, state: StreamState) -> tuple[bool, np.ndarray | None]:
         """
         Read the freshest frame from the capture device.
 
@@ -382,8 +368,8 @@ class LiveStreamService:
         self,
         frame: np.ndarray,
         run_detection: bool,
-        cached_detections: List[Detection],
-    ) -> Tuple[bytes, List[Detection], str]:
+        cached_detections: list[Detection],
+    ) -> tuple[bytes, list[Detection], str]:
         """
         Full frame pipeline (synchronous, meant to run in executor):
             1. Resize to stream resolution
@@ -426,7 +412,7 @@ class LiveStreamService:
 
         return jpeg_bytes, detections, b64_str
 
-    def _detect_and_recognise(self, frame: np.ndarray) -> List[Detection]:
+    def _detect_and_recognise(self, frame: np.ndarray) -> list[Detection]:
         """
         Run InsightFace detection + ArcFace embedding + FAISS search on one frame.
         Returns Detection list (user_id/similarity populated for matched faces).
@@ -441,15 +427,17 @@ class LiveStreamService:
                     if matches:
                         user_id, similarity = matches[0]
 
-                detections.append(Detection(
-                    x=face.x,
-                    y=face.y,
-                    width=face.width,
-                    height=face.height,
-                    confidence=face.confidence,
-                    user_id=user_id,
-                    similarity=similarity,
-                ))
+                detections.append(
+                    Detection(
+                        x=face.x,
+                        y=face.y,
+                        width=face.width,
+                        height=face.height,
+                        confidence=face.confidence,
+                        user_id=user_id,
+                        similarity=similarity,
+                    )
+                )
             return detections
         except Exception as exc:
             logger.error(f"Live stream detect+recognise error: {exc}")
@@ -458,7 +446,7 @@ class LiveStreamService:
     def _annotate_frame(
         self,
         frame: np.ndarray,
-        detections: List[Detection],
+        detections: list[Detection],
     ) -> np.ndarray:
         """
         Draw bounding boxes and labels onto the frame.
@@ -487,7 +475,7 @@ class LiveStreamService:
             )
 
             # Label
-            parts: List[str] = []
+            parts: list[str] = []
             if det.name:
                 parts.append(det.name)
             elif det.student_id:
@@ -532,7 +520,7 @@ class LiveStreamService:
 
     @staticmethod
     def enrich_detections(
-        detections: List[Detection],
+        detections: list[Detection],
         db,
     ) -> None:
         """
@@ -543,10 +531,7 @@ class LiveStreamService:
 
         user_repo = UserRepository(db)
         # Collect unique user_ids that need resolution
-        ids_to_resolve = {
-            d.user_id for d in detections
-            if d.user_id and not d.name
-        }
+        ids_to_resolve = {d.user_id for d in detections if d.user_id and not d.name}
         if not ids_to_resolve:
             return
 

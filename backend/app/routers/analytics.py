@@ -4,27 +4,28 @@ Analytics Router
 API endpoints for attendance analytics and reporting.
 """
 
-from typing import List, Optional
 from datetime import date
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.user import User
-from app.services.analytics_service import AnalyticsService
 from app.repositories.anomaly_repository import AnomalyRepository
-from app.utils.dependencies import get_current_user, get_current_faculty, get_current_student
+from app.services.analytics_service import AnalyticsService
+from app.utils.dependencies import get_current_faculty, get_current_student, get_current_user
 
 router = APIRouter()
 
 
 # ----- Faculty Endpoints -----
 
+
 @router.get("/class/{schedule_id}")
 def get_class_overview(
     schedule_id: str,
-    start_date: Optional[date] = Query(None),
-    end_date: Optional[date] = Query(None),
+    start_date: date | None = Query(None),
+    end_date: date | None = Query(None),
     current_user: User = Depends(get_current_faculty),
     db: Session = Depends(get_db),
 ):
@@ -36,8 +37,8 @@ def get_class_overview(
 @router.get("/class/{schedule_id}/heatmap")
 def get_class_heatmap(
     schedule_id: str,
-    start_date: Optional[date] = Query(None),
-    end_date: Optional[date] = Query(None),
+    start_date: date | None = Query(None),
+    end_date: date | None = Query(None),
     current_user: User = Depends(get_current_faculty),
     db: Session = Depends(get_db),
 ):
@@ -100,6 +101,7 @@ def resolve_anomaly(
     anomaly = repo.resolve(anomaly_id, str(current_user.id))
     if not anomaly:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="Anomaly not found")
     return {"success": True, "resolved": True}
 
@@ -107,12 +109,13 @@ def resolve_anomaly(
 @router.get("/predictions/{schedule_id}")
 def get_predictions(
     schedule_id: str,
-    week_start: Optional[date] = Query(None),
+    week_start: date | None = Query(None),
     current_user: User = Depends(get_current_faculty),
     db: Session = Depends(get_db),
 ):
     """Get attendance predictions for a schedule."""
     from app.repositories.prediction_repository import PredictionRepository
+
     repo = PredictionRepository(db)
     target = week_start or date.today()
     predictions = repo.get_by_schedule(schedule_id, target)
@@ -128,6 +131,7 @@ def get_predictions(
 
 
 # ----- Student Endpoints -----
+
 
 @router.get("/me/dashboard")
 def get_student_dashboard(
@@ -150,6 +154,7 @@ def get_student_subjects(
 
 
 # ----- Admin Endpoints -----
+
 
 @router.get("/system/metrics")
 def get_system_metrics(

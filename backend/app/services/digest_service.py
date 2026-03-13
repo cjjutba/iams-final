@@ -5,31 +5,30 @@ Generates daily and weekly attendance summaries for faculty and students.
 """
 
 from datetime import date, datetime, timedelta
-from typing import Dict, Any, List
+from typing import Any
 
-from sqlalchemy.orm import Session
 from sqlalchemy import func
+from sqlalchemy.orm import Session
 
 from app.config import logger
-from app.models.attendance_record import AttendanceRecord, AttendanceStatus
-from app.models.schedule import Schedule
-from app.models.enrollment import Enrollment
-from app.models.early_leave_event import EarlyLeaveEvent
 from app.models.attendance_anomaly import AttendanceAnomaly
+from app.models.attendance_record import AttendanceRecord, AttendanceStatus
+from app.models.early_leave_event import EarlyLeaveEvent
 from app.models.notification_preference import NotificationPreference
+from app.models.schedule import Schedule
 from app.models.user import User, UserRole
-
 
 # ---------------------------------------------------------------------------
 # Pure digest builders (stateless, testable)
 # ---------------------------------------------------------------------------
 
+
 def build_faculty_daily_digest(
     total_classes: int,
-    attendance_rates: List[float],
+    attendance_rates: list[float],
     anomaly_count: int,
     early_leave_count: int,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Build a faculty daily digest summary.
 
@@ -63,8 +62,8 @@ def build_student_weekly_digest(
     attendance_rate: float,
     classes_attended: int,
     classes_total: int,
-    subject_breakdown: List[Dict[str, Any]],
-) -> Dict[str, Any]:
+    subject_breakdown: list[dict[str, Any]],
+) -> dict[str, Any]:
     """
     Build a student weekly digest summary.
 
@@ -85,8 +84,7 @@ def build_student_weekly_digest(
         "classes_total": classes_total,
         "subject_breakdown": subject_breakdown,
         "summary_text": (
-            f"This week: {classes_attended}/{classes_total} classes attended "
-            f"({attendance_rate:.0f}% rate)"
+            f"This week: {classes_attended}/{classes_total} classes attended ({attendance_rate:.0f}% rate)"
         ),
     }
 
@@ -94,6 +92,7 @@ def build_student_weekly_digest(
 # ---------------------------------------------------------------------------
 # Orchestrator (DB-aware)
 # ---------------------------------------------------------------------------
+
 
 class DigestService:
     """Generates and sends digest notifications."""
@@ -122,11 +121,7 @@ class DigestService:
             faculty_id = str(pref.user_id)
 
             # Get today's schedules for this faculty
-            schedules = (
-                self.db.query(Schedule)
-                .filter(Schedule.faculty_id == pref.user_id)
-                .all()
-            )
+            schedules = self.db.query(Schedule).filter(Schedule.faculty_id == pref.user_id).all()
 
             attendance_rates = []
             for schedule in schedules:
@@ -139,10 +134,7 @@ class DigestService:
                     .all()
                 )
                 if records:
-                    present = sum(
-                        1 for r in records
-                        if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
-                    )
+                    present = sum(1 for r in records if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE))
                     attendance_rates.append((present / len(records)) * 100.0)
 
             # Count anomalies and early leaves
@@ -150,18 +142,22 @@ class DigestService:
                 self.db.query(func.count(AttendanceAnomaly.id))
                 .filter(
                     AttendanceAnomaly.detected_at >= datetime.combine(target_date, datetime.min.time()),
-                    AttendanceAnomaly.detected_at < datetime.combine(target_date + timedelta(days=1), datetime.min.time()),
+                    AttendanceAnomaly.detected_at
+                    < datetime.combine(target_date + timedelta(days=1), datetime.min.time()),
                 )
-                .scalar() or 0
+                .scalar()
+                or 0
             )
 
             early_leave_count = (
                 self.db.query(func.count(EarlyLeaveEvent.id))
                 .filter(
                     EarlyLeaveEvent.detected_at >= datetime.combine(target_date, datetime.min.time()),
-                    EarlyLeaveEvent.detected_at < datetime.combine(target_date + timedelta(days=1), datetime.min.time()),
+                    EarlyLeaveEvent.detected_at
+                    < datetime.combine(target_date + timedelta(days=1), datetime.min.time()),
                 )
-                .scalar() or 0
+                .scalar()
+                or 0
             )
 
             digest = build_faculty_daily_digest(
@@ -223,10 +219,7 @@ class DigestService:
             if not records:
                 continue
 
-            present = sum(
-                1 for r in records
-                if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
-            )
+            present = sum(1 for r in records if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE))
             rate = (present / len(records)) * 100.0
 
             # Per-subject breakdown
@@ -242,12 +235,14 @@ class DigestService:
             subject_breakdown = []
             for sid, data in subject_map.items():
                 s_rate = (data["present"] / data["total"]) * 100.0 if data["total"] > 0 else 0
-                subject_breakdown.append({
-                    "schedule_id": sid,
-                    "rate": round(s_rate, 1),
-                    "attended": data["present"],
-                    "total": data["total"],
-                })
+                subject_breakdown.append(
+                    {
+                        "schedule_id": sid,
+                        "rate": round(s_rate, 1),
+                        "attended": data["present"],
+                        "total": data["total"],
+                    }
+                )
 
             digest = build_student_weekly_digest(
                 attendance_rate=rate,

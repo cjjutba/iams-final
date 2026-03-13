@@ -4,18 +4,20 @@ User Model
 Represents all system users: students, faculty, and admins.
 """
 
+import enum
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Boolean, DateTime, Enum as SQLEnum
+
+from sqlalchemy import Boolean, Column, DateTime, String
+from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import relationship
-import enum
 
 from app.database import Base
 
 
-class UserRole(str, enum.Enum):
+class UserRole(enum.StrEnum):
     """User role enumeration"""
+
     STUDENT = "student"
     FACULTY = "faculty"
     ADMIN = "admin"

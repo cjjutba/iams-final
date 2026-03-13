@@ -11,10 +11,9 @@ Only the GoTrue Admin API endpoints we actually use are implemented:
 - get_user:    GET /auth/v1/admin/users/{id}
 """
 
-from typing import Optional
 import httpx
 
-from app.config import settings, logger
+from app.config import logger, settings
 
 
 class SupabaseAdminAuth:
@@ -83,7 +82,7 @@ class SupabaseAdminAuth:
 
         return response.json()
 
-    def get_user_by_id(self, user_id: str) -> Optional[dict]:
+    def get_user_by_id(self, user_id: str) -> dict | None:
         """
         Get a user by ID via the Admin API.
 
@@ -104,17 +103,14 @@ class SupabaseAdminAuth:
 class SupabaseAdmin:
     """Singleton providing a lightweight Supabase Auth admin client."""
 
-    _instance: Optional[SupabaseAdminAuth] = None
+    _instance: SupabaseAdminAuth | None = None
 
     @classmethod
     def get_client(cls) -> SupabaseAdminAuth:
         """Return (and lazily create) the admin auth client."""
         if cls._instance is None:
             if not settings.SUPABASE_URL or not settings.SUPABASE_SERVICE_KEY:
-                raise RuntimeError(
-                    "SUPABASE_URL and SUPABASE_SERVICE_KEY must be set "
-                    "to use Supabase Auth features"
-                )
+                raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set to use Supabase Auth features")
             cls._instance = SupabaseAdminAuth(
                 url=settings.SUPABASE_URL,
                 service_key=settings.SUPABASE_SERVICE_KEY,

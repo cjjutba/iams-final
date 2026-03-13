@@ -6,7 +6,8 @@ Links users to their face embeddings in FAISS index.
 
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Integer, Boolean, DateTime, ForeignKey, LargeBinary
+
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, LargeBinary
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 

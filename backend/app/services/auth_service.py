@@ -7,25 +7,21 @@ Supports dual mode: custom JWT (legacy) and Supabase Auth.
 
 import uuid as uuid_mod
 from datetime import datetime
-from typing import Optional, Tuple
+
 from sqlalchemy.orm import Session
 
+from app.config import logger, settings
 from app.models.user import User, UserRole
-from app.repositories.user_repository import UserRepository
 from app.repositories.student_record_repository import StudentRecordRepository
+from app.repositories.user_repository import UserRepository
+from app.utils.exceptions import AuthenticationError, NotFoundError, ValidationError
 from app.utils.security import (
-    hash_password,
-    verify_password,
     create_access_token,
     create_refresh_token,
-    validate_password_strength
+    hash_password,
+    validate_password_strength,
+    verify_password,
 )
-from app.utils.exceptions import (
-    AuthenticationError,
-    ValidationError,
-    NotFoundError
-)
-from app.config import settings, logger
 
 
 class AuthService:
@@ -61,11 +57,7 @@ class AuthService:
         logger.info(f"Verifying student ID: {student_id}")
 
         if not student_id or len(student_id.strip()) < 3:
-            return {
-                "valid": False,
-                "student_info": None,
-                "message": "Invalid student ID format"
-            }
+            return {"valid": False, "student_info": None, "message": "Invalid student ID format"}
 
         normalized = student_id.strip().upper()
 
@@ -74,18 +66,10 @@ class AuthService:
 
         if not record:
             logger.warning(f"Student ID not found in registry: {normalized}")
-            return {
-                "valid": False,
-                "student_info": None,
-                "message": "Student ID not found in university records"
-            }
+            return {"valid": False, "student_info": None, "message": "Student ID not found in university records"}
 
         if not record.is_active:
-            return {
-                "valid": False,
-                "student_info": None,
-                "message": "Student ID is no longer active"
-            }
+            return {"valid": False, "student_info": None, "message": "Student ID is no longer active"}
 
         # SECURITY: Verify birthdate matches before showing student information
         if not record.birthdate:
@@ -93,7 +77,7 @@ class AuthService:
             return {
                 "valid": False,
                 "student_info": None,
-                "message": "Unable to verify identity. Please contact registrar."
+                "message": "Unable to verify identity. Please contact registrar.",
             }
 
         # Convert datetime to date if needed
@@ -104,7 +88,7 @@ class AuthService:
             return {
                 "valid": False,
                 "student_info": None,
-                "message": "Identity verification failed. Please check your birthdate."
+                "message": "Identity verification failed. Please check your birthdate.",
             }
 
         # Reject if already has an app account (prevent duplicate registration)
@@ -113,7 +97,7 @@ class AuthService:
             return {
                 "valid": False,
                 "student_info": None,
-                "message": "This student ID is already registered. Please login instead."
+                "message": "This student ID is already registered. Please login instead.",
             }
 
         # Both student ID and birthdate verified — return student info
@@ -129,14 +113,14 @@ class AuthService:
                 "email": record.email,
                 "contact_number": record.contact_number,
             },
-            "message": "Student ID verified successfully"
+            "message": "Student ID verified successfully",
         }
 
     # ------------------------------------------------------------------
     # FUN-01-02: Register Student Account
     # ------------------------------------------------------------------
 
-    def register_student(self, registration_data: dict) -> Tuple[User, dict]:
+    def register_student(self, registration_data: dict) -> tuple[User, dict]:
         """
         Register a new student account.
 
@@ -171,13 +155,12 @@ class AuthService:
             raise ValidationError("Student ID is no longer active")
 
         # Check if already registered (student ID or email) in a single query
-        existing_user = self.user_repo.get_by_student_id_or_email(
-            normalized_id, registration_data["email"]
-        )
+        existing_user = self.user_repo.get_by_student_id_or_email(normalized_id, registration_data["email"])
         if existing_user:
             if existing_user.student_id == normalized_id:
                 raise ValidationError("This student ID is already registered. Please login instead.")
             from app.utils.exceptions import DuplicateError
+
             raise DuplicateError("An account with this email already exists")
 
         # Validate password strength
@@ -193,7 +176,7 @@ class AuthService:
         else:
             return self._register_student_legacy(registration_data, record, normalized_id)
 
-    def _register_student_supabase(self, registration_data: dict, record, normalized_id: str) -> Tuple[User, dict]:
+    def _register_student_supabase(self, registration_data: dict, record, normalized_id: str) -> tuple[User, dict]:
         """Create student via Supabase Auth signup endpoint.
 
         Uses the regular POST /auth/v1/signup endpoint (not admin API)
@@ -210,6 +193,7 @@ class AuthService:
             # construct it from the BACKEND_URL env var or fall back to
             # letting Supabase handle it (site_url configured in dashboard).
             import os
+
             backend_url = os.environ.get("BACKEND_URL", "").rstrip("/")
             if backend_url:
                 redirect_url = f"{backend_url}{settings.API_PREFIX}/auth/email-confirmed"
@@ -250,12 +234,13 @@ class AuthService:
             logger.error(f"Supabase user creation failed: {error_msg}")
             if "already been registered" in error_msg.lower() or "duplicate" in error_msg.lower():
                 from app.utils.exceptions import DuplicateError
-                raise DuplicateError("An account with this email already exists")
-            raise ValidationError(f"Failed to create account: {error_msg}")
+
+                raise DuplicateError("An account with this email already exists") from e
+            raise ValidationError(f"Failed to create account: {error_msg}") from e
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Supabase signup request failed: {error_msg}")
-            raise ValidationError(f"Failed to create account: {error_msg}")
+            raise ValidationError(f"Failed to create account: {error_msg}") from e
 
         # Create local user record — skip duplicate checks (already validated
         # by register_student() and Supabase signup above).  Use flush() to
@@ -279,9 +264,11 @@ class AuthService:
         # student record and skip enrollment duplicate checks (brand-new user
         # can't have existing enrollments).
         from app.services.enrollment_service import EnrollmentService
+
         enrollment_service = EnrollmentService(self.db)
         enrollment_service.auto_enroll_student(
-            user.id, normalized_id,
+            user.id,
+            normalized_id,
             record=record,
             skip_duplicate_check=True,
         )
@@ -300,7 +287,7 @@ class AuthService:
             "message": "Account created. Please check your email to verify your address.",
         }
 
-    def _register_student_legacy(self, registration_data: dict, record, normalized_id: str) -> Tuple[User, dict]:
+    def _register_student_legacy(self, registration_data: dict, record, normalized_id: str) -> tuple[User, dict]:
         """Create student with local password hashing (legacy / custom JWT mode)."""
         user = User(
             email=registration_data["email"],
@@ -318,9 +305,11 @@ class AuthService:
 
         # Auto-enroll in matching schedules
         from app.services.enrollment_service import EnrollmentService
+
         enrollment_service = EnrollmentService(self.db)
         enrollment_service.auto_enroll_student(
-            user.id, normalized_id,
+            user.id,
+            normalized_id,
             record=record,
             skip_duplicate_check=True,
         )
@@ -338,7 +327,7 @@ class AuthService:
     # FUN-01-03: Login (custom JWT — kept for dual-auth)
     # ------------------------------------------------------------------
 
-    def login(self, identifier: str, password: str) -> Tuple[User, dict]:
+    def login(self, identifier: str, password: str) -> tuple[User, dict]:
         """
         Authenticate user and generate tokens (custom JWT mode).
 
@@ -360,9 +349,7 @@ class AuthService:
             raise AuthenticationError("Invalid email/student ID or password")
 
         if not user.password_hash:
-            raise AuthenticationError(
-                "This account uses Supabase Auth. Please login via the mobile app."
-            )
+            raise AuthenticationError("This account uses Supabase Auth. Please login via the mobile app.")
 
         if not verify_password(password, user.password_hash):
             logger.warning(f"Login failed: Invalid password for user {user.id}")
@@ -406,14 +393,11 @@ class AuthService:
 
             access_token = create_access_token({"user_id": str(user.id)})
 
-            return {
-                "access_token": access_token,
-                "token_type": "bearer"
-            }
+            return {"access_token": access_token, "token_type": "bearer"}
 
         except Exception as e:
             logger.error(f"Token refresh failed: {e}")
-            raise AuthenticationError("Invalid or expired refresh token")
+            raise AuthenticationError("Invalid or expired refresh token") from e
 
     # ------------------------------------------------------------------
     # FUN-01-05: Get Current User (handled by dependency in dependencies.py)
@@ -443,6 +427,7 @@ class AuthService:
         if settings.USE_SUPABASE_AUTH:
             try:
                 import httpx
+
                 response = httpx.post(
                     f"{settings.SUPABASE_URL}/auth/v1/recover",
                     json={"email": email},
@@ -476,7 +461,7 @@ class AuthService:
     # Email Verification helpers
     # ------------------------------------------------------------------
 
-    def handle_email_verified(self, supabase_user_id: str) -> Optional[User]:
+    def handle_email_verified(self, supabase_user_id: str) -> User | None:
         """
         Mark a user's email as verified.
 
@@ -495,11 +480,7 @@ class AuthService:
             logger.error(f"Invalid supabase_user_id: {supabase_user_id}")
             return None
 
-        user = (
-            self.db.query(User)
-            .filter(User.supabase_user_id == sb_uuid)
-            .first()
-        )
+        user = self.db.query(User).filter(User.supabase_user_id == sb_uuid).first()
 
         if not user:
             logger.warning(f"Webhook: no local user for supabase_user_id {supabase_user_id}")
@@ -534,6 +515,7 @@ class AuthService:
         if settings.USE_SUPABASE_AUTH and user.supabase_user_id:
             try:
                 import httpx
+
                 response = httpx.get(
                     f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user.supabase_user_id}",
                     headers={
@@ -571,6 +553,7 @@ class AuthService:
 
         try:
             import httpx
+
             response = httpx.post(
                 f"{settings.SUPABASE_URL}/auth/v1/resend",
                 json={"type": "signup", "email": email},
@@ -605,9 +588,8 @@ class AuthService:
             raise NotFoundError(f"User not found: {user_id}")
 
         # Verify old password (only for users with local password)
-        if user.password_hash:
-            if not verify_password(old_password, user.password_hash):
-                raise AuthenticationError("Current password is incorrect")
+        if user.password_hash and not verify_password(old_password, user.password_hash):
+            raise AuthenticationError("Current password is incorrect")
 
         # Validate new password
         is_valid, error_msg = validate_password_strength(new_password)
@@ -615,14 +597,13 @@ class AuthService:
             raise ValidationError(error_msg)
 
         # Update local password hash
-        self.user_repo.update(user_id, {
-            "password_hash": hash_password(new_password)
-        })
+        self.user_repo.update(user_id, {"password_hash": hash_password(new_password)})
 
         # Also update in Supabase Auth if applicable
         if settings.USE_SUPABASE_AUTH and user.supabase_user_id:
             try:
                 from app.services.supabase_client import get_supabase_admin
+
                 admin = get_supabase_admin()
                 admin.update_user_by_id(
                     str(user.supabase_user_id),
@@ -653,6 +634,7 @@ class AuthService:
             existing = self.user_repo.get_by_email(filtered_data["email"])
             if existing:
                 from app.utils.exceptions import DuplicateError
+
                 raise DuplicateError(f"Email already in use: {filtered_data['email']}")
 
         updated_user = self.user_repo.update(user_id, filtered_data)
@@ -668,8 +650,4 @@ class AuthService:
         access_token = create_access_token({"user_id": str(user.id)})
         refresh_token = create_refresh_token({"user_id": str(user.id)})
 
-        return {
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "token_type": "bearer"
-        }
+        return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
