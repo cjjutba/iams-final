@@ -1,8 +1,10 @@
 import { Bell } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth.store'
+import { useNotificationStore } from '@/stores/notification.store'
 import { SidebarTrigger } from '@/components/ui/sidebar'
 import { Separator } from '@/components/ui/separator'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,6 +18,7 @@ import { Breadcrumbs } from './breadcrumbs'
 
 export function Header() {
   const { user, logout } = useAuthStore()
+  const unreadCount = useNotificationStore((s) => s.unreadCount)
 
   const initials = user
     ? `${user.first_name.charAt(0)}${user.last_name.charAt(0)}`
@@ -27,8 +30,16 @@ export function Header() {
       <Separator orientation="vertical" className="h-4" />
       <Breadcrumbs />
       <div className="ml-auto flex items-center gap-2">
-        <Button variant="ghost" size="icon">
+        <Button variant="ghost" size="icon" className="relative">
           <Bell className="h-4 w-4" />
+          {unreadCount > 0 && (
+            <Badge
+              variant="destructive"
+              className="absolute -top-1 -right-1 h-4 min-w-4 px-1 text-[10px] leading-none"
+            >
+              {unreadCount > 99 ? '99+' : unreadCount}
+            </Badge>
+          )}
           <span className="sr-only">Notifications</span>
         </Button>
         <DropdownMenu>
