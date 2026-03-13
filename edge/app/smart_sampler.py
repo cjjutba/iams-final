@@ -14,7 +14,6 @@ best-confidence frame within a dedup window before sending.
 
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
 
 from app.config import logger
 from app.processor import FaceData
@@ -25,11 +24,11 @@ class TrackedFace:
     """State for a single tracked face across frames."""
 
     track_id: int
-    bbox: List[int]              # [x, y, w, h]
+    bbox: list[int]  # [x, y, w, h]
     confidence: float
-    last_seen: float             # timestamp
-    last_sent: float             # timestamp (0 = never sent)
-    best_frame_data: Optional[FaceData] = None
+    last_seen: float  # timestamp
+    last_sent: float  # timestamp (0 = never sent)
+    best_frame_data: FaceData | None = None
     best_confidence: float = 0.0
     is_new: bool = True
 
@@ -49,7 +48,7 @@ class SmartSampler:
         self.face_gone_timeout = config.FACE_GONE_TIMEOUT
         self.iou_threshold = config.IOU_MATCH_THRESHOLD
 
-        self._tracks: Dict[int, TrackedFace] = {}
+        self._tracks: dict[int, TrackedFace] = {}
         self._next_track_id: int = 1
 
     # ------------------------------------------------------------------
@@ -58,10 +57,10 @@ class SmartSampler:
 
     def update(
         self,
-        detections: List[List[int]],
-        face_data_list: List[FaceData],
-        current_time: Optional[float] = None,
-    ) -> Tuple[List[FaceData], List[int]]:
+        detections: list[list[int]],
+        face_data_list: list[FaceData],
+        current_time: float | None = None,
+    ) -> tuple[list[FaceData], list[int]]:
         """
         Process a new set of detections and decide which faces to send.
 
@@ -78,11 +77,11 @@ class SmartSampler:
         """
         now = current_time if current_time is not None else time.time()
 
-        faces_to_send: List[FaceData] = []
+        faces_to_send: list[FaceData] = []
         matched_track_ids: set = set()
 
         # --- Match each detection to an existing or new track ----------
-        for bbox, face_data in zip(detections, face_data_list):
+        for bbox, face_data in zip(detections, face_data_list, strict=False):
             track_id = self._match_or_create(bbox, now)
             matched_track_ids.add(track_id)
             track = self._tracks[track_id]
@@ -114,12 +113,10 @@ class SmartSampler:
                 track.last_sent = now
                 track.best_confidence = 0.0
                 track.best_frame_data = None
-                logger.debug(
-                    f"SmartSampler: track {track_id} dedup window expired, sending"
-                )
+                logger.debug(f"SmartSampler: track {track_id} dedup window expired, sending")
 
         # --- Detect gone faces -----------------------------------------
-        gone_track_ids: List[int] = []
+        gone_track_ids: list[int] = []
         stale_ids = [
             tid
             for tid, t in self._tracks.items()
@@ -141,7 +138,7 @@ class SmartSampler:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _match_or_create(self, bbox: List[int], now: float) -> int:
+    def _match_or_create(self, bbox: list[int], now: float) -> int:
         """
         Match a detection bbox to an existing track via IoU, or create a
         new track if no match exceeds the threshold.
@@ -154,7 +151,7 @@ class SmartSampler:
             Track ID (existing or newly created).
         """
         best_iou = 0.0
-        best_tid: Optional[int] = None
+        best_tid: int | None = None
 
         for tid, track in self._tracks.items():
             iou = self._compute_iou(bbox, track.bbox)
@@ -179,7 +176,7 @@ class SmartSampler:
         return new_id
 
     @staticmethod
-    def _compute_iou(box1: List[int], box2: List[int]) -> float:
+    def _compute_iou(box1: list[int], box2: list[int]) -> float:
         """
         Compute Intersection over Union between two [x, y, w, h] boxes.
 

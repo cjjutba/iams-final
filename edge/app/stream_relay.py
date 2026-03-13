@@ -12,11 +12,10 @@ Key design decisions:
 - Runs in a background thread so it doesn't block the scan loop
 """
 
-import subprocess
 import shutil
+import subprocess
 import threading
 import time
-from typing import Optional
 
 from app.config import config, logger
 
@@ -25,11 +24,11 @@ class StreamRelay:
     """Manages FFmpeg subprocess for RTSP relay to VPS mediamtx."""
 
     def __init__(self) -> None:
-        self._process: Optional[subprocess.Popen] = None
+        self._process: subprocess.Popen | None = None
         self._lock = threading.Lock()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
-        self._current_room_id: Optional[str] = None
+        self._current_room_id: str | None = None
 
     @property
     def is_running(self) -> bool:
@@ -81,10 +80,7 @@ class StreamRelay:
         )
         self._thread.start()
 
-        logger.info(
-            f"Stream relay started: {config.RTSP_URL} → "
-            f"{config.STREAM_RELAY_URL}/{room_id}"
-        )
+        logger.info(f"Stream relay started: {config.RTSP_URL} → {config.STREAM_RELAY_URL}/{room_id}")
         return True
 
     def stop(self) -> None:
@@ -140,12 +136,17 @@ class StreamRelay:
         cmd = [
             "ffmpeg",
             "-hide_banner",
-            "-loglevel", "warning",
-            "-rtsp_transport", config.RTSP_TRANSPORT,
-            "-i", config.RTSP_URL,
-            "-an",              # Drop audio (avoids codec issues with mediamtx)
-            "-c:v", "copy",
-            "-f", "rtsp",
+            "-loglevel",
+            "warning",
+            "-rtsp_transport",
+            config.RTSP_TRANSPORT,
+            "-i",
+            config.RTSP_URL,
+            "-an",  # Drop audio (avoids codec issues with mediamtx)
+            "-c:v",
+            "copy",
+            "-f",
+            "rtsp",
             dest,
         ]
 

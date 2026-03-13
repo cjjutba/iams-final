@@ -21,12 +21,11 @@ Environment variables:
 - LOG_LEVEL: Logging level (default: INFO)
 """
 
-import os
 import logging
+import os
 from pathlib import Path
-from typing import Optional
-from dotenv import load_dotenv
 
+from dotenv import load_dotenv
 
 # Load environment variables from .env file
 env_path = Path(__file__).parent.parent / ".env"
@@ -100,7 +99,7 @@ class Config:
 
     # ===== Logging Configuration =====
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
-    LOG_FILE: Optional[str] = os.getenv("LOG_FILE", None)
+    LOG_FILE: str | None = os.getenv("LOG_FILE", None)
 
     # ===== HTTP Configuration =====
     HTTP_TIMEOUT: int = int(os.getenv("HTTP_TIMEOUT", "30"))
@@ -183,7 +182,7 @@ class Config:
             errors.append(f"STREAM_RELAY_URL must start with rtsp:// or rtsps:// (got: {cls.STREAM_RELAY_URL[:30]}...)")
 
         if errors:
-            raise ValueError(f"Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in errors))
+            raise ValueError("Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in errors))
 
     @classmethod
     def get_api_endpoint(cls, path: str) -> str:
@@ -221,12 +220,7 @@ def setup_logging() -> logging.Logger:
         handlers.append(logging.FileHandler(Config.LOG_FILE))
 
     # Configure root logger
-    logging.basicConfig(
-        level=log_level,
-        format=log_format,
-        datefmt=date_format,
-        handlers=handlers
-    )
+    logging.basicConfig(level=log_level, format=log_format, datefmt=date_format, handlers=handlers)
 
     return logging.getLogger("edge")
 

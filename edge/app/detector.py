@@ -13,10 +13,10 @@ Features:
 """
 
 import os
-import numpy as np
+
 import cv2
-from typing import List, Tuple, Optional
 import mediapipe as mp
+import numpy as np
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
@@ -92,19 +92,13 @@ class FaceBox:
         self.height = max(1, height)
         self.confidence = confidence
 
-    def to_list(self) -> List[int]:
+    def to_list(self) -> list[int]:
         """Convert to [x, y, width, height] format for API"""
         return [self.x, self.y, self.width, self.height]
 
     def to_dict(self) -> dict:
         """Convert to dictionary"""
-        return {
-            "x": self.x,
-            "y": self.y,
-            "width": self.width,
-            "height": self.height,
-            "confidence": self.confidence
-        }
+        return {"x": self.x, "y": self.y, "width": self.width, "height": self.height, "confidence": self.confidence}
 
     def __repr__(self) -> str:
         return f"FaceBox(x={self.x}, y={self.y}, w={self.width}, h={self.height}, conf={self.confidence:.2f})"
@@ -123,7 +117,7 @@ class FaceDetector:
     """
 
     def __init__(self):
-        self.detector: Optional[vision.FaceDetector] = None
+        self.detector: vision.FaceDetector | None = None
         self.is_initialized = False
         self._consecutive_errors = 0
         self._max_consecutive_errors = 3
@@ -144,9 +138,7 @@ class FaceDetector:
             model_path = _get_model_path(config.DETECTION_MODEL)
 
             # Create face detector options
-            base_options = python.BaseOptions(
-                model_asset_path=model_path
-            )
+            base_options = python.BaseOptions(model_asset_path=model_path)
 
             options = vision.FaceDetectorOptions(
                 base_options=base_options,
@@ -158,9 +150,7 @@ class FaceDetector:
             self._consecutive_errors = 0
 
             logger.info(
-                f"MediaPipe Face Detector initialized - "
-                f"confidence={config.DETECTION_CONFIDENCE}, "
-                f"model=short-range"
+                f"MediaPipe Face Detector initialized - confidence={config.DETECTION_CONFIDENCE}, model=short-range"
             )
             return True
 
@@ -192,7 +182,7 @@ class FaceDetector:
     # and waste backend resources.
     MIN_FACE_PIXELS = 80
 
-    def detect(self, frame: np.ndarray) -> List[FaceBox]:
+    def detect(self, frame: np.ndarray) -> list[FaceBox]:
         """
         Detect faces in a frame.
 
@@ -261,9 +251,7 @@ class FaceDetector:
 
                 # Skip faces that are too small for reliable recognition
                 if face_box.width < self.MIN_FACE_PIXELS or face_box.height < self.MIN_FACE_PIXELS:
-                    logger.debug(
-                        f"Skipping small face: {face_box.width}x{face_box.height} < {self.MIN_FACE_PIXELS}px"
-                    )
+                    logger.debug(f"Skipping small face: {face_box.width}x{face_box.height} < {self.MIN_FACE_PIXELS}px")
                     continue
 
                 face_boxes.append(face_box)
@@ -278,10 +266,7 @@ class FaceDetector:
             # If we've had multiple consecutive errors, the graph is likely
             # in a broken state. Try to recover by re-creating the detector.
             if self._consecutive_errors >= self._max_consecutive_errors:
-                logger.warning(
-                    f"{self._consecutive_errors} consecutive detection errors — "
-                    "attempting graph recovery"
-                )
+                logger.warning(f"{self._consecutive_errors} consecutive detection errors — attempting graph recovery")
                 if self._try_recover():
                     logger.info("MediaPipe detector recovered successfully")
                 else:
@@ -289,7 +274,7 @@ class FaceDetector:
 
             return []
 
-    def detect_and_visualize(self, frame: np.ndarray, draw_boxes: bool = True) -> Tuple[List[FaceBox], np.ndarray]:
+    def detect_and_visualize(self, frame: np.ndarray, draw_boxes: bool = True) -> tuple[list[FaceBox], np.ndarray]:
         """
         Detect faces and optionally draw bounding boxes.
 
@@ -315,19 +300,13 @@ class FaceDetector:
                 (face_box.x, face_box.y),
                 (face_box.x + face_box.width, face_box.y + face_box.height),
                 (0, 255, 0),  # Green
-                2
+                2,
             )
 
             # Draw confidence score
             label = f"{face_box.confidence:.2f}"
             cv2.putText(
-                annotated_frame,
-                label,
-                (face_box.x, face_box.y - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (0, 255, 0),
-                2
+                annotated_frame, label, (face_box.x, face_box.y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2
             )
 
         return face_boxes, annotated_frame

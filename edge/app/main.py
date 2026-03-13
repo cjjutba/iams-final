@@ -20,18 +20,16 @@ Signals:
 import signal
 import sys
 import time
-import asyncio
 from datetime import datetime
-from typing import Optional
 
-from app.config import config, logger
 from app.camera import CameraManager
+from app.config import config, logger
 from app.detector import FaceDetector
 from app.processor import FaceProcessor
-from app.sender import SyncBackendSender
 from app.queue_manager import QueueManager, RetryWorker
-from app.stream_relay import stream_relay
+from app.sender import SyncBackendSender
 from app.smart_sampler import SmartSampler
+from app.stream_relay import stream_relay
 
 
 class EdgeDevice:
@@ -48,7 +46,7 @@ class EdgeDevice:
         self.processor = FaceProcessor()
         self.sender = SyncBackendSender()
         self.queue_manager = QueueManager()
-        self.retry_worker: Optional[RetryWorker] = None
+        self.retry_worker: RetryWorker | None = None
 
         # State
         self.is_running = False
@@ -58,7 +56,7 @@ class EdgeDevice:
 
         # Session awareness state
         self._session_active = False
-        self._current_schedule_id: Optional[str] = None
+        self._current_schedule_id: str | None = None
 
         # Configuration
         self.room_id = config.ROOM_ID
@@ -68,7 +66,7 @@ class EdgeDevice:
 
         # Smart sampler
         self.use_smart_sampler = config.USE_SMART_SAMPLER
-        self.smart_sampler: Optional[SmartSampler] = None
+        self.smart_sampler: SmartSampler | None = None
         if self.use_smart_sampler:
             self.smart_sampler = SmartSampler(config)
 
@@ -240,10 +238,7 @@ class EdgeDevice:
             if self.smart_sampler is not None:
                 _, gone_track_ids = self.smart_sampler.update([], [])
                 if gone_track_ids:
-                    logger.info(
-                        f"Smart sampler: {len(gone_track_ids)} face(s) gone "
-                        f"(track_ids={gone_track_ids})"
-                    )
+                    logger.info(f"Smart sampler: {len(gone_track_ids)} face(s) gone (track_ids={gone_track_ids})")
                     if self.sender:
                         self.sender.send_face_gone(self.room_id, gone_track_ids)
             logger.info("No faces detected, skipping transmission")
@@ -263,15 +258,10 @@ class EdgeDevice:
         # Smart sampler: filter to only new/changed faces
         if self.smart_sampler is not None:
             detections = [fd.bbox for fd in face_data_list]
-            faces_to_send, gone_track_ids = self.smart_sampler.update(
-                detections, face_data_list
-            )
+            faces_to_send, gone_track_ids = self.smart_sampler.update(detections, face_data_list)
 
             if gone_track_ids:
-                logger.info(
-                    f"Smart sampler: {len(gone_track_ids)} face(s) gone "
-                    f"(track_ids={gone_track_ids})"
-                )
+                logger.info(f"Smart sampler: {len(gone_track_ids)} face(s) gone (track_ids={gone_track_ids})")
                 if self.sender:
                     self.sender.send_face_gone(self.room_id, gone_track_ids)
 
@@ -290,18 +280,13 @@ class EdgeDevice:
 
         # Send to backend
         try:
-            result = self.sender.send_with_retry(
-                faces=faces_to_send,
-                room_id=self.room_id,
-                timestamp=scan_timestamp
-            )
+            result = self.sender.send_with_retry(faces=faces_to_send, room_id=self.room_id, timestamp=scan_timestamp)
 
             if result is not None:
                 # Success
                 self.total_faces_sent += len(faces_to_send)
                 logger.info(
-                    f"Successfully sent {len(faces_to_send)} faces to backend. "
-                    f"Response: {result.get('data', {})}"
+                    f"Successfully sent {len(faces_to_send)} faces to backend. Response: {result.get('data', {})}"
                 )
             else:
                 # Failed after retries - queue for later
@@ -310,17 +295,14 @@ class EdgeDevice:
                     faces=faces_to_send,
                     room_id=self.room_id,
                     timestamp=scan_timestamp,
-                    error_msg="Backend unreachable after retries"
+                    error_msg="Backend unreachable after retries",
                 )
 
         except Exception as e:
             logger.error(f"Error sending faces: {e}")
             # Queue for retry
             self.queue_manager.enqueue(
-                faces=faces_to_send,
-                room_id=self.room_id,
-                timestamp=scan_timestamp,
-                error_msg=str(e)
+                faces=faces_to_send, room_id=self.room_id, timestamp=scan_timestamp, error_msg=str(e)
             )
 
         # Update scan count
@@ -362,16 +344,12 @@ class EdgeDevice:
                     if self.session_aware and not scan_performed:
                         # No active session -- use shorter poll interval
                         sleep_interval = self.session_poll_interval
-                        logger.debug(
-                            f"No active session, polling again in {sleep_interval}s"
-                        )
+                        logger.debug(f"No active session, polling again in {sleep_interval}s")
                     elif self.smart_sampler is not None and scan_performed:
                         # Smart sampler active + session running: scan at
                         # SEND_INTERVAL (default 3s) for responsive tracking
                         sleep_interval = config.SEND_INTERVAL
-                        logger.debug(
-                            f"Smart sampler active, next scan in {sleep_interval}s"
-                        )
+                        logger.debug(f"Smart sampler active, next scan in {sleep_interval}s")
                     else:
                         # Active session or session-aware disabled -- use scan interval
                         sleep_interval = self.scan_interval
@@ -403,15 +381,17 @@ class EdgeDevice:
         logger.info(f"Total faces sent: {self.total_faces_sent}")
         logger.info(f"Queue size: {queue_stats['current_size']}/{queue_stats['max_size']}")
         logger.info(f"Queue utilization: {queue_stats['utilization_pct']:.1f}%")
-        logger.info(f"Queue stats: enqueued={queue_stats['total_enqueued']}, "
-                   f"dropped={queue_stats['total_dropped']}, "
-                   f"succeeded={queue_stats['total_succeeded']}, "
-                   f"failed={queue_stats['total_failed']}")
+        logger.info(
+            f"Queue stats: enqueued={queue_stats['total_enqueued']}, "
+            f"dropped={queue_stats['total_dropped']}, "
+            f"succeeded={queue_stats['total_succeeded']}, "
+            f"failed={queue_stats['total_failed']}"
+        )
         logger.info("=" * 60)
 
 
 # Global edge device instance
-edge_device: Optional[EdgeDevice] = None
+edge_device: EdgeDevice | None = None
 
 
 def signal_handler(signum, frame):

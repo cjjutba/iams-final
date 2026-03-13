@@ -11,12 +11,10 @@ Features:
 - Batch processing support
 """
 
+import base64
+
 import cv2
 import numpy as np
-import base64
-from typing import List, Optional, Tuple
-from io import BytesIO
-from PIL import Image
 
 from app.config import config, logger
 from app.detector import FaceBox
@@ -32,17 +30,14 @@ class FaceData:
         confidence: Detection confidence
     """
 
-    def __init__(self, image_base64: str, bbox: List[int], confidence: float):
+    def __init__(self, image_base64: str, bbox: list[int], confidence: float):
         self.image_base64 = image_base64
         self.bbox = bbox
         self.confidence = confidence
 
     def to_dict(self) -> dict:
         """Convert to API request format"""
-        return {
-            "image": self.image_base64,
-            "bbox": self.bbox
-        }
+        return {"image": self.image_base64, "bbox": self.bbox}
 
 
 class FaceProcessor:
@@ -85,9 +80,9 @@ class FaceProcessor:
             return face_img
         try:
             lab = cv2.cvtColor(face_img, cv2.COLOR_BGR2LAB)
-            l, a, b = cv2.split(lab)
-            l = self._clahe.apply(l)
-            enhanced = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
+            lightness, a, b = cv2.split(lab)
+            lightness = self._clahe.apply(lightness)
+            enhanced = cv2.cvtColor(cv2.merge([lightness, a, b]), cv2.COLOR_LAB2BGR)
             return enhanced
         except Exception as e:
             logger.debug(f"CLAHE enhancement failed, returning original: {e}")
@@ -112,7 +107,7 @@ class FaceProcessor:
         except Exception:
             return False
 
-    def compute_dynamic_padding(self, face_box: FaceBox, frame_shape: Tuple[int, ...]) -> float:
+    def compute_dynamic_padding(self, face_box: FaceBox, frame_shape: tuple[int, ...]) -> float:
         """
         Compute adaptive crop padding based on face size relative to frame.
 
@@ -145,12 +140,7 @@ class FaceProcessor:
         else:
             return 0.4
 
-    def crop_face(
-        self,
-        frame: np.ndarray,
-        face_box: FaceBox,
-        padding: float = 0.2
-    ) -> Optional[np.ndarray]:
+    def crop_face(self, frame: np.ndarray, face_box: FaceBox, padding: float = 0.2) -> np.ndarray | None:
         """
         Crop face region from frame with optional padding.
 
@@ -196,7 +186,7 @@ class FaceProcessor:
             logger.error(f"Face crop error: {e}")
             return None
 
-    def resize_face(self, face_img: np.ndarray) -> Optional[np.ndarray]:
+    def resize_face(self, face_img: np.ndarray) -> np.ndarray | None:
         """
         Resize face image to standard dimensions.
 
@@ -207,18 +197,14 @@ class FaceProcessor:
             Resized face image (crop_size x crop_size)
         """
         try:
-            resized = cv2.resize(
-                face_img,
-                (self.crop_size, self.crop_size),
-                interpolation=cv2.INTER_AREA
-            )
+            resized = cv2.resize(face_img, (self.crop_size, self.crop_size), interpolation=cv2.INTER_AREA)
             return resized
 
         except Exception as e:
             logger.error(f"Face resize error: {e}")
             return None
 
-    def encode_jpeg(self, face_img: np.ndarray) -> Optional[bytes]:
+    def encode_jpeg(self, face_img: np.ndarray) -> bytes | None:
         """
         Encode face image to JPEG bytes.
 
@@ -231,7 +217,7 @@ class FaceProcessor:
         try:
             # Encode to JPEG using OpenCV
             encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
-            success, buffer = cv2.imencode('.jpg', face_img, encode_params)
+            success, buffer = cv2.imencode(".jpg", face_img, encode_params)
 
             if not success:
                 logger.error("JPEG encoding failed")
@@ -253,13 +239,9 @@ class FaceProcessor:
         Returns:
             Base64-encoded string
         """
-        return base64.b64encode(jpeg_bytes).decode('utf-8')
+        return base64.b64encode(jpeg_bytes).decode("utf-8")
 
-    def process_face(
-        self,
-        frame: np.ndarray,
-        face_box: FaceBox
-    ) -> Optional[FaceData]:
+    def process_face(self, frame: np.ndarray, face_box: FaceBox) -> FaceData | None:
         """
         Process a single detected face for transmission.
 
@@ -287,10 +269,7 @@ class FaceProcessor:
 
             # Skip blurry crops (saves bandwidth)
             if self.is_blurry(cropped):
-                logger.debug(
-                    f"Skipping blurry face crop "
-                    f"(bbox={face_box.to_list()}, conf={face_box.confidence:.2f})"
-                )
+                logger.debug(f"Skipping blurry face crop (bbox={face_box.to_list()}, conf={face_box.confidence:.2f})")
                 return None
 
             # Apply CLAHE histogram equalization
@@ -310,11 +289,7 @@ class FaceProcessor:
             base64_str = self.encode_base64(jpeg_bytes)
 
             # Create FaceData
-            face_data = FaceData(
-                image_base64=base64_str,
-                bbox=face_box.to_list(),
-                confidence=face_box.confidence
-            )
+            face_data = FaceData(image_base64=base64_str, bbox=face_box.to_list(), confidence=face_box.confidence)
 
             return face_data
 
@@ -322,11 +297,7 @@ class FaceProcessor:
             logger.error(f"Face processing error: {e}")
             return None
 
-    def process_batch(
-        self,
-        frame: np.ndarray,
-        face_boxes: List[FaceBox]
-    ) -> List[FaceData]:
+    def process_batch(self, frame: np.ndarray, face_boxes: list[FaceBox]) -> list[FaceData]:
         """
         Process multiple detected faces.
 
@@ -345,7 +316,7 @@ class FaceProcessor:
             if face_data:
                 face_data_list.append(face_data)
             else:
-                logger.warning(f"Failed to process face {i+1}/{len(face_boxes)}")
+                logger.warning(f"Failed to process face {i + 1}/{len(face_boxes)}")
 
         logger.debug(f"Processed {len(face_data_list)}/{len(face_boxes)} faces")
         return face_data_list

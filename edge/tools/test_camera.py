@@ -25,11 +25,10 @@ Requirements:
 """
 
 import argparse
-import sys
-import os
-import time
 import math
-import numpy as np
+import os
+import sys
+import time
 
 # Add parent dir so we can import from app if needed
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -39,7 +38,7 @@ def connect_rtsp(url: str, transport: str = "tcp"):
     """Connect to RTSP stream and return VideoCapture + test frame."""
     import cv2
 
-    print(f"\n[1/4] Connecting to RTSP stream...")
+    print("\n[1/4] Connecting to RTSP stream...")
 
     # Mask password for display
     safe_url = url
@@ -102,21 +101,20 @@ def connect_usb(index: int = 0):
 
 def analyze_frame(frame, camera_hfov_deg: float = 93.0):
     """Analyze frame resolution and estimate face pixel coverage."""
-    import cv2
 
     height, width = frame.shape[:2]
     total_pixels = width * height
     mp = total_pixels / 1_000_000
 
-    print(f"\n[2/4] Frame Analysis:")
+    print("\n[2/4] Frame Analysis:")
     print(f"  Resolution: {width} x {height} ({mp:.1f} MP)")
-    print(f"  Aspect ratio: {width/height:.2f}")
+    print(f"  Aspect ratio: {width / height:.2f}")
     print(f"  Horizontal FOV: {camera_hfov_deg}°")
 
     # Calculate pixels-per-face at various distances
-    print(f"\n  Face pixel coverage estimates (face width ~18cm):")
+    print("\n  Face pixel coverage estimates (face width ~18cm):")
     print(f"  {'Distance':>10} | {'Frame covers':>14} | {'Pixels/face':>12} | {'Quality':>15}")
-    print(f"  {'-'*10}-+-{'-'*14}-+-{'-'*12}-+-{'-'*15}")
+    print(f"  {'-' * 10}-+-{'-' * 14}-+-{'-' * 12}-+-{'-' * 15}")
 
     hfov_rad = math.radians(camera_hfov_deg)
     face_width_m = 0.18  # average face width
@@ -152,7 +150,7 @@ def _get_model_path():
 
     if not os.path.exists(model_path):
         url = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite"
-        print(f"  Downloading face detection model...")
+        print("  Downloading face detection model...")
         urllib.request.urlretrieve(url, model_path)
         print(f"  Model saved to {model_path}")
 
@@ -163,7 +161,7 @@ def detect_faces(frame):
     """Run MediaPipe face detection on frame."""
     import cv2
 
-    print(f"\n[3/4] Face Detection:")
+    print("\n[3/4] Face Detection:")
 
     try:
         import mediapipe as mp
@@ -200,14 +198,14 @@ def detect_faces(frame):
         conf = detection.categories[0].score if detection.categories else 0
         face_w = bbox.width
         face_h = bbox.height
-        print(f"  Face {i+1}: {face_w}x{face_h} px, confidence={conf:.2f}")
+        print(f"  Face {i + 1}: {face_w}x{face_h} px, confidence={conf:.2f}")
 
         if face_w < 80:
-            print(f"    WARNING: Face too small for reliable recognition (need 80+ px)")
+            print("    WARNING: Face too small for reliable recognition (need 80+ px)")
         elif face_w < 160:
-            print(f"    OK: Detectable, but will be upscaled for FaceNet (160x160)")
+            print("    OK: Detectable, but will be upscaled for FaceNet (160x160)")
         else:
-            print(f"    EXCELLENT: Good size for face recognition")
+            print("    EXCELLENT: Good size for face recognition")
 
     return faces
 
@@ -216,7 +214,7 @@ def save_results(frame, faces, output_dir: str = "test_output"):
     """Save test frame and annotated frame."""
     import cv2
 
-    print(f"\n[4/4] Saving Results:")
+    print("\n[4/4] Saving Results:")
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -242,12 +240,10 @@ def save_results(frame, faces, output_dir: str = "test_output"):
 
         # Draw label
         label = f"{w}x{h}px ({conf:.0%})"
-        cv2.putText(annotated, label, (x, y - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        cv2.putText(annotated, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
     # Add resolution overlay
-    cv2.putText(annotated, f"{width}x{height}", (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+    cv2.putText(annotated, f"{width}x{height}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
 
     ann_path = os.path.join(output_dir, "test_frame_annotated.jpg")
     cv2.imwrite(ann_path, annotated, [cv2.IMWRITE_JPEG_QUALITY, 95])
@@ -272,38 +268,40 @@ def print_coverage_recommendation(width: int, height: int, room_depth: float, hf
     pixels_per_meter = width / coverage_m
     face_pixels_back = pixels_per_meter * face_width_m
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"COVERAGE RECOMMENDATION for {room_depth}m deep room")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"Camera: {width}x{height}, {hfov}° HFOV")
     print(f"Back row distance: {room_depth}m")
     print(f"Face size at back: ~{face_pixels_back:.0f} pixels")
 
     if face_pixels_back >= 80:
-        print(f"\nVERDICT: ONE CAMERA IS SUFFICIENT")
+        print("\nVERDICT: ONE CAMERA IS SUFFICIENT")
         print(f"Faces at the back row ({room_depth}m) are {face_pixels_back:.0f}px wide.")
         print(f"This is {'above' if face_pixels_back >= 160 else 'enough for'} the 80px minimum for detection.")
     else:
         # Calculate max distance where 1 camera works
         max_distance = (width * face_width_m) / (80 * 2 * math.tan(hfov_rad / 2))
 
-        print(f"\nVERDICT: ONE CAMERA MAY NOT BE ENOUGH")
+        print("\nVERDICT: ONE CAMERA MAY NOT BE ENOUGH")
         print(f"Faces at {room_depth}m are only {face_pixels_back:.0f}px (need 80+).")
         print(f"Single camera works up to ~{max_distance:.1f}m depth.")
-        print(f"\nOptions:")
-        print(f"  1. CEILING MOUNT at center - reduces max distance to ~{room_depth/2:.1f}m")
+        print("\nOptions:")
+        print(f"  1. CEILING MOUNT at center - reduces max distance to ~{room_depth / 2:.1f}m")
 
         # Check if ceiling mount solves it
-        ceiling_distance = math.sqrt((room_depth / 2) ** 2 + 3 ** 2)  # 3m ceiling
+        ceiling_distance = math.sqrt((room_depth / 2) ** 2 + 3**2)  # 3m ceiling
         ceiling_face_px = (width / (2 * ceiling_distance * math.tan(hfov_rad / 2))) * face_width_m
-        print(f"     Face size from ceiling: ~{ceiling_face_px:.0f}px {'(sufficient!)' if ceiling_face_px >= 80 else '(still marginal)'}")
+        print(
+            f"     Face size from ceiling: ~{ceiling_face_px:.0f}px {'(sufficient!)' if ceiling_face_px >= 80 else '(still marginal)'}"
+        )
 
-        print(f"  2. TWO CAMERAS - one covers front half, one covers back half")
+        print("  2. TWO CAMERAS - one covers front half, one covers back half")
         half_depth = room_depth / 2
         half_face_px = (width / (2 * half_depth * math.tan(hfov_rad / 2))) * face_width_m
         print(f"     Face size per camera: ~{half_face_px:.0f}px (excellent)")
 
-        print(f"  3. USE SUB-STREAM for detection, crop from MAIN stream for recognition")
+        print("  3. USE SUB-STREAM for detection, crop from MAIN stream for recognition")
 
 
 def continuous_preview(cap, detect: bool = False):
@@ -335,15 +333,14 @@ def continuous_preview(cap, detect: bool = False):
             display = cv2.resize(display, None, fx=scale, fy=scale)
 
         # FPS overlay
-        cv2.putText(display, f"{w}x{h} | {fps:.1f} FPS", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        cv2.putText(display, f"{w}x{h} | {fps:.1f} FPS", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
         cv2.imshow("IAMS Camera Test", display)
 
         key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
+        if key == ord("q"):
             break
-        elif key == ord('s'):
+        elif key == ord("s"):
             path = f"snapshot_{int(time.time())}.jpg"
             cv2.imwrite(path, frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
             print(f"Saved: {path}")
@@ -352,9 +349,7 @@ def continuous_preview(cap, detect: bool = False):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="IAMS Camera Test Tool - Test your camera for face recognition"
-    )
+    parser = argparse.ArgumentParser(description="IAMS Camera Test Tool - Test your camera for face recognition")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--rtsp", type=str, help="RTSP URL (e.g., rtsp://admin:pass@192.168.1.100/Preview_01_main)")
     group.add_argument("--usb", type=int, nargs="?", const=0, help="USB camera index (default: 0)")
@@ -363,7 +358,9 @@ def main():
     parser.add_argument("--save", action="store_true", help="Save test frames to disk")
     parser.add_argument("--preview", action="store_true", help="Show live camera preview window")
     parser.add_argument("--room-depth", type=float, default=0, help="Room depth in meters for coverage analysis")
-    parser.add_argument("--hfov", type=float, default=93.0, help="Camera horizontal FOV in degrees (default: 93 for Reolink P340)")
+    parser.add_argument(
+        "--hfov", type=float, default=93.0, help="Camera horizontal FOV in degrees (default: 93 for Reolink P340)"
+    )
     parser.add_argument("--transport", choices=["tcp", "udp"], default="tcp", help="RTSP transport (default: tcp)")
     parser.add_argument("--output-dir", type=str, default="test_output", help="Output directory for saved frames")
 
@@ -393,13 +390,13 @@ def main():
         if args.detect:
             faces = detect_faces(frame)
         else:
-            print(f"\n[3/4] Face Detection: SKIPPED (use --detect to enable)")
+            print("\n[3/4] Face Detection: SKIPPED (use --detect to enable)")
 
         # Save results
         if args.save or args.detect:
             save_results(frame, faces, args.output_dir)
         else:
-            print(f"\n[4/4] Save: SKIPPED (use --save to enable)")
+            print("\n[4/4] Save: SKIPPED (use --save to enable)")
 
         # Coverage recommendation
         if args.room_depth > 0:
@@ -409,7 +406,7 @@ def main():
         if args.preview:
             continuous_preview(cap, args.detect)
 
-        print(f"\nDone! Camera test complete.")
+        print("\nDone! Camera test complete.")
 
     finally:
         cap.release()

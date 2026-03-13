@@ -13,9 +13,10 @@ Features:
 """
 
 import asyncio
-import httpx
-from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime
+from typing import Any
+
+import httpx
 
 from app.config import config, logger
 from app.processor import FaceData
@@ -35,7 +36,7 @@ class BackendSender:
         self.max_retries = config.HTTP_MAX_RETRIES
 
         # HTTP client (created on first use)
-        self._client: Optional[httpx.AsyncClient] = None
+        self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         """
@@ -47,16 +48,13 @@ class BackendSender:
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(self.timeout),
-                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
+                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
             )
         return self._client
 
     async def send_faces(
-        self,
-        faces: List[FaceData],
-        room_id: str,
-        timestamp: Optional[datetime] = None
-    ) -> Dict[str, Any]:
+        self, faces: list[FaceData], room_id: str, timestamp: datetime | None = None
+    ) -> dict[str, Any]:
         """
         Send detected faces to backend API.
 
@@ -84,7 +82,7 @@ class BackendSender:
         payload = {
             "room_id": room_id,
             "timestamp": timestamp.isoformat() + "Z",
-            "faces": [face.to_dict() for face in faces]
+            "faces": [face.to_dict() for face in faces],
         }
 
         # Get endpoint URL
@@ -106,9 +104,7 @@ class BackendSender:
             result = response.json()
 
             if response.status_code == 202:
-                logger.info(
-                    f"Backend accepted batch (202): {len(faces)} faces queued for processing"
-                )
+                logger.info(f"Backend accepted batch (202): {len(faces)} faces queued for processing")
             else:
                 logger.info(
                     f"Backend response: processed={result.get('data', {}).get('processed', 0)}, "
@@ -153,12 +149,8 @@ class BackendSender:
             pass  # Non-critical, presence service handles via timeout
 
     async def send_with_retry(
-        self,
-        faces: List[FaceData],
-        room_id: str,
-        timestamp: Optional[datetime] = None,
-        max_attempts: Optional[int] = None
-    ) -> Optional[Dict[str, Any]]:
+        self, faces: list[FaceData], room_id: str, timestamp: datetime | None = None, max_attempts: int | None = None
+    ) -> dict[str, Any] | None:
         """
         Send faces with automatic retry on failure.
 
@@ -222,10 +214,7 @@ class BackendSender:
         """
         try:
             client = await self._get_client()
-            response = await client.get(
-                f"{self.base_url}/",
-                timeout=5.0
-            )
+            response = await client.get(f"{self.base_url}/", timeout=5.0)
             is_healthy = response.status_code < 500
             return is_healthy
 
@@ -233,7 +222,7 @@ class BackendSender:
             logger.debug(f"Backend health check failed: {e}")
             return False
 
-    async def check_session_status(self, room_id: str) -> Tuple[bool, Optional[str]]:
+    async def check_session_status(self, room_id: str) -> tuple[bool, str | None]:
         """
         Check if there is an active attendance session for a given room.
 
@@ -251,11 +240,7 @@ class BackendSender:
 
         try:
             client = await self._get_client()
-            response = await client.get(
-                url,
-                params={"room_id": room_id},
-                timeout=10.0
-            )
+            response = await client.get(url, params={"room_id": room_id}, timeout=10.0)
             response.raise_for_status()
 
             data = response.json()
@@ -309,7 +294,7 @@ class BackendSender:
             "endpoint": self.endpoint,
             "timeout": self.timeout,
             "max_retries": self.max_retries,
-            "client_active": self._client is not None and not self._client.is_closed
+            "client_active": self._client is not None and not self._client.is_closed,
         }
 
 
@@ -327,7 +312,7 @@ class SyncBackendSender:
         self.endpoint = "/api/v1/face/process"
         self.timeout = config.HTTP_TIMEOUT
         self.max_retries = config.HTTP_MAX_RETRIES
-        self._client: Optional[httpx.Client] = None
+        self._client: httpx.Client | None = None
 
     def _get_client(self) -> httpx.Client:
         if self._client is None or self._client.is_closed:
@@ -339,10 +324,10 @@ class SyncBackendSender:
 
     def send_faces(
         self,
-        faces: List[FaceData],
+        faces: list[FaceData],
         room_id: str,
-        timestamp: Optional[datetime] = None,
-    ) -> Dict[str, Any]:
+        timestamp: datetime | None = None,
+    ) -> dict[str, Any]:
         if timestamp is None:
             timestamp = datetime.utcnow()
 
@@ -359,9 +344,7 @@ class SyncBackendSender:
             response.raise_for_status()
         result = response.json()
         if response.status_code == 202:
-            logger.info(
-                f"Backend accepted batch (202): {len(faces)} faces queued for processing"
-            )
+            logger.info(f"Backend accepted batch (202): {len(faces)} faces queued for processing")
         else:
             logger.info(
                 f"Backend response: processed={result.get('data', {}).get('processed', 0)}, "
@@ -390,11 +373,11 @@ class SyncBackendSender:
 
     def send_with_retry(
         self,
-        faces: List[FaceData],
+        faces: list[FaceData],
         room_id: str,
-        timestamp: Optional[datetime] = None,
-        max_attempts: Optional[int] = None,
-    ) -> Optional[Dict[str, Any]]:
+        timestamp: datetime | None = None,
+        max_attempts: int | None = None,
+    ) -> dict[str, Any] | None:
         if max_attempts is None:
             max_attempts = self.max_retries
 
@@ -429,7 +412,7 @@ class SyncBackendSender:
             logger.debug(f"Backend health check failed: {e}")
             return False
 
-    def check_session_status(self, room_id: str) -> Tuple[bool, Optional[str]]:
+    def check_session_status(self, room_id: str) -> tuple[bool, str | None]:
         url = config.get_api_endpoint("/api/v1/presence/sessions/room-status")
         try:
             client = self._get_client()

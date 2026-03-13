@@ -17,9 +17,9 @@ Features:
 """
 
 import time
-import numpy as np
-from typing import Optional
 from contextlib import contextmanager
+
+import numpy as np
 
 from app.config import config, logger
 
@@ -36,7 +36,7 @@ class CameraManager:
 
     def __init__(self):
         self.camera = None
-        self.camera_type: Optional[str] = None
+        self.camera_type: str | None = None
         self.is_running = False
         self._init_attempts = 0
         self._max_init_attempts = 3
@@ -101,13 +101,8 @@ class CameraManager:
 
             # Configure camera
             camera_config = self.camera.create_still_configuration(
-                main={
-                    "size": (config.CAMERA_WIDTH, config.CAMERA_HEIGHT),
-                    "format": "RGB888"
-                },
-                controls={
-                    "FrameRate": config.CAMERA_FPS
-                }
+                main={"size": (config.CAMERA_WIDTH, config.CAMERA_HEIGHT), "format": "RGB888"},
+                controls={"FrameRate": config.CAMERA_FPS},
             )
 
             self.camera.configure(camera_config)
@@ -139,7 +134,7 @@ class CameraManager:
             if self.camera:
                 try:
                     self.camera.stop()
-                except:
+                except Exception:
                     pass
             self.camera = None
             return False
@@ -162,7 +157,7 @@ class CameraManager:
                 logger.debug("No RTSP_URL configured, skipping RTSP")
                 return False
 
-            logger.info(f"Attempting to initialize RTSP camera...")
+            logger.info("Attempting to initialize RTSP camera...")
             # Mask password in logs
             safe_url = rtsp_url
             if "@" in rtsp_url:
@@ -174,7 +169,6 @@ class CameraManager:
             # Set RTSP transport before opening
             # TCP is more reliable than UDP for PoE cameras
             transport = config.RTSP_TRANSPORT.lower()
-            env_key = f"OPENCV_FFMPEG_CAPTURE_OPTIONS"
 
             self.camera = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
 
@@ -186,7 +180,7 @@ class CameraManager:
             self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
             if not self.camera.isOpened():
-                raise RuntimeError(f"Failed to open RTSP stream")
+                raise RuntimeError("Failed to open RTSP stream")
 
             # Test capture (give it time to connect)
             time.sleep(2)
@@ -202,10 +196,7 @@ class CameraManager:
             actual_height = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
             actual_fps = self.camera.get(cv2.CAP_PROP_FPS)
 
-            logger.info(
-                f"RTSP camera initialized successfully - "
-                f"{actual_width}x{actual_height} @ {actual_fps:.1f} FPS"
-            )
+            logger.info(f"RTSP camera initialized successfully - {actual_width}x{actual_height} @ {actual_fps:.1f} FPS")
             return True
 
         except ImportError:
@@ -217,7 +208,7 @@ class CameraManager:
             if self.camera:
                 try:
                     self.camera.release()
-                except:
+                except Exception:
                     pass
             self.camera = None
             return False
@@ -257,10 +248,7 @@ class CameraManager:
             actual_height = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
             actual_fps = int(self.camera.get(cv2.CAP_PROP_FPS))
 
-            logger.info(
-                f"USB camera initialized successfully - "
-                f"{actual_width}x{actual_height} @ {actual_fps} FPS"
-            )
+            logger.info(f"USB camera initialized successfully - {actual_width}x{actual_height} @ {actual_fps} FPS")
             return True
 
         except ImportError:
@@ -272,7 +260,7 @@ class CameraManager:
             if self.camera:
                 try:
                     self.camera.release()
-                except:
+                except Exception:
                     pass
             self.camera = None
             return False
@@ -300,7 +288,7 @@ class CameraManager:
             logger.error(f"RTSP reconnection failed: {e}")
             return False
 
-    def capture_frame(self) -> Optional[np.ndarray]:
+    def capture_frame(self) -> np.ndarray | None:
         """
         Capture a single frame from the camera.
 
@@ -327,6 +315,7 @@ class CameraManager:
 
                 # Convert RGB to BGR for consistency with OpenCV
                 import cv2
+
                 frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
                 self._consecutive_failures = 0
                 return frame_bgr
@@ -343,8 +332,7 @@ class CameraManager:
                     )
 
                     # Auto-reconnect RTSP after consecutive failures
-                    if (self.camera_type == "rtsp"
-                            and self._consecutive_failures >= self._max_consecutive_failures):
+                    if self.camera_type == "rtsp" and self._consecutive_failures >= self._max_consecutive_failures:
                         logger.error("Too many consecutive RTSP failures, reconnecting...")
                         if self._reconnect_rtsp():
                             self._consecutive_failures = 0
@@ -437,9 +425,9 @@ class CameraManager:
         # Add actual resolution for RTSP/OpenCV
         if self.camera_type in ("rtsp", "opencv") and self.camera is not None:
             import cv2
+
             status["actual_resolution"] = (
-                f"{int(self.camera.get(cv2.CAP_PROP_FRAME_WIDTH))}x"
-                f"{int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))}"
+                f"{int(self.camera.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))}"
             )
 
         if self.camera_type == "rtsp":

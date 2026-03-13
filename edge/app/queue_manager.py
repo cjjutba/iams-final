@@ -11,13 +11,12 @@ Features:
 - Queue statistics and monitoring
 """
 
-import asyncio
+import threading
 import time
 from collections import deque
-from typing import List, Optional, Dict, Any
-from datetime import datetime, timedelta
 from dataclasses import dataclass, field
-import threading
+from datetime import datetime
+from typing import Any
 
 from app.config import config, logger
 from app.processor import FaceData
@@ -36,12 +35,13 @@ class QueueEntry:
         retry_count: Number of retry attempts
         last_error: Last error message (optional)
     """
-    faces: List[FaceData]
+
+    faces: list[FaceData]
     room_id: str
     timestamp: datetime
     enqueued_at: float = field(default_factory=time.time)
     retry_count: int = 0
-    last_error: Optional[str] = None
+    last_error: str | None = None
 
     def is_stale(self, ttl_seconds: int) -> bool:
         """
@@ -64,7 +64,7 @@ class QueueEntry:
             "face_count": len(self.faces),
             "enqueued_at": datetime.fromtimestamp(self.enqueued_at).isoformat(),
             "retry_count": self.retry_count,
-            "age_seconds": int(time.time() - self.enqueued_at)
+            "age_seconds": int(time.time() - self.enqueued_at),
         }
 
 
@@ -95,13 +95,7 @@ class QueueManager:
         self.total_succeeded = 0
         self.total_failed = 0
 
-    def enqueue(
-        self,
-        faces: List[FaceData],
-        room_id: str,
-        timestamp: datetime,
-        error_msg: Optional[str] = None
-    ) -> bool:
+    def enqueue(self, faces: list[FaceData], room_id: str, timestamp: datetime, error_msg: str | None = None) -> bool:
         """
         Add entry to queue.
 
@@ -123,12 +117,7 @@ class QueueManager:
             was_full = len(self._queue) >= self.max_size
 
             # Create queue entry
-            entry = QueueEntry(
-                faces=faces,
-                room_id=room_id,
-                timestamp=timestamp,
-                last_error=error_msg
-            )
+            entry = QueueEntry(faces=faces, room_id=room_id, timestamp=timestamp, last_error=error_msg)
 
             # Add to queue (oldest is dropped if full)
             self._queue.append(entry)
@@ -138,18 +127,14 @@ class QueueManager:
             if was_full:
                 self.total_dropped += 1
                 logger.warning(
-                    f"Queue full ({self.max_size} items), dropped oldest entry. "
-                    f"New entry: {entry.to_dict()}"
+                    f"Queue full ({self.max_size} items), dropped oldest entry. New entry: {entry.to_dict()}"
                 )
             else:
-                logger.info(
-                    f"Enqueued entry: {entry.to_dict()}. "
-                    f"Queue size: {len(self._queue)}/{self.max_size}"
-                )
+                logger.info(f"Enqueued entry: {entry.to_dict()}. Queue size: {len(self._queue)}/{self.max_size}")
 
             return True
 
-    def dequeue(self) -> Optional[QueueEntry]:
+    def dequeue(self) -> QueueEntry | None:
         """
         Remove and return oldest entry from queue.
 
@@ -167,7 +152,7 @@ class QueueManager:
             entry = self._queue.popleft()
             return entry
 
-    def peek(self) -> Optional[QueueEntry]:
+    def peek(self) -> QueueEntry | None:
         """
         View oldest entry without removing it.
 
@@ -195,8 +180,7 @@ class QueueManager:
 
             # Filter out stale entries
             fresh_entries = deque(
-                (entry for entry in self._queue if not entry.is_stale(self.ttl_seconds)),
-                maxlen=self.max_size
+                (entry for entry in self._queue if not entry.is_stale(self.ttl_seconds)), maxlen=self.max_size
             )
 
             dropped_count = original_size - len(fresh_entries)
@@ -238,7 +222,7 @@ class QueueManager:
             logger.info(f"Cleared {size} entries from queue")
             return size
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """
         Get queue statistics.
 
@@ -254,10 +238,10 @@ class QueueManager:
                 "total_retried": self.total_retried,
                 "total_succeeded": self.total_succeeded,
                 "total_failed": self.total_failed,
-                "utilization_pct": (len(self._queue) / self.max_size * 100) if self.max_size > 0 else 0
+                "utilization_pct": (len(self._queue) / self.max_size * 100) if self.max_size > 0 else 0,
             }
 
-    def get_entries_snapshot(self) -> List[Dict[str, Any]]:
+    def get_entries_snapshot(self) -> list[dict[str, Any]]:
         """
         Get snapshot of queue entries for debugging.
 
@@ -286,7 +270,7 @@ class RetryWorker:
         self.queue_manager = queue_manager
         self.sender = sender
         self.is_running = False
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
     def start(self) -> None:
@@ -373,7 +357,7 @@ class RetryWorker:
                     faces=entry.faces,
                     room_id=entry.room_id,
                     timestamp=entry.timestamp,
-                    max_attempts=self.queue_manager.max_retry_attempts
+                    max_attempts=self.queue_manager.max_retry_attempts,
                 )
 
                 if result is not None:
@@ -383,8 +367,7 @@ class RetryWorker:
                     self.queue_manager.total_retried += 1
 
                     logger.info(
-                        f"Successfully retried entry: {entry.to_dict()}. "
-                        f"Queue size: {self.queue_manager.size()}"
+                        f"Successfully retried entry: {entry.to_dict()}. Queue size: {self.queue_manager.size()}"
                     )
                 else:
                     # Failed after retries
@@ -396,15 +379,10 @@ class RetryWorker:
                         entry.retry_count += 1
                         entry.last_error = "Max retries exceeded"
                         self.queue_manager.enqueue(
-                            entry.faces,
-                            entry.room_id,
-                            entry.timestamp,
-                            error_msg=entry.last_error
+                            entry.faces, entry.room_id, entry.timestamp, error_msg=entry.last_error
                         )
                     else:
-                        logger.error(
-                            f"Permanently failed after {entry.retry_count} attempts: {entry.to_dict()}"
-                        )
+                        logger.error(f"Permanently failed after {entry.retry_count} attempts: {entry.to_dict()}")
 
             except Exception as e:
                 logger.error(f"Error retrying entry: {e}")
