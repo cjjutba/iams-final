@@ -135,6 +135,88 @@ class ConnectionManager:
             f"Broadcast to schedule {schedule_id} ({message.get('event')}): {sent_count} sent, {failed_count} failed"
         )
 
+    # ------ Redis pub/sub for cross-worker broadcast ------
+
+    async def start_redis_listener(self):
+        """Subscribe to Redis pub/sub for cross-worker broadcast."""
+        import asyncio
+
+        from app.config import settings
+        from app.redis_client import get_redis
+
+        r = await get_redis()
+        self._pubsub = r.pubsub()
+        await self._pubsub.subscribe(settings.REDIS_WS_CHANNEL)
+        self._listener_task = asyncio.create_task(self._listen_redis())
+        logger.info(f"Redis WS listener subscribed to channel: {settings.REDIS_WS_CHANNEL}")
+
+    async def _listen_redis(self):
+        """Process messages from Redis and broadcast to local WebSocket clients."""
+        async for message in self._pubsub.listen():
+            if message["type"] in ("message", b"message"):
+                try:
+                    raw = message["data"]
+                    # decode_responses=False so data arrives as bytes
+                    if isinstance(raw, bytes):
+                        raw = raw.decode("utf-8")
+                    data = json.loads(raw)
+                    await self._broadcast_batch_results(data)
+                except Exception:
+                    logger.exception("Redis WS listener error")
+
+    async def _broadcast_batch_results(self, data: dict):
+        """Send batch recognition results to relevant WebSocket clients."""
+        results = data.get("results", [])
+        room_id = data.get("room_id")
+
+        # Send individual check-in notifications to matched students
+        for result in results:
+            user_id = result.get("user_id")
+            if user_id and user_id in self.active_connections:
+                await self.send_personal(user_id, {
+                    "event": "student_checked_in",
+                    "data": {
+                        "user_id": user_id,
+                        "room_id": room_id,
+                        "confidence": result.get("confidence"),
+                        "timestamp": data.get("timestamp"),
+                    },
+                })
+
+        # Broadcast attendance update to all schedule subscribers
+        # (faculty watching this room)
+        for schedule_id, user_ids in self.schedule_connections.items():
+            for uid in list(user_ids):
+                if uid in self.active_connections:
+                    try:
+                        await self.send_personal(uid, {
+                            "event": "attendance_update",
+                            "data": {
+                                "room_id": room_id,
+                                "results": results,
+                                "processing_time_ms": data.get("processing_time_ms"),
+                                "batch_size": data.get("batch_size"),
+                            },
+                        })
+                    except Exception:
+                        pass
+
+    async def stop_redis_listener(self):
+        """Stop the Redis pub/sub listener."""
+        import asyncio
+
+        if hasattr(self, "_listener_task") and self._listener_task:
+            self._listener_task.cancel()
+            try:
+                await self._listener_task
+            except asyncio.CancelledError:
+                pass
+        if hasattr(self, "_pubsub") and self._pubsub:
+            await self._pubsub.unsubscribe()
+        logger.info("Redis WS listener stopped")
+
+    # ------ Connection info helpers ------
+
     def get_connection_count(self) -> int:
         """Get number of active connections"""
         return len(self.active_connections)

@@ -124,6 +124,15 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to initialize Redis: {e}")
 
+    # Start Redis pub/sub listener for WebSocket broadcast (multi-worker)
+    try:
+        from app.routers.websocket import manager
+
+        await manager.start_redis_listener()
+        logger.info("WebSocket Redis pub/sub listener started")
+    except Exception as e:
+        logger.error(f"Failed to start WebSocket Redis listener: {e}")
+
     # Load InsightFace model and FAISS index
     try:
         from app.services.ml.faiss_manager import faiss_manager
@@ -322,6 +331,14 @@ async def shutdown_event():
             logger.info("Batch face processor stopped")
         except Exception as e:
             logger.error(f"Failed to stop batch processor: {e}")
+
+    # Stop WebSocket Redis pub/sub listener
+    try:
+        from app.routers.websocket import manager
+
+        await manager.stop_redis_listener()
+    except Exception as e:
+        logger.error(f"Failed to stop WebSocket Redis listener: {e}")
 
     # Close Redis connection pool
     try:
