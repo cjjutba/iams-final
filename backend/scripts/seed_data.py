@@ -156,11 +156,11 @@ def seed():
             print(f"  Faculty: {existing_faculty.email} (ID: {existing_faculty.id})")
 
             # Ensure admin account exists even if seed was run before admin was added
-            existing_admin = db.query(User).filter(User.email == "admin@iams.local").first()
+            existing_admin = db.query(User).filter(User.email == "admin@jrmsu.edu.ph").first()
             if not existing_admin:
                 print("\n  Admin account missing — creating now...")
                 admin = User(
-                    email="admin@iams.local",
+                    email="admin@jrmsu.edu.ph",
                     password_hash=hash_password("admin123"),
                     role=UserRole.ADMIN,
                     first_name="System",
@@ -170,7 +170,7 @@ def seed():
                 )
                 db.add(admin)
                 db.commit()
-                print(f"  Created: admin@iams.local (ID: {admin.id})")
+                print(f"  Created: admin@jrmsu.edu.ph (ID: {admin.id})")
             else:
                 print(f"  Admin: {existing_admin.email} (ID: {existing_admin.id})")
 
@@ -214,7 +214,7 @@ def seed():
 
         # Create Admin User
         admin = User(
-            email="admin@iams.local",
+            email="admin@jrmsu.edu.ph",
             password_hash=hash_password("admin123"),
             role=UserRole.ADMIN,
             first_name="System",
@@ -291,7 +291,7 @@ def seed():
         print("SEED DATA COMPLETE")
         print("=" * 60)
         print(f"\nAdmin Login (web dashboard):")
-        print(f"  Email:      admin@iams.local")
+        print(f"  Email:      admin@jrmsu.edu.ph")
         print(f"  Password:   admin123")
         print(f"\nFaculty Login:")
         print(f"  Email:      faculty@gmail.com")

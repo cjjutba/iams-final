@@ -66,7 +66,7 @@ export default function LoginPage() {
               <Input
                 id="identifier"
                 type="text"
-                placeholder="admin@iams.local"
+                placeholder="admin@jrmsu.edu.ph"
                 autoComplete="email"
                 {...register('identifier')}
               />
