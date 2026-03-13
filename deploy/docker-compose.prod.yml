@@ -17,15 +17,32 @@ services:
       - app_logs:/app/logs
     ports:
       - "127.0.0.1:8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
     depends_on:
       mediamtx:
         condition: service_started
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s  # InsightFace model takes time to load
+
+  redis:
+    image: redis:7-alpine
+    container_name: iams-redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 64mb --maxmemory-policy allkeys-lru --save ""
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
   mediamtx:
     image: bluenviron/mediamtx:latest
@@ -95,5 +112,6 @@ volumes:
   faiss_data:
   face_uploads:
   app_logs:
+  redis_data:
   certbot_certs:
   certbot_www:

@@ -101,6 +101,14 @@ async def startup_event():
     else:
         logger.info("Database connection established")
 
+    # Initialize Redis connection pool
+    try:
+        from app.redis_client import get_redis
+        await get_redis()
+        logger.info("Redis connection pool initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize Redis: {e}")
+
     # Load InsightFace model and FAISS index
     try:
         from app.services.ml.insightface_model import insightface_model
@@ -270,6 +278,13 @@ async def shutdown_event():
             mediamtx_service.stop()
         except Exception as e:
             logger.error(f"Failed to stop mediamtx: {e}")
+
+    # Close Redis connection pool
+    try:
+        from app.redis_client import close_redis
+        await close_redis()
+    except Exception as e:
+        logger.error(f"Failed to close Redis: {e}")
 
     # Save FAISS index
     try:
