@@ -210,6 +210,14 @@ class PresenceService:
 
         return session
 
+    async def handle_face_gone(self, room_id: str, track_ids: list, timestamp: str):
+        """Handle face_gone events from RPi smart sampler.
+
+        Provides early warning that a student may be leaving.
+        The 60-second confirmation scan still runs as the authoritative check.
+        """
+        logger.info(f"Face gone event: room={room_id}, tracks={track_ids}")
+
     async def feed_detection(self, schedule_id: str, user_id: str, confidence: float, bbox: list[float] | None = None):
         """Feed a detection into the tracking service without updating attendance.
         Attendance updates happen solely in run_scan_cycle()."""
@@ -673,6 +681,12 @@ class PresenceService:
             # Unregister from global session manager
             session_manager.unregister_session(schedule_id)
 
+        # Clear Redis presence state for this session
+        try:
+            await self._redis_clear_room(schedule_id)
+        except Exception as e:
+            logger.error(f"Failed to clear Redis presence state for {schedule_id}: {e}")
+
         # Notify faculty of session end (outside lock — no session mutation)
         if self.notification_service:
             try:
@@ -698,6 +712,58 @@ class PresenceService:
 
         score = (scans_present / total_scans) * 100.0
         return round(score, 2)
+
+    async def _redis_update_presence(self, room_id: str, student_id: str, timestamp: float):
+        """Update student presence state in Redis."""
+        from app.redis_client import get_redis
+        from app.config import settings
+        r = await get_redis()
+        key = f"{settings.REDIS_PRESENCE_PREFIX}:{room_id}:{student_id}"
+        await r.hset(key, mapping={
+            "last_seen": str(timestamp),
+            "miss_count": "0",
+        })
+        await r.hincrby(key, "present_count", 1)
+
+    async def _redis_get_presence(self, room_id: str, student_id: str) -> dict:
+        """Get student presence state from Redis."""
+        from app.redis_client import get_redis
+        from app.config import settings
+        r = await get_redis()
+        key = f"{settings.REDIS_PRESENCE_PREFIX}:{room_id}:{student_id}"
+        data = await r.hgetall(key)
+        if not data:
+            return {"last_seen": 0, "miss_count": 0, "present_count": 0, "total_scans": 0}
+        return {
+            "last_seen": float(data.get(b"last_seen", 0)),
+            "miss_count": int(data.get(b"miss_count", 0)),
+            "present_count": int(data.get(b"present_count", 0)),
+            "total_scans": int(data.get(b"total_scans", 0)),
+        }
+
+    async def _redis_increment_miss(self, room_id: str, student_id: str) -> int:
+        """Increment miss counter, return new value."""
+        from app.redis_client import get_redis
+        from app.config import settings
+        r = await get_redis()
+        key = f"{settings.REDIS_PRESENCE_PREFIX}:{room_id}:{student_id}"
+        return await r.hincrby(key, "miss_count", 1)
+
+    async def _redis_increment_total_scans(self, room_id: str, student_id: str):
+        """Increment total scan count."""
+        from app.redis_client import get_redis
+        from app.config import settings
+        r = await get_redis()
+        key = f"{settings.REDIS_PRESENCE_PREFIX}:{room_id}:{student_id}"
+        await r.hincrby(key, "total_scans", 1)
+
+    async def _redis_clear_room(self, room_id: str):
+        """Clear all presence state for a room (on session end)."""
+        from app.redis_client import get_redis
+        from app.config import settings
+        r = await get_redis()
+        async for key in r.scan_iter(match=f"{settings.REDIS_PRESENCE_PREFIX}:{room_id}:*"):
+            await r.delete(key)
 
     def get_session_state(self, schedule_id: str) -> SessionState | None:
         """
