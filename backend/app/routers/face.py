@@ -542,6 +542,20 @@ async def process_faces(request: EdgeProcessRequest, db: Session = Depends(get_d
     )
 
 
+@router.post("/gone", status_code=200)
+async def face_gone(request: dict, db: Session = Depends(get_db)):
+    """Receive face_gone events from RPi smart sampler."""
+    room_id = request.get("room_id")
+    track_ids = request.get("track_ids", [])
+    timestamp = request.get("timestamp")
+
+    if room_id and track_ids:
+        presence_service = PresenceService(db)
+        await presence_service.handle_face_gone(room_id, track_ids, timestamp)
+
+    return {"status": "ok", "processed": len(track_ids)}
+
+
 @router.get("/statistics", status_code=status.HTTP_200_OK)
 async def get_face_statistics(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
