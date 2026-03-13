@@ -8,6 +8,11 @@ _redis_pool: redis.Redis | None = None
 
 
 async def get_redis() -> redis.Redis:
+    """Get or create the Redis connection pool.
+
+    decode_responses=False: face embeddings are stored as raw bytes;
+    callers handling text keys/channels must encode/decode explicitly.
+    """
     global _redis_pool
     if _redis_pool is None:
         _redis_pool = redis.from_url(
@@ -15,6 +20,7 @@ async def get_redis() -> redis.Redis:
             decode_responses=False,
             max_connections=20,
         )
+        await _redis_pool.ping()  # Fail fast if Redis is unreachable
     return _redis_pool
 
 

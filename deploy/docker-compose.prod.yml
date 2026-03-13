@@ -36,8 +36,6 @@ services:
     container_name: iams-redis
     restart: unless-stopped
     command: redis-server --maxmemory 64mb --maxmemory-policy allkeys-lru --save ""
-    volumes:
-      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -112,6 +110,5 @@ volumes:
   faiss_data:
   face_uploads:
   app_logs:
-  redis_data:
   certbot_certs:
   certbot_www:
