@@ -3,15 +3,21 @@ FAISS Index Manager
 
 Manages FAISS vector index for fast face similarity search.
 Uses IndexFlatIP for exact nearest neighbor search with inner product (cosine similarity).
+
+The index is memory-mapped (IO_FLAG_MMAP) so that multiple Uvicorn workers
+share the same physical RAM pages for the read-only vector data.  When any
+worker mutates the index it saves to disk and publishes a Redis notification;
+other workers pick up the notification and re-mmap the updated file.
 """
 
+import asyncio
 import os
-import faiss
-import numpy as np
-from typing import List, Tuple, Optional, Dict
 from pathlib import Path
 
-from app.config import settings, logger
+import faiss
+import numpy as np
+
+from app.config import logger, settings
 
 
 class FAISSManager:
@@ -31,8 +37,8 @@ class FAISSManager:
         """
         self.index_path = index_path or settings.FAISS_INDEX_PATH
         self.dimension = 512  # ArcFace embedding dimension
-        self.index: Optional[faiss.Index] = None
-        self.user_map: Dict[int, str] = {}  # faiss_id → user_id mapping
+        self.index: faiss.Index | None = None
+        self.user_map: dict[int, str] = {}  # faiss_id → user_id mapping
 
         # Ensure directory exists
         Path(self.index_path).parent.mkdir(parents=True, exist_ok=True)
@@ -49,12 +55,12 @@ class FAISSManager:
         """
         if os.path.exists(self.index_path):
             try:
-                self.index = faiss.read_index(self.index_path)
-                logger.info(f"Loaded FAISS index from {self.index_path} ({self.index.ntotal} vectors)")
+                self.index = faiss.read_index(self.index_path, faiss.IO_FLAG_MMAP)
+                logger.info(f"Loaded FAISS index (mmap) from {self.index_path} ({self.index.ntotal} vectors)")
                 return self.index
             except Exception as e:
                 logger.error(f"Failed to load FAISS index: {e}")
-                raise RuntimeError(f"FAISS index loading failed: {e}")
+                raise RuntimeError(f"FAISS index loading failed: {e}") from e
         else:
             logger.info("Creating new FAISS index (IndexFlatIP)")
             self.index = self._create_index()
@@ -116,7 +122,7 @@ class FAISSManager:
 
         return faiss_id
 
-    def add_batch(self, embeddings: np.ndarray, user_ids: List[str]) -> List[int]:
+    def add_batch(self, embeddings: np.ndarray, user_ids: list[str]) -> list[int]:
         """
         Add multiple embeddings to index
 
@@ -156,21 +162,16 @@ class FAISSManager:
 
     @staticmethod
     def _deduplicate_by_user(
-        raw: List[Tuple[str, float]],
-    ) -> List[Tuple[str, float]]:
+        raw: list[tuple[str, float]],
+    ) -> list[tuple[str, float]]:
         """Keep only the best similarity per user_id, sorted descending."""
-        best: Dict[str, float] = {}
+        best: dict[str, float] = {}
         for user_id, sim in raw:
             if user_id not in best or sim > best[user_id]:
                 best[user_id] = sim
         return sorted(best.items(), key=lambda x: x[1], reverse=True)
 
-    def search(
-        self,
-        embedding: np.ndarray,
-        k: int = 1,
-        threshold: Optional[float] = None
-    ) -> List[Tuple[str, float]]:
+    def search(self, embedding: np.ndarray, k: int = 1, threshold: float | None = None) -> list[tuple[str, float]]:
         """
         Search for similar faces (deduplicated by user_id).
 
@@ -206,7 +207,7 @@ class FAISSManager:
 
         # Collect raw results above threshold
         threshold = threshold or settings.RECOGNITION_THRESHOLD
-        raw: List[Tuple[str, float]] = []
+        raw: list[tuple[str, float]] = []
 
         for i in range(raw_k):
             faiss_id = int(indices[0][i])
@@ -224,11 +225,8 @@ class FAISSManager:
         return deduped[:k]
 
     def search_batch(
-        self,
-        embeddings: np.ndarray,
-        k: int = 1,
-        threshold: Optional[float] = None
-    ) -> List[List[Tuple[str, float]]]:
+        self, embeddings: np.ndarray, k: int = 1, threshold: float | None = None
+    ) -> list[list[tuple[str, float]]]:
         """
         Search for multiple faces (deduplicated by user_id per query).
 
@@ -255,7 +253,7 @@ class FAISSManager:
         batch_results = []
 
         for i in range(len(embeddings)):
-            raw: List[Tuple[str, float]] = []
+            raw: list[tuple[str, float]] = []
             for j in range(raw_k):
                 faiss_id = int(indices[i][j])
                 similarity = float(similarities[i][j])
@@ -278,7 +276,7 @@ class FAISSManager:
         k: int = None,
         threshold: float = None,
         margin: float = None,
-    ) -> Dict:
+    ) -> dict:
         """
         Search with confidence margin check between top-1 and top-2.
 
@@ -343,7 +341,7 @@ class FAISSManager:
             return True
         return False
 
-    def rebuild(self, embeddings_data: List[Tuple[np.ndarray, str]]):
+    def rebuild(self, embeddings_data: list[tuple[np.ndarray, str]]):
         """
         Rebuild index from scratch
 
@@ -379,9 +377,9 @@ class FAISSManager:
 
         logger.info("FAISS index rebuilt successfully")
 
-    def save(self, path: Optional[str] = None):
+    def save(self, path: str | None = None):
         """
-        Save FAISS index to disk
+        Save FAISS index to disk and notify other workers to reload.
 
         Args:
             path: Optional custom path (default: self.index_path)
@@ -401,7 +399,47 @@ class FAISSManager:
             logger.error(f"Failed to save FAISS index: {e}")
             raise
 
-    def get_stats(self) -> Dict:
+        # Notify other workers to reload the updated index
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.notify_index_changed())
+        except RuntimeError:
+            # No running event loop (e.g. during tests or CLI scripts) — skip notification
+            pass
+
+    # ------------------------------------------------------------------
+    # Redis pub/sub for multi-worker index synchronisation
+    # ------------------------------------------------------------------
+
+    async def notify_index_changed(self):
+        """Publish index-change event so other workers reload."""
+        try:
+            from app.redis_client import get_redis
+
+            r = await get_redis()
+            await r.publish("faiss_reload", b"reload")
+            logger.debug("Published FAISS reload notification")
+        except Exception as e:
+            logger.warning(f"Failed to publish FAISS reload notification: {e}")
+
+    async def subscribe_index_changes(self):
+        """Listen for index-change events and reload (runs forever as a background task)."""
+        from app.redis_client import get_redis
+
+        r = await get_redis()
+        pubsub = r.pubsub()
+        await pubsub.subscribe("faiss_reload")
+        logger.info("Subscribed to FAISS reload notifications")
+
+        async for message in pubsub.listen():
+            if message["type"] == "message":
+                try:
+                    self.load_or_create_index()
+                    logger.info("FAISS index reloaded from disk (notified by another worker)")
+                except Exception as e:
+                    logger.error(f"Failed to reload FAISS index after notification: {e}")
+
+    def get_stats(self) -> dict:
         """
         Get index statistics
 
@@ -409,19 +447,14 @@ class FAISSManager:
             Dictionary with index stats
         """
         if self.index is None:
-            return {
-                "initialized": False,
-                "total_vectors": 0,
-                "dimension": self.dimension,
-                "index_type": None
-            }
+            return {"initialized": False, "total_vectors": 0, "dimension": self.dimension, "index_type": None}
 
         return {
             "initialized": True,
             "total_vectors": self.index.ntotal,
             "dimension": self.dimension,
             "index_type": "IndexFlatIP",
-            "user_mappings": len(self.user_map)
+            "user_mappings": len(self.user_map),
         }
 
 

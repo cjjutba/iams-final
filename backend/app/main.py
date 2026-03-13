@@ -5,26 +5,39 @@ Main application file that initializes FastAPI, configures middleware,
 registers routers, and handles application lifecycle events.
 """
 
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse
-from fastapi.exceptions import RequestValidationError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from app.config import settings, logger
-from app.database import check_db_connection, get_db
+from app.config import logger, settings
+from app.database import check_db_connection
 from app.rate_limiter import limiter
-from app.utils.exceptions import (
-    IAMSException,
-    iams_exception_handler,
-    validation_exception_handler,
-    generic_exception_handler
-)
 
 # Import routers
-from app.routers import auth, users, face, schedules, attendance, websocket, notifications, presence, live_stream, hls, webrtc, analytics
+from app.routers import (
+    analytics,
+    attendance,
+    auth,
+    face,
+    hls,
+    live_stream,
+    notifications,
+    presence,
+    schedules,
+    users,
+    webrtc,
+    websocket,
+)
+from app.utils.exceptions import (
+    IAMSError,
+    generic_exception_handler,
+    iams_exception_handler,
+    validation_exception_handler,
+)
 
 # Global scheduler instance for background tasks
 scheduler = AsyncIOScheduler()
@@ -45,7 +58,7 @@ app = FastAPI(
     },
     license_info={
         "name": "MIT",
-    }
+    },
 )
 
 # Attach limiter to app state (required by slowapi)
@@ -66,7 +79,7 @@ app.add_middleware(
 # ===== Exception Handlers =====
 
 # Custom IAMS exceptions
-app.add_exception_handler(IAMSException, iams_exception_handler)
+app.add_exception_handler(IAMSError, iams_exception_handler)
 
 # Pydantic validation errors
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
@@ -79,6 +92,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 # ===== Startup and Shutdown Events =====
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -104,6 +118,7 @@ async def startup_event():
     # Initialize Redis connection pool
     try:
         from app.redis_client import get_redis
+
         await get_redis()
         logger.info("Redis connection pool initialized")
     except Exception as e:
@@ -111,8 +126,8 @@ async def startup_event():
 
     # Load InsightFace model and FAISS index
     try:
-        from app.services.ml.insightface_model import insightface_model
         from app.services.ml.faiss_manager import faiss_manager
+        from app.services.ml.insightface_model import insightface_model
 
         logger.info("Loading InsightFace model...")
         insightface_model.load_model()
@@ -122,8 +137,9 @@ async def startup_event():
 
         # Reconcile FAISS index with database
         try:
-            from app.services.face_service import FaceService
             from app.database import SessionLocal
+            from app.services.face_service import FaceService
+
             db = SessionLocal()
             try:
                 FaceService.reconcile_faiss_index(db)
@@ -132,14 +148,19 @@ async def startup_event():
         except Exception as e:
             logger.error(f"FAISS reconciliation failed: {e}")
 
+        # Start background listener for FAISS reload notifications (multi-worker sync)
+        import asyncio
+
+        asyncio.create_task(faiss_manager.subscribe_index_changes())
+
         logger.info("Face recognition system initialized")
     except Exception as e:
         logger.error(f"Failed to initialize face recognition: {e}")
 
     # Initialize APScheduler for continuous presence tracking
     try:
-        from app.services.presence_service import PresenceService
         from app.database import SessionLocal
+        from app.services.presence_service import PresenceService
 
         logger.info("Initializing presence tracking scheduler...")
 
@@ -158,11 +179,11 @@ async def startup_event():
         # Schedule continuous presence tracking (every 60 seconds)
         scheduler.add_job(
             run_presence_scan_cycle,
-            'interval',
+            "interval",
             seconds=settings.SCAN_INTERVAL_SECONDS,
-            id='presence_scan_cycle',
+            id="presence_scan_cycle",
             replace_existing=True,
-            max_instances=1  # Prevent overlapping runs
+            max_instances=1,  # Prevent overlapping runs
         )
 
         # Periodic FAISS health check (every 30 minutes)
@@ -172,6 +193,7 @@ async def startup_event():
             try:
                 from app.repositories.face_repository import FaceRepository
                 from app.services.ml.faiss_manager import faiss_manager as fm
+
                 repo = FaceRepository(db)
                 active_count = len(repo.get_active_embeddings())
                 faiss_count = fm.index.ntotal if fm.index else 0
@@ -189,11 +211,11 @@ async def startup_event():
 
         scheduler.add_job(
             run_faiss_health_check,
-            'interval',
+            "interval",
             minutes=30,
-            id='faiss_health_check',
+            id="faiss_health_check",
             replace_existing=True,
-            max_instances=1
+            max_instances=1,
         )
 
         # Auto-session scheduler: starts/ends sessions based on schedule times
@@ -201,11 +223,11 @@ async def startup_event():
 
         scheduler.add_job(
             auto_manage_sessions,
-            'interval',
+            "interval",
             seconds=60,
-            id='auto_session_manager',
+            id="auto_session_manager",
             replace_existing=True,
-            max_instances=1
+            max_instances=1,
         )
 
         # Start the scheduler
@@ -220,19 +242,19 @@ async def startup_event():
     if settings.USE_WEBRTC_STREAMING:
         try:
             from app.services.mediamtx_service import mediamtx_service
+
             started = await mediamtx_service.start()
             if started:
                 logger.info("WebRTC streaming ready (mediamtx running)")
             else:
-                logger.warning(
-                    "mediamtx failed to start — WebRTC unavailable, falling back to HLS"
-                )
+                logger.warning("mediamtx failed to start — WebRTC unavailable, falling back to HLS")
         except Exception as e:
             logger.error(f"Failed to start mediamtx: {e}")
 
     # Create HLS segment directory (if HLS streaming enabled)
     if settings.USE_HLS_STREAMING:
         import os
+
         os.makedirs(settings.HLS_SEGMENT_DIR, exist_ok=True)
         logger.info(f"HLS streaming enabled (segment dir: {settings.HLS_SEGMENT_DIR})")
 
@@ -264,6 +286,7 @@ async def shutdown_event():
         try:
             from app.services.hls_service import hls_service
             from app.services.recognition_service import recognition_service
+
             logger.info("Stopping HLS and recognition services...")
             await hls_service.cleanup_all()
             await recognition_service.cleanup_all()
@@ -274,6 +297,7 @@ async def shutdown_event():
     if settings.USE_WEBRTC_STREAMING:
         try:
             from app.services.mediamtx_service import mediamtx_service
+
             logger.info("Stopping mediamtx...")
             mediamtx_service.stop()
         except Exception as e:
@@ -282,6 +306,7 @@ async def shutdown_event():
     # Close Redis connection pool
     try:
         from app.redis_client import close_redis
+
         await close_redis()
     except Exception as e:
         logger.error(f"Failed to close Redis: {e}")
@@ -289,6 +314,7 @@ async def shutdown_event():
     # Save FAISS index
     try:
         from app.services.ml.faiss_manager import faiss_manager
+
         logger.info("Saving FAISS index...")
         faiss_manager.save()
     except Exception as e:
@@ -298,6 +324,7 @@ async def shutdown_event():
 
 
 # ===== Health Check Endpoint =====
+
 
 @app.get(f"{settings.API_PREFIX}/health", tags=["System"])
 async def health_check():
@@ -309,12 +336,7 @@ async def health_check():
     Returns:
         dict: Health status
     """
-    return {
-        "status": "healthy",
-        "app": settings.APP_NAME,
-        "version": "1.0.0",
-        "debug": settings.DEBUG
-    }
+    return {"status": "healthy", "app": settings.APP_NAME, "version": "1.0.0", "debug": settings.DEBUG}
 
 
 @app.get("/", tags=["System"])
@@ -330,7 +352,8 @@ async def root(request: Request):
     accept = request.headers.get("accept", "")
     if "text/html" in accept:
         redirect_target = f"{settings.API_PREFIX}/auth/email-confirmed"
-        return HTMLResponse(content=f"""<!DOCTYPE html>
+        return HTMLResponse(
+            content=f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>IAMS</title></head>
 <body>
 <p id="msg" style="font-family:sans-serif;padding:40px">Loading&hellip;</p>
@@ -341,100 +364,50 @@ if (h && (h.includes('access_token') || h.includes('error='))) {{
 }} else {{
   document.getElementById('msg').textContent = 'IAMS API is running';
 }}
-</script></body></html>""")
-    return {
-        "message": f"{settings.APP_NAME} API is running",
-        "docs": f"{settings.API_PREFIX}/docs"
-    }
+</script></body></html>"""
+        )
+    return {"message": f"{settings.APP_NAME} API is running", "docs": f"{settings.API_PREFIX}/docs"}
 
 
 # ===== Router Includes =====
 
 # Auth routes
-app.include_router(
-    auth.router,
-    prefix=f"{settings.API_PREFIX}/auth",
-    tags=["Authentication"]
-)
+app.include_router(auth.router, prefix=f"{settings.API_PREFIX}/auth", tags=["Authentication"])
 
 # User routes
-app.include_router(
-    users.router,
-    prefix=f"{settings.API_PREFIX}/users",
-    tags=["Users"]
-)
+app.include_router(users.router, prefix=f"{settings.API_PREFIX}/users", tags=["Users"])
 
 # Face recognition routes
-app.include_router(
-    face.router,
-    prefix=f"{settings.API_PREFIX}/face",
-    tags=["Face Recognition"]
-)
+app.include_router(face.router, prefix=f"{settings.API_PREFIX}/face", tags=["Face Recognition"])
 
 # Schedule routes
-app.include_router(
-    schedules.router,
-    prefix=f"{settings.API_PREFIX}/schedules",
-    tags=["Schedules"]
-)
+app.include_router(schedules.router, prefix=f"{settings.API_PREFIX}/schedules", tags=["Schedules"])
 
 # Attendance routes
-app.include_router(
-    attendance.router,
-    prefix=f"{settings.API_PREFIX}/attendance",
-    tags=["Attendance"]
-)
+app.include_router(attendance.router, prefix=f"{settings.API_PREFIX}/attendance", tags=["Attendance"])
 
 # Notification routes
-app.include_router(
-    notifications.router,
-    prefix=f"{settings.API_PREFIX}/notifications",
-    tags=["Notifications"]
-)
+app.include_router(notifications.router, prefix=f"{settings.API_PREFIX}/notifications", tags=["Notifications"])
 
 # Presence tracking routes
-app.include_router(
-    presence.router,
-    prefix=f"{settings.API_PREFIX}/presence",
-    tags=["Presence Tracking"]
-)
+app.include_router(presence.router, prefix=f"{settings.API_PREFIX}/presence", tags=["Presence Tracking"])
 
 # Live Stream routes (WebSocket-based camera streaming)
-app.include_router(
-    live_stream.router,
-    prefix=f"{settings.API_PREFIX}/stream",
-    tags=["Live Stream"]
-)
+app.include_router(live_stream.router, prefix=f"{settings.API_PREFIX}/stream", tags=["Live Stream"])
 
 # HLS routes (serve .m3u8 playlists and .ts segments)
 if settings.USE_HLS_STREAMING:
-    app.include_router(
-        hls.router,
-        prefix=f"{settings.API_PREFIX}/hls",
-        tags=["HLS Streaming"]
-    )
+    app.include_router(hls.router, prefix=f"{settings.API_PREFIX}/hls", tags=["HLS Streaming"])
 
 # WebRTC routes (WHEP signaling proxy + ICE config)
 if settings.USE_WEBRTC_STREAMING:
-    app.include_router(
-        webrtc.router,
-        prefix=f"{settings.API_PREFIX}/webrtc",
-        tags=["WebRTC Streaming"]
-    )
+    app.include_router(webrtc.router, prefix=f"{settings.API_PREFIX}/webrtc", tags=["WebRTC Streaming"])
 
 # WebSocket routes
-app.include_router(
-    websocket.router,
-    prefix=f"{settings.API_PREFIX}/ws",
-    tags=["WebSocket"]
-)
+app.include_router(websocket.router, prefix=f"{settings.API_PREFIX}/ws", tags=["WebSocket"])
 
 # Analytics routes
-app.include_router(
-    analytics.router,
-    prefix=f"{settings.API_PREFIX}/analytics",
-    tags=["Analytics"]
-)
+app.include_router(analytics.router, prefix=f"{settings.API_PREFIX}/analytics", tags=["Analytics"])
 
 
 # ===== Development Server =====
@@ -447,5 +420,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8000,
         reload=settings.DEBUG,
-        log_level="info" if settings.DEBUG else "warning"
+        log_level="info" if settings.DEBUG else "warning",
     )
