@@ -153,17 +153,30 @@ class ConnectionManager:
 
     async def _listen_redis(self):
         """Process messages from Redis and broadcast to local WebSocket clients."""
-        async for message in self._pubsub.listen():
-            if message["type"] in ("message", b"message"):
+        from app.config import settings
+
+        while True:
+            try:
+                async for message in self._pubsub.listen():
+                    if message["type"] in ("message", b"message"):
+                        try:
+                            raw = message["data"]
+                            # decode_responses=False so data arrives as bytes
+                            if isinstance(raw, bytes):
+                                raw = raw.decode("utf-8")
+                            data = json.loads(raw)
+                            await self._broadcast_batch_results(data)
+                        except Exception:
+                            logger.exception("Redis WS listener error")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Redis WS listener connection lost, reconnecting...")
+                await asyncio.sleep(1)
                 try:
-                    raw = message["data"]
-                    # decode_responses=False so data arrives as bytes
-                    if isinstance(raw, bytes):
-                        raw = raw.decode("utf-8")
-                    data = json.loads(raw)
-                    await self._broadcast_batch_results(data)
+                    await self._pubsub.subscribe(settings.REDIS_WS_CHANNEL)
                 except Exception:
-                    logger.exception("Redis WS listener error")
+                    logger.exception("Redis WS listener re-subscribe failed")
 
     async def _broadcast_batch_results(self, data: dict):
         """Send batch recognition results to relevant WebSocket clients."""

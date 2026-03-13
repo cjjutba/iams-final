@@ -424,20 +424,29 @@ class FAISSManager:
 
     async def subscribe_index_changes(self):
         """Listen for index-change events and reload (runs forever as a background task)."""
+        import asyncio
+
         from app.redis_client import get_redis
 
-        r = await get_redis()
-        pubsub = r.pubsub()
-        await pubsub.subscribe("faiss_reload")
-        logger.info("Subscribed to FAISS reload notifications")
+        while True:
+            try:
+                r = await get_redis()
+                pubsub = r.pubsub()
+                await pubsub.subscribe("faiss_reload")
+                logger.info("Subscribed to FAISS reload notifications")
 
-        async for message in pubsub.listen():
-            if message["type"] == "message":
-                try:
-                    self.load_or_create_index()
-                    logger.info("FAISS index reloaded from disk (notified by another worker)")
-                except Exception as e:
-                    logger.error(f"Failed to reload FAISS index after notification: {e}")
+                async for message in pubsub.listen():
+                    if message["type"] == "message":
+                        try:
+                            self.load_or_create_index()
+                            logger.info("FAISS index reloaded from disk (notified by another worker)")
+                        except Exception as e:
+                            logger.error(f"Failed to reload FAISS index after notification: {e}")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("FAISS reload subscriber connection lost, reconnecting...")
+                await asyncio.sleep(1)
 
     def get_stats(self) -> dict:
         """

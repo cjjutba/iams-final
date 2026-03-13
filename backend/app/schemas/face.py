@@ -153,3 +153,14 @@ class FaceRecognizeResponse(BaseModel):
     matched: bool
     user_id: str | None = None
     confidence: float | None = None
+
+
+# ===== Face Gone (RPi Smart Sampler) =====
+
+
+class FaceGoneRequest(BaseModel):
+    """Request from RPi when tracked faces leave the frame."""
+
+    room_id: str = Field(..., description="Room where faces were lost")
+    track_ids: list[int] = Field(default_factory=list, description="IDs of lost face tracks")
+    timestamp: float | None = Field(None, description="Unix timestamp of the event")

@@ -603,7 +603,7 @@ class PresenceService:
             self.db.query(EarlyLeaveEvent)
             .filter(
                 EarlyLeaveEvent.attendance_id == attendance_id,
-                not EarlyLeaveEvent.returned,
+                EarlyLeaveEvent.returned.is_(False),
             )
             .order_by(EarlyLeaveEvent.detected_at.desc())
             .first()

@@ -47,13 +47,13 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
     CMD curl -f http://localhost:8000/api/v1/health || exit 1
 
-# Run with uvicorn (4 workers for production concurrency)
-# Each worker loads its own ONNX session (shared pages via fork),
-# FAISS index with mmap (shared pages), and batch processor (Redis lock ensures single processor)
+# Run with uvicorn (single worker, async concurrency handles load)
+# Avoids cross-worker state issues with _active_sessions, user_map, etc.
+# Redis batch processor + async IO are sufficient for 2-room JRMSU scale.
 CMD ["uvicorn", "app.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
-     "--workers", "4", \
+     "--workers", "1", \
      "--proxy-headers", \
      "--forwarded-allow-ips", "*", \
      "--log-level", "info"]
