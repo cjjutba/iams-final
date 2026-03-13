@@ -22,6 +22,9 @@ interface UseWebSocketOptions {
   onSessionEnd?: (message: WebSocketMessage) => void;
   onConnected?: () => void;
   autoConnect?: boolean;
+  onPresenceWarning?: (message: WebSocketMessage) => void;
+  onPresenceScore?: (message: WebSocketMessage) => void;
+  onStudentCheckedIn?: (message: WebSocketMessage) => void;
 }
 
 export const useWebSocket = ({
@@ -31,6 +34,9 @@ export const useWebSocket = ({
   onSessionEnd,
   onConnected,
   autoConnect = true,
+  onPresenceWarning,
+  onPresenceScore,
+  onStudentCheckedIn,
 }: UseWebSocketOptions = {}) => {
   const { user, isAuthenticated } = useAuth();
   const [connectionState, setConnectionState] = useState<string>(
@@ -45,6 +51,9 @@ export const useWebSocket = ({
   const onSessionStartRef = useRef(onSessionStart);
   const onSessionEndRef = useRef(onSessionEnd);
   const onConnectedRef = useRef(onConnected);
+  const onPresenceWarningRef = useRef(onPresenceWarning);
+  const onPresenceScoreRef = useRef(onPresenceScore);
+  const onStudentCheckedInRef = useRef(onStudentCheckedIn);
 
   // Keep refs up-to-date with latest callback values
   useEffect(() => {
@@ -66,6 +75,18 @@ export const useWebSocket = ({
   useEffect(() => {
     onConnectedRef.current = onConnected;
   }, [onConnected]);
+
+  useEffect(() => {
+    onPresenceWarningRef.current = onPresenceWarning;
+  }, [onPresenceWarning]);
+
+  useEffect(() => {
+    onPresenceScoreRef.current = onPresenceScore;
+  }, [onPresenceScore]);
+
+  useEffect(() => {
+    onStudentCheckedInRef.current = onStudentCheckedIn;
+  }, [onStudentCheckedIn]);
 
   // Main effect: connect, subscribe to events, and clean up
   useEffect(() => {
@@ -107,6 +128,21 @@ export const useWebSocket = ({
       onSessionEndRef.current?.(msg);
     });
     unsubscribers.push(unsubSessionEnd);
+
+    const unsubPresenceWarning = websocketService.onPresenceWarning((msg) => {
+      onPresenceWarningRef.current?.(msg);
+    });
+    unsubscribers.push(unsubPresenceWarning);
+
+    const unsubPresenceScore = websocketService.onPresenceScore((msg) => {
+      onPresenceScoreRef.current?.(msg);
+    });
+    unsubscribers.push(unsubPresenceScore);
+
+    const unsubStudentCheckedIn = websocketService.onStudentCheckedIn((msg) => {
+      onStudentCheckedInRef.current?.(msg);
+    });
+    unsubscribers.push(unsubStudentCheckedIn);
 
     // Acquire a ref-counted connection (only the last release disconnects)
     websocketService.acquire(user.id);

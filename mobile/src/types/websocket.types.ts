@@ -11,6 +11,9 @@ export enum WebSocketEventType {
   EARLY_LEAVE = 'early_leave',
   SESSION_START = 'session_start',
   SESSION_END = 'session_end',
+  PRESENCE_WARNING = 'presence_warning',
+  PRESENCE_SCORE = 'presence_score',
+  STUDENT_CHECKED_IN = 'student_checked_in',
 }
 
 // Base WebSocket message

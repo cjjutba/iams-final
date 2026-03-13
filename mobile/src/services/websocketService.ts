@@ -281,6 +281,27 @@ class WebSocketService {
   }
 
   /**
+   * Register callback for presence warnings
+   */
+  onPresenceWarning(callback: MessageCallback): () => void {
+    return this.on(WebSocketEventType.PRESENCE_WARNING, callback);
+  }
+
+  /**
+   * Register callback for presence score updates
+   */
+  onPresenceScore(callback: MessageCallback): () => void {
+    return this.on(WebSocketEventType.PRESENCE_SCORE, callback);
+  }
+
+  /**
+   * Register callback for student checked in events
+   */
+  onStudentCheckedIn(callback: MessageCallback): () => void {
+    return this.on(WebSocketEventType.STUDENT_CHECKED_IN, callback);
+  }
+
+  /**
    * Handle incoming WebSocket message
    * Backend sends: { "event": "attendance_update", "data": {...} }
    */
