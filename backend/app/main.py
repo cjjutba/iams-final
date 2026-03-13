@@ -21,13 +21,16 @@ from app.rate_limiter import limiter
 from app.routers import (
     analytics,
     attendance,
+    audit,
     auth,
     face,
     hls,
     live_stream,
     notifications,
     presence,
+    rooms,
     schedules,
+    settings_router,
     users,
     webrtc,
     websocket,
@@ -417,6 +420,9 @@ app.include_router(users.router, prefix=f"{settings.API_PREFIX}/users", tags=["U
 # Face recognition routes
 app.include_router(face.router, prefix=f"{settings.API_PREFIX}/face", tags=["Face Recognition"])
 
+# Room routes (edge device room lookup)
+app.include_router(rooms.router, prefix=f"{settings.API_PREFIX}/rooms", tags=["Rooms"])
+
 # Schedule routes
 app.include_router(schedules.router, prefix=f"{settings.API_PREFIX}/schedules", tags=["Schedules"])
 
@@ -445,6 +451,12 @@ app.include_router(websocket.router, prefix=f"{settings.API_PREFIX}/ws", tags=["
 
 # Analytics routes
 app.include_router(analytics.router, prefix=f"{settings.API_PREFIX}/analytics", tags=["Analytics"])
+
+# Audit log routes
+app.include_router(audit.router, prefix=f"{settings.API_PREFIX}/audit", tags=["Audit"])
+
+# System settings routes
+app.include_router(settings_router.router, prefix=f"{settings.API_PREFIX}/settings", tags=["Settings"])
 
 
 # ===== Development Server =====

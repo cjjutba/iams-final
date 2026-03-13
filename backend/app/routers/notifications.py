@@ -4,14 +4,16 @@ Notifications Router
 API endpoints for user notifications.
 """
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.user import User
+from app.models.notification import Notification
+from app.models.user import User, UserRole
 from app.repositories.notification_repository import NotificationRepository
 from app.schemas.notification import NotificationResponse
-from app.utils.dependencies import get_current_user
+from app.utils.dependencies import get_current_admin, get_current_user
 
 router = APIRouter()
 
@@ -106,3 +108,47 @@ def get_unread_count(current_user: User = Depends(get_current_user), db: Session
     count = notification_repo.get_unread_count(str(current_user.id))
 
     return {"unread_count": count}
+
+
+# ===== Broadcast Notifications =====
+
+
+class BroadcastRequest(BaseModel):
+    """Request model for broadcasting notifications"""
+
+    target: str  # 'all', 'students', 'faculty', 'admin'
+    title: str
+    message: str
+
+
+@router.post("/broadcast", status_code=status.HTTP_201_CREATED)
+def broadcast_notification(
+    data: BroadcastRequest,
+    current_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    **Broadcast Notification** (Admin Only)
+
+    Send a notification to all users or a specific role group.
+
+    - **target**: Target audience ('all', 'students', 'faculty', 'admin')
+    - **title**: Notification title
+    - **message**: Notification body text
+
+    Requires admin authentication.
+    """
+    if data.target == "all":
+        users = db.query(User).filter(User.is_active.is_(True)).all()
+    elif data.target in ("students", "faculty", "admin"):
+        role_map = {"students": UserRole.STUDENT, "faculty": UserRole.FACULTY, "admin": UserRole.ADMIN}
+        users = db.query(User).filter(User.role == role_map[data.target], User.is_active.is_(True)).all()
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid target. Must be 'all', 'students', 'faculty', or 'admin'")
+
+    for user in users:
+        notif = Notification(user_id=user.id, type="broadcast", title=data.title, message=data.message)
+        db.add(notif)
+    db.commit()
+
+    return {"success": True, "message": f"Notification sent to {len(users)} users"}
