@@ -147,6 +147,7 @@ const StudentRow = React.memo(({ item }: { item: DetectedStudent }) => (
     </Text>
   </View>
 ));
+StudentRow.displayName = 'StudentRow';
 
 // ---------------------------------------------------------------------------
 // Component

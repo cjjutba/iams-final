@@ -249,6 +249,7 @@ const UnknownBadge: React.FC<{ count: number }> = React.memo(({ count }) => {
     </View>
   );
 });
+UnknownBadge.displayName = 'UnknownBadge';
 
 // ---------------------------------------------------------------------------
 // Main Component
@@ -312,6 +313,7 @@ export const DetectionOverlay: React.FC<DetectionOverlayProps> = React.memo(
     );
   },
 );
+DetectionOverlay.displayName = 'DetectionOverlay';
 
 // ---------------------------------------------------------------------------
 // Styles
