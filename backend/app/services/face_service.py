@@ -16,6 +16,11 @@ from sqlalchemy.orm import Session
 from app.config import logger, settings
 from app.repositories.face_repository import FaceRepository
 from app.services.ml.anti_spoof import anti_spoof_detector
+from app.services.ml.embedding_pipeline import (
+    embed_face,
+    validate_registration_embeddings,
+    average_embeddings,
+)
 from app.services.ml.face_quality import QualityReport, assess_quality
 from app.services.ml.faiss_manager import faiss_manager
 from app.services.ml.insightface_model import insightface_model
@@ -128,6 +133,12 @@ class FaceService:
             n = emb / np.linalg.norm(emb)
             normed.append(n)
 
+        # Cross-capture validation: all embeddings must be from the same person
+        is_valid, validation_msg = validate_registration_embeddings(normed)
+        if not is_valid:
+            logger.warning(f"Cross-capture validation failed for user {user_id}: {validation_msg}")
+            return 0, validation_msg, quality_reports or None
+
         # Anti-spoof check (registration-time, uses embedding variance + texture)
         if settings.ANTISPOOF_ENABLED and settings.ANTISPOOF_REGISTRATION_STRICT:
             spoof_result = anti_spoof_detector.check_registration_set(
@@ -217,8 +228,11 @@ class FaceService:
             FaceRecognitionError: If face processing fails
         """
         try:
-            # Generate embedding
-            embedding = self.facenet.get_embedding(image_bytes)
+            # Generate embedding via shared pipeline
+            embedding = await embed_face(image_bytes)
+            if embedding is None:
+                logger.debug("No face detected in recognition image")
+                return None, None
 
             # Search FAISS
             results = self.faiss.search(embedding, k=1, threshold=threshold)
