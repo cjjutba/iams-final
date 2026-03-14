@@ -36,6 +36,7 @@ from app.config import logger, settings
 from app.database import SessionLocal
 from app.repositories.schedule_repository import ScheduleRepository
 from app.services.camera_config import get_camera_url
+from app.services.edge_relay_service import edge_relay_manager
 from app.services.hls_service import hls_service
 from app.services.recognition_service import recognition_service
 from app.services.webrtc_service import webrtc_service
@@ -247,6 +248,10 @@ async def _hls_mode(
     """
     HLS mode: start FFmpeg HLS stream + recognition pipeline,
     then push only detection metadata over WebSocket.
+
+    When an edge device is connected, bounding-box relay is handled by
+    EdgeRelayManager and this loop only pushes identity updates.
+    Falls back to direct ``detections`` messages when no edge device.
     """
     # Start HLS stream
     hls_ok = await hls_service.start_stream(room_id, rtsp_url, viewer_id)
@@ -282,6 +287,9 @@ async def _hls_mode(
         }
     )
 
+    # Register this mobile client with the edge relay manager
+    await edge_relay_manager.register_mobile(room_id, websocket)
+
     # --- Receive task (handle pings/close) ---
     stop_event = asyncio.Event()
 
@@ -316,6 +324,9 @@ async def _hls_mode(
                     logger.info(f"HLS: health check detected dead FFmpeg for room {room_id}, restarting...")
                     await hls_service.ensure_healthy(room_id)
 
+            # Check if an edge device is connected for this room
+            edge_connected = edge_relay_manager.has_edge_device(room_id)
+
             result = recognition_service.get_latest_detections(room_id)
 
             if result is not None:
@@ -330,16 +341,36 @@ async def _hls_mode(
                         det_objects = recognition_service.get_detections_objects(room_id)
                         detections_dicts = _enrich_and_cache(detections_dicts, det_objects, SessionLocal)
 
-                    ts = datetime.now(UTC).isoformat()
-                    await websocket.send_json(
-                        {
-                            "type": "detections",
-                            "timestamp": ts,
-                            "detections": detections_dicts,
-                            "detection_width": det_w,
-                            "detection_height": det_h,
-                        }
-                    )
+                    if edge_connected:
+                        # Edge device handles bounding boxes — push identity
+                        # mappings so they merge into the relay stream.
+                        mappings = []
+                        for d in detections_dicts:
+                            if d.get("user_id"):
+                                mappings.append(
+                                    {
+                                        "track_id": d.get("track_id"),
+                                        "user_id": d["user_id"],
+                                        "name": d.get("name"),
+                                        "student_id": d.get("student_id"),
+                                        "confidence": d.get("similarity"),
+                                        "bbox": d.get("bbox"),
+                                    }
+                                )
+                        if mappings:
+                            await edge_relay_manager.push_identity_update(room_id, mappings)
+                    else:
+                        # No edge device — fall back to sending detections directly
+                        ts = datetime.now(UTC).isoformat()
+                        await websocket.send_json(
+                            {
+                                "type": "detections",
+                                "timestamp": ts,
+                                "detections": detections_dicts,
+                                "detection_width": det_w,
+                                "detection_height": det_h,
+                            }
+                        )
                     last_send_time = now
 
                 elif (now - last_send_time) >= heartbeat_interval:
@@ -384,6 +415,7 @@ async def _hls_mode(
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await receive_task
 
+        await edge_relay_manager.unregister_mobile(room_id, websocket)
         await hls_service.stop_stream(room_id, viewer_id)
         await recognition_service.stop(room_id, viewer_id)
 
@@ -408,6 +440,12 @@ async def _webrtc_mode(
     WebRTC mode: start only the recognition pipeline and push detection
     metadata over WebSocket.  Video delivery is handled separately by the
     WebRTC signalling layer — this socket never touches hls_service.
+
+    When an edge device is connected for the room, bounding-box data is
+    relayed by EdgeRelayManager (real-time from RPi).  This loop only
+    pushes identity updates from the recognition service.  When no edge
+    device is connected, falls back to the original behaviour (send
+    ``detections`` messages directly from the recognition service).
     """
     # Start recognition pipeline (use high-res stream if configured)
     recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
@@ -430,6 +468,9 @@ async def _webrtc_mode(
             "stream_resolution": f"{settings.STREAM_WIDTH}x{settings.STREAM_HEIGHT}",
         }
     )
+
+    # Register this mobile client with the edge relay manager
+    await edge_relay_manager.register_mobile(room_id, websocket)
 
     # --- Receive task (handle pings/close) ---
     stop_event = asyncio.Event()
@@ -455,6 +496,12 @@ async def _webrtc_mode(
     try:
         while not stop_event.is_set():
             now = asyncio.get_event_loop().time()
+
+            # Check if an edge device is connected for this room.
+            # If yes, bounding boxes are relayed by EdgeRelayManager — we only
+            # need to push identity updates from the recognition service.
+            edge_connected = edge_relay_manager.has_edge_device(room_id)
+
             result = recognition_service.get_latest_detections(room_id)
 
             if result is not None:
@@ -469,16 +516,36 @@ async def _webrtc_mode(
                         det_objects = recognition_service.get_detections_objects(room_id)
                         detections_dicts = _enrich_and_cache(detections_dicts, det_objects, SessionLocal)
 
-                    ts = datetime.now(UTC).isoformat()
-                    await websocket.send_json(
-                        {
-                            "type": "detections",
-                            "timestamp": ts,
-                            "detections": detections_dicts,
-                            "detection_width": det_w,
-                            "detection_height": det_h,
-                        }
-                    )
+                    if edge_connected:
+                        # Edge device handles bounding boxes — push identity
+                        # mappings so they merge into the relay stream.
+                        mappings = []
+                        for d in detections_dicts:
+                            if d.get("user_id"):
+                                mappings.append(
+                                    {
+                                        "track_id": d.get("track_id"),
+                                        "user_id": d["user_id"],
+                                        "name": d.get("name"),
+                                        "student_id": d.get("student_id"),
+                                        "confidence": d.get("similarity"),
+                                        "bbox": d.get("bbox"),
+                                    }
+                                )
+                        if mappings:
+                            await edge_relay_manager.push_identity_update(room_id, mappings)
+                    else:
+                        # No edge device — fall back to sending detections directly
+                        ts = datetime.now(UTC).isoformat()
+                        await websocket.send_json(
+                            {
+                                "type": "detections",
+                                "timestamp": ts,
+                                "detections": detections_dicts,
+                                "detection_width": det_w,
+                                "detection_height": det_h,
+                            }
+                        )
                     last_send_time = now
 
                 elif (now - last_send_time) >= heartbeat_interval:
@@ -523,6 +590,7 @@ async def _webrtc_mode(
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await receive_task
 
+        await edge_relay_manager.unregister_mobile(room_id, websocket)
         await recognition_service.stop(room_id, viewer_id)
 
         if websocket.client_state == WebSocketState.CONNECTED:
