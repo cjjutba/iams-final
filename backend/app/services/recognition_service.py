@@ -19,7 +19,7 @@ import cv2
 import numpy as np
 
 from app.config import logger, settings
-from app.services.edge_relay_service import edge_relay_manager
+
 
 
 @dataclass
@@ -237,25 +237,8 @@ class RecognitionService:
                 state.last_timestamp = time.monotonic()
                 state.update_seq += 1
 
-                # Push identity updates to edge relay for mobile clients
-                identity_mappings = [
-                    {
-                        "bbox": {"x": det.x, "y": det.y, "width": det.width, "height": det.height},
-                        "user_id": det.user_id,
-                        "name": det.name or "",
-                        "student_id": det.student_id or "",
-                        "confidence": det.similarity or 0.0,
-                    }
-                    for det in detections
-                    if det.user_id
-                ]
-                if identity_mappings:
-                    try:
-                        await edge_relay_manager.push_identity_update(
-                            state.room_id, identity_mappings
-                        )
-                    except Exception as e:
-                        logger.debug(f"Failed to push identity update: {e}")
+                # Identity push is handled by live_stream router (which enriches
+                # names via DB cache before pushing). No duplicate push here.
 
                 # Throttle to target FPS
                 elapsed = time.monotonic() - frame_start

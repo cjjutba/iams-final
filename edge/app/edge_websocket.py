@@ -119,6 +119,9 @@ class EdgeWebSocketClient:
             frame_width: Width of the source frame in pixels.
             frame_height: Height of the source frame in pixels.
         """
+        if not self.is_connected:
+            return
+
         message = {
             "type": "edge_detections",
             "room_id": self._room_id,

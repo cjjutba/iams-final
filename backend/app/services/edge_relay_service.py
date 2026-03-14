@@ -86,10 +86,8 @@ class EdgeRelayManager:
                 room = RoomRelay(room_id=room_id)
                 self._rooms[room_id] = room
             room.mobile_clients.add(ws)
-        logger.info(
-            f"EdgeRelay: mobile client registered for room {room_id} "
-            f"(total: {len(self._rooms.get(room_id, RoomRelay(room_id=room_id)).mobile_clients)})"
-        )
+        count = len(room.mobile_clients)
+        logger.info(f"EdgeRelay: mobile client registered for room {room_id} (total: {count})")
 
     async def unregister_mobile(self, room_id: str, ws: WebSocket) -> None:
         """Unregister a mobile client WebSocket from a room."""
@@ -121,20 +119,26 @@ class EdgeRelayManager:
             if room is None:
                 return
 
-            # Store latest detections
+            # Store raw edge detections (unmodified)
             room.last_detections = message
             room.last_update_time = time.monotonic()
 
-            # Merge identity cache into detections
-            detections = message.get("detections", [])
-            for det in detections:
+            # Build outbound message with identity merged (copy, don't mutate original)
+            raw_detections = message.get("detections", [])
+            merged_detections = []
+            for det in raw_detections:
+                out = dict(det)  # shallow copy
                 track_id = det.get("track_id")
                 if track_id and track_id in room.identity_cache:
                     identity = room.identity_cache[track_id]
-                    det["user_id"] = identity.get("user_id")
-                    det["name"] = identity.get("name")
-                    det["student_id"] = identity.get("student_id")
-                    det["similarity"] = identity.get("confidence")
+                    out["user_id"] = identity.get("user_id")
+                    out["name"] = identity.get("name")
+                    out["student_id"] = identity.get("student_id")
+                    out["similarity"] = identity.get("confidence")
+                merged_detections.append(out)
+
+            outbound = dict(message)
+            outbound["detections"] = merged_detections
 
             # Snapshot clients to send outside lock
             clients = list(room.mobile_clients)
@@ -147,7 +151,7 @@ class EdgeRelayManager:
         for client in clients:
             try:
                 if client.client_state == WebSocketState.CONNECTED:
-                    await client.send_json(message)
+                    await client.send_json(outbound)
                 else:
                     dead_clients.append(client)
             except Exception:
@@ -169,11 +173,71 @@ class EdgeRelayManager:
     # Push identity updates from recognition service
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _bbox_center_distance(bbox_a: dict | list, bbox_b: dict | list) -> float:
+        """Compute Euclidean distance between centers of two bboxes.
+
+        Accepts both dict {x,y,width,height} and list [x,y,w,h] formats.
+        """
+        if isinstance(bbox_a, list):
+            ax, ay, aw, ah = bbox_a[0], bbox_a[1], bbox_a[2], bbox_a[3]
+        else:
+            ax, ay, aw, ah = bbox_a.get("x", 0), bbox_a.get("y", 0), bbox_a.get("width", 0), bbox_a.get("height", 0)
+
+        if isinstance(bbox_b, list):
+            bx, by, bw, bh = bbox_b[0], bbox_b[1], bbox_b[2], bbox_b[3]
+        else:
+            bx, by, bw, bh = bbox_b.get("x", 0), bbox_b.get("y", 0), bbox_b.get("width", 0), bbox_b.get("height", 0)
+
+        cx_a, cy_a = ax + aw / 2, ay + ah / 2
+        cx_b, cy_b = bx + bw / 2, by + bh / 2
+        return ((cx_a - cx_b) ** 2 + (cy_a - cy_b) ** 2) ** 0.5
+
+    def _match_identity_to_edge_tracks(
+        self, room: RoomRelay, mapping: dict
+    ) -> str | None:
+        """Match a recognition-service identity (with bbox) to the closest edge track_id.
+
+        Uses center-distance between the recognition bbox and the latest edge
+        detection bboxes. Returns the closest track_id if within a reasonable
+        threshold, or None.
+        """
+        recog_bbox = mapping.get("bbox")
+        if not recog_bbox or room.last_detections is None:
+            return None
+
+        edge_dets = room.last_detections.get("detections", [])
+        if not edge_dets:
+            return None
+
+        # Compute distance threshold based on frame size (~15% of frame diagonal)
+        fw = room.last_detections.get("frame_width", 1280)
+        fh = room.last_detections.get("frame_height", 720)
+        max_distance = 0.15 * ((fw ** 2 + fh ** 2) ** 0.5)
+
+        best_track_id = None
+        best_dist = max_distance
+
+        for edet in edge_dets:
+            ebbox = edet.get("bbox")
+            if ebbox is None:
+                continue
+            dist = self._bbox_center_distance(recog_bbox, ebbox)
+            if dist < best_dist:
+                best_dist = dist
+                best_track_id = edet.get("track_id")
+
+        return best_track_id
+
     async def push_identity_update(self, room_id: str, mappings: list[dict]) -> None:
         """
         Update identity cache and forward identity_update message to mobile clients.
 
         Each mapping: {track_id, user_id, name, student_id, confidence, bbox}
+
+        When track_id is missing (recognition service has no edge track IDs),
+        uses bbox-proximity matching against the latest edge detections to find
+        the closest track_id.
 
         Prunes cache to 100 entries (LRU-style: oldest entries removed first).
         """
@@ -188,6 +252,13 @@ class EdgeRelayManager:
 
             for m in mappings:
                 track_id = m.get("track_id")
+
+                # If no track_id, try to match by bbox proximity to edge detections
+                if not track_id:
+                    track_id = self._match_identity_to_edge_tracks(room, m)
+                    if track_id:
+                        m["track_id"] = track_id
+
                 if track_id:
                     room.identity_cache[track_id] = {
                         "user_id": m.get("user_id"),
