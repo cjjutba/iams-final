@@ -20,6 +20,9 @@ mediapipe>=0.10.9
 # HTTP client (async)
 httpx>=0.25,<1.0
 
+# WebSocket client (edge → VPS real-time bbox relay)
+websocket-client>=1.6.0
+
 # Environment variables
 python-dotenv>=1.0,<2.0
 
