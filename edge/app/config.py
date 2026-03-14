@@ -51,8 +51,8 @@ class Config:
 
     # USB / general camera settings
     CAMERA_INDEX: int = int(os.getenv("CAMERA_INDEX", "0"))
-    CAMERA_WIDTH: int = int(os.getenv("CAMERA_WIDTH", "640"))
-    CAMERA_HEIGHT: int = int(os.getenv("CAMERA_HEIGHT", "480"))
+    CAMERA_WIDTH: int = int(os.getenv("CAMERA_WIDTH", "1280"))
+    CAMERA_HEIGHT: int = int(os.getenv("CAMERA_HEIGHT", "720"))
     CAMERA_FPS: int = int(os.getenv("CAMERA_FPS", "15"))
 
     # ===== Face Detection Configuration =====
@@ -60,7 +60,7 @@ class Config:
     JPEG_QUALITY: int = int(os.getenv("JPEG_QUALITY", "85"))
 
     # MediaPipe Face Detection settings
-    DETECTION_CONFIDENCE: float = float(os.getenv("DETECTION_CONFIDENCE", "0.6"))
+    DETECTION_CONFIDENCE: float = float(os.getenv("DETECTION_CONFIDENCE", "0.5"))
     DETECTION_MODEL: int = int(os.getenv("DETECTION_MODEL", "0"))  # 0 = short_range, 1 = full_range
 
     # ===== Queue Configuration =====
@@ -85,10 +85,10 @@ class Config:
     SESSION_POLL_INTERVAL: int = int(os.getenv("SESSION_POLL_INTERVAL", "10"))  # seconds
 
     # ===== Smart Sampler Configuration =====
-    SEND_INTERVAL: float = float(os.getenv("SEND_INTERVAL", "3"))
-    DEDUP_WINDOW: float = float(os.getenv("DEDUP_WINDOW", "5"))
-    FACE_GONE_TIMEOUT: float = float(os.getenv("FACE_GONE_TIMEOUT", "10"))
-    IOU_MATCH_THRESHOLD: float = float(os.getenv("IOU_MATCH_THRESHOLD", "0.3"))
+    SEND_INTERVAL: float = float(os.getenv("SEND_INTERVAL", "1"))
+    DEDUP_WINDOW: float = float(os.getenv("DEDUP_WINDOW", "2"))
+    FACE_GONE_TIMEOUT: float = float(os.getenv("FACE_GONE_TIMEOUT", "5"))
+    IOU_MATCH_THRESHOLD: float = float(os.getenv("IOU_MATCH_THRESHOLD", "0.25"))
     USE_SMART_SAMPLER: bool = os.getenv("USE_SMART_SAMPLER", "true").lower() == "true"
 
     # ===== Stream Relay Configuration =====
@@ -97,6 +97,11 @@ class Config:
     STREAM_RELAY_ENABLED: bool = os.getenv("STREAM_RELAY_ENABLED", "false").lower() in ("true", "1", "yes")
     STREAM_RELAY_URL: str = os.getenv("STREAM_RELAY_URL", "")  # e.g., rtsp://167.71.217.44:8554
     STREAM_RELAY_RETRY_DELAY: int = int(os.getenv("STREAM_RELAY_RETRY_DELAY", "5"))
+
+    # ===== Edge WebSocket (real-time bbox push to VPS) =====
+    EDGE_WS_ENABLED: bool = os.getenv("EDGE_WS_ENABLED", "true").lower() in ("true", "1", "yes")
+    EDGE_WS_URL: str = os.getenv("EDGE_WS_URL", "")  # Derived from BACKEND_URL if empty
+    EDGE_WS_RECONNECT_DELAY: int = int(os.getenv("EDGE_WS_RECONNECT_DELAY", "3"))
 
     # ===== Logging Configuration =====
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
@@ -199,6 +204,16 @@ class Config:
         base = cls.BACKEND_URL.rstrip("/")
         path = path.lstrip("/")
         return f"{base}/{path}"
+
+    @classmethod
+    def get_edge_ws_url(cls) -> str:
+        """Get WebSocket URL for edge bbox relay. Derives from BACKEND_URL if not set."""
+        if cls.EDGE_WS_URL:
+            return cls.EDGE_WS_URL
+        # Convert http://host to ws://host/api/v1/edge/ws
+        base = cls.BACKEND_URL.rstrip("/")
+        ws_base = base.replace("https://", "wss://").replace("http://", "ws://")
+        return f"{ws_base}/api/v1/edge/ws"
 
 
 def setup_logging() -> logging.Logger:
