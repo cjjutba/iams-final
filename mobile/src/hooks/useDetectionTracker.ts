@@ -20,8 +20,9 @@ export interface TrackedDetection extends DetectionItem {
 }
 
 // How many missed frames before a track is dropped
-const STALE_THRESHOLD = 5;
-const IOU_THRESHOLD = 0.3;
+const STALE_THRESHOLD_KNOWN = 4;   // Keep recognized users briefly (smooth exit)
+const STALE_THRESHOLD_UNKNOWN = 1; // Drop unknown tracks immediately (prevents duplicates)
+const IOU_THRESHOLD = 0.2;         // Lower threshold = more lenient matching
 
 let _nextTrackId = 0;
 function generateTrackId(): string {
@@ -63,7 +64,19 @@ export function useDetectionTracker(
     const usedPrevIndices = new Set<number>();
 
     for (const det of detections) {
-      // Known faces always use user_id as trackId
+      // Priority 1: Edge track_id (from RPi)
+      if (det.track_id) {
+        const prevIdx = prevTracks.findIndex((t) => t.trackId === det.track_id);
+        if (prevIdx >= 0) usedPrevIndices.add(prevIdx);
+        newTracks.push({
+          ...det,
+          trackId: det.track_id,
+          staleFrames: 0,
+        });
+        continue;
+      }
+
+      // Priority 2: Known faces use user_id as trackId
       if (det.user_id) {
         const prevIdx = prevTracks.findIndex(
           (t) => t.user_id === det.user_id,
@@ -110,11 +123,16 @@ export function useDetectionTracker(
       }
     }
 
-    // Carry forward unmatched previous tracks as stale (for fade-out)
+    // Carry forward unmatched previous tracks as stale (for fade-out).
+    // Only keep known (recognized) tracks briefly; drop unknown tracks
+    // immediately to prevent duplicate "Unknown" labels.
     for (let i = 0; i < prevTracks.length; i++) {
       if (usedPrevIndices.has(i)) continue;
       const stale = prevTracks[i].staleFrames + 1;
-      if (stale < STALE_THRESHOLD) {
+      const threshold = prevTracks[i].user_id
+        ? STALE_THRESHOLD_KNOWN
+        : STALE_THRESHOLD_UNKNOWN;
+      if (stale < threshold) {
         newTracks.push({ ...prevTracks[i], staleFrames: stale });
       }
     }

@@ -32,6 +32,8 @@ export interface DetectionItem {
   student_id: string | null;
   name: string | null;
   similarity: number | null;
+  /** Track ID from edge device (used for identity mapping). */
+  track_id?: string;
 }
 
 interface DetectionOverlayProps {
@@ -169,11 +171,9 @@ const DetectionBox: React.FC<BoxProps> = React.memo(({
             },
           ]}
         >
-          <View style={[styles.labelBg, { backgroundColor: borderColor }]}>
-            <Text style={styles.labelText} numberOfLines={1}>
-              {label}
-            </Text>
-          </View>
+          <Text style={[styles.labelText, { color: borderColor }]} numberOfLines={1}>
+            {label}
+          </Text>
         </View>
       )}
     </>
@@ -277,20 +277,15 @@ const styles = StyleSheet.create({
   labelAnchor: {
     position: 'absolute',
     alignItems: 'center',
-    transform: [{ translateX: -40 }],
-  },
-  labelBg: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    minWidth: 50,
-    alignItems: 'center',
+    transform: [{ translateX: -30 }],
   },
   labelText: {
-    fontSize: 9,
+    fontSize: 7,
     fontWeight: '700',
-    color: '#FFFFFF',
     textAlign: 'center',
+    textShadowColor: 'rgba(0,0,0,0.8)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   unknownBadge: {
     position: 'absolute',
