@@ -29,6 +29,7 @@ from app.processor import FaceProcessor
 from app.queue_manager import QueueManager, RetryWorker
 from app.sender import SyncBackendSender
 from app.smart_sampler import SmartSampler
+from app.edge_websocket import edge_ws_client
 from app.stream_relay import stream_relay
 
 
@@ -142,8 +143,9 @@ class EdgeDevice:
 
         self.is_running = False
 
-        # Stop stream relay (safe to call even if never started)
+        # Stop stream relay and edge WebSocket (safe to call even if never started)
         stream_relay.stop()
+        edge_ws_client.stop()
 
         # Stop retry worker
         if self.retry_worker:
@@ -205,6 +207,12 @@ class EdgeDevice:
             elif not active and prev_active:
                 stream_relay.stop()
 
+        # Start/stop edge WebSocket on session transitions
+        if active and not prev_active:
+            edge_ws_client.start(self.room_id)
+        elif not active and prev_active:
+            edge_ws_client.stop()
+
         return active
 
     def run_single_scan(self) -> bool:
@@ -246,6 +254,10 @@ class EdgeDevice:
         logger.info(f"Detected {face_count} faces")
 
         if face_count == 0:
+            # Send empty detections so mobile clears overlay boxes
+            if edge_ws_client.is_connected:
+                edge_ws_client.send_detections([], frame.shape[1], frame.shape[0])
+
             # Even with no detections, update smart sampler so it can
             # detect gone faces (tracks that timed out).
             if self.smart_sampler is not None:
@@ -257,6 +269,24 @@ class EdgeDevice:
             logger.info("No faces detected, skipping transmission")
             self.scan_count += 1
             return True
+
+        # Push raw bounding boxes to VPS via WebSocket for real-time overlay.
+        # When the smart sampler is NOT active, send now with index-based IDs.
+        # When the smart sampler IS active, we defer until after its update()
+        # so we can attach real track IDs.
+        if edge_ws_client.is_connected and self.smart_sampler is None:
+            ws_detections = []
+            for i, fb in enumerate(face_boxes):
+                ws_detections.append({
+                    "bbox": fb.to_list(),
+                    "confidence": fb.confidence,
+                    "track_id": str(i),
+                })
+            edge_ws_client.send_detections(
+                ws_detections,
+                frame_width=frame.shape[1],
+                frame_height=frame.shape[0],
+            )
 
         # Process faces
         face_data_list = self.processor.process_batch(frame, face_boxes)
@@ -272,6 +302,21 @@ class EdgeDevice:
         if self.smart_sampler is not None:
             detections = [fd.bbox for fd in face_data_list]
             faces_to_send, gone_track_ids = self.smart_sampler.update(detections, face_data_list)
+
+            # Push bounding boxes with real track IDs from the sampler
+            if edge_ws_client.is_connected:
+                ws_detections = []
+                for tid, track in self.smart_sampler._tracks.items():
+                    ws_detections.append({
+                        "bbox": track.bbox,
+                        "confidence": track.confidence,
+                        "track_id": str(tid),
+                    })
+                edge_ws_client.send_detections(
+                    ws_detections,
+                    frame_width=frame.shape[1],
+                    frame_height=frame.shape[0],
+                )
 
             if gone_track_ids:
                 logger.info(f"Smart sampler: {len(gone_track_ids)} face(s) gone (track_ids={gone_track_ids})")
