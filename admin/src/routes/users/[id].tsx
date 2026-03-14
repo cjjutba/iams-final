@@ -1,14 +1,18 @@
-import { useCallback, useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { useNavigate, useParams, useLocation } from 'react-router-dom'
+import { usePageTitle } from '@/hooks/use-page-title'
+import { useBreadcrumbStore } from '@/stores/breadcrumb.store'
 import { type ColumnDef } from '@tanstack/react-table'
 import { format } from 'date-fns'
 import {
   ArrowLeft,
   CheckCircle2,
+  Loader2,
   XCircle,
   UserX,
   UserCheck,
   ScanFace,
+  Pencil,
   Phone,
   Mail,
   Calendar,
@@ -39,10 +43,16 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
-import { usersService } from '@/services/users.service'
-import { faceService } from '@/services/face.service'
-import { attendanceService } from '@/services/attendance.service'
-import type { UserResponse, UserRole, AttendanceRecord } from '@/types'
+import {
+  useUser,
+  useUserAttendance,
+  useDeactivateUser,
+  useReactivateUser,
+  useDeregisterFace,
+} from '@/hooks/use-queries'
+import type { UserRole, AttendanceRecord } from '@/types'
+import { formatStatus } from '@/types/attendance'
+import { EditUserDialog } from './edit-user-dialog'
 
 const roleBadgeVariant: Record<UserRole, 'default' | 'secondary' | 'outline'> = {
   student: 'default',
@@ -51,94 +61,83 @@ const roleBadgeVariant: Record<UserRole, 'default' | 'secondary' | 'outline'> = 
 }
 
 const statusBadgeVariant: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
-  PRESENT: 'default',
-  LATE: 'secondary',
-  ABSENT: 'destructive',
-  EXCUSED: 'outline',
-  EARLY_LEAVE: 'destructive',
+  present: 'default',
+  late: 'secondary',
+  absent: 'destructive',
+  excused: 'outline',
+  early_leave: 'destructive',
+}
+
+const roleBackRoutes: Record<string, { path: string; label: string }> = {
+  student: { path: '/students', label: 'Back to Students' },
+  faculty: { path: '/faculty', label: 'Back to Faculty' },
+  admin: { path: '/admins', label: 'Back to Admins' },
 }
 
 export default function UserDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const [user, setUser] = useState<UserResponse | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [attendance, setAttendance] = useState<AttendanceRecord[]>([])
-  const [attendanceLoading, setAttendanceLoading] = useState(false)
-  const [actionLoading, setActionLoading] = useState(false)
+  const location = useLocation()
+  const stateRole = (location.state as { role?: string })?.role
+  const setLabel = useBreadcrumbStore((s) => s.setLabel)
 
-  const fetchUser = useCallback(async () => {
-    if (!id) return
-    setIsLoading(true)
-    try {
-      const data = await usersService.getById(id)
-      setUser(data)
-    } catch {
-      toast.error('Failed to load user.')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [id])
+  const { data: user, isLoading } = useUser(id!)
 
-  const fetchAttendance = useCallback(async () => {
-    if (!id || !user || user.role !== 'student') return
-    setAttendanceLoading(true)
-    try {
-      const data = await attendanceService.list({ student_id: id })
-      setAttendance(data)
-    } catch {
-      toast.error('Failed to load attendance history.')
-    } finally {
-      setAttendanceLoading(false)
-    }
-  }, [id, user])
+  const fullName = user ? `${user.first_name} ${user.last_name}` : null
+  usePageTitle(fullName ?? 'User Details')
 
   useEffect(() => {
-    void fetchUser()
-  }, [fetchUser])
+    if (fullName) setLabel(fullName)
+    return () => setLabel(null)
+  }, [fullName, setLabel])
+  const { data: attendance = [], isLoading: attendanceLoading } = useUserAttendance(
+    id!,
+    !!user && user.role === 'student',
+  )
 
-  useEffect(() => {
-    void fetchAttendance()
-  }, [fetchAttendance])
+  const [editOpen, setEditOpen] = useState(false)
+  const [deactivateOpen, setDeactivateOpen] = useState(false)
+  const [reactivateOpen, setReactivateOpen] = useState(false)
+  const [deregisterOpen, setDeregisterOpen] = useState(false)
+
+  const deactivateMutation = useDeactivateUser()
+  const reactivateMutation = useReactivateUser()
+  const deregisterMutation = useDeregisterFace()
+  const actionLoading = deactivateMutation.isPending || reactivateMutation.isPending || deregisterMutation.isPending
 
   const handleDeactivate = async () => {
     if (!user) return
-    setActionLoading(true)
     try {
-      await usersService.deactivate(user.id)
+      await deactivateMutation.mutateAsync(user.id)
       toast.success(`${user.first_name} ${user.last_name} has been deactivated.`)
-      await fetchUser()
     } catch {
       toast.error('Failed to deactivate user.')
     } finally {
-      setActionLoading(false)
+      setDeactivateOpen(false)
     }
   }
 
   const handleReactivate = async () => {
     if (!user) return
-    setActionLoading(true)
     try {
-      await usersService.reactivate(user.id)
+      await reactivateMutation.mutateAsync(user.id)
       toast.success(`${user.first_name} ${user.last_name} has been reactivated.`)
-      await fetchUser()
     } catch {
       toast.error('Failed to reactivate user.')
     } finally {
-      setActionLoading(false)
+      setReactivateOpen(false)
     }
   }
 
   const handleDeregister = async () => {
     if (!user) return
-    setActionLoading(true)
     try {
-      await faceService.deregister(user.id)
+      await deregisterMutation.mutateAsync(user.id)
       toast.success(`Face data for ${user.first_name} ${user.last_name} has been removed.`)
     } catch {
       toast.error('Failed to deregister face.')
     } finally {
-      setActionLoading(false)
+      setDeregisterOpen(false)
     }
   }
 
@@ -164,7 +163,7 @@ export default function UserDetailPage() {
       header: 'Status',
       cell: ({ row }) => (
         <Badge variant={statusBadgeVariant[row.original.status] ?? 'outline'}>
-          {row.original.status}
+          {formatStatus(row.original.status)}
         </Badge>
       ),
     },
@@ -197,12 +196,14 @@ export default function UserDetailPage() {
     )
   }
 
+  const backRoute = roleBackRoutes[user?.role ?? stateRole ?? 'student'] ?? roleBackRoutes.student
+
   if (!user) {
     return (
       <div className="space-y-4">
-        <Button variant="ghost" onClick={() => navigate('/users')}>
+        <Button variant="ghost" onClick={() => navigate(backRoute.path)}>
           <ArrowLeft className="mr-2 h-4 w-4" />
-          Back to Users
+          {backRoute.label}
         </Button>
         <p className="text-muted-foreground">User not found.</p>
       </div>
@@ -213,9 +214,9 @@ export default function UserDetailPage() {
 
   return (
     <div className="space-y-6">
-      <Button variant="ghost" onClick={() => navigate('/users')}>
+      <Button variant="ghost" onClick={() => navigate(backRoute.path)}>
         <ArrowLeft className="mr-2 h-4 w-4" />
-        Back to Users
+        {backRoute.label}
       </Button>
 
       <Card>
@@ -242,96 +243,111 @@ export default function UserDetailPage() {
               </div>
             </div>
             <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+                <Pencil className="mr-2 h-4 w-4" />
+                Edit
+              </Button>
               {user.is_active ? (
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button variant="outline" size="sm" disabled={actionLoading}>
-                      <UserX className="mr-2 h-4 w-4" />
-                      Deactivate
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Deactivate User</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        Are you sure you want to deactivate {user.first_name}{' '}
-                        {user.last_name}? They will no longer be able to access the
-                        system.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel disabled={actionLoading}>
-                        Cancel
-                      </AlertDialogCancel>
-                      <AlertDialogAction
-                        onClick={handleDeactivate}
-                        disabled={actionLoading}
-                      >
-                        {actionLoading ? 'Deactivating...' : 'Deactivate'}
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
+                <>
+                  <Button variant="outline" size="sm" disabled={actionLoading} onClick={() => setDeactivateOpen(true)}>
+                    <UserX className="mr-2 h-4 w-4" />
+                    Deactivate
+                  </Button>
+                  <AlertDialog open={deactivateOpen} onOpenChange={setDeactivateOpen}>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Deactivate User</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          Are you sure you want to deactivate {user.first_name}{' '}
+                          {user.last_name}? They will no longer be able to access the
+                          system.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel disabled={actionLoading}>
+                          Cancel
+                        </AlertDialogCancel>
+                        <AlertDialogAction
+                          onClick={(e) => {
+                            e.preventDefault()
+                            void handleDeactivate()
+                          }}
+                          disabled={actionLoading}
+                        >
+                          {actionLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Deactivating...</>) : 'Deactivate'}
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </>
               ) : (
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button variant="outline" size="sm" disabled={actionLoading}>
-                      <UserCheck className="mr-2 h-4 w-4" />
-                      Reactivate
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Reactivate User</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        Are you sure you want to reactivate {user.first_name}{' '}
-                        {user.last_name}? They will regain access to the system.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel disabled={actionLoading}>
-                        Cancel
-                      </AlertDialogCancel>
-                      <AlertDialogAction
-                        onClick={handleReactivate}
-                        disabled={actionLoading}
-                      >
-                        {actionLoading ? 'Reactivating...' : 'Reactivate'}
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
+                <>
+                  <Button variant="outline" size="sm" disabled={actionLoading} onClick={() => setReactivateOpen(true)}>
+                    <UserCheck className="mr-2 h-4 w-4" />
+                    Reactivate
+                  </Button>
+                  <AlertDialog open={reactivateOpen} onOpenChange={setReactivateOpen}>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Reactivate User</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          Are you sure you want to reactivate {user.first_name}{' '}
+                          {user.last_name}? They will regain access to the system.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel disabled={actionLoading}>
+                          Cancel
+                        </AlertDialogCancel>
+                        <AlertDialogAction
+                          onClick={(e) => {
+                            e.preventDefault()
+                            void handleReactivate()
+                          }}
+                          disabled={actionLoading}
+                        >
+                          {actionLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Reactivating...</>) : 'Reactivate'}
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </>
               )}
 
-              <AlertDialog>
-                <AlertDialogTrigger asChild>
-                  <Button variant="outline" size="sm" disabled={actionLoading}>
+              {user.role === 'student' && (
+                <>
+                  <Button variant="outline" size="sm" disabled={actionLoading} onClick={() => setDeregisterOpen(true)}>
                     <ScanFace className="mr-2 h-4 w-4" />
                     Deregister Face
                   </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Deregister Face</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      Are you sure you want to remove face registration data for{' '}
-                      {user.first_name} {user.last_name}? They will need to
-                      re-register their face to use the attendance system.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel disabled={actionLoading}>
-                      Cancel
-                    </AlertDialogCancel>
-                    <AlertDialogAction
-                      onClick={handleDeregister}
-                      disabled={actionLoading}
-                    >
-                      {actionLoading ? 'Removing...' : 'Deregister'}
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
+                  <AlertDialog open={deregisterOpen} onOpenChange={setDeregisterOpen}>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Deregister Face</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          Are you sure you want to remove face registration data for{' '}
+                          {user.first_name} {user.last_name}? They will need to
+                          re-register their face to use the attendance system.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel disabled={actionLoading}>
+                          Cancel
+                        </AlertDialogCancel>
+                        <AlertDialogAction
+                          onClick={(e) => {
+                            e.preventDefault()
+                            void handleDeregister()
+                          }}
+                          disabled={actionLoading}
+                        >
+                          {actionLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Removing...</>) : 'Deregister'}
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </>
+              )}
             </div>
           </div>
         </CardHeader>
@@ -387,26 +403,20 @@ export default function UserDetailPage() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Attendance History</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {user.role !== 'student' ? (
-            <p className="text-sm text-muted-foreground">
-              Attendance history is only available for students.
-            </p>
-          ) : (
-            <DataTable
-              columns={attendanceColumns}
-              data={attendance}
-              isLoading={attendanceLoading}
-              searchColumn="subject_code"
-              searchPlaceholder="Search by subject..."
-            />
-          )}
-        </CardContent>
-      </Card>
+      {user.role === 'student' && (
+        <div>
+          <h3 className="text-lg font-semibold mb-4">Attendance History</h3>
+          <DataTable
+            columns={attendanceColumns}
+            data={attendance}
+            isLoading={attendanceLoading}
+            searchColumn="subject_code"
+            searchPlaceholder="Search by subject..."
+          />
+        </div>
+      )}
+
+      <EditUserDialog user={user} open={editOpen} onOpenChange={setEditOpen} />
     </div>
   )
 }

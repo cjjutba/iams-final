@@ -1,7 +1,9 @@
 import { useLocation, Link } from 'react-router-dom'
 import {
   LayoutDashboard,
-  Users,
+  GraduationCap,
+  UserCog,
+  ShieldAlert,
   Calendar,
   Building2,
   ClipboardList,
@@ -15,6 +17,7 @@ import {
   LogOut,
   ShieldCheck,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth.store'
 import {
   Sidebar,
@@ -27,20 +30,26 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarSeparator,
 } from '@/components/ui/sidebar'
 
 const navGroups = [
   {
     label: 'Overview',
     items: [
-      { title: 'Dashboard', icon: LayoutDashboard, href: '/' },
+      { title: 'Dashboard', icon: LayoutDashboard, href: '/dashboard' },
+    ],
+  },
+  {
+    label: 'People',
+    items: [
+      { title: 'Students', icon: GraduationCap, href: '/students' },
+      { title: 'Faculty', icon: UserCog, href: '/faculty' },
+      { title: 'Admins', icon: ShieldAlert, href: '/admins' },
     ],
   },
   {
     label: 'Management',
     items: [
-      { title: 'Users', icon: Users, href: '/users' },
       { title: 'Schedules', icon: Calendar, href: '/schedules' },
       { title: 'Rooms', icon: Building2, href: '/rooms' },
     ],
@@ -69,20 +78,37 @@ export function AppSidebar() {
   const location = useLocation()
   const logout = useAuthStore((s) => s.logout)
 
+  const handleLogout = () => {
+    logout()
+    toast.success('Signed out successfully')
+  }
+
   const isActive = (href: string) => {
-    if (href === '/') return location.pathname === '/'
-    return location.pathname.startsWith(href)
+    if (href === '/dashboard') return location.pathname === '/dashboard' || location.pathname === '/'
+    if (location.pathname.startsWith(href)) return true
+
+    // Map detail routes back to their parent sidebar item
+    const state = location.state as Record<string, string> | null
+    if (location.pathname.startsWith('/users/') && state?.role) {
+      const roleToHref: Record<string, string> = {
+        student: '/students',
+        faculty: '/faculty',
+        admin: '/admins',
+      }
+      return roleToHref[state.role] === href
+    }
+
+    return false
   }
 
   return (
     <Sidebar>
-      <SidebarHeader className="px-4 py-3">
-        <Link to="/" className="flex items-center gap-2">
+      <SidebarHeader className="px-4 py-3 border-b border-sidebar-border">
+        <Link to="/dashboard" className="flex items-center gap-2">
           <ShieldCheck className="h-6 w-6 text-primary" />
           <span className="text-lg font-semibold">IAMS Admin</span>
         </Link>
       </SidebarHeader>
-      <SidebarSeparator />
       <SidebarContent>
         {navGroups.map((group) => (
           <SidebarGroup key={group.label}>
@@ -107,7 +133,7 @@ export function AppSidebar() {
       <SidebarFooter className="p-2">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton onClick={logout}>
+            <SidebarMenuButton onClick={handleLogout}>
               <LogOut className="h-4 w-4" />
               <span>Logout</span>
             </SidebarMenuButton>

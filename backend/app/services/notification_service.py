@@ -9,7 +9,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.config import logger
+from app.config import logger, settings
 from app.models.attendance_record import AttendanceRecord
 from app.models.notification import Notification
 from app.models.notification_preference import NotificationPreference
@@ -19,7 +19,7 @@ from app.models.user import User
 
 class NotificationService:
     """
-    Service for sending real-time notifications via WebSocket
+    Service for sending real-time notifications via WebSocket + Email
 
     Handles:
     - Early leave alerts to faculty
@@ -28,18 +28,21 @@ class NotificationService:
     - Broadcast messages to all users in a schedule
     - Anomaly alerts, attendance confirmations, low attendance warnings
     - Persisted notifications with preference gating
+    - Email notifications via Resend (when enabled)
     """
 
-    def __init__(self, ws_manager, db: Session):
+    def __init__(self, ws_manager, db: Session, email_service=None):
         """
         Initialize notification service
 
         Args:
             ws_manager: WebSocket ConnectionManager instance
             db: Database session
+            email_service: Optional EmailService instance for sending emails
         """
         self.ws_manager = ws_manager
         self.db = db
+        self.email_service = email_service
 
     def _check_preference(self, user_id: str, pref_field: str) -> bool:
         """Check if a user has a specific notification preference enabled."""
@@ -151,9 +154,33 @@ class NotificationService:
                     recent_detected.sort(key=lambda x: x.scan_time, reverse=True)
                     message["data"]["last_seen_at"] = recent_detected[0].scan_time.isoformat()
 
-            # Send to faculty
+            # Send to faculty via WebSocket
             faculty_id = str(schedule.faculty_id)
             await self.ws_manager.send_personal(faculty_id, message)
+
+            # Persist notification to DB
+            student_name = f"{student.first_name} {student.last_name}"
+            if self._check_preference(faculty_id, "early_leave_alerts"):
+                self.create_persisted_notification(
+                    user_id=faculty_id,
+                    title="Early Leave Detected",
+                    message=f"{student_name} left {schedule.subject_code} — {schedule.subject_name} early",
+                    notification_type="alert",
+                    reference_id=str(attendance.id),
+                    reference_type="early_leave",
+                )
+
+            # Send email if enabled
+            if self.email_service and self._check_preference(faculty_id, "email_enabled"):
+                faculty = self.db.query(User).filter(User.id == schedule.faculty_id).first()
+                if faculty and faculty.email:
+                    self.email_service.send_early_leave_email(
+                        faculty_email=faculty.email,
+                        student_name=student_name,
+                        subject_code=schedule.subject_code,
+                        subject_name=schedule.subject_name,
+                        detected_at=datetime.now(),
+                    )
 
             logger.info(f"Early leave notification sent to faculty {faculty_id} for student {student.student_id}")
 
@@ -374,7 +401,7 @@ class NotificationService:
             logger.error(f"Failed to send attendance confirmation: {e}")
 
     async def notify_low_attendance_warning(
-        self, student_id: str, subject_name: str, current_rate: float, threshold: float
+        self, student_id: str, subject_name: str, current_rate: float, threshold: float, subject_code: str = ""
     ):
         """Send low attendance warning to student (if preference allows)."""
         if not self._check_preference(student_id, "low_attendance_warning"):
@@ -384,6 +411,7 @@ class NotificationService:
             "event": "low_attendance_warning",
             "data": {
                 "subject_name": subject_name,
+                "subject_code": subject_code,
                 "current_rate": round(current_rate, 1),
                 "threshold": threshold,
                 "timestamp": datetime.now().isoformat(),
@@ -391,5 +419,28 @@ class NotificationService:
         }
         try:
             await self.ws_manager.send_personal(student_id, message)
+
+            # Persist notification
+            self.create_persisted_notification(
+                user_id=student_id,
+                title="Low Attendance Warning",
+                message=f"Your attendance in {subject_code} — {subject_name} is at {current_rate:.0f}% (threshold: {threshold:.0f}%)",
+                notification_type="alert",
+                reference_type="low_attendance",
+            )
+
+            # Send email if enabled
+            if self.email_service and self._check_preference(student_id, "email_enabled"):
+                student = self.db.query(User).filter(User.id == student_id).first()
+                if student and student.email:
+                    student_name = f"{student.first_name} {student.last_name}"
+                    self.email_service.send_low_attendance_email(
+                        student_email=student.email,
+                        student_name=student_name,
+                        subject_name=subject_name,
+                        subject_code=subject_code,
+                        current_rate=current_rate,
+                        threshold=threshold,
+                    )
         except Exception as e:
             logger.error(f"Failed to send low attendance warning: {e}")

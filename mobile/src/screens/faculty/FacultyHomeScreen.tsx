@@ -9,7 +9,7 @@
  * - Today's teaching schedule
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   StyleSheet,
@@ -24,6 +24,7 @@ import type { StackNavigationProp } from '@react-navigation/stack';
 import { Users, Play, Square, Camera } from 'lucide-react-native';
 import { useAuth, useSchedule, useSession } from '../../hooks';
 import { useToast } from '../../hooks/useToast';
+import { useNotificationStore } from '../../stores/notificationStore';
 import { theme, strings } from '../../constants';
 import { formatDate, formatTime, getDayName } from '../../utils';
 import type { FacultyStackParamList, ScheduleWithAttendance } from '../../types';
@@ -45,6 +46,11 @@ export const FacultyHomeScreen: React.FC = () => {
     refreshActiveSessions,
   } = useSession();
   const { showError, showSuccess } = useToast();
+  const { unreadCount, fetchUnreadCount } = useNotificationStore();
+
+  useEffect(() => {
+    fetchUnreadCount();
+  }, [fetchUnreadCount]);
 
   const currentClass = getCurrentClass();
   const sessionActive = currentClass ? isSessionActive(currentClass.id) : false;
@@ -330,6 +336,7 @@ export const FacultyHomeScreen: React.FC = () => {
       <Header
         title={strings.faculty.home}
         showNotification
+        notificationCount={unreadCount}
         onNotificationPress={handleNotificationPress}
       />
 

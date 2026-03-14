@@ -4,12 +4,17 @@ User Service
 Business logic for user management operations.
 """
 
+from datetime import date
+
 from sqlalchemy.orm import Session
 
-from app.config import logger
+from app.config import logger, settings
 from app.models.user import User, UserRole
+from app.repositories.student_record_repository import StudentRecordRepository
 from app.repositories.user_repository import UserRepository
+from app.schemas.user import AdminCreateUser
 from app.utils.exceptions import NotFoundError, ValidationError
+from app.utils.security import hash_password
 
 
 class UserService:
@@ -18,6 +23,7 @@ class UserService:
     def __init__(self, db: Session):
         self.db = db
         self.user_repo = UserRepository(db)
+        self.student_record_repo = StudentRecordRepository(db)
 
     def get_user(self, user_id: str) -> User:
         """
@@ -164,6 +170,156 @@ class UserService:
         user = self.user_repo.update(user_id, {"is_active": True})
         logger.info(f"User reactivated: {user.email}")
         return user
+
+    def admin_create_user(self, body: AdminCreateUser) -> User:
+        """
+        Admin-initiated user creation for faculty/admin only.
+        Students are added via create_student_record instead.
+        """
+        if body.role == UserRole.STUDENT:
+            raise ValidationError("Use the student-records endpoint to add students")
+
+        # Check for duplicate email
+        existing = self.user_repo.get_by_email(body.email)
+        if existing:
+            raise ValidationError(f"An account with email {body.email} already exists")
+
+        # Build user data
+        user_data = {
+            "email": body.email,
+            "first_name": body.first_name,
+            "last_name": body.last_name,
+            "phone": body.phone,
+            "role": body.role,
+            "is_active": True,
+            "email_verified": True,  # Admin-created accounts are pre-verified
+        }
+
+        # Handle password: Supabase or local
+        if settings.USE_SUPABASE_AUTH:
+            supabase_user = self._create_supabase_user(body.email, body.password, body.first_name, body.last_name, body.role)
+            user_data["supabase_user_id"] = supabase_user["id"]
+            user_data["password_hash"] = None
+        else:
+            user_data["password_hash"] = hash_password(body.password)
+
+        user = self.user_repo.create(user_data)
+        logger.info(f"Admin created {body.role} user: {user.email}")
+        return user
+
+    def get_student_records_with_status(self, skip: int = 0, limit: int = 1000) -> list[dict]:
+        """Get all student records with app registration status."""
+        return self.student_record_repo.get_all_with_status(skip, limit)
+
+    def get_student_record(self, student_id: str) -> dict:
+        """Get a single student record with registration status."""
+        from app.models.face_registration import FaceRegistration
+
+        normalized = student_id.strip().upper()
+        record = self.student_record_repo.get_by_student_id(normalized)
+        if not record:
+            raise NotFoundError(f"Student record not found: {student_id}")
+
+        user = self.user_repo.get_by_student_id(normalized)
+        has_face = False
+        if user:
+            face = self.db.query(FaceRegistration).filter(
+                FaceRegistration.user_id == user.id, FaceRegistration.is_active == True
+            ).first()
+            has_face = face is not None
+
+        return {
+            "record": record,
+            "user_id": str(user.id) if user else None,
+            "is_registered": user is not None,
+            "has_face_registered": has_face,
+        }
+
+    def update_student_record(self, student_id: str, update_data: dict) -> "StudentRecord":
+        """Update a student record."""
+        from app.models.student_record import StudentRecord
+
+        normalized = student_id.strip().upper()
+        if "birthdate" in update_data and update_data["birthdate"]:
+            update_data["birthdate"] = date.fromisoformat(update_data["birthdate"])
+
+        record = self.student_record_repo.update(normalized, update_data)
+        self.db.commit()
+        logger.info(f"Updated student record: {normalized}")
+        return record
+
+    def deactivate_student_record(self, student_id: str) -> bool:
+        """Deactivate a student record."""
+        normalized = student_id.strip().upper()
+        result = self.student_record_repo.deactivate(normalized)
+        self.db.commit()
+        logger.info(f"Deactivated student record: {normalized}")
+        return result
+
+    def create_student_record(self, body) -> "StudentRecord":
+        """
+        Create a student record in the student_records registry.
+        The student can then self-register via the mobile app.
+        """
+        from app.models.student_record import StudentRecord
+
+        normalized_id = body.student_id.strip().upper()
+
+        # Check for duplicate
+        existing = self.student_record_repo.get_by_student_id(normalized_id)
+        if existing:
+            raise ValidationError(f"Student ID {normalized_id} already exists in the registry")
+
+        record_data = {
+            "student_id": normalized_id,
+            "first_name": body.first_name,
+            "middle_name": body.middle_name,
+            "last_name": body.last_name,
+            "email": body.email,
+            "course": body.course,
+            "year_level": body.year_level,
+            "section": body.section,
+            "contact_number": body.contact_number,
+            "is_active": True,
+        }
+        if body.birthdate:
+            record_data["birthdate"] = date.fromisoformat(body.birthdate)
+
+        record = self.student_record_repo.create(record_data)
+        self.db.commit()
+        logger.info(f"Admin created student record: {normalized_id}")
+        return record
+
+    def _create_supabase_user(self, email: str, password: str, first_name: str, last_name: str, role: UserRole) -> dict:
+        """Create a user in Supabase Auth using the admin API."""
+        import httpx
+
+        response = httpx.post(
+            f"{settings.SUPABASE_URL}/auth/v1/admin/users",
+            json={
+                "email": email,
+                "password": password,
+                "email_confirm": True,
+                "user_metadata": {
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "role": role.value,
+                },
+            },
+            headers={
+                "apikey": settings.SUPABASE_ANON_KEY,
+                "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
+                "Content-Type": "application/json",
+            },
+            timeout=15.0,
+        )
+
+        if response.status_code >= 400:
+            body = response.json() if "application/json" in response.headers.get("content-type", "") else {}
+            error_msg = body.get("msg") or body.get("message") or response.text
+            raise ValidationError(f"Failed to create Supabase user: {error_msg}")
+
+        return response.json()
 
     def get_statistics(self) -> dict:
         """

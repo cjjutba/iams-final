@@ -16,6 +16,7 @@ interface HeaderProps {
   title: string;
   showBack?: boolean;
   showNotification?: boolean;
+  notificationCount?: number;
   rightAction?: React.ReactNode;
   onNotificationPress?: () => void;
 }
@@ -24,6 +25,7 @@ export const Header: React.FC<HeaderProps> = ({
   title,
   showBack = false,
   showNotification = false,
+  notificationCount = 0,
   rightAction,
   onNotificationPress,
 }) => {
@@ -60,8 +62,16 @@ export const Header: React.FC<HeaderProps> = ({
             onPress={onNotificationPress}
             activeOpacity={theme.interaction.activeOpacity}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            style={{ position: 'relative' }}
           >
             <Bell size={24} color={theme.colors.text.primary} />
+            {notificationCount > 0 && (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>
+                  {notificationCount > 99 ? '99+' : String(notificationCount)}
+                </Text>
+              </View>
+            )}
           </TouchableOpacity>
         ) : null}
       </View>
@@ -87,5 +97,23 @@ const styles = StyleSheet.create({
   titleContainer: {
     flex: 1,
     paddingHorizontal: theme.spacing[4], // 16px
+  },
+  badge: {
+    position: 'absolute' as const,
+    top: -6,
+    right: -8,
+    backgroundColor: '#dc2626',
+    borderRadius: 10,
+    minWidth: 18,
+    height: 18,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    paddingHorizontal: 4,
+  },
+  badgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '700' as const,
+    lineHeight: 12,
   },
 });

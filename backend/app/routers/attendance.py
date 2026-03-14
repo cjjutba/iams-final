@@ -33,6 +33,72 @@ from app.utils.dependencies import get_current_faculty, get_current_student, get
 router = APIRouter()
 
 
+@router.get("", response_model=list[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
+def list_attendance_records(
+    student_id: str | None = Query(None, description="Filter by student UUID"),
+    schedule_id: str | None = Query(None, description="Filter by schedule UUID"),
+    start_date: date | None = Query(None, description="Start date filter"),
+    end_date: date | None = Query(None, description="End date filter"),
+    status_filter: str | None = Query(None, alias="status", description="Filter by attendance status"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    **List Attendance Records** (Admin/Faculty)
+
+    General-purpose attendance listing with filters.
+    Admins see all records; faculty see records for their schedules;
+    students see only their own records.
+    """
+    import uuid as _uuid
+
+    from sqlalchemy.orm import joinedload
+
+    from app.models.attendance_record import AttendanceRecord as AR
+    from app.models.attendance_record import AttendanceStatus as AStatus
+
+    query = db.query(AR).options(joinedload(AR.student), joinedload(AR.schedule))
+
+    # Role-based scoping
+    if current_user.role == UserRole.STUDENT:
+        query = query.filter(AR.student_id == current_user.id)
+    elif current_user.role == UserRole.FACULTY:
+        from app.models.schedule import Schedule
+
+        query = query.join(Schedule, AR.schedule_id == Schedule.id).filter(Schedule.faculty_id == current_user.id)
+
+    # Optional filters
+    if student_id:
+        query = query.filter(AR.student_id == _uuid.UUID(student_id))
+    if schedule_id:
+        query = query.filter(AR.schedule_id == _uuid.UUID(schedule_id))
+    if start_date:
+        query = query.filter(AR.date >= start_date)
+    if end_date:
+        query = query.filter(AR.date <= end_date)
+    if status_filter:
+        try:
+            query = query.filter(AR.status == AStatus(status_filter))
+        except ValueError:
+            pass  # ignore unknown status
+
+    records = query.order_by(AR.date.desc()).offset(skip).limit(limit).all()
+
+    # Build response with student_name and subject_code
+    results = []
+    for r in records:
+        resp = AttendanceRecordResponse.model_validate(r)
+        if r.student:
+            resp.student_name = f"{r.student.first_name} {r.student.last_name}"
+        if r.schedule:
+            resp.subject_code = r.schedule.subject_code
+        results.append(resp)
+
+    return results
+
+
 @router.get(
     "/schedule-summaries",
     response_model=list[ScheduleAttendanceSummaryItem],
@@ -63,8 +129,11 @@ def get_schedule_summaries(
     # Get the day_of_week for the target date (Monday=0 ... Sunday=6)
     day_of_week = summary_date.weekday()
 
-    # Fetch all schedules this faculty teaches
-    all_schedules = schedule_repo.get_by_faculty(str(current_user.id))
+    # Admin sees all schedules; faculty sees only their own
+    if current_user.role == UserRole.ADMIN:
+        all_schedules = schedule_repo.get_all()
+    else:
+        all_schedules = schedule_repo.get_by_faculty(str(current_user.id))
 
     # Filter to only those that occur on the requested day
     day_schedules = [s for s in all_schedules if s.day_of_week == day_of_week]
@@ -484,9 +553,11 @@ def get_early_leave_alerts(
         if not attendance:
             continue
 
-        # Only show alerts for schedules this faculty teaches
+        # Admin sees all alerts; faculty sees only their own schedules
         schedule = schedule_repo.get_by_id(str(attendance.schedule_id))
-        if not schedule or str(schedule.faculty_id) != str(current_user.id):
+        if not schedule:
+            continue
+        if current_user.role != UserRole.ADMIN and str(schedule.faculty_id) != str(current_user.id):
             continue
 
         # Get student info
@@ -517,60 +588,81 @@ def get_early_leave_alerts(
 
 @router.get("/export", status_code=status.HTTP_200_OK)
 def export_attendance(
-    schedule_id: str = Query(..., description="Schedule UUID"),
-    start_date: date = Query(..., description="Start date"),
-    end_date: date = Query(..., description="End date"),
+    schedule_id: str | None = Query(None, description="Schedule UUID (optional for admins)"),
+    start_date: date | None = Query(None, description="Start date"),
+    end_date: date | None = Query(None, description="End date"),
+    status_filter: str | None = Query(None, alias="status", description="Filter by attendance status"),
     format: str = Query("csv", description="Export format: csv or json"),
-    current_user: User = Depends(get_current_faculty),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    **Export Attendance Report** (Faculty Only)
+    **Export Attendance Report**
 
-    Export attendance records for a schedule within a date range.
-
-    - **schedule_id**: Schedule UUID
-    - **start_date**: Start date
-    - **end_date**: End date
-    - **format**: Export format (csv or json)
+    Export attendance records with optional filters.
+    Admins can export all records; faculty can only export their own schedules.
 
     Returns attendance data in the requested format.
-
-    Requires faculty authentication.
     """
     import csv
     import io
 
     from fastapi import HTTPException
     from fastapi.responses import StreamingResponse
+    from sqlalchemy.orm import joinedload
 
-    attendance_repo = AttendanceRepository(db)
-    schedule_repo = ScheduleRepository(db)
+    from app.models.attendance_record import AttendanceRecord as AR
+    from app.models.attendance_record import AttendanceStatus as AStatus
 
-    # Verify schedule exists and faculty owns it
-    schedule = schedule_repo.get_by_id(schedule_id)
-    if not schedule:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
+    query = db.query(AR).options(joinedload(AR.student), joinedload(AR.schedule))
 
-    if str(schedule.faculty_id) != str(current_user.id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="You can only export attendance for your own schedules"
-        )
+    # Role-based scoping
+    if current_user.role == UserRole.FACULTY:
+        from app.models.schedule import Schedule
 
-    # Get all attendance records in range
-    records = attendance_repo.get_by_schedule_date_range(schedule_id, start_date, end_date)
+        if schedule_id:
+            schedule_repo = ScheduleRepository(db)
+            schedule = schedule_repo.get_by_id(schedule_id)
+            if not schedule:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
+            if str(schedule.faculty_id) != str(current_user.id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN, detail="You can only export attendance for your own schedules"
+                )
+            query = query.filter(AR.schedule_id == schedule.id)
+        else:
+            query = query.join(Schedule, AR.schedule_id == Schedule.id).filter(Schedule.faculty_id == current_user.id)
+    elif current_user.role == UserRole.STUDENT:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Students cannot export attendance")
+    else:
+        # Admin — optionally filter by schedule
+        if schedule_id:
+            import uuid as _uuid
+            query = query.filter(AR.schedule_id == _uuid.UUID(schedule_id))
+
+    # Apply filters
+    if start_date:
+        query = query.filter(AR.date >= start_date)
+    if end_date:
+        query = query.filter(AR.date <= end_date)
+    if status_filter:
+        try:
+            query = query.filter(AR.status == AStatus(status_filter))
+        except ValueError:
+            pass
+
+    records = query.order_by(AR.date.desc()).limit(5000).all()
 
     if format == "csv":
-        # Build CSV
         output = io.StringIO()
         writer = csv.writer(output)
 
-        # Header
         writer.writerow(
             [
                 "Date",
                 "Student ID",
                 "Student Name",
+                "Subject",
                 "Status",
                 "Check In",
                 "Check Out",
@@ -582,15 +674,16 @@ def export_attendance(
         )
 
         for record in records:
-            student = db.query(User).filter(User.id == record.student_id).first()
-            student_name = f"{student.first_name} {student.last_name}" if student else "Unknown"
-            student_sid = student.student_id if student else "N/A"
+            student_name = f"{record.student.first_name} {record.student.last_name}" if record.student else "Unknown"
+            student_sid = record.student.student_id if record.student else "N/A"
+            subject = record.schedule.subject_code if record.schedule else "N/A"
 
             writer.writerow(
                 [
                     record.date.isoformat(),
                     student_sid,
                     student_name,
+                    subject,
                     record.status.value if record.status else "unknown",
                     record.check_in_time.isoformat() if record.check_in_time else "",
                     record.check_out_time.isoformat() if record.check_out_time else "",
@@ -602,7 +695,8 @@ def export_attendance(
             )
 
         output.seek(0)
-        filename = f"attendance_{schedule.subject_code}_{start_date}_{end_date}.csv"
+        date_suffix = f"_{start_date}_{end_date}" if start_date and end_date else f"_{date.today()}"
+        filename = f"attendance_export{date_suffix}.csv"
 
         return StreamingResponse(
             iter([output.getvalue()]),
@@ -611,18 +705,18 @@ def export_attendance(
         )
 
     else:
-        # JSON format
         result = []
         for record in records:
-            student = db.query(User).filter(User.id == record.student_id).first()
-            student_name = f"{student.first_name} {student.last_name}" if student else "Unknown"
-            student_sid = student.student_id if student else "N/A"
+            student_name = f"{record.student.first_name} {record.student.last_name}" if record.student else "Unknown"
+            student_sid = record.student.student_id if record.student else "N/A"
+            subject = record.schedule.subject_code if record.schedule else "N/A"
 
             result.append(
                 {
                     "date": record.date.isoformat(),
                     "student_id": student_sid,
                     "student_name": student_name,
+                    "subject": subject,
                     "status": record.status.value if record.status else "unknown",
                     "check_in_time": record.check_in_time.isoformat() if record.check_in_time else None,
                     "check_out_time": record.check_out_time.isoformat() if record.check_out_time else None,
@@ -634,15 +728,69 @@ def export_attendance(
             )
 
         return {
-            "schedule": {
-                "id": str(schedule.id),
-                "subject_code": schedule.subject_code,
-                "subject_name": schedule.subject_name,
-            },
-            "date_range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
+            "date_range": {"start": start_date.isoformat() if start_date else None, "end": end_date.isoformat() if end_date else None},
             "total_records": len(result),
             "records": result,
         }
+
+
+@router.get("/early-leaves", response_model=list[AlertResponse], status_code=status.HTTP_200_OK)
+def get_early_leave_events(
+    schedule_id: str | None = Query(None, description="Filter by schedule"),
+    start_date: date | None = Query(None, description="Start date filter"),
+    end_date: date | None = Query(None, description="End date filter"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    **Get Early Leave Events**
+
+    Get list of early leave events with optional filters, enriched with student and schedule info.
+
+    - **schedule_id**: Optional schedule filter
+    - **start_date**: Optional start date filter
+    - **end_date**: Optional end date filter
+
+    Returns list of early leave events sorted by detection time.
+    """
+    attendance_repo = AttendanceRepository(db)
+    schedule_repo = ScheduleRepository(db)
+
+    events = attendance_repo.get_early_leave_events(schedule_id, start_date, end_date)
+
+    alerts = []
+    for event in events:
+        attendance = attendance_repo.get_by_id(str(event.attendance_id))
+        if not attendance:
+            continue
+
+        schedule = schedule_repo.get_by_id(str(attendance.schedule_id))
+        if not schedule:
+            continue
+
+        student = db.query(User).filter(User.id == attendance.student_id).first()
+        if not student:
+            continue
+
+        alerts.append(
+            AlertResponse(
+                id=str(event.id),
+                attendance_id=str(event.attendance_id),
+                student_id=str(student.id),
+                student_name=f"{student.first_name} {student.last_name}",
+                student_student_id=student.student_id,
+                schedule_id=str(attendance.schedule_id),
+                subject_code=schedule.subject_code,
+                subject_name=schedule.subject_name,
+                detected_at=event.detected_at,
+                last_seen_at=event.last_seen_at,
+                consecutive_misses=event.consecutive_misses,
+                notified=event.notified,
+                date=attendance.date,
+            )
+        )
+
+    return alerts
 
 
 @router.get("/{attendance_id}", response_model=AttendanceRecordResponse, status_code=status.HTTP_200_OK)
@@ -795,31 +943,3 @@ def update_attendance_record(
     logger.info(f"Attendance record updated by {current_user.email}: {attendance_id}")
 
     return AttendanceRecordResponse.model_validate(record)
-
-
-@router.get("/early-leaves/", response_model=list[EarlyLeaveResponse], status_code=status.HTTP_200_OK)
-def get_early_leave_events(
-    schedule_id: str | None = Query(None, description="Filter by schedule"),
-    start_date: date | None = Query(None, description="Start date filter"),
-    end_date: date | None = Query(None, description="End date filter"),
-    current_user: User = Depends(get_current_faculty),
-    db: Session = Depends(get_db),
-):
-    """
-    **Get Early Leave Events** (Faculty Only)
-
-    Get list of early leave events with optional filters.
-
-    - **schedule_id**: Optional schedule filter
-    - **start_date**: Optional start date filter
-    - **end_date**: Optional end date filter
-
-    Returns list of early leave events sorted by detection time.
-
-    Requires faculty authentication.
-    """
-    attendance_repo = AttendanceRepository(db)
-
-    events = attendance_repo.get_early_leave_events(schedule_id, start_date, end_date)
-
-    return [EarlyLeaveResponse.model_validate(event) for event in events]

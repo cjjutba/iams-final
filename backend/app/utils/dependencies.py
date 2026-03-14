@@ -219,18 +219,18 @@ async def get_current_student(current_user: User = Depends(get_current_user)) ->
 
 async def get_current_faculty(current_user: User = Depends(get_current_user)) -> User:
     """
-    Get current user and verify they are faculty
+    Get current user and verify they are faculty or admin
 
     Args:
         current_user: Current authenticated user
 
     Returns:
-        Current faculty user
+        Current faculty or admin user
 
     Raises:
-        AuthorizationError: If user is not faculty
+        AuthorizationError: If user is not faculty or admin
     """
-    if current_user.role != UserRole.FACULTY:
+    if current_user.role not in (UserRole.FACULTY, UserRole.ADMIN):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This endpoint is only accessible to faculty")
     return current_user
 

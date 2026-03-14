@@ -356,8 +356,10 @@ async def _hls_mode(
                 stale_count += 1
                 if stale_count >= 100:  # ~10s of no recognition service (100 × 100ms)
                     logger.warning(f"Live stream: recognition service gone for room {room_id}, attempting restart")
-                    recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
-                    await recognition_service.start(room_id, recog_url, viewer_id)
+                    _recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
+                    if not _recog_url:
+                        _recog_url = f"{settings.MEDIAMTX_RTSP_URL}/{room_id}"
+                    await recognition_service.start(room_id, _recog_url, viewer_id)
                     stale_count = 0
 
                 # Still send heartbeat
@@ -409,6 +411,10 @@ async def _webrtc_mode(
     """
     # Start recognition pipeline (use high-res stream if configured)
     recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
+    # In push mode (RPi → mediamtx), pull frames from mediamtx's internal RTSP
+    if not recog_url:
+        recog_url = f"{settings.MEDIAMTX_RTSP_URL}/{room_id}"
+        logger.info(f"Recognition: push mode — pulling frames from mediamtx at {recog_url}")
     recog_ok = await recognition_service.start(room_id, recog_url, viewer_id)
     if not recog_ok:
         logger.warning("Recognition service failed to start — WebRTC stream will have no overlays")
@@ -489,8 +495,10 @@ async def _webrtc_mode(
                 stale_count += 1
                 if stale_count >= 100:  # ~10s of no recognition service (100 × 100ms)
                     logger.warning(f"Live stream: recognition service gone for room {room_id}, attempting restart")
-                    recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
-                    await recognition_service.start(room_id, recog_url, viewer_id)
+                    _recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
+                    if not _recog_url:
+                        _recog_url = f"{settings.MEDIAMTX_RTSP_URL}/{room_id}"
+                    await recognition_service.start(room_id, _recog_url, viewer_id)
                     stale_count = 0
 
                 # Still send heartbeat

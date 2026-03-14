@@ -46,6 +46,9 @@ class NotificationPreference(Base):
     daily_digest = Column(Boolean, default=False, nullable=False)
     weekly_digest = Column(Boolean, default=True, nullable=False)
 
+    # Email
+    email_enabled = Column(Boolean, default=False, nullable=False)
+
     # Thresholds
     low_attendance_threshold = Column(Float, default=75.0, nullable=False)
 

@@ -45,3 +45,35 @@ class NotificationCreate(BaseModel):
     type: str = "system"
     reference_id: str | None = None
     reference_type: str | None = None
+
+
+# ===== Notification Preferences =====
+
+
+class NotificationPreferenceResponse(BaseModel):
+    """Notification preference response model"""
+
+    early_leave_alerts: bool
+    anomaly_alerts: bool
+    attendance_confirmation: bool
+    low_attendance_warning: bool
+    daily_digest: bool
+    weekly_digest: bool
+    email_enabled: bool
+    low_attendance_threshold: float
+
+    class Config:
+        from_attributes = True
+
+
+class NotificationPreferenceUpdate(BaseModel):
+    """Partial update model for notification preferences"""
+
+    early_leave_alerts: bool | None = None
+    anomaly_alerts: bool | None = None
+    attendance_confirmation: bool | None = None
+    low_attendance_warning: bool | None = None
+    daily_digest: bool | None = None
+    weekly_digest: bool | None = None
+    email_enabled: bool | None = None
+    low_attendance_threshold: float | None = None

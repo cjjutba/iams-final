@@ -1,19 +1,20 @@
-import { useState, useEffect, useCallback } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
 import { ArrowLeft } from 'lucide-react'
-import { toast } from 'sonner'
+import { usePageTitle } from '@/hooks/use-page-title'
 
 import { DataTable } from '@/components/data-tables'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { analyticsService } from '@/services/analytics.service'
+import { useAtRiskStudents } from '@/hooks/use-queries'
 import type { AtRiskStudent } from '@/types'
+import { formatStatus } from '@/types/attendance'
 
 const riskColors: Record<string, string> = {
-  HIGH: 'bg-red-100 text-red-800 hover:bg-red-100',
-  MEDIUM: 'bg-yellow-100 text-yellow-800 hover:bg-yellow-100',
-  LOW: 'bg-green-100 text-green-800 hover:bg-green-100',
+  critical: 'bg-red-100 text-red-800 hover:bg-red-100',
+  high: 'bg-red-100 text-red-800 hover:bg-red-100',
+  moderate: 'bg-yellow-100 text-yellow-800 hover:bg-yellow-100',
+  low: 'bg-green-100 text-green-800 hover:bg-green-100',
 }
 
 const columns: ColumnDef<AtRiskStudent>[] = [
@@ -34,8 +35,8 @@ const columns: ColumnDef<AtRiskStudent>[] = [
     accessorKey: 'risk_level',
     header: 'Risk Level',
     cell: ({ row }) => (
-      <Badge className={riskColors[row.original.risk_level]}>
-        {row.original.risk_level}
+      <Badge className={riskColors[row.original.risk_level] ?? 'bg-gray-100 text-gray-800 hover:bg-gray-100'}>
+        {formatStatus(row.original.risk_level)}
       </Badge>
     ),
   },
@@ -46,23 +47,9 @@ const columns: ColumnDef<AtRiskStudent>[] = [
 ]
 
 export default function AtRiskPage() {
-  const [students, setStudents] = useState<AtRiskStudent[]>([])
-  const [loading, setLoading] = useState(true)
-
-  const fetchData = useCallback(async () => {
-    try {
-      const data = await analyticsService.atRisk()
-      setStudents(data)
-    } catch {
-      toast.error('Failed to load at-risk students')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void fetchData()
-  }, [fetchData])
+  usePageTitle('At-Risk Students')
+  const navigate = useNavigate()
+  const { data: students = [], isLoading } = useAtRiskStudents()
 
   return (
     <div className="space-y-6">
@@ -73,7 +60,7 @@ export default function AtRiskPage() {
           </Button>
         </Link>
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">At-Risk Students</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">At-Risk Students</h1>
           <p className="text-muted-foreground">Students with low attendance rates requiring attention</p>
         </div>
       </div>
@@ -81,9 +68,10 @@ export default function AtRiskPage() {
       <DataTable
         columns={columns}
         data={students}
-        isLoading={loading}
+        isLoading={isLoading}
         searchPlaceholder="Search students..."
         searchColumn="student_name"
+        onRowClick={(row) => navigate(`/users/${row.student_id}`, { state: { role: 'student' } })}
       />
     </div>
   )

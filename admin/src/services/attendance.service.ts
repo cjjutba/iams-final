@@ -18,7 +18,7 @@ export const attendanceService = {
     api.get<EarlyLeaveAlert[]>('/attendance/alerts', { params }).then(r => r.data),
   getEarlyLeaves: () =>
     api.get('/attendance/early-leaves').then(r => r.data),
-  export: (params: { schedule_id?: string; start_date?: string; end_date?: string; format?: 'csv' | 'json' }) =>
+  export: (params: { schedule_id?: string; start_date?: string; end_date?: string; status?: string; format?: 'csv' | 'json' }) =>
     api.get('/attendance/export', { params, responseType: params.format === 'csv' ? 'blob' : 'json' }).then(r => r.data),
   update: (id: string, data: { status?: string; remarks?: string }) =>
     api.patch<AttendanceRecord>(`/attendance/${id}`, data).then(r => r.data),

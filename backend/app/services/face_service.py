@@ -394,9 +394,14 @@ class FaceService:
             Dictionary with stats
         """
         active_count = self.face_repo.count_active()
+        total_count = self.face_repo.count_all()
+        inactive_count = self.face_repo.count_inactive()
         faiss_stats = self.faiss.get_stats()
 
         return {
+            "total_registered": total_count,
+            "total_active": active_count,
+            "total_inactive": inactive_count,
             "active_registrations": active_count,
             "faiss_vectors": faiss_stats["total_vectors"],
             "faiss_initialized": faiss_stats["initialized"],

@@ -11,8 +11,14 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.notification import Notification
 from app.models.user import User, UserRole
+from app.config import logger, settings
+from app.repositories.notification_preference_repository import NotificationPreferenceRepository
 from app.repositories.notification_repository import NotificationRepository
-from app.schemas.notification import NotificationResponse
+from app.schemas.notification import (
+    NotificationPreferenceResponse,
+    NotificationPreferenceUpdate,
+    NotificationResponse,
+)
 from app.utils.dependencies import get_current_admin, get_current_user
 
 router = APIRouter()
@@ -110,6 +116,45 @@ def get_unread_count(current_user: User = Depends(get_current_user), db: Session
     return {"unread_count": count}
 
 
+# ===== Notification Preferences =====
+
+
+@router.get("/preferences", response_model=NotificationPreferenceResponse, status_code=status.HTTP_200_OK)
+def get_notification_preferences(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    **Get Notification Preferences**
+
+    Get the current user's notification preference settings.
+
+    Requires authentication.
+    """
+    pref_repo = NotificationPreferenceRepository(db)
+    pref = pref_repo.get_or_create(str(current_user.id))
+    return NotificationPreferenceResponse.model_validate(pref)
+
+
+@router.put("/preferences", response_model=NotificationPreferenceResponse, status_code=status.HTTP_200_OK)
+def update_notification_preferences(
+    data: NotificationPreferenceUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    **Update Notification Preferences**
+
+    Update the current user's notification preference settings.
+    Only provided fields will be updated (partial update).
+
+    Requires authentication.
+    """
+    pref_repo = NotificationPreferenceRepository(db)
+    pref = pref_repo.update(str(current_user.id), data.model_dump(exclude_unset=True))
+    return NotificationPreferenceResponse.model_validate(pref)
+
+
 # ===== Broadcast Notifications =====
 
 
@@ -151,4 +196,23 @@ def broadcast_notification(
         db.add(notif)
     db.commit()
 
-    return {"success": True, "message": f"Notification sent to {len(users)} users"}
+    # Send email to users who have email_enabled
+    emails_sent = 0
+    if settings.EMAIL_ENABLED:
+        try:
+            from app.models.notification_preference import NotificationPreference
+            from app.services.email_service import EmailService
+
+            email_service = EmailService()
+            email_recipients = []
+            for user in users:
+                pref = db.query(NotificationPreference).filter(NotificationPreference.user_id == user.id).first()
+                if pref and pref.email_enabled and user.email:
+                    email_recipients.append(user.email)
+            if email_recipients:
+                email_service.send_broadcast_email(email_recipients, data.title, data.message)
+                emails_sent = len(email_recipients)
+        except Exception as e:
+            logger.error(f"Failed to send broadcast emails: {e}")
+
+    return {"success": True, "message": f"Notification sent to {len(users)} users ({emails_sent} emails)"}

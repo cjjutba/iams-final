@@ -1,15 +1,17 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState } from 'react'
 import { type ColumnDef } from '@tanstack/react-table'
 import { format } from 'date-fns'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Send, CheckCircle } from 'lucide-react'
+import { Send, CheckCircle, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { usePageTitle } from '@/hooks/use-page-title'
 
 import { DataTable } from '@/components/data-tables'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { formatStatus } from '@/types/attendance'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -27,7 +29,7 @@ import {
 } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { notificationsService } from '@/services/notifications.service'
+import { useNotifications, useMarkNotificationRead, useBroadcastNotification } from '@/hooks/use-queries'
 import type { Notification, BroadcastNotificationRequest } from '@/types'
 
 const broadcastSchema = z.object({
@@ -39,7 +41,7 @@ const broadcastSchema = z.object({
 type BroadcastForm = z.infer<typeof broadcastSchema>
 
 function SendNotificationForm() {
-  const [sending, setSending] = useState(false)
+  const broadcastNotification = useBroadcastNotification()
 
   const {
     register,
@@ -56,20 +58,17 @@ function SendNotificationForm() {
   const targetValue = watch('target')
 
   const onSubmit = async (data: BroadcastForm) => {
-    setSending(true)
     try {
       const payload: BroadcastNotificationRequest = {
         target: data.target,
         title: data.title,
         message: data.message,
       }
-      await notificationsService.broadcast(payload)
+      await broadcastNotification.mutateAsync(payload)
       toast.success('Notification sent successfully')
       reset()
     } catch {
       toast.error('Failed to send notification. The broadcast endpoint may not be available yet.')
-    } finally {
-      setSending(false)
     }
   }
 
@@ -106,9 +105,18 @@ function SendNotificationForm() {
             {errors.message && <p className="text-sm text-destructive">{errors.message.message}</p>}
           </div>
 
-          <Button type="submit" disabled={sending}>
-            <Send className="mr-2 h-4 w-4" />
-            {sending ? 'Sending...' : 'Send Notification'}
+          <Button type="submit" disabled={broadcastNotification.isPending}>
+            {broadcastNotification.isPending ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Sending...
+              </>
+            ) : (
+              <>
+                <Send className="mr-2 h-4 w-4" />
+                Send Notification
+              </>
+            )}
           </Button>
         </form>
       </CardContent>
@@ -116,52 +124,36 @@ function SendNotificationForm() {
   )
 }
 
-function MarkReadAction({ notification, onMarked }: { notification: Notification; onMarked: () => void }) {
-  const [loading, setLoading] = useState(false)
+function MarkReadAction({ notification }: { notification: Notification }) {
+  const markRead = useMarkNotificationRead()
 
   if (notification.read) {
     return <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Read</Badge>
   }
 
   const handleMarkRead = async () => {
-    setLoading(true)
     try {
-      await notificationsService.markRead(notification.id)
+      await markRead.mutateAsync(notification.id)
       toast.success('Marked as read')
-      onMarked()
     } catch {
       toast.error('Failed to mark as read')
-    } finally {
-      setLoading(false)
     }
   }
 
   return (
-    <Button variant="outline" size="sm" onClick={() => void handleMarkRead()} disabled={loading}>
-      <CheckCircle className="mr-1 h-3 w-3" />
-      Mark Read
+    <Button variant="outline" size="sm" onClick={() => void handleMarkRead()} disabled={markRead.isPending}>
+      {markRead.isPending ? (
+        <><Loader2 className="mr-1 h-3 w-3 animate-spin" />Marking...</>
+      ) : (
+        <><CheckCircle className="mr-1 h-3 w-3" />Mark Read</>
+      )}
     </Button>
   )
 }
 
 export default function NotificationsPage() {
-  const [notifications, setNotifications] = useState<Notification[]>([])
-  const [loading, setLoading] = useState(true)
-
-  const fetchNotifications = useCallback(async () => {
-    try {
-      const data = await notificationsService.list()
-      setNotifications(data)
-    } catch {
-      toast.error('Failed to load notifications')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void fetchNotifications()
-  }, [fetchNotifications])
+  usePageTitle('Notifications')
+  const { data: notifications = [], isLoading } = useNotifications()
 
   const columns: ColumnDef<Notification>[] = [
     {
@@ -181,7 +173,7 @@ export default function NotificationsPage() {
       accessorKey: 'type',
       header: 'Type',
       cell: ({ row }) => (
-        <Badge variant="outline">{row.original.type}</Badge>
+        <Badge variant="outline">{formatStatus(row.original.type)}</Badge>
       ),
     },
     {
@@ -211,7 +203,7 @@ export default function NotificationsPage() {
       id: 'actions',
       header: 'Actions',
       cell: ({ row }) => (
-        <MarkReadAction notification={row.original} onMarked={() => void fetchNotifications()} />
+        <MarkReadAction notification={row.original} />
       ),
     },
   ]
@@ -219,7 +211,7 @@ export default function NotificationsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Notification Management</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Notification Management</h1>
         <p className="text-muted-foreground">Send and manage system notifications</p>
       </div>
 
@@ -237,7 +229,7 @@ export default function NotificationsPage() {
           <DataTable
             columns={columns}
             data={notifications}
-            isLoading={loading}
+            isLoading={isLoading}
             searchPlaceholder="Search notifications..."
             searchColumn="title"
           />

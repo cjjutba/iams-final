@@ -26,6 +26,7 @@ class StudentRecord(Base):
     student_id = Column(String(50), primary_key=True, nullable=False)
 
     first_name = Column(String(100), nullable=False)
+    middle_name = Column(String(100), nullable=True)
     last_name = Column(String(100), nullable=False)
 
     # Official school email (e.g., firstname.lastname@jrmsu.edu.ph)

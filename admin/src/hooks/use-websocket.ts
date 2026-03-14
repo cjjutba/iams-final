@@ -1,62 +1,102 @@
-import { useEffect, useRef, useCallback, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAuthStore } from '@/stores/auth.store'
 
-type MessageHandler = (data: any) => void
+type MessageHandler = (data: unknown) => void
+
+// Singleton WebSocket connection shared across all hook instances
+let sharedWs: WebSocket | null = null
+let sharedUserId: string | null = null
+const messageHandlers = new Set<MessageHandler>()
+let reconnectTimeout: ReturnType<typeof setTimeout> | undefined
+
+function connectShared(userId: string) {
+  // Don't open a new connection if one is already active or connecting
+  if (sharedWs && sharedWs.readyState <= WebSocket.OPEN) return
+
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const host = import.meta.env.VITE_WS_URL || `${protocol}//${window.location.host}`
+  const ws = new WebSocket(`${host}/api/v1/ws/${userId}`)
+
+  ws.onopen = () => {
+    console.log('[WS] Connected')
+  }
+
+  ws.onclose = () => {
+    // Only reconnect if we still want to be connected (user still set)
+    if (sharedWs === ws) {
+      sharedWs = null
+      if (sharedUserId) {
+        clearTimeout(reconnectTimeout)
+        reconnectTimeout = setTimeout(() => connectShared(userId), 5000)
+      }
+    }
+  }
+
+  ws.onerror = () => {
+    // onclose will handle reconnect
+  }
+
+  ws.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data)
+      messageHandlers.forEach((handler) => handler(data))
+    } catch {
+      // Ignore non-JSON messages
+    }
+  }
+
+  sharedWs = ws
+  sharedUserId = userId
+}
+
+function disconnectShared() {
+  clearTimeout(reconnectTimeout)
+  sharedUserId = null
+  if (sharedWs) {
+    sharedWs.close()
+    sharedWs = null
+  }
+}
 
 export function useWebSocket(onMessage?: MessageHandler) {
   const user = useAuthStore((s) => s.user)
-  const wsRef = useRef<WebSocket | null>(null)
   const [isConnected, setIsConnected] = useState(false)
-  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined)
   const onMessageRef = useRef(onMessage)
   onMessageRef.current = onMessage
 
-  const connect = useCallback(() => {
-    if (!user) return
-
-    // Clean up existing connection
-    if (wsRef.current) {
-      wsRef.current.close()
-    }
-
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = import.meta.env.VITE_WS_URL || `${protocol}//${window.location.host}`
-    const ws = new WebSocket(`${wsUrl}/api/v1/ws/${user.id}`)
-
-    ws.onopen = () => {
-      setIsConnected(true)
-      console.log('[WS] Connected')
-    }
-
-    ws.onclose = () => {
-      setIsConnected(false)
-      console.log('[WS] Disconnected, reconnecting in 5s...')
-      reconnectTimeoutRef.current = setTimeout(connect, 5000)
-    }
-
-    ws.onerror = (error) => {
-      console.error('[WS] Error:', error)
-    }
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        onMessageRef.current?.(data)
-      } catch {
-        // Ignore non-JSON messages (like pings)
-      }
-    }
-
-    wsRef.current = ws
-  }, [user])
+  // Stable handler wrapper
+  const handlerRef = useRef<MessageHandler>((data) => {
+    onMessageRef.current?.(data)
+  })
 
   useEffect(() => {
-    connect()
-    return () => {
-      clearTimeout(reconnectTimeoutRef.current)
-      wsRef.current?.close()
+    if (!user) {
+      // User logged out — tear down the singleton
+      disconnectShared()
+      setIsConnected(false)
+      return
     }
-  }, [connect])
+
+    // If user changed, disconnect old
+    if (sharedUserId && sharedUserId !== user.id) {
+      disconnectShared()
+    }
+
+    connectShared(user.id)
+    messageHandlers.add(handlerRef.current)
+
+    // Track connection state
+    const interval = setInterval(() => {
+      setIsConnected(sharedWs?.readyState === WebSocket.OPEN)
+    }, 2000)
+
+    return () => {
+      messageHandlers.delete(handlerRef.current)
+      clearInterval(interval)
+      // Don't disconnect the singleton on component unmount —
+      // it stays alive for the entire session
+    }
+  }, [user])
 
   return { isConnected }
 }

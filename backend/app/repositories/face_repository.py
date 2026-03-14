@@ -150,6 +150,14 @@ class FaceRepository:
         """Get count of active face registrations"""
         return self.db.query(FaceRegistration).filter(FaceRegistration.is_active).count()
 
+    def count_all(self) -> int:
+        """Get total count of face registrations"""
+        return self.db.query(FaceRegistration).count()
+
+    def count_inactive(self) -> int:
+        """Get count of inactive face registrations"""
+        return self.db.query(FaceRegistration).filter(FaceRegistration.is_active == False).count()
+
     # ------------------------------------------------------------------
     # Multi-embedding operations (FaceEmbedding table)
     # ------------------------------------------------------------------

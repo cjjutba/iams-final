@@ -23,6 +23,7 @@ from app.routers import (
     attendance,
     audit,
     auth,
+    edge,
     face,
     hls,
     live_stream,
@@ -242,10 +243,78 @@ async def startup_event():
             max_instances=1,
         )
 
+        # Daily digest for faculty (8 PM Manila time, Mon-Sat)
+        async def run_daily_digests():
+            """Generate daily attendance digests for faculty."""
+            db = SessionLocal()
+            try:
+                from app.routers.websocket import manager
+                from app.services.digest_service import DigestService
+                from app.services.notification_service import NotificationService
+
+                email_svc = None
+                if settings.EMAIL_ENABLED:
+                    from app.services.email_service import EmailService
+                    email_svc = EmailService()
+
+                ns = NotificationService(manager, db, email_service=email_svc)
+                ds = DigestService(db, notification_service=ns, email_service=email_svc)
+                ds.generate_faculty_daily_digests()
+            except Exception as e:
+                logger.error(f"Daily digest error: {e}")
+            finally:
+                db.close()
+
+        scheduler.add_job(
+            run_daily_digests,
+            "cron",
+            hour=20,
+            minute=0,
+            timezone="Asia/Manila",
+            id="daily_digest",
+            replace_existing=True,
+            max_instances=1,
+        )
+
+        # Weekly digest for students (Monday 8 AM Manila time)
+        async def run_weekly_digests():
+            """Generate weekly attendance digests for students."""
+            db = SessionLocal()
+            try:
+                from app.routers.websocket import manager
+                from app.services.digest_service import DigestService
+                from app.services.notification_service import NotificationService
+
+                email_svc = None
+                if settings.EMAIL_ENABLED:
+                    from app.services.email_service import EmailService
+                    email_svc = EmailService()
+
+                ns = NotificationService(manager, db, email_service=email_svc)
+                ds = DigestService(db, notification_service=ns, email_service=email_svc)
+                ds.generate_student_weekly_digests()
+            except Exception as e:
+                logger.error(f"Weekly digest error: {e}")
+            finally:
+                db.close()
+
+        scheduler.add_job(
+            run_weekly_digests,
+            "cron",
+            day_of_week="mon",
+            hour=8,
+            minute=0,
+            timezone="Asia/Manila",
+            id="weekly_digest",
+            replace_existing=True,
+            max_instances=1,
+        )
+
         # Start the scheduler
         scheduler.start()
         logger.info(f"Presence tracking scheduler started (scan interval: {settings.SCAN_INTERVAL_SECONDS}s)")
         logger.info("Auto-session scheduler started (checks every 60s)")
+        logger.info("Digest scheduler started (daily 8PM, weekly Mon 8AM)")
 
     except Exception as e:
         logger.error(f"Failed to initialize presence tracking scheduler: {e}")
@@ -454,6 +523,9 @@ app.include_router(analytics.router, prefix=f"{settings.API_PREFIX}/analytics", 
 
 # Audit log routes
 app.include_router(audit.router, prefix=f"{settings.API_PREFIX}/audit", tags=["Audit"])
+
+# Edge device monitoring routes
+app.include_router(edge.router, prefix=f"{settings.API_PREFIX}/edge", tags=["Edge Devices"])
 
 # System settings routes
 app.include_router(settings_router.router, prefix=f"{settings.API_PREFIX}/settings", tags=["Settings"])

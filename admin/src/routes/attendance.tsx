@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
 import { format } from 'date-fns'
-import { CalendarIcon, Download } from 'lucide-react'
+import { CalendarIcon, Download, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { usePageTitle } from '@/hooks/use-page-title'
 
 import { DataTable } from '@/components/data-tables'
 import { Badge } from '@/components/ui/badge'
@@ -20,27 +22,29 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { useAttendanceList } from '@/hooks/use-queries'
 import { attendanceService } from '@/services/attendance.service'
 import type { AttendanceRecord, AttendanceStatus } from '@/types'
+import { formatStatus } from '@/types/attendance'
 
 const statusColors: Record<AttendanceStatus, string> = {
-  PRESENT: 'bg-green-100 text-green-800 hover:bg-green-100',
-  LATE: 'bg-yellow-100 text-yellow-800 hover:bg-yellow-100',
-  ABSENT: 'bg-red-100 text-red-800 hover:bg-red-100',
-  EXCUSED: 'bg-blue-100 text-blue-800 hover:bg-blue-100',
-  EARLY_LEAVE: 'bg-orange-100 text-orange-800 hover:bg-orange-100',
+  present: 'bg-green-100 text-green-800 hover:bg-green-100',
+  late: 'bg-yellow-100 text-yellow-800 hover:bg-yellow-100',
+  absent: 'bg-red-100 text-red-800 hover:bg-red-100',
+  excused: 'bg-blue-100 text-blue-800 hover:bg-blue-100',
+  early_leave: 'bg-orange-100 text-orange-800 hover:bg-orange-100',
 }
 
 const columns: ColumnDef<AttendanceRecord>[] = [
   {
     accessorKey: 'student_name',
     header: 'Student',
-    cell: ({ row }) => row.original.student_name ?? '—',
+    cell: ({ row }) => row.original.student_name ?? '\u2014',
   },
   {
     accessorKey: 'subject_code',
     header: 'Subject',
-    cell: ({ row }) => row.original.subject_code ?? '—',
+    cell: ({ row }) => row.original.subject_code ?? '\u2014',
   },
   {
     accessorKey: 'date',
@@ -58,7 +62,7 @@ const columns: ColumnDef<AttendanceRecord>[] = [
     header: 'Status',
     cell: ({ row }) => (
       <Badge className={statusColors[row.original.status]}>
-        {row.original.status.replace('_', ' ')}
+        {formatStatus(row.original.status)}
       </Badge>
     ),
   },
@@ -67,7 +71,7 @@ const columns: ColumnDef<AttendanceRecord>[] = [
     header: 'Check-in',
     cell: ({ row }) => {
       const t = row.original.check_in_time
-      if (!t) return '—'
+      if (!t) return '\u2014'
       try {
         return format(new Date(t), 'h:mm a')
       } catch {
@@ -87,32 +91,32 @@ const columns: ColumnDef<AttendanceRecord>[] = [
 ]
 
 export default function AttendancePage() {
-  const [records, setRecords] = useState<AttendanceRecord[]>([])
-  const [loading, setLoading] = useState(true)
+  usePageTitle('Attendance')
+  const navigate = useNavigate()
   const [startDate, setStartDate] = useState<Date | undefined>(undefined)
   const [endDate, setEndDate] = useState<Date | undefined>(undefined)
-  const [status, setStatus] = useState<string>('all')
+  const [statusFilter, setStatusFilter] = useState<string>('all')
   const [exporting, setExporting] = useState(false)
+  const [startOpen, setStartOpen] = useState(false)
+  const [endOpen, setEndOpen] = useState(false)
 
-  const fetchRecords = useCallback(async () => {
-    setLoading(true)
-    try {
-      const params: Record<string, string> = {}
-      if (startDate) params.start_date = format(startDate, 'yyyy-MM-dd')
-      if (endDate) params.end_date = format(endDate, 'yyyy-MM-dd')
-      if (status !== 'all') params.status = status
-      const data = await attendanceService.list(params)
-      setRecords(data)
-    } catch {
-      toast.error('Failed to load attendance records')
-    } finally {
-      setLoading(false)
-    }
-  }, [startDate, endDate, status])
+  const queryParams = useMemo(() => {
+    const params: Record<string, string> = {}
+    if (startDate) params.start_date = format(startDate, 'yyyy-MM-dd')
+    if (endDate) params.end_date = format(endDate, 'yyyy-MM-dd')
+    if (statusFilter !== 'all') params.status = statusFilter
+    return params
+  }, [startDate, endDate, statusFilter])
 
-  useEffect(() => {
-    void fetchRecords()
-  }, [fetchRecords])
+  const { data: records = [], isLoading } = useAttendanceList(queryParams)
+
+  const hasFilters = startDate !== undefined || endDate !== undefined || statusFilter !== 'all'
+
+  const clearFilters = () => {
+    setStartDate(undefined)
+    setEndDate(undefined)
+    setStatusFilter('all')
+  }
 
   const handleExport = async () => {
     setExporting(true)
@@ -120,7 +124,7 @@ export default function AttendancePage() {
       const params: Record<string, string> = { format: 'csv' }
       if (startDate) params.start_date = format(startDate, 'yyyy-MM-dd')
       if (endDate) params.end_date = format(endDate, 'yyyy-MM-dd')
-      if (status !== 'all') params.status = status
+      if (statusFilter !== 'all') params.status = statusFilter
       const blob = await attendanceService.export({ ...params, format: 'csv' })
       const url = URL.createObjectURL(blob as Blob)
       const a = document.createElement('a')
@@ -136,64 +140,106 @@ export default function AttendancePage() {
     }
   }
 
+  const filterToolbar = (
+    <>
+      <Popover open={startOpen} onOpenChange={setStartOpen}>
+        <PopoverTrigger asChild>
+          <Button variant="outline" size="sm" className="h-9 w-[150px] justify-start text-left font-normal">
+            <CalendarIcon className="mr-2 h-3.5 w-3.5" />
+            {startDate ? format(startDate, 'MMM d, yyyy') : 'Start date'}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-auto p-0" align="start">
+          <Calendar
+            mode="single"
+            selected={startDate}
+            onSelect={(date) => {
+              setStartDate(date)
+              setStartOpen(false)
+            }}
+            disabled={(date) => endDate ? date > endDate : false}
+          />
+        </PopoverContent>
+      </Popover>
+
+      <Popover open={endOpen} onOpenChange={setEndOpen}>
+        <PopoverTrigger asChild>
+          <Button variant="outline" size="sm" className="h-9 w-[150px] justify-start text-left font-normal">
+            <CalendarIcon className="mr-2 h-3.5 w-3.5" />
+            {endDate ? format(endDate, 'MMM d, yyyy') : 'End date'}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-auto p-0" align="start">
+          <Calendar
+            mode="single"
+            selected={endDate}
+            onSelect={(date) => {
+              setEndDate(date)
+              setEndOpen(false)
+            }}
+            disabled={(date) => startDate ? date < startDate : false}
+          />
+        </PopoverContent>
+      </Popover>
+
+      <Select value={statusFilter} onValueChange={setStatusFilter}>
+        <SelectTrigger className="w-[140px] h-9">
+          <SelectValue placeholder="All Statuses" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All Statuses</SelectItem>
+          <SelectItem value="present">Present</SelectItem>
+          <SelectItem value="late">Late</SelectItem>
+          <SelectItem value="absent">Absent</SelectItem>
+          <SelectItem value="excused">Excused</SelectItem>
+          <SelectItem value="early_leave">Early Leave</SelectItem>
+        </SelectContent>
+      </Select>
+
+      {hasFilters && (
+        <Button variant="ghost" size="sm" onClick={clearFilters} className="h-9 px-2 text-muted-foreground">
+          Clear
+        </Button>
+      )}
+    </>
+  )
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Attendance Overview</h1>
-        <p className="text-muted-foreground">View and export attendance records</p>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-3">
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button variant="outline" className="w-[180px] justify-start text-left font-normal">
-              <CalendarIcon className="mr-2 h-4 w-4" />
-              {startDate ? format(startDate, 'MMM d, yyyy') : 'Start date'}
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-auto p-0" align="start">
-            <Calendar mode="single" selected={startDate} onSelect={setStartDate} />
-          </PopoverContent>
-        </Popover>
-
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button variant="outline" className="w-[180px] justify-start text-left font-normal">
-              <CalendarIcon className="mr-2 h-4 w-4" />
-              {endDate ? format(endDate, 'MMM d, yyyy') : 'End date'}
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-auto p-0" align="start">
-            <Calendar mode="single" selected={endDate} onSelect={setEndDate} />
-          </PopoverContent>
-        </Popover>
-
-        <Select value={status} onValueChange={setStatus}>
-          <SelectTrigger className="w-[160px]">
-            <SelectValue placeholder="All statuses" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Statuses</SelectItem>
-            <SelectItem value="PRESENT">Present</SelectItem>
-            <SelectItem value="LATE">Late</SelectItem>
-            <SelectItem value="ABSENT">Absent</SelectItem>
-            <SelectItem value="EXCUSED">Excused</SelectItem>
-            <SelectItem value="EARLY_LEAVE">Early Leave</SelectItem>
-          </SelectContent>
-        </Select>
-
-        <Button variant="outline" onClick={() => void handleExport()} disabled={exporting}>
-          <Download className="mr-2 h-4 w-4" />
-          {exporting ? 'Exporting...' : 'Export CSV'}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Attendance Overview</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            {isLoading
+              ? 'Loading...'
+              : hasFilters
+                ? `${records.length} filtered records`
+                : `${records.length} attendance record${records.length !== 1 ? 's' : ''}`}
+          </p>
+        </div>
+        <Button variant="outline" onClick={() => void handleExport()} disabled={exporting || records.length === 0}>
+          {exporting ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Exporting...
+            </>
+          ) : (
+            <>
+              <Download className="mr-2 h-4 w-4" />
+              Export CSV
+            </>
+          )}
         </Button>
       </div>
 
       <DataTable
         columns={columns}
         data={records}
-        isLoading={loading}
+        isLoading={isLoading}
         searchPlaceholder="Search students..."
         searchColumn="student_name"
+        toolbar={filterToolbar}
+        onRowClick={(row) => navigate(`/users/${row.student_id}`, { state: { role: 'student' } })}
       />
     </div>
   )

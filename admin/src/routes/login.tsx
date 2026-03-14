@@ -1,19 +1,14 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { usePageTitle } from '@/hooks/use-page-title'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth.store'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
 
 const loginSchema = z.object({
   identifier: z.string().min(1, 'Email is required'),
@@ -23,6 +18,7 @@ const loginSchema = z.object({
 type LoginForm = z.infer<typeof loginSchema>
 
 export default function LoginPage() {
+  usePageTitle('Login')
   const navigate = useNavigate()
   const login = useAuthStore((s) => s.login)
   const [error, setError] = useState<string | null>(null)
@@ -39,59 +35,78 @@ export default function LoginPage() {
     setError(null)
     try {
       await login(data.identifier, data.password)
-      navigate('/', { replace: true })
+      toast.success('Signed in successfully')
+      navigate('/dashboard', { replace: true })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Login failed. Please try again.')
+      const message = err instanceof Error ? err.message : 'Login failed. Please try again.'
+      setError(message)
+      toast.error(message)
     }
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-muted/50 px-4">
-      <Card className="w-full max-w-sm">
-        <CardHeader className="text-center">
-          <CardTitle className="text-2xl font-bold">IAMS Admin</CardTitle>
-          <CardDescription>
-            Sign in to access the admin dashboard
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-            {error && (
-              <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                {error}
-              </div>
+    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+      <div className="w-full max-w-md">
+        {/* Header */}
+        <div className="mb-10 text-center">
+          <h1 className="text-3xl font-bold tracking-tight">IAMS Admin</h1>
+          <p className="mt-2 text-base text-muted-foreground">
+            Sign in to your account
+          </p>
+        </div>
+
+        {/* Form */}
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+          {error && (
+            <div className="rounded-lg bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              {error}
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <Input
+              id="identifier"
+              type="text"
+              placeholder="Email"
+              autoComplete="email"
+              className="h-12 text-base px-4"
+              {...register('identifier')}
+            />
+            {errors.identifier && (
+              <p className="text-xs text-destructive">{errors.identifier.message}</p>
             )}
-            <div className="space-y-2">
-              <Label htmlFor="identifier">Email</Label>
-              <Input
-                id="identifier"
-                type="text"
-                placeholder="admin@jrmsu.edu.ph"
-                autoComplete="email"
-                {...register('identifier')}
-              />
-              {errors.identifier && (
-                <p className="text-sm text-destructive">{errors.identifier.message}</p>
-              )}
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                autoComplete="current-password"
-                {...register('password')}
-              />
-              {errors.password && (
-                <p className="text-sm text-destructive">{errors.password.message}</p>
-              )}
-            </div>
-            <Button type="submit" className="w-full" disabled={isSubmitting}>
-              {isSubmitting ? 'Signing in...' : 'Sign in'}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+          </div>
+
+          <div className="space-y-2">
+            <Input
+              id="password"
+              type="password"
+              placeholder="Password"
+              autoComplete="current-password"
+              className="h-12 text-base px-4"
+              {...register('password')}
+            />
+            {errors.password && (
+              <p className="text-xs text-destructive">{errors.password.message}</p>
+            )}
+          </div>
+
+          <Button
+            type="submit"
+            className="h-12 w-full text-base font-semibold uppercase tracking-wide"
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Signing in...
+              </>
+            ) : (
+              'Sign in'
+            )}
+          </Button>
+        </form>
+      </div>
     </div>
   )
 }

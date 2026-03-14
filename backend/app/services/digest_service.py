@@ -97,9 +97,10 @@ def build_student_weekly_digest(
 class DigestService:
     """Generates and sends digest notifications."""
 
-    def __init__(self, db: Session, notification_service=None):
+    def __init__(self, db: Session, notification_service=None, email_service=None):
         self.db = db
         self.notification_service = notification_service
+        self.email_service = email_service
 
     def generate_faculty_daily_digests(self, target_date: date = None):
         """Generate daily digests for all faculty who opted in."""
@@ -179,6 +180,42 @@ class DigestService:
                     )
                 except Exception as e:
                     logger.error(f"Failed to send daily digest to {faculty_id}: {e}")
+
+            # Send email digest if enabled
+            if self.email_service and pref.email_enabled:
+                try:
+                    faculty = self.db.query(User).filter(User.id == pref.user_id).first()
+                    if faculty and faculty.email:
+                        session_details = []
+                        for schedule in schedules:
+                            records = (
+                                self.db.query(AttendanceRecord)
+                                .filter(AttendanceRecord.schedule_id == schedule.id, AttendanceRecord.date == target_date)
+                                .all()
+                            )
+                            if records:
+                                present = sum(1 for r in records if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE))
+                                session_details.append({
+                                    "subject_code": schedule.subject_code,
+                                    "time": f"{schedule.start_time}–{schedule.end_time}" if hasattr(schedule, "start_time") else "",
+                                    "rate": (present / len(records)) * 100.0,
+                                    "present": present,
+                                    "enrolled": len(records),
+                                })
+                        self.email_service.send_daily_digest_email(
+                            faculty_email=faculty.email,
+                            faculty_name=f"{faculty.first_name} {faculty.last_name}",
+                            digest_data={
+                                "date": target_date.strftime("%B %d, %Y"),
+                                "total_sessions": len(schedules),
+                                "avg_attendance_rate": digest["average_attendance_rate"],
+                                "early_leaves": early_leave_count,
+                                "anomalies": anomaly_count,
+                                "session_details": session_details,
+                            },
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to send daily digest email to {faculty_id}: {e}")
 
             created += 1
 
@@ -262,6 +299,36 @@ class DigestService:
                     )
                 except Exception as e:
                     logger.error(f"Failed to send weekly digest to {student_id}: {e}")
+
+            # Send email digest if enabled
+            if self.email_service and pref.email_enabled:
+                try:
+                    student = self.db.query(User).filter(User.id == pref.user_id).first()
+                    if student and student.email:
+                        # Enrich subject breakdown with names
+                        enriched_breakdown = []
+                        for s in subject_breakdown:
+                            schedule = self.db.query(Schedule).filter(Schedule.id == s["schedule_id"]).first()
+                            enriched_breakdown.append({
+                                "subject_code": schedule.subject_code if schedule else "N/A",
+                                "subject_name": schedule.subject_name if schedule else "Unknown",
+                                "rate": s["rate"],
+                                "attended": s["attended"],
+                                "total": s["total"],
+                            })
+                        self.email_service.send_weekly_digest_email(
+                            student_email=student.email,
+                            student_name=f"{student.first_name} {student.last_name}",
+                            digest_data={
+                                "week_range": f"{week_start.strftime('%b %d')} – {week_ending.strftime('%b %d, %Y')}",
+                                "overall_rate": rate,
+                                "total_classes": len(records),
+                                "classes_attended": present,
+                                "subject_breakdown": enriched_breakdown,
+                            },
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to send weekly digest email to {student_id}: {e}")
 
             created += 1
 

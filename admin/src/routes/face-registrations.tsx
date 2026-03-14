@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useMemo, useState, useTransition } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
-import { ScanFace, UserCheck, UserX, Trash2 } from 'lucide-react'
+import { Loader2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { usePageTitle } from '@/hooks/use-page-title'
 
-import { StatCard } from '@/components/charts'
 import { DataTable } from '@/components/data-tables'
 import {
   AlertDialog,
@@ -14,162 +15,186 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader } from '@/components/ui/card'
-import { Skeleton } from '@/components/ui/skeleton'
-import { faceService } from '@/services/face.service'
-import { usersService } from '@/services/users.service'
-import type { UserResponse, FaceStatistics } from '@/types'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { useUsers, useDeregisterFace } from '@/hooks/use-queries'
+import type { UserResponse } from '@/types'
 
-function DeregisterAction({ user, onDeregistered }: { user: UserResponse; onDeregistered: () => void }) {
-  const [loading, setLoading] = useState(false)
+type StatusFilter = 'all' | 'active' | 'inactive'
+
+function DeregisterAction({ user }: { user: UserResponse }) {
+  const [open, setOpen] = useState(false)
+  const deregisterMutation = useDeregisterFace()
 
   const handleDeregister = async () => {
-    setLoading(true)
     try {
-      await faceService.deregister(user.id)
+      await deregisterMutation.mutateAsync(user.id)
       toast.success(`Face deregistered for ${user.first_name} ${user.last_name}`)
-      onDeregistered()
     } catch {
       toast.error('Failed to deregister face')
     } finally {
-      setLoading(false)
+      setOpen(false)
     }
   }
 
   return (
-    <AlertDialog>
-      <AlertDialogTrigger asChild>
-        <Button variant="outline" size="sm" disabled={loading}>
-          <Trash2 className="mr-1 h-3 w-3" />
-          Deregister
-        </Button>
-      </AlertDialogTrigger>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Deregister Face</AlertDialogTitle>
-          <AlertDialogDescription>
-            Are you sure you want to remove the face registration for {user.first_name} {user.last_name}? They will need to re-register their face to use the system.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={() => void handleDeregister()}>Deregister</AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <>
+      <Button variant="outline" size="sm" disabled={deregisterMutation.isPending} onClick={() => setOpen(true)}>
+        {deregisterMutation.isPending ? (
+          <><Loader2 className="mr-1 h-3 w-3 animate-spin" />Removing...</>
+        ) : (
+          <><Trash2 className="mr-1 h-3 w-3" />Deregister</>
+        )}
+      </Button>
+      <AlertDialog open={open} onOpenChange={setOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Deregister Face</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to remove the face registration for {user.first_name} {user.last_name}? They will need to re-register their face to use the system.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deregisterMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                void handleDeregister()
+              }}
+              disabled={deregisterMutation.isPending}
+            >
+              {deregisterMutation.isPending ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Removing...</>) : 'Deregister'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   )
 }
 
+const columns: ColumnDef<UserResponse>[] = [
+  {
+    accessorKey: 'first_name',
+    header: 'Student Name',
+    cell: ({ row }) => (
+      <div>
+        <div className="font-medium">{row.original.first_name} {row.original.last_name}</div>
+        {row.original.email && (
+          <div className="text-sm text-muted-foreground">{row.original.email}</div>
+        )}
+      </div>
+    ),
+  },
+  {
+    accessorKey: 'student_id',
+    header: 'Student ID',
+    cell: ({ row }) => (
+      <span className="text-sm font-mono">{row.original.student_id ?? '\u2014'}</span>
+    ),
+  },
+  {
+    accessorKey: 'is_active',
+    header: 'Status',
+    cell: ({ row }) =>
+      row.original.is_active ? (
+        <Badge variant="default">Active</Badge>
+      ) : (
+        <Badge variant="destructive">Inactive</Badge>
+      ),
+  },
+  {
+    id: 'actions',
+    header: '',
+    enableSorting: false,
+    cell: ({ row }) => (
+      <DeregisterAction user={row.original} />
+    ),
+  },
+]
+
 export default function FaceRegistrationsPage() {
-  const [students, setStudents] = useState<UserResponse[]>([])
-  const [stats, setStats] = useState<FaceStatistics | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [statsLoading, setStatsLoading] = useState(true)
+  usePageTitle('Face Registrations')
+  const navigate = useNavigate()
+  const { data: students = [], isLoading } = useUsers({ role: 'student' })
 
-  const fetchStudents = useCallback(async () => {
-    try {
-      const data = await usersService.list({ role: 'student' })
-      setStudents(data)
-    } catch {
-      toast.error('Failed to load students')
-    } finally {
-      setLoading(false)
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [isPending, startTransition] = useTransition()
+
+  const filtered = useMemo(() => {
+    let result = students
+    if (statusFilter === 'active') result = result.filter((s) => s.is_active)
+    else if (statusFilter === 'inactive') result = result.filter((s) => !s.is_active)
+    return result
+  }, [students, statusFilter])
+
+  const hasFilters = statusFilter !== 'all'
+
+  function handleFilterChange<T>(setter: (v: T) => void) {
+    return (value: T) => {
+      startTransition(() => setter(value))
     }
-  }, [])
-
-  const fetchStats = useCallback(async () => {
-    try {
-      const res = await faceService.statistics()
-      setStats(res.data)
-    } catch {
-      // silently handle
-    } finally {
-      setStatsLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void fetchStudents()
-    void fetchStats()
-  }, [fetchStudents, fetchStats])
-
-  const handleRefresh = () => {
-    void fetchStudents()
-    void fetchStats()
   }
 
-  const columns: ColumnDef<UserResponse>[] = [
-    {
-      accessorKey: 'first_name',
-      header: 'Student Name',
-      cell: ({ row }) => `${row.original.first_name} ${row.original.last_name}`,
-    },
-    {
-      accessorKey: 'student_id',
-      header: 'Student ID',
-      cell: ({ row }) => row.original.student_id ?? '—',
-    },
-    {
-      accessorKey: 'is_active',
-      header: 'Status',
-      cell: ({ row }) => (
-        <Badge className={row.original.is_active
-          ? 'bg-green-100 text-green-800 hover:bg-green-100'
-          : 'bg-gray-100 text-gray-800 hover:bg-gray-100'
-        }>
-          {row.original.is_active ? 'Active' : 'Inactive'}
-        </Badge>
-      ),
-    },
-    {
-      id: 'actions',
-      header: 'Actions',
-      cell: ({ row }) => (
-        <DeregisterAction user={row.original} onDeregistered={handleRefresh} />
-      ),
-    },
-  ]
+  function clearFilters() {
+    startTransition(() => {
+      setStatusFilter('all')
+    })
+  }
+
+  const showSkeleton = isLoading || isPending
+
+  const filterToolbar = (
+    <>
+      <Select value={statusFilter} onValueChange={handleFilterChange(setStatusFilter)}>
+        <SelectTrigger className="w-[130px] h-9">
+          <SelectValue placeholder="Status" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All Status</SelectItem>
+          <SelectItem value="active">Active</SelectItem>
+          <SelectItem value="inactive">Inactive</SelectItem>
+        </SelectContent>
+      </Select>
+
+      {hasFilters && (
+        <Button variant="ghost" size="sm" onClick={clearFilters} className="h-9 px-2 text-muted-foreground">
+          Clear
+        </Button>
+      )}
+    </>
+  )
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Face Registration Management</h1>
-        <p className="text-muted-foreground">Manage student face registrations</p>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {statsLoading ? (
-          Array.from({ length: 3 }).map((_, i) => (
-            <Card key={`stat-skeleton-${String(i)}`}>
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <Skeleton className="h-4 w-24" />
-                <Skeleton className="h-4 w-4" />
-              </CardHeader>
-              <CardContent>
-                <Skeleton className="h-7 w-16" />
-              </CardContent>
-            </Card>
-          ))
-        ) : stats ? (
-          <>
-            <StatCard title="Total Registered" value={stats.total_registered} icon={ScanFace} />
-            <StatCard title="Active" value={stats.total_active} icon={UserCheck} />
-            <StatCard title="Inactive" value={stats.total_inactive} icon={UserX} />
-          </>
-        ) : null}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Face Registrations</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            {isLoading
+              ? 'Loading...'
+              : hasFilters
+                ? `${filtered.length} of ${students.length} registrations`
+                : `${students.length} face registration${students.length !== 1 ? 's' : ''}`}
+          </p>
+        </div>
       </div>
 
       <DataTable
         columns={columns}
-        data={students}
-        isLoading={loading}
+        data={filtered}
+        isLoading={showSkeleton}
         searchPlaceholder="Search students..."
         searchColumn="first_name"
+        toolbar={filterToolbar}
+        onRowClick={(row) => navigate(`/users/${row.id}`, { state: { role: 'student' } })}
       />
     </div>
   )

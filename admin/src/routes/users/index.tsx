@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { usePageTitle } from '@/hooks/use-page-title'
 import { type ColumnDef } from '@tanstack/react-table'
 import { format } from 'date-fns'
 import {
   CheckCircle2,
+  Loader2,
   MoreHorizontal,
   XCircle,
   Eye,
@@ -40,8 +42,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { usersService } from '@/services/users.service'
-import { faceService } from '@/services/face.service'
+import {
+  useUsers,
+  useDeactivateUser,
+  useReactivateUser,
+  useDeregisterFace,
+} from '@/hooks/use-queries'
 import type { UserResponse, UserRole } from '@/types'
 
 const roleBadgeVariant: Record<UserRole, 'default' | 'secondary' | 'outline'> = {
@@ -50,56 +56,46 @@ const roleBadgeVariant: Record<UserRole, 'default' | 'secondary' | 'outline'> = 
   admin: 'outline',
 }
 
-function ActionsCell({
-  user,
-  onRefresh,
-}: {
-  user: UserResponse
-  onRefresh: () => void
-}) {
+function ActionsCell({ user }: { user: UserResponse }) {
   const navigate = useNavigate()
   const [deactivateOpen, setDeactivateOpen] = useState(false)
   const [reactivateOpen, setReactivateOpen] = useState(false)
   const [deregisterOpen, setDeregisterOpen] = useState(false)
-  const [loading, setLoading] = useState(false)
+
+  const deactivateMutation = useDeactivateUser()
+  const reactivateMutation = useReactivateUser()
+  const deregisterMutation = useDeregisterFace()
+  const loading = deactivateMutation.isPending || reactivateMutation.isPending || deregisterMutation.isPending
 
   const handleDeactivate = async () => {
-    setLoading(true)
     try {
-      await usersService.deactivate(user.id)
+      await deactivateMutation.mutateAsync(user.id)
       toast.success(`${user.first_name} ${user.last_name} has been deactivated.`)
-      onRefresh()
     } catch {
       toast.error('Failed to deactivate user.')
     } finally {
-      setLoading(false)
       setDeactivateOpen(false)
     }
   }
 
   const handleReactivate = async () => {
-    setLoading(true)
     try {
-      await usersService.reactivate(user.id)
+      await reactivateMutation.mutateAsync(user.id)
       toast.success(`${user.first_name} ${user.last_name} has been reactivated.`)
-      onRefresh()
     } catch {
       toast.error('Failed to reactivate user.')
     } finally {
-      setLoading(false)
       setReactivateOpen(false)
     }
   }
 
   const handleDeregister = async () => {
-    setLoading(true)
     try {
-      await faceService.deregister(user.id)
+      await deregisterMutation.mutateAsync(user.id)
       toast.success(`Face data for ${user.first_name} ${user.last_name} has been removed.`)
     } catch {
       toast.error('Failed to deregister face.')
     } finally {
-      setLoading(false)
       setDeregisterOpen(false)
     }
   }
@@ -148,8 +144,14 @@ function ActionsCell({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={loading}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeactivate} disabled={loading}>
-              {loading ? 'Deactivating...' : 'Deactivate'}
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                void handleDeactivate()
+              }}
+              disabled={loading}
+            >
+              {loading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Deactivating...</>) : 'Deactivate'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -166,8 +168,14 @@ function ActionsCell({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={loading}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleReactivate} disabled={loading}>
-              {loading ? 'Reactivating...' : 'Reactivate'}
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                void handleReactivate()
+              }}
+              disabled={loading}
+            >
+              {loading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Reactivating...</>) : 'Reactivate'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -185,8 +193,14 @@ function ActionsCell({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={loading}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeregister} disabled={loading}>
-              {loading ? 'Removing...' : 'Deregister'}
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                void handleDeregister()
+              }}
+              disabled={loading}
+            >
+              {loading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Removing...</>) : 'Deregister'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -196,26 +210,15 @@ function ActionsCell({
 }
 
 export default function UsersPage() {
-  const [users, setUsers] = useState<UserResponse[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  usePageTitle('Users')
+  const navigate = useNavigate()
   const [roleFilter, setRoleFilter] = useState<string>('all')
 
-  const fetchUsers = useCallback(async () => {
-    setIsLoading(true)
-    try {
-      const params = roleFilter !== 'all' ? { role: roleFilter as UserRole } : undefined
-      const data = await usersService.list(params)
-      setUsers(data)
-    } catch {
-      toast.error('Failed to load users.')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [roleFilter])
-
-  useEffect(() => {
-    void fetchUsers()
-  }, [fetchUsers])
+  const queryParams = useMemo(
+    () => (roleFilter !== 'all' ? { role: roleFilter as UserRole } : undefined),
+    [roleFilter],
+  )
+  const { data: users = [], isLoading } = useUsers(queryParams)
 
   const columns: ColumnDef<UserResponse>[] = [
     {
@@ -282,7 +285,7 @@ export default function UsersPage() {
       header: '',
       enableSorting: false,
       cell: ({ row }) => (
-        <ActionsCell user={row.original} onRefresh={fetchUsers} />
+        <ActionsCell user={row.original} />
       ),
     },
   ]
@@ -291,7 +294,7 @@ export default function UsersPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">User Management</h1>
+          <h1 className="text-2xl font-semibold">User Management</h1>
           <p className="text-muted-foreground mt-1">
             {isLoading ? 'Loading users...' : `${users.length} user${users.length !== 1 ? 's' : ''} total`}
           </p>
@@ -313,8 +316,9 @@ export default function UsersPage() {
         columns={columns}
         data={users}
         isLoading={isLoading}
-        searchColumn="email"
+        searchColumn="first_name"
         searchPlaceholder="Search users..."
+        onRowClick={(row) => navigate(`/users/${row.id}`, { state: { role: row.role } })}
       />
     </div>
   )

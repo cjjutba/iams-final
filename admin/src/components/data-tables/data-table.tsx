@@ -33,6 +33,8 @@ interface DataTableProps<TData, TValue> {
   searchColumn?: string
   toolbar?: React.ReactNode
   pageSize?: number
+  onRowClick?: (row: TData) => void
+  borderless?: boolean
 }
 
 export function DataTable<TData, TValue>({
@@ -43,6 +45,8 @@ export function DataTable<TData, TValue>({
   searchColumn,
   toolbar,
   pageSize = 10,
+  onRowClick,
+  borderless = false,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
@@ -75,7 +79,7 @@ export function DataTable<TData, TValue>({
         {toolbar}
       </DataTableToolbar>
 
-      <div className="rounded-md border">
+      <div className={borderless ? "" : "rounded-lg border border-border"}>
         <Table>
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
@@ -129,7 +133,17 @@ export function DataTable<TData, TValue>({
               ))
             ) : table.getRowModel().rows.length > 0 ? (
               table.getRowModel().rows.map((row) => (
-                <TableRow key={row.id}>
+                <TableRow
+                  key={row.id}
+                  className={onRowClick ? "cursor-pointer" : undefined}
+                  onClick={(e) => {
+                    if (!onRowClick) return
+                    // Don't navigate if clicking on actions, dialogs, or portaled content
+                    const target = e.target as HTMLElement
+                    if (target.closest('button, a, [role="menuitem"], [role="dialog"], [data-radix-popper-content-wrapper], [data-no-row-click]')) return
+                    onRowClick(row.original)
+                  }}
+                >
                   {row.getVisibleCells().map((cell) => (
                     <TableCell key={cell.id}>
                       {flexRender(

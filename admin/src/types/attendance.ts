@@ -1,4 +1,12 @@
-export type AttendanceStatus = 'PRESENT' | 'LATE' | 'ABSENT' | 'EXCUSED' | 'EARLY_LEAVE'
+export type AttendanceStatus = 'present' | 'late' | 'absent' | 'excused' | 'early_leave'
+
+/** Format a status value for display: "early_leave" → "Early Leave" */
+export function formatStatus(status: string): string {
+  return status
+    .split('_')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ')
+}
 
 export interface AttendanceRecord {
   id: string

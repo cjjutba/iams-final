@@ -17,10 +17,13 @@ import {
   StudentNotificationsScreen,
   SettingsScreen,
 } from '../screens';
+import { useNotificationWebSocket } from '../hooks/useNotificationWebSocket';
 
 const Stack = createStackNavigator<StudentStackParamList>();
 
 export const StudentNavigator: React.FC = () => {
+  useNotificationWebSocket();
+
   return (
     <Stack.Navigator
       screenOptions={{

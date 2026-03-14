@@ -61,7 +61,7 @@ def _wipe_supabase_auth_users(keep_emails: list[str] | None = None) -> int:
     Auth is disabled or the admin API is unreachable.
     """
     if keep_emails is None:
-        keep_emails = ["faculty@gmail.com", "admin@jrmsu.edu.ph"]
+        keep_emails = ["faculty@gmail.com", "admin@admin.com"]
     if not settings.USE_SUPABASE_AUTH:
         print("  Supabase Auth disabled — skipping Auth user cleanup.")
         return 0
@@ -168,7 +168,7 @@ def wipe_user_data(confirm: bool = False):
             print(f"  Created: faculty@gmail.com (ID: {new_faculty.id})")
 
         # --- Admin account ---
-        existing_admin = db.query(User).filter(User.email == "admin@jrmsu.edu.ph").first()
+        existing_admin = db.query(User).filter(User.email == "admin@admin.com").first()
 
         if existing_admin:
             new_admin = existing_admin
@@ -176,10 +176,10 @@ def wipe_user_data(confirm: bool = False):
             new_admin.is_active = True
             new_admin.email_verified = True
             db.flush()
-            print(f"  Using existing: admin@jrmsu.edu.ph (ID: {new_admin.id})")
+            print(f"  Using existing: admin@admin.com (ID: {new_admin.id})")
         else:
             new_admin = User(
-                email="admin@jrmsu.edu.ph",
+                email="admin@admin.com",
                 password_hash=hash_password("admin123"),
                 role=UserRole.ADMIN,
                 first_name="System",
@@ -189,7 +189,7 @@ def wipe_user_data(confirm: bool = False):
             )
             db.add(new_admin)
             db.flush()
-            print(f"  Created: admin@jrmsu.edu.ph (ID: {new_admin.id})")
+            print(f"  Created: admin@admin.com (ID: {new_admin.id})")
 
         keep_user_ids = {new_faculty.id, new_admin.id}
 
@@ -235,7 +235,7 @@ def wipe_user_data(confirm: bool = False):
         logger.info("User data wiped successfully")
 
         # STEP 4: Clean up Supabase Auth users (except faculty and admin)
-        sb_deleted = _wipe_supabase_auth_users(keep_emails=["faculty@gmail.com", "admin@jrmsu.edu.ph"])
+        sb_deleted = _wipe_supabase_auth_users(keep_emails=["faculty@gmail.com", "admin@admin.com"])
 
         # STEP 5: Delete FAISS index file for a clean start
         faiss_deleted = _delete_faiss_index()
@@ -249,7 +249,7 @@ def wipe_user_data(confirm: bool = False):
         print("\nReference data (student_records, faculty_records, rooms, schedules) preserved.")
         print(f"All {schedule_count} schedules have been reassigned to the new faculty account.")
         print("\nDefault Admin Account (web dashboard):")
-        print("  Email:    admin@jrmsu.edu.ph")
+        print("  Email:    admin@admin.com")
         print("  Password: admin123")
         print("\nDefault Faculty Account:")
         print("  Email:    faculty@gmail.com")

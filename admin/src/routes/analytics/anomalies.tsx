@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react'
-import { Link } from 'react-router-dom'
+import { useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
 import { format } from 'date-fns'
-import { ArrowLeft, CheckCircle } from 'lucide-react'
+import { ArrowLeft, CheckCircle, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { usePageTitle } from '@/hooks/use-page-title'
 
 import { DataTable } from '@/components/data-tables'
 import {
@@ -19,77 +20,75 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { analyticsService } from '@/services/analytics.service'
+import { useAnomalies, useResolveAnomaly } from '@/hooks/use-queries'
 import type { AttendanceAnomaly } from '@/types'
+import { formatStatus } from '@/types/attendance'
 
-function AnomalyActions({ anomaly, onResolved }: { anomaly: AttendanceAnomaly; onResolved: () => void }) {
-  const [resolving, setResolving] = useState(false)
+function AnomalyActions({ anomaly }: { anomaly: AttendanceAnomaly }) {
+  const [open, setOpen] = useState(false)
+  const resolveAnomaly = useResolveAnomaly()
 
   if (anomaly.resolved) {
     return <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Resolved</Badge>
   }
 
   const handleResolve = async () => {
-    setResolving(true)
     try {
-      await analyticsService.resolveAnomaly(anomaly.id)
+      await resolveAnomaly.mutateAsync(anomaly.id)
       toast.success('Anomaly marked as resolved')
-      onResolved()
     } catch {
       toast.error('Failed to resolve anomaly')
     } finally {
-      setResolving(false)
+      setOpen(false)
     }
   }
 
   return (
-    <AlertDialog>
-      <AlertDialogTrigger asChild>
-        <Button variant="outline" size="sm" disabled={resolving}>
-          <CheckCircle className="mr-1 h-3 w-3" />
-          Resolve
-        </Button>
-      </AlertDialogTrigger>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Resolve Anomaly</AlertDialogTitle>
-          <AlertDialogDescription>
-            Are you sure you want to mark this anomaly as resolved? This action indicates the issue has been reviewed.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={() => void handleResolve()}>Resolve</AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <>
+      <Button variant="outline" size="sm" disabled={resolveAnomaly.isPending} onClick={() => setOpen(true)}>
+        {resolveAnomaly.isPending ? (
+          <><Loader2 className="mr-1 h-3 w-3 animate-spin" />Resolving...</>
+        ) : (
+          <><CheckCircle className="mr-1 h-3 w-3" />Resolve</>
+        )}
+      </Button>
+      <AlertDialog open={open} onOpenChange={setOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Resolve Anomaly</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to mark this anomaly as resolved? This action indicates the issue has been reviewed.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={resolveAnomaly.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                void handleResolve()
+              }}
+              disabled={resolveAnomaly.isPending}
+            >
+              {resolveAnomaly.isPending ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Resolving...</>) : 'Resolve'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   )
 }
 
 const anomalyTypeLabels: Record<string, string> = {
-  FREQUENT_ABSENTEE: 'Frequent Absentee',
-  CHRONIC_ABSENTEE: 'Chronic Absentee',
-  PATTERN_CHANGE: 'Pattern Change',
+  sudden_absence: 'Sudden Absence',
+  proxy_suspect: 'Proxy Suspect',
+  pattern_break: 'Pattern Break',
+  low_confidence: 'Low Confidence',
 }
 
 export default function AnomaliesPage() {
-  const [anomalies, setAnomalies] = useState<AttendanceAnomaly[]>([])
-  const [loading, setLoading] = useState(true)
-
-  const fetchData = useCallback(async () => {
-    try {
-      const data = await analyticsService.anomalies()
-      setAnomalies(data)
-    } catch {
-      toast.error('Failed to load anomalies')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void fetchData()
-  }, [fetchData])
+  usePageTitle('Anomalies')
+  const navigate = useNavigate()
+  const { data: anomalies = [], isLoading } = useAnomalies()
 
   const columns: ColumnDef<AttendanceAnomaly>[] = [
     {
@@ -101,7 +100,7 @@ export default function AnomaliesPage() {
       header: 'Type',
       cell: ({ row }) => (
         <Badge variant="outline">
-          {anomalyTypeLabels[row.original.anomaly_type] ?? row.original.anomaly_type}
+          {anomalyTypeLabels[row.original.anomaly_type] ?? formatStatus(row.original.anomaly_type)}
         </Badge>
       ),
     },
@@ -148,7 +147,7 @@ export default function AnomaliesPage() {
       id: 'actions',
       header: 'Actions',
       cell: ({ row }) => (
-        <AnomalyActions anomaly={row.original} onResolved={() => void fetchData()} />
+        <AnomalyActions anomaly={row.original} />
       ),
     },
   ]
@@ -162,7 +161,7 @@ export default function AnomaliesPage() {
           </Button>
         </Link>
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Anomaly Detection</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Anomaly Detection</h1>
           <p className="text-muted-foreground">Review and resolve attendance anomalies</p>
         </div>
       </div>
@@ -170,9 +169,10 @@ export default function AnomaliesPage() {
       <DataTable
         columns={columns}
         data={anomalies}
-        isLoading={loading}
+        isLoading={isLoading}
         searchPlaceholder="Search by student ID..."
         searchColumn="student_id"
+        onRowClick={(row) => navigate(`/users/${row.student_id}`, { state: { role: 'student' } })}
       />
     </div>
   )

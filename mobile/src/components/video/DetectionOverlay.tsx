@@ -1,25 +1,18 @@
 /**
  * Detection Overlay
  *
- * Renders face detection bounding boxes with smooth 60 FPS interpolation
- * using react-native-reanimated. Detection coordinates are received from
- * the backend at ~15 FPS; reanimated smoothly transitions positions on
- * the native UI thread between updates.
+ * Renders face detection bounding boxes on top of RTCView / video.
+ * Uses plain View components (not react-native-reanimated) to ensure
+ * rendering works on Android's SurfaceView (RTCView).
  *
  * The box and its name label are rendered as **separate** absolutely-
- * positioned Animated.Views (siblings in the overlay). This avoids
- * Android's overflow clipping: the label is never a child of the narrow
- * box, so its width isn't constrained by the tiny face-crop rectangle.
+ * positioned Views (siblings in the overlay). This avoids Android's
+ * overflow clipping: the label is never a child of the narrow box,
+ * so its width isn't constrained by the tiny face-crop rectangle.
  */
 
-import React, { useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  Easing,
-} from 'react-native-reanimated';
+import React, { useMemo } from 'react';
+import { View, Text, StyleSheet, Platform } from 'react-native';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -105,53 +98,25 @@ function computeScale(
 }
 
 // ---------------------------------------------------------------------------
-// Timing config: fast ease-out for snappy tracking
-// ---------------------------------------------------------------------------
-
-const TIMING_CONFIG = {
-  duration: 80,
-  easing: Easing.out(Easing.quad),
-};
-
-const FADE_OUT_CONFIG = {
-  duration: 150,
-  easing: Easing.out(Easing.quad),
-};
-
-// ---------------------------------------------------------------------------
-// AnimatedDetectionBox
-//
-// Returns a Fragment with TWO sibling Animated.Views:
-//   1. The bounding box (border rectangle)
-//   2. The name label (positioned just above the box)
-//
-// Both share the same animated position values so they move in sync.
-// Because they are siblings (not parent/child), the label's width is
-// unconstrained and can display the full student name regardless of
-// how small the face box is.
-// ---------------------------------------------------------------------------
-
-const LABEL_OFFSET = 10; // px above the box top
-
-// ---------------------------------------------------------------------------
 // Detection color scheme
 // ---------------------------------------------------------------------------
 
 /** Recognized student: green bounding box */
 const COLOR_RECOGNIZED = '#22C55E';
-/** Unknown / unrecognized face: muted red-orange */
-const COLOR_UNKNOWN = '#EF4444';
+/** Unknown / unrecognized face: amber/yellow */
+const COLOR_UNKNOWN = '#F59E0B';
 
-/**
- * Determine bounding box color: green for recognized students, red for unknown.
- * A face is "recognized" when the backend returns a non-null user_id,
- * which only happens when similarity passes threshold + margin checks.
- */
+const LABEL_OFFSET = 10; // px above the box top
+
 function getDetectionColor(userId: string | null): string {
   return userId ? COLOR_RECOGNIZED : COLOR_UNKNOWN;
 }
 
-interface TrackedBoxProps {
+// ---------------------------------------------------------------------------
+// DetectionBox — plain View (works on top of Android SurfaceView/RTCView)
+// ---------------------------------------------------------------------------
+
+interface BoxProps {
   bbox: DetectionBBox;
   userId: string | null;
   label: string;
@@ -159,7 +124,7 @@ interface TrackedBoxProps {
   scaleInfo: ScaleInfo;
 }
 
-const AnimatedDetectionBox: React.FC<TrackedBoxProps> = ({
+const DetectionBox: React.FC<BoxProps> = React.memo(({
   bbox,
   userId,
   label,
@@ -168,74 +133,53 @@ const AnimatedDetectionBox: React.FC<TrackedBoxProps> = ({
 }) => {
   const { scale, offsetX, offsetY } = scaleInfo;
 
-  const hasLabel = label.length > 0;
-
-  const targetLeft = bbox.x * scale + offsetX;
-  const targetTop = bbox.y * scale + offsetY;
-  const targetWidth = bbox.width * scale;
-  const targetHeight = bbox.height * scale;
-
-  const left = useSharedValue(targetLeft);
-  const top = useSharedValue(targetTop);
-  const width = useSharedValue(targetWidth);
-  const height = useSharedValue(targetHeight);
-  const opacity = useSharedValue(staleFrames > 0 ? 0 : 1);
-
-  useEffect(() => {
-    left.value = withTiming(targetLeft, TIMING_CONFIG);
-    top.value = withTiming(targetTop, TIMING_CONFIG);
-    width.value = withTiming(targetWidth, TIMING_CONFIG);
-    height.value = withTiming(targetHeight, TIMING_CONFIG);
-  }, [targetLeft, targetTop, targetWidth, targetHeight]);
-
-  useEffect(() => {
-    opacity.value = withTiming(staleFrames > 0 ? 0 : 1, FADE_OUT_CONFIG);
-  }, [staleFrames]);
-
-  // Box style — positioned exactly at the face coordinates
-  const boxStyle = useAnimatedStyle(() => ({
-    left: left.value,
-    top: top.value,
-    width: width.value,
-    height: height.value,
-    opacity: opacity.value,
-  }));
-
-  // Label style — centered above the box, no width constraint
-  const labelStyle = useAnimatedStyle(() => ({
-    left: left.value + width.value / 2,
-    top: Math.max(0, top.value - LABEL_OFFSET),
-    opacity: opacity.value,
-  }));
-
+  const left = bbox.x * scale + offsetX;
+  const top = bbox.y * scale + offsetY;
+  const width = bbox.width * scale;
+  const height = bbox.height * scale;
   const borderColor = getDetectionColor(userId);
+  const opacity = staleFrames > 0 ? 0.3 : 1;
+  const hasLabel = label.length > 0;
 
   return (
     <>
       {/* Bounding box */}
-      <Animated.View style={[styles.box, { borderColor }, boxStyle]} />
+      <View
+        style={[
+          styles.box,
+          {
+            left,
+            top,
+            width,
+            height,
+            borderColor,
+            opacity,
+          },
+        ]}
+      />
       {/* Name label (separate element — not clipped by box width) */}
       {hasLabel && (
-        <Animated.View style={[styles.labelAnchor, labelStyle]}>
-          {/* Stroke: dark text behind for readability */}
-          <Text
-            style={[styles.labelText, styles.labelStroke]}
-            numberOfLines={1}
-          >
-            {label}
-          </Text>
-          {/* Fill: always white for readability */}
-          <Text
-            style={[styles.labelText, styles.labelFill, { color: '#FFFFFF' }]}
-            numberOfLines={1}
-          >
-            {label}
-          </Text>
-        </Animated.View>
+        <View
+          style={[
+            styles.labelAnchor,
+            {
+              left: left + width / 2,
+              top: Math.max(0, top - LABEL_OFFSET),
+              opacity,
+            },
+          ]}
+        >
+          <View style={[styles.labelBg, { backgroundColor: borderColor }]}>
+            <Text style={styles.labelText} numberOfLines={1}>
+              {label}
+            </Text>
+          </View>
+        </View>
       )}
     </>
   );
-};
+});
+DetectionBox.displayName = 'DetectionBox';
 
 // ---------------------------------------------------------------------------
 // UnknownBadge
@@ -286,7 +230,7 @@ export const DetectionOverlay: React.FC<DetectionOverlayProps> = React.memo(
     }
 
     return (
-      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      <View style={styles.overlay} pointerEvents="none">
         {detections.map((det) => {
           const trackId =
             (det as any).trackId || det.user_id || `unk-${det.bbox.x}-${det.bbox.y}`;
@@ -298,7 +242,7 @@ export const DetectionOverlay: React.FC<DetectionOverlayProps> = React.memo(
           const staleFrames = (det as any).staleFrames ?? 0;
 
           return (
-            <AnimatedDetectionBox
+            <DetectionBox
               key={trackId}
               bbox={det.bbox}
               userId={det.user_id}
@@ -320,36 +264,39 @@ DetectionOverlay.displayName = 'DetectionOverlay';
 // ---------------------------------------------------------------------------
 
 const styles = StyleSheet.create({
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    // On Android, elevation ensures we render above SurfaceView (RTCView)
+    ...(Platform.OS === 'android' ? { elevation: 10 } : {}),
+  },
   box: {
     position: 'absolute',
     borderWidth: 2,
-    borderRadius: 2,
+    borderRadius: 3,
   },
   labelAnchor: {
     position: 'absolute',
-    width: 80,
-    marginLeft: -40,
+    alignItems: 'center',
+    transform: [{ translateX: -40 }],
+  },
+  labelBg: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    minWidth: 50,
     alignItems: 'center',
   },
   labelText: {
-    fontSize: 7,
+    fontSize: 9,
     fontWeight: '700',
+    color: '#FFFFFF',
     textAlign: 'center',
-  },
-  labelStroke: {
-    color: '#000000',
-    textShadowColor: '#000000',
-    textShadowOffset: { width: 0.4, height: 0.4 },
-    textShadowRadius: 0.8,
-  },
-  labelFill: {
-    position: 'absolute',
   },
   unknownBadge: {
     position: 'absolute',
     bottom: 8,
     right: 8,
-    backgroundColor: 'rgba(239,68,68,0.18)',
+    backgroundColor: 'rgba(245,158,11,0.18)',
     borderWidth: 1,
     borderColor: COLOR_UNKNOWN,
     borderRadius: 6,

@@ -164,3 +164,24 @@ def get_system_metrics(
     """Get system-wide metrics (admin only)."""
     svc = AnalyticsService(db)
     return svc.get_system_metrics()
+
+
+@router.get("/system/daily-trend")
+def get_daily_trend(
+    days: int = Query(30, ge=1, le=90, description="Number of days to look back"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get daily attendance trend (present/late/absent counts) for the last N days."""
+    svc = AnalyticsService(db)
+    return svc.get_daily_trend(days)
+
+
+@router.get("/system/weekday-breakdown")
+def get_weekday_breakdown(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get average attendance rate per day of the week."""
+    svc = AnalyticsService(db)
+    return svc.get_weekday_breakdown()

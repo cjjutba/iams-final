@@ -145,6 +145,8 @@ class StreamRelay:
             "-an",  # Drop audio (avoids codec issues with mediamtx)
             "-c:v",
             "copy",
+            "-rtsp_transport",
+            "tcp",  # Force TCP for output (VPS only exposes RTSP TCP port)
             "-f",
             "rtsp",
             dest,

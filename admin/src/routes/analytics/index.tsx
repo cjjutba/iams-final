@@ -1,4 +1,3 @@
-import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Users,
@@ -11,61 +10,35 @@ import {
   UserX,
   ShieldAlert,
 } from 'lucide-react'
+import { usePageTitle } from '@/hooks/use-page-title'
 
 import { StatCard, LineChartCard } from '@/components/charts'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import { analyticsService } from '@/services/analytics.service'
-import type { SystemMetrics } from '@/types'
-
-function generateTrendData() {
-  const data: Record<string, unknown>[] = []
-  const now = new Date()
-  for (let i = 29; i >= 0; i--) {
-    const d = new Date(now)
-    d.setDate(d.getDate() - i)
-    const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-    data.push({
-      date: label,
-      present: Math.floor(70 + Math.random() * 25),
-      late: Math.floor(5 + Math.random() * 10),
-      absent: Math.floor(3 + Math.random() * 8),
-    })
-  }
-  return data
-}
-
-const trendData = generateTrendData()
+import { useSystemMetrics, useDailyTrend } from '@/hooks/use-queries'
 
 export default function AnalyticsPage() {
-  const [metrics, setMetrics] = useState<SystemMetrics | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  usePageTitle('Analytics')
+  const { data: metrics, isLoading: loading, error } = useSystemMetrics()
+  const { data: trendRaw, isLoading: trendLoading } = useDailyTrend(30)
 
-  const fetchMetrics = useCallback(async () => {
-    try {
-      const res = await analyticsService.systemMetrics()
-      setMetrics(res.data)
-      setError(null)
-    } catch {
-      setError('Failed to load system metrics')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void fetchMetrics()
-  }, [fetchMetrics])
+  const trendData = Array.isArray(trendRaw)
+    ? trendRaw.map((d: Record<string, unknown>) => ({
+        date: d.date as string,
+        present: (d.present ?? d.present_count ?? 0) as number,
+        late: (d.late ?? d.late_count ?? 0) as number,
+        absent: (d.absent ?? d.absent_count ?? 0) as number,
+      }))
+    : []
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Analytics Dashboard</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Analytics Dashboard</h1>
         <p className="text-muted-foreground">System-wide metrics and insights</p>
       </div>
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && <p className="text-sm text-destructive">Failed to load system metrics</p>}
 
       {/* System Metrics */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
@@ -138,18 +111,30 @@ export default function AnalyticsPage() {
 
       {/* Charts */}
       <div className="grid grid-cols-1 gap-4">
-        <LineChartCard
-          title="Attendance Trend"
-          description="Daily attendance over the last 30 days"
-          data={trendData}
-          xKey="date"
-          lines={[
-            { key: 'present', label: 'Present', color: 'var(--color-chart-1)' },
-            { key: 'late', label: 'Late', color: 'var(--color-chart-3)' },
-            { key: 'absent', label: 'Absent', color: 'var(--color-chart-5)' },
-          ]}
-          height={320}
-        />
+        {trendLoading ? (
+          <Card>
+            <CardHeader>
+              <Skeleton className="h-5 w-40" />
+              <Skeleton className="h-4 w-64 mt-1" />
+            </CardHeader>
+            <CardContent>
+              <Skeleton className="h-[320px] w-full" />
+            </CardContent>
+          </Card>
+        ) : (
+          <LineChartCard
+            title="Attendance Trend"
+            description="Daily attendance over the last 30 days"
+            data={trendData}
+            xKey="date"
+            lines={[
+              { key: 'present', label: 'Present', color: 'var(--color-chart-1)' },
+              { key: 'late', label: 'Late', color: 'var(--color-chart-3)' },
+              { key: 'absent', label: 'Absent', color: 'var(--color-chart-5)' },
+            ]}
+            height={320}
+          />
+        )}
       </div>
     </div>
   )

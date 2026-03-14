@@ -12,7 +12,7 @@ export interface SystemMetrics {
 export interface AttendanceAnomaly {
   id: string
   student_id: string
-  anomaly_type: 'FREQUENT_ABSENTEE' | 'CHRONIC_ABSENTEE' | 'PATTERN_CHANGE'
+  anomaly_type: string
   severity: string
   description: string
   resolved: boolean
@@ -25,6 +25,6 @@ export interface AtRiskStudent {
   student_id: string
   student_name: string
   attendance_rate: number
-  risk_level: 'LOW' | 'MEDIUM' | 'HIGH'
+  risk_level: string
   missed_classes: number
 }

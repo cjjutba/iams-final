@@ -19,6 +19,7 @@ import type { StackNavigationProp } from '@react-navigation/stack';
 import { RefreshCw } from 'lucide-react-native';
 import { useAuth, useSchedule } from '../../hooks';
 import { useToast } from '../../hooks/useToast';
+import { useNotificationStore } from '../../stores/notificationStore';
 import { faceService, attendanceService } from '../../services';
 import { theme, strings } from '../../constants';
 import { formatDate, formatTime, getDayName } from '../../utils';
@@ -51,6 +52,9 @@ export const StudentHomeScreen: React.FC = () => {
   } = useSchedule();
 
   const { showError } = useToast();
+  const { unreadCount, fetchUnreadCount } = useNotificationStore();
+
+  useEffect(() => { fetchUnreadCount(); }, [fetchUnreadCount]);
 
   const currentClass = getCurrentClass();
   const nextClass = getNextClass();
@@ -363,6 +367,7 @@ export const StudentHomeScreen: React.FC = () => {
         <Header
           title={strings.student.home}
           showNotification
+          notificationCount={unreadCount}
           onNotificationPress={handleNotificationPress}
         />
         <View style={styles.errorContainer}>

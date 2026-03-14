@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
-import { Save } from 'lucide-react'
+import { Loader2, Save } from 'lucide-react'
+import { usePageTitle } from '@/hooks/use-page-title'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -9,7 +10,8 @@ import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
-import { settingsService } from '@/services/settings.service'
+import { useSettings, useUpdateSettings, useNotificationPreferences, useUpdateNotificationPreferences } from '@/hooks/use-queries'
+import type { NotificationPreference } from '@/types'
 
 const DEFAULT_SETTINGS: Record<string, string> = {
   current_semester: '1st',
@@ -22,49 +24,34 @@ const DEFAULT_SETTINGS: Record<string, string> = {
 }
 
 export default function SettingsPage() {
+  usePageTitle('Settings')
   const [values, setValues] = useState<Record<string, string>>(DEFAULT_SETTINGS)
-  const [isLoading, setIsLoading] = useState(true)
-  const [isSaving, setIsSaving] = useState(false)
+  const { data: settingsData, isLoading } = useSettings()
+  const updateSettings = useUpdateSettings()
 
-  const fetchSettings = useCallback(async () => {
-    setIsLoading(true)
-    try {
-      const data = await settingsService.getAll()
-      // API returns { key: { value, updated_at } }
+  useEffect(() => {
+    if (settingsData && typeof settingsData === 'object') {
       const loaded: Record<string, string> = { ...DEFAULT_SETTINGS }
-      if (data && typeof data === 'object') {
-        for (const [key, entry] of Object.entries(data)) {
-          const val = (entry as { value?: string })?.value
-          if (val !== undefined) {
-            loaded[key] = String(val)
-          }
+      for (const [key, entry] of Object.entries(settingsData)) {
+        const val = (entry as { value?: string })?.value
+        if (val !== undefined) {
+          loaded[key] = String(val)
         }
       }
       setValues(loaded)
-    } catch {
-      // Use defaults if settings endpoint is not available
-    } finally {
-      setIsLoading(false)
     }
-  }, [])
-
-  useEffect(() => {
-    void fetchSettings()
-  }, [fetchSettings])
+  }, [settingsData])
 
   const handleChange = (key: string, value: string) => {
     setValues(prev => ({ ...prev, [key]: value }))
   }
 
   const handleSave = async () => {
-    setIsSaving(true)
     try {
-      await settingsService.update(values)
+      await updateSettings.mutateAsync(values)
       toast.success('Settings saved successfully.')
     } catch {
       toast.error('Failed to save settings.')
-    } finally {
-      setIsSaving(false)
     }
   }
 
@@ -72,7 +59,7 @@ export default function SettingsPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-2xl font-bold">System Settings</h1>
+          <h1 className="text-2xl font-semibold">System Settings</h1>
           <p className="text-muted-foreground mt-1">Loading settings...</p>
         </div>
         <div className="space-y-4">
@@ -88,14 +75,23 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">System Settings</h1>
+          <h1 className="text-2xl font-semibold">System Settings</h1>
           <p className="text-muted-foreground mt-1">
             Configure system-wide settings
           </p>
         </div>
-        <Button onClick={handleSave} disabled={isSaving}>
-          <Save className="mr-2 h-4 w-4" />
-          {isSaving ? 'Saving...' : 'Save Settings'}
+        <Button onClick={() => void handleSave()} disabled={updateSettings.isPending}>
+          {updateSettings.isPending ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Saving...
+            </>
+          ) : (
+            <>
+              <Save className="mr-2 h-4 w-4" />
+              Save Settings
+            </>
+          )}
         </Button>
       </div>
 
@@ -214,6 +210,90 @@ export default function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      <NotificationPreferencesCard />
     </div>
+  )
+}
+
+function NotificationPreferencesCard() {
+  const { data: prefs, isLoading } = useNotificationPreferences()
+  const updatePrefs = useUpdateNotificationPreferences()
+
+  const handleToggle = (key: keyof NotificationPreference, checked: boolean) => {
+    updatePrefs.mutate(
+      { [key]: checked },
+      {
+        onError: () => toast.error('Failed to update preference'),
+      },
+    )
+  }
+
+  if (isLoading) {
+    return <Skeleton className="h-64 w-full" />
+  }
+
+  const items: { key: keyof NotificationPreference; label: string; description: string }[] = [
+    { key: 'early_leave_alerts', label: 'Early Leave Alerts', description: 'Receive alerts when a student leaves class early' },
+    { key: 'anomaly_alerts', label: 'Anomaly Alerts', description: 'Receive alerts for anomalous attendance patterns' },
+    { key: 'attendance_confirmation', label: 'Attendance Confirmations', description: 'Receive confirmations when attendance is recorded' },
+    { key: 'low_attendance_warning', label: 'Low Attendance Warnings', description: 'Receive warnings when attendance drops below threshold' },
+    { key: 'daily_digest', label: 'Daily Digest', description: 'Receive a daily attendance summary at 8 PM' },
+    { key: 'weekly_digest', label: 'Weekly Digest', description: 'Receive a weekly attendance summary on Mondays' },
+    { key: 'email_enabled', label: 'Email Notifications', description: 'Also send notifications to your email address' },
+  ]
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Notification Preferences</CardTitle>
+        <CardDescription>
+          Control which notifications you receive
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-1">
+        {items.map(({ key, label, description }) => (
+          <div key={key} className="flex items-center justify-between py-3">
+            <div className="space-y-0.5">
+              <Label htmlFor={`pref-${key}`}>{label}</Label>
+              <p className="text-sm text-muted-foreground">{description}</p>
+            </div>
+            <Switch
+              id={`pref-${key}`}
+              checked={prefs?.[key] as boolean ?? true}
+              onCheckedChange={checked => handleToggle(key, checked)}
+              disabled={updatePrefs.isPending}
+            />
+          </div>
+        ))}
+        <Separator className="my-3" />
+        <div className="flex items-center justify-between py-3">
+          <div className="space-y-0.5">
+            <Label htmlFor="pref-threshold">Low Attendance Threshold (%)</Label>
+            <p className="text-sm text-muted-foreground">
+              Trigger warning when attendance drops below this percentage
+            </p>
+          </div>
+          <Input
+            id="pref-threshold"
+            type="number"
+            min={0}
+            max={100}
+            step={5}
+            className="w-20"
+            value={prefs?.low_attendance_threshold ?? 75}
+            onChange={e => {
+              const val = parseFloat(e.target.value)
+              if (!isNaN(val)) {
+                updatePrefs.mutate(
+                  { low_attendance_threshold: val },
+                  { onError: () => toast.error('Failed to update threshold') },
+                )
+              }
+            }}
+          />
+        </div>
+      </CardContent>
+    </Card>
   )
 }

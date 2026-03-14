@@ -6,9 +6,9 @@ Request and response models for authentication flows.
 
 from datetime import date
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from app.schemas.user import UserResponse
+from app.schemas.user import UserResponse, _validate_ph_phone
 
 
 class LoginRequest(BaseModel):
@@ -69,7 +69,12 @@ class RegisterRequest(BaseModel):
     password: str = Field(..., min_length=8)
     first_name: str = Field(..., min_length=1, max_length=100)
     last_name: str = Field(..., min_length=1, max_length=100)
-    phone: str | None = None
+    phone: str | None = Field(None, max_length=11)
+
+    @field_validator("phone", mode="before")
+    @classmethod
+    def validate_phone(cls, v):
+        return _validate_ph_phone(v)
 
 
 class RegisterResponse(BaseModel):
@@ -97,7 +102,12 @@ class ProfileUpdateRequest(BaseModel):
     """Profile update request (limited fields for self-service)"""
 
     email: EmailStr | None = None
-    phone: str | None = None
+    phone: str | None = Field(None, max_length=11)
+
+    @field_validator("phone", mode="before")
+    @classmethod
+    def validate_phone(cls, v):
+        return _validate_ph_phone(v)
 
 
 class SupabaseWebhookPayload(BaseModel):

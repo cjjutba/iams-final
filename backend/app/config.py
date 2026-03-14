@@ -121,6 +121,7 @@ class Settings(BaseSettings):
     MEDIAMTX_EXTERNAL: bool = False  # True = mediamtx runs as separate container (skip subprocess)
     MEDIAMTX_API_URL: str = "http://localhost:9997"  # mediamtx REST API (internal only)
     MEDIAMTX_WEBRTC_URL: str = "http://localhost:8889"  # mediamtx WHEP endpoint (internal only)
+    MEDIAMTX_RTSP_URL: str = "rtsp://localhost:8554"  # mediamtx RTSP endpoint (for recognition in push mode)
     WEBRTC_STUN_URLS: str = "stun:stun.l.google.com:19302"  # Comma-separated STUN URLs (free Google STUN)
     WEBRTC_TURN_URL: str = ""  # Optional: "turn:your-server:3478"
     WEBRTC_TURN_USERNAME: str = ""  # TURN username (empty = no TURN)
@@ -144,6 +145,11 @@ class Settings(BaseSettings):
     # File Storage
     UPLOAD_DIR: str = "data/uploads/faces"
     MAX_UPLOAD_SIZE_MB: int = 10
+
+    # Email (Resend)
+    RESEND_API_KEY: str = ""
+    RESEND_FROM_EMAIL: str = "IAMS <noreply@iams.jrmsu.edu.ph>"
+    EMAIL_ENABLED: bool = False  # Master kill switch — set True when Resend API key is configured
 
     # Logging
     LOG_LEVEL: str = "INFO"

@@ -49,14 +49,14 @@ export function BarChartCard({
 }: BarChartCardProps) {
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">{title}</CardTitle>
         {description && <CardDescription>{description}</CardDescription>}
       </CardHeader>
       <CardContent>
         <ResponsiveContainer width="100%" height={height}>
           <BarChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" strokeOpacity={0.5} />
             <XAxis dataKey={xKey} fontSize={12} tickLine={false} axisLine={false} />
             <YAxis fontSize={12} tickLine={false} axisLine={false} />
             <Tooltip />

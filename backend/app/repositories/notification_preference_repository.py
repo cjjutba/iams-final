@@ -46,6 +46,7 @@ class NotificationPreferenceRepository:
             "low_attendance_warning",
             "daily_digest",
             "weekly_digest",
+            "email_enabled",
             "low_attendance_threshold",
         }
         for key, value in updates.items():

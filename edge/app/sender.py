@@ -403,6 +403,27 @@ class SyncBackendSender:
                 logger.error(f"Send failed after {max_attempts} attempts: {last_error}")
         return None
 
+    def resolve_room(self, room_name: str) -> str | None:
+        """Resolve a room name to its UUID via the backend API.
+
+        Returns the room UUID string, or None if not found / unreachable.
+        """
+        url = config.get_api_endpoint("/api/v1/rooms/lookup")
+        try:
+            client = self._get_client()
+            response = client.get(url, params={"name": room_name}, timeout=10.0)
+            if response.status_code == 404:
+                logger.error(f"Room '{room_name}' not found on backend")
+                return None
+            response.raise_for_status()
+            data = response.json()
+            room_id = data.get("id")
+            logger.info(f"Resolved room '{room_name}' → {room_id}")
+            return room_id
+        except Exception as e:
+            logger.error(f"Failed to resolve room name '{room_name}': {e}")
+            return None
+
     def check_backend_health(self) -> bool:
         try:
             client = self._get_client()

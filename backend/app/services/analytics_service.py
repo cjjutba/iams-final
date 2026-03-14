@@ -18,6 +18,7 @@ from app.models.early_leave_event import EarlyLeaveEvent
 from app.models.engagement_score import EngagementScore
 from app.models.enrollment import Enrollment
 from app.models.schedule import Schedule
+from app.models.student_record import StudentRecord
 from app.models.user import User, UserRole
 
 
@@ -343,9 +344,67 @@ class AnalyticsService:
 
     # ----- Admin Analytics -----
 
+    def get_daily_trend(self, days: int = 30) -> list[dict[str, Any]]:
+        """Get daily attendance counts (present, late, absent) for the last N days."""
+        from datetime import timedelta
+
+        today = date.today()
+        start = today - timedelta(days=days - 1)
+
+        records = (
+            self.db.query(AttendanceRecord)
+            .filter(AttendanceRecord.date >= start, AttendanceRecord.date <= today)
+            .all()
+        )
+
+        by_date: dict[date, list] = {}
+        for rec in records:
+            by_date.setdefault(rec.date, []).append(rec)
+
+        trend = []
+        current = start
+        while current <= today:
+            recs = by_date.get(current, [])
+            trend.append(
+                {
+                    "date": current.isoformat(),
+                    "present": sum(1 for r in recs if r.status == AttendanceStatus.PRESENT),
+                    "late": sum(1 for r in recs if r.status == AttendanceStatus.LATE),
+                    "absent": sum(1 for r in recs if r.status == AttendanceStatus.ABSENT),
+                }
+            )
+            current += timedelta(days=1)
+
+        return trend
+
+    def get_weekday_breakdown(self) -> list[dict[str, Any]]:
+        """Get average attendance rate per day of the week."""
+        records = self.db.query(AttendanceRecord).all()
+
+        by_weekday: dict[int, list] = {}
+        for rec in records:
+            wd = rec.date.weekday()
+            by_weekday.setdefault(wd, []).append(rec)
+
+        day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        breakdown = []
+        for i, name in enumerate(day_names):
+            recs = by_weekday.get(i, [])
+            total = len(recs)
+            present = sum(1 for r in recs if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE))
+            rate = round((present / total) * 100.0, 1) if total > 0 else 0.0
+            breakdown.append({"day": name, "rate": rate})
+
+        return breakdown
+
     def get_system_metrics(self) -> dict[str, Any]:
         """Get system-wide metrics."""
-        total_students = self.db.query(func.count(User.id)).filter(User.role == UserRole.STUDENT).scalar() or 0
+        total_students = (
+            self.db.query(func.count(StudentRecord.student_id))
+            .filter(StudentRecord.is_active == True)  # noqa: E712
+            .scalar()
+            or 0
+        )
 
         total_faculty = self.db.query(func.count(User.id)).filter(User.role == UserRole.FACULTY).scalar() or 0
 

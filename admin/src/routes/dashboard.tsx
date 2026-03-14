@@ -1,53 +1,20 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
+import { usePageTitle } from '@/hooks/use-page-title'
 import {
   Users,
   GraduationCap,
   Calendar,
-  ClipboardList,
   TrendingUp,
-  DoorOpen,
 } from 'lucide-react'
 
 import { StatCard, LineChartCard, BarChartCard } from '@/components/charts'
 import { DataTable } from '@/components/data-tables'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import { analyticsService } from '@/services/analytics.service'
-import { attendanceService } from '@/services/attendance.service'
-import type { SystemMetrics, ScheduleAttendanceSummary, EarlyLeaveAlert } from '@/types'
-
-// --- Mock chart data ---
-
-function generateTrendData() {
-  const data: Record<string, unknown>[] = []
-  const now = new Date()
-  for (let i = 29; i >= 0; i--) {
-    const d = new Date(now)
-    d.setDate(d.getDate() - i)
-    const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-    data.push({
-      date: label,
-      present: Math.floor(70 + Math.random() * 25),
-      late: Math.floor(5 + Math.random() * 10),
-      absent: Math.floor(3 + Math.random() * 8),
-    })
-  }
-  return data
-}
-
-const WEEKDAY_DATA = [
-  { day: 'Mon', rate: 88 },
-  { day: 'Tue', rate: 91 },
-  { day: 'Wed', rate: 85 },
-  { day: 'Thu', rate: 90 },
-  { day: 'Fri', rate: 78 },
-  { day: 'Sat', rate: 62 },
-  { day: 'Sun', rate: 0 },
-]
-
-const trendData = generateTrendData()
+import { useSystemMetrics, useScheduleSummaries, useDailyTrend, useWeekdayBreakdown } from '@/hooks/use-queries'
+import type { ScheduleAttendanceSummary } from '@/types'
 
 // --- Table columns ---
 
@@ -67,181 +34,110 @@ const sessionColumns: ColumnDef<ScheduleAttendanceSummary>[] = [
   },
 ]
 
-const alertColumns: ColumnDef<EarlyLeaveAlert>[] = [
-  { accessorKey: 'student_name', header: 'Student' },
-  { accessorKey: 'subject_name', header: 'Subject' },
-  {
-    accessorKey: 'detected_at',
-    header: 'Time',
-    cell: ({ row }) => {
-      const dt = new Date(row.original.detected_at)
-      return dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-    },
-  },
-  {
-    accessorKey: 'consecutive_misses',
-    header: 'Misses',
-    cell: ({ row }) => (
-      <Badge variant={row.original.consecutive_misses >= 3 ? 'destructive' : 'secondary'}>
-        {row.original.consecutive_misses}
-      </Badge>
-    ),
-  },
-]
-
 // --- Component ---
 
 export default function DashboardPage() {
-  const [metrics, setMetrics] = useState<SystemMetrics | null>(null)
-  const [metricsLoading, setMetricsLoading] = useState(true)
-  const [metricsError, setMetricsError] = useState<string | null>(null)
+  usePageTitle('Dashboard')
+  const navigate = useNavigate()
+  const { data: metrics, isLoading: metricsLoading, error: metricsError } = useSystemMetrics()
+  const { data: summaries = [], isLoading: sessionsLoading } = useScheduleSummaries()
+  const { data: trendData = [], isLoading: trendLoading } = useDailyTrend(30)
+  const { data: weekdayData = [], isLoading: weekdayLoading } = useWeekdayBreakdown()
 
-  const [sessions, setSessions] = useState<ScheduleAttendanceSummary[]>([])
-  const [sessionsLoading, setSessionsLoading] = useState(true)
+  const sessions = useMemo(() => summaries.filter((s) => s.session_active), [summaries])
 
-  const [alerts, setAlerts] = useState<EarlyLeaveAlert[]>([])
-  const [alertsLoading, setAlertsLoading] = useState(true)
-
-  const fetchMetrics = useCallback(async () => {
-    try {
-      const res = await analyticsService.systemMetrics()
-      setMetrics(res.data)
-      setMetricsError(null)
-    } catch {
-      setMetricsError('Failed to load metrics')
-    } finally {
-      setMetricsLoading(false)
-    }
-  }, [])
-
-  const fetchSessions = useCallback(async () => {
-    try {
-      const data = await attendanceService.getScheduleSummaries()
-      setSessions(data.filter((s) => s.session_active))
-    } catch {
-      // silently handle
-    } finally {
-      setSessionsLoading(false)
-    }
-  }, [])
-
-  const fetchAlerts = useCallback(async () => {
-    try {
-      const data = await attendanceService.getAlerts()
-      setAlerts(data.slice(0, 5))
-    } catch {
-      // silently handle
-    } finally {
-      setAlertsLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void fetchMetrics()
-    void fetchSessions()
-    void fetchAlerts()
-
-    const interval = setInterval(() => {
-      void fetchMetrics()
-    }, 60_000)
-
-    return () => clearInterval(interval)
-  }, [fetchMetrics, fetchSessions, fetchAlerts])
+  // Format trend dates for display
+  const formattedTrend = useMemo(
+    () =>
+      trendData.map((item) => ({
+        ...item,
+        date: new Date(item.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      })),
+    [trendData],
+  )
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Page header */}
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
-        <p className="text-muted-foreground">System overview and real-time monitoring</p>
+        <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+        <p className="text-sm text-muted-foreground mt-1">System overview and real-time monitoring</p>
       </div>
 
-      {/* Stat cards */}
+      {/* Stat cards — 4 cards */}
       {metricsError && (
-        <p className="text-sm text-destructive">{metricsError}</p>
+        <p className="text-sm text-destructive">Failed to load metrics</p>
       )}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {metricsLoading ? (
-          Array.from({ length: 6 }).map((_, i) => (
-            <Card key={`stat-skeleton-${String(i)}`}>
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <Skeleton className="h-4 w-24" />
-                <Skeleton className="h-4 w-4" />
-              </CardHeader>
-              <CardContent>
-                <Skeleton className="h-7 w-16" />
-              </CardContent>
-            </Card>
+          Array.from({ length: 4 }).map((_, i) => (
+            <div key={`stat-skeleton-${String(i)}`} className="rounded-xl border border-border bg-card px-5 py-4 space-y-2">
+              <Skeleton className="h-3 w-20" />
+              <Skeleton className="h-7 w-14" />
+            </div>
           ))
         ) : metrics ? (
           <>
-            <StatCard title="Total Students" value={metrics.total_students} icon={Users} />
-            <StatCard title="Total Faculty" value={metrics.total_faculty} icon={GraduationCap} />
-            <StatCard title="Active Schedules" value={metrics.total_schedules} icon={Calendar} />
-            <StatCard title="Attendance Records" value={metrics.total_attendance_records} icon={ClipboardList} />
+            <StatCard title="Students" value={metrics.total_students} icon={Users} />
+            <StatCard title="Faculty" value={metrics.total_faculty} icon={GraduationCap} />
+            <StatCard title="Schedules" value={metrics.total_schedules} icon={Calendar} />
             <StatCard
-              title="Avg Attendance Rate"
+              title="Avg Attendance"
               value={`${metrics.average_attendance_rate.toFixed(1)}%`}
               icon={TrendingUp}
             />
-            <StatCard title="Early Leaves" value={metrics.total_early_leaves} icon={DoorOpen} />
           </>
         ) : null}
       </div>
 
       {/* Charts row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <LineChartCard
-          title="Attendance Trend"
-          description="Daily attendance over the last 30 days"
-          data={trendData}
-          xKey="date"
-          lines={[
-            { key: 'present', label: 'Present', color: 'var(--color-chart-1)' },
-            { key: 'late', label: 'Late', color: 'var(--color-chart-3)' },
-            { key: 'absent', label: 'Absent', color: 'var(--color-chart-5)' },
-          ]}
-          height={280}
-        />
-        <BarChartCard
-          title="Attendance by Weekday"
-          description="Average attendance rate per day of the week"
-          data={WEEKDAY_DATA}
-          xKey="day"
-          bars={[{ key: 'rate', label: 'Attendance Rate (%)', color: 'var(--color-chart-2)' }]}
-          height={280}
-        />
+        {trendLoading ? (
+          <div className="rounded-xl border border-border bg-card p-6 space-y-4">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-[280px] w-full" />
+          </div>
+        ) : (
+          <LineChartCard
+            title="Attendance Trend"
+            description="Daily attendance over the last 30 days"
+            data={formattedTrend}
+            xKey="date"
+            lines={[
+              { key: 'present', label: 'Present', color: 'var(--color-chart-1)' },
+              { key: 'late', label: 'Late', color: 'var(--color-chart-3)' },
+              { key: 'absent', label: 'Absent', color: 'var(--color-chart-5)' },
+            ]}
+            height={280}
+          />
+        )}
+        {weekdayLoading ? (
+          <div className="rounded-xl border border-border bg-card p-6 space-y-4">
+            <Skeleton className="h-4 w-48" />
+            <Skeleton className="h-[280px] w-full" />
+          </div>
+        ) : (
+          <BarChartCard
+            title="Attendance by Weekday"
+            description="Average attendance rate per day of the week"
+            data={weekdayData}
+            xKey="day"
+            bars={[{ key: 'rate', label: 'Attendance Rate (%)', color: 'var(--color-chart-2)' }]}
+            height={280}
+          />
+        )}
       </div>
 
-      {/* Tables row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <Card>
-          <CardHeader>
-            <CardTitle>Active Sessions</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <DataTable
-              columns={sessionColumns}
-              data={sessions}
-              isLoading={sessionsLoading}
-              pageSize={5}
-            />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Recent Early Leave Alerts</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <DataTable
-              columns={alertColumns}
-              data={alerts}
-              isLoading={alertsLoading}
-              pageSize={5}
-            />
-          </CardContent>
-        </Card>
+      {/* Active Sessions — full width */}
+      <div className="space-y-3">
+        <h2 className="text-sm font-medium text-muted-foreground tracking-wide uppercase">Active Sessions</h2>
+        <DataTable
+          columns={sessionColumns}
+          data={sessions}
+          isLoading={sessionsLoading}
+          pageSize={5}
+          onRowClick={(row) => navigate(`/schedules/${row.schedule_id}`)}
+        />
       </div>
     </div>
   )

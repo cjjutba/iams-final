@@ -96,6 +96,19 @@ class EdgeDevice:
                 f"iou_threshold={config.IOU_MATCH_THRESHOLD}"
             )
 
+        # Dynamic room resolution: if ROOM_NAME is set but ROOM_ID is not,
+        # resolve the room name to a UUID via the backend API.
+        if not config.ROOM_ID and config.ROOM_NAME:
+            logger.info(f"Resolving ROOM_NAME '{config.ROOM_NAME}' to ROOM_ID via backend...")
+            resolved_id = self.sender.resolve_room(config.ROOM_NAME)
+            if resolved_id:
+                config.ROOM_ID = resolved_id
+                self.room_id = resolved_id
+                logger.info(f"Room resolved: '{config.ROOM_NAME}' → {resolved_id}")
+            else:
+                logger.error(f"Could not resolve ROOM_NAME '{config.ROOM_NAME}' — is the backend reachable?")
+                return False
+
         # Validate configuration
         try:
             config.validate()

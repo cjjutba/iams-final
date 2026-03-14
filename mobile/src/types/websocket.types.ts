@@ -9,11 +9,16 @@ export enum WebSocketEventType {
   CONNECTED = 'connected',
   ATTENDANCE_UPDATE = 'attendance_update',
   EARLY_LEAVE = 'early_leave',
+  EARLY_LEAVE_RETURN = 'early_leave_return',
   SESSION_START = 'session_start',
   SESSION_END = 'session_end',
   PRESENCE_WARNING = 'presence_warning',
   PRESENCE_SCORE = 'presence_score',
   STUDENT_CHECKED_IN = 'student_checked_in',
+  NOTIFICATION = 'notification',
+  ATTENDANCE_CONFIRMED = 'attendance_confirmed',
+  LOW_ATTENDANCE_WARNING = 'low_attendance_warning',
+  ANOMALY_DETECTED = 'anomaly_detected',
 }
 
 // Base WebSocket message

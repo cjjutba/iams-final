@@ -18,4 +18,20 @@ export const analyticsService = {
     api.patch(`/analytics/anomalies/${id}/resolve`).then(r => r.data),
   predictions: (scheduleId: string) =>
     api.get(`/analytics/predictions/${scheduleId}`).then(r => r.data),
+  dailyTrend: (days = 30) =>
+    api.get<DailyTrendItem[]>('/analytics/system/daily-trend', { params: { days } }).then(r => r.data),
+  weekdayBreakdown: () =>
+    api.get<WeekdayBreakdownItem[]>('/analytics/system/weekday-breakdown').then(r => r.data),
+}
+
+export interface DailyTrendItem {
+  date: string
+  present: number
+  late: number
+  absent: number
+}
+
+export interface WeekdayBreakdownItem {
+  day: string
+  rate: number
 }

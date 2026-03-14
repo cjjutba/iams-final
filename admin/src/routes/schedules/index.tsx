@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useMemo, useState, useTransition } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { usePageTitle } from '@/hooks/use-page-title'
 import { type ColumnDef } from '@tanstack/react-table'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
@@ -7,6 +8,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import {
   MoreHorizontal,
   Eye,
+  Loader2,
   Pencil,
   Trash2,
   Plus,
@@ -57,12 +59,13 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
-import { schedulesService } from '@/services/schedules.service'
-import { usersService } from '@/services/users.service'
-import { roomsService } from '@/services/rooms.service'
-import type { ScheduleResponse, UserResponse, Room } from '@/types'
+import { useSchedules, useCreateSchedule, useUpdateSchedule, useDeleteSchedule, useUsers, useRooms } from '@/hooks/use-queries'
+import type { ScheduleResponse } from '@/types'
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+
+type StatusFilter = 'all' | 'active' | 'inactive'
+type DayFilter = 'all' | '0' | '1' | '2' | '3' | '4' | '5' | '6'
 
 interface ScheduleFormValues {
   subject_code: string
@@ -140,14 +143,50 @@ function ActionsCell({
 }
 
 export default function SchedulesPage() {
-  const [schedules, setSchedules] = useState<ScheduleResponse[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [faculty, setFaculty] = useState<UserResponse[]>([])
-  const [rooms, setRooms] = useState<Room[]>([])
+  usePageTitle('Schedules')
+  const navigate = useNavigate()
+  const { data: schedules = [], isLoading } = useSchedules()
+  const { data: faculty = [] } = useUsers({ role: 'faculty' })
+  const { data: rooms = [] } = useRooms()
+  const createSchedule = useCreateSchedule()
+  const updateSchedule = useUpdateSchedule()
+  const deleteScheduleMutation = useDeleteSchedule()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingSchedule, setEditingSchedule] = useState<ScheduleResponse | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<ScheduleResponse | null>(null)
-  const [submitting, setSubmitting] = useState(false)
+
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [dayFilter, setDayFilter] = useState<DayFilter>('all')
+  const [isPending, startTransition] = useTransition()
+
+  const filtered = useMemo(() => {
+    let result = schedules
+    if (statusFilter === 'active') result = result.filter((s) => s.is_active)
+    else if (statusFilter === 'inactive') result = result.filter((s) => !s.is_active)
+
+    if (dayFilter !== 'all') result = result.filter((s) => s.day_of_week === parseInt(dayFilter, 10))
+
+    return result
+  }, [schedules, statusFilter, dayFilter])
+
+  const hasFilters = statusFilter !== 'all' || dayFilter !== 'all'
+
+  function handleFilterChange<T>(setter: (v: T) => void) {
+    return (value: T) => {
+      startTransition(() => setter(value))
+    }
+  }
+
+  function clearFilters() {
+    startTransition(() => {
+      setStatusFilter('all')
+      setDayFilter('all')
+    })
+  }
+
+  const showSkeleton = isLoading || isPending
+
+  const submitting = createSchedule.isPending || updateSchedule.isPending || deleteScheduleMutation.isPending
 
   const form = useForm<ScheduleFormValues>({
     resolver: zodResolver(scheduleFormSchema),
@@ -165,42 +204,6 @@ export default function SchedulesPage() {
       target_year_level: undefined,
     },
   })
-
-  const fetchSchedules = useCallback(async () => {
-    setIsLoading(true)
-    try {
-      const data = await schedulesService.list()
-      setSchedules(data)
-    } catch {
-      toast.error('Failed to load schedules.')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [])
-
-  const fetchFaculty = useCallback(async () => {
-    try {
-      const data = await usersService.list({ role: 'faculty' })
-      setFaculty(data)
-    } catch {
-      // Faculty endpoint may not support role filter — fail silently
-    }
-  }, [])
-
-  const fetchRooms = useCallback(async () => {
-    try {
-      const data = await roomsService.list()
-      setRooms(data)
-    } catch {
-      // Rooms endpoint may not exist yet — fail silently
-    }
-  }, [])
-
-  useEffect(() => {
-    void fetchSchedules()
-    void fetchFaculty()
-    void fetchRooms()
-  }, [fetchSchedules, fetchFaculty, fetchRooms])
 
   const openCreateDialog = () => {
     setEditingSchedule(null)
@@ -239,7 +242,6 @@ export default function SchedulesPage() {
   }
 
   const onSubmit = async (values: ScheduleFormValues) => {
-    setSubmitting(true)
     try {
       const payload = {
         ...values,
@@ -248,33 +250,26 @@ export default function SchedulesPage() {
       }
 
       if (editingSchedule) {
-        await schedulesService.update(editingSchedule.id, payload)
+        await updateSchedule.mutateAsync({ id: editingSchedule.id, data: payload })
         toast.success('Schedule updated successfully.')
       } else {
-        await schedulesService.create(payload)
+        await createSchedule.mutateAsync(payload)
         toast.success('Schedule created successfully.')
       }
       setDialogOpen(false)
-      void fetchSchedules()
     } catch {
       toast.error(editingSchedule ? 'Failed to update schedule.' : 'Failed to create schedule.')
-    } finally {
-      setSubmitting(false)
     }
   }
 
   const handleDelete = async () => {
     if (!deleteTarget) return
-    setSubmitting(true)
     try {
-      await schedulesService.delete(deleteTarget.id)
+      await deleteScheduleMutation.mutateAsync(deleteTarget.id)
       toast.success('Schedule deleted successfully.')
       setDeleteTarget(null)
-      void fetchSchedules()
     } catch {
       toast.error('Failed to delete schedule.')
-    } finally {
-      setSubmitting(false)
     }
   }
 
@@ -356,11 +351,13 @@ export default function SchedulesPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Schedule Management</h1>
-          <p className="text-muted-foreground mt-1">
+          <h1 className="text-2xl font-semibold tracking-tight">Schedule Management</h1>
+          <p className="text-sm text-muted-foreground mt-1">
             {isLoading
-              ? 'Loading schedules...'
-              : `${schedules.length} schedule${schedules.length !== 1 ? 's' : ''} total`}
+              ? 'Loading...'
+              : hasFilters
+                ? `${filtered.length} of ${schedules.length} schedules`
+                : `${schedules.length} schedule${schedules.length !== 1 ? 's' : ''} total`}
           </p>
         </div>
         <Button onClick={openCreateDialog}>
@@ -371,10 +368,43 @@ export default function SchedulesPage() {
 
       <DataTable
         columns={columns}
-        data={schedules}
-        isLoading={isLoading}
+        data={filtered}
+        isLoading={showSkeleton}
         searchColumn="subject_name"
         searchPlaceholder="Search by subject..."
+        toolbar={
+          <>
+            <Select value={dayFilter} onValueChange={handleFilterChange(setDayFilter)}>
+              <SelectTrigger className="w-[140px] h-9">
+                <SelectValue placeholder="Day" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Days</SelectItem>
+                {DAY_NAMES.map((name, i) => (
+                  <SelectItem key={name} value={String(i)}>{name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select value={statusFilter} onValueChange={handleFilterChange(setStatusFilter)}>
+              <SelectTrigger className="w-[130px] h-9">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Status</SelectItem>
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="inactive">Inactive</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {hasFilters && (
+              <Button variant="ghost" size="sm" onClick={clearFilters} className="h-9 px-2 text-muted-foreground">
+                Clear
+              </Button>
+            )}
+          </>
+        }
+        onRowClick={(row) => navigate(`/schedules/${row.id}`)}
       />
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -609,13 +639,14 @@ export default function SchedulesPage() {
                   Cancel
                 </Button>
                 <Button type="submit" disabled={submitting}>
-                  {submitting
-                    ? editingSchedule
-                      ? 'Updating...'
-                      : 'Creating...'
-                    : editingSchedule
-                      ? 'Update Schedule'
-                      : 'Create Schedule'}
+                  {submitting ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      {editingSchedule ? 'Updating...' : 'Creating...'}
+                    </>
+                  ) : (
+                    editingSchedule ? 'Update Schedule' : 'Create Schedule'
+                  )}
                 </Button>
               </DialogFooter>
             </form>
@@ -634,8 +665,14 @@ export default function SchedulesPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={submitting}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} disabled={submitting}>
-              {submitting ? 'Deleting...' : 'Delete'}
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                void handleDelete()
+              }}
+              disabled={submitting}
+            >
+              {submitting ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Deleting...</>) : 'Delete'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

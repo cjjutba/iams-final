@@ -38,6 +38,7 @@ class Config:
     # ===== Backend Configuration =====
     BACKEND_URL: str = os.getenv("BACKEND_URL", "http://167.71.217.44")
     ROOM_ID: str = os.getenv("ROOM_ID", "")
+    ROOM_NAME: str = os.getenv("ROOM_NAME", "")  # Dynamic: resolved to ROOM_ID at startup
 
     # ===== Camera Configuration =====
     # Source: "auto" (try picamera→rtsp→usb), "picamera", "rtsp", "usb"
@@ -119,9 +120,9 @@ class Config:
         if not cls.BACKEND_URL:
             errors.append("BACKEND_URL is required")
 
-        # Room ID is required
-        if not cls.ROOM_ID:
-            errors.append("ROOM_ID is required")
+        # Room ID or Room Name is required
+        if not cls.ROOM_ID and not cls.ROOM_NAME:
+            errors.append("ROOM_ID or ROOM_NAME is required")
 
         # Camera source validation
         if cls.CAMERA_SOURCE not in ("auto", "picamera", "rtsp", "usb"):
