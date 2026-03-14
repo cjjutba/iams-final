@@ -24,6 +24,7 @@ from app.routers import (
     audit,
     auth,
     edge,
+    edge_ws,
     face,
     hls,
     live_stream,
@@ -526,6 +527,9 @@ app.include_router(audit.router, prefix=f"{settings.API_PREFIX}/audit", tags=["A
 
 # Edge device monitoring routes
 app.include_router(edge.router, prefix=f"{settings.API_PREFIX}/edge", tags=["Edge Devices"])
+
+# Edge device WebSocket routes (RPi detection relay)
+app.include_router(edge_ws.router, prefix=f"{settings.API_PREFIX}/edge", tags=["Edge Devices"])
 
 # System settings routes
 app.include_router(settings_router.router, prefix=f"{settings.API_PREFIX}/settings", tags=["Settings"])
