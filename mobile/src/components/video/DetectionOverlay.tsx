@@ -11,8 +11,13 @@
  * so its width isn't constrained by the tiny face-crop rectangle.
  */
 
-import React, { useRef, useEffect, useMemo } from 'react';
+import React, { useRef, useEffect, useMemo, useState } from 'react';
 import { View, Text, Animated, Easing, StyleSheet, Platform } from 'react-native';
+import {
+  TrackAnimationEngine,
+  FusedTrack,
+  AnimatedTrack,
+} from '../../engines/TrackAnimationEngine';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -333,6 +338,129 @@ export const DetectionOverlay: React.FC<DetectionOverlayProps> = React.memo(
   },
 );
 DetectionOverlay.displayName = 'DetectionOverlay';
+
+// ---------------------------------------------------------------------------
+// FusedDetectionOverlay — uses TrackAnimationEngine for smooth 30 FPS boxes
+// ---------------------------------------------------------------------------
+
+interface FusedDetectionOverlayProps {
+  tracks: FusedTrack[];
+  videoWidth: number;
+  videoHeight: number;
+  containerWidth: number;
+  containerHeight: number;
+  resizeMode?: 'contain' | 'cover';
+}
+
+const FusedBox = React.memo(
+  ({ track, scaleInfo }: { track: AnimatedTrack; scaleInfo: ScaleInfo }) => {
+    const { scale, offsetX, offsetY } = scaleInfo;
+    const isRecognized = track.userId != null;
+    const color = isRecognized ? COLOR_RECOGNIZED : COLOR_UNKNOWN;
+    const label = track.name
+      ? `${track.name.split(' ')[0].substring(0, 10)} (${Math.round((track.similarity ?? 0) * 100)}%)`
+      : 'Unknown';
+
+    // Scale detection-space coords to screen-space using Animated arithmetic.
+    // `scale` and offsets are plain numbers; track.x/y/w/h are Animated.Values.
+    const animatedStyle = {
+      position: 'absolute' as const,
+      left: Animated.add(Animated.multiply(track.x, scale), offsetX),
+      top: Animated.add(Animated.multiply(track.y, scale), offsetY),
+      width: Animated.multiply(track.w, scale),
+      height: Animated.multiply(track.h, scale),
+      borderWidth: 2,
+      borderColor: color,
+      borderRadius: 3,
+      opacity: track.opacity,
+    };
+
+    const labelStyle = {
+      position: 'absolute' as const,
+      left: Animated.add(Animated.multiply(track.x, scale), offsetX),
+      top: Animated.add(
+        Animated.add(Animated.multiply(track.y, scale), offsetY),
+        -16,
+      ),
+      opacity: track.opacity,
+    };
+
+    return (
+      <>
+        <Animated.View style={animatedStyle} />
+        {track.missedFrames === 0 && (
+          <Animated.View style={labelStyle}>
+            <Text style={[styles.labelText, { color }]}>{label}</Text>
+          </Animated.View>
+        )}
+      </>
+    );
+  },
+);
+FusedBox.displayName = 'FusedBox';
+
+export const FusedDetectionOverlay: React.FC<FusedDetectionOverlayProps> =
+  React.memo(
+    ({
+      tracks,
+      videoWidth,
+      videoHeight,
+      containerWidth,
+      containerHeight,
+      resizeMode = 'contain',
+    }) => {
+      const engineRef = useRef(new TrackAnimationEngine());
+      const [animatedTracks, setAnimatedTracks] = useState<AnimatedTrack[]>([]);
+
+      const scaleInfo = useMemo(
+        () =>
+          computeScale(
+            videoWidth,
+            videoHeight,
+            containerWidth,
+            containerHeight,
+            resizeMode,
+          ),
+        [videoWidth, videoHeight, containerWidth, containerHeight, resizeMode],
+      );
+
+      useEffect(() => {
+        const updated = engineRef.current.update(tracks);
+        setAnimatedTracks(updated);
+      }, [tracks]);
+
+      // Cleanup on unmount
+      useEffect(() => {
+        return () => engineRef.current.clear();
+      }, []);
+
+      if (
+        !animatedTracks.length ||
+        containerWidth === 0 ||
+        containerHeight === 0
+      ) {
+        return null;
+      }
+
+      const unknownCount = animatedTracks.filter(
+        (t) => t.userId == null,
+      ).length;
+
+      return (
+        <View style={styles.overlay} pointerEvents="none">
+          {animatedTracks.map((track) => (
+            <FusedBox
+              key={track.trackId}
+              track={track}
+              scaleInfo={scaleInfo}
+            />
+          ))}
+          <UnknownBadge count={unknownCount} />
+        </View>
+      );
+    },
+  );
+FusedDetectionOverlay.displayName = 'FusedDetectionOverlay';
 
 // ---------------------------------------------------------------------------
 // Styles
