@@ -3,19 +3,20 @@
  *
  * Displays a live camera feed using two independent layers:
  *
- * 1. **Video Layer** — HLS stream via `expo-video` (hardware-decoded, 30 FPS)
- *    The backend runs FFmpeg to remux the RTSP H.264 stream into HLS segments.
- *    `expo-video`'s native `VideoView` plays HLS with hardware decoding.
+ * 1. **Video Layer** — WebRTC stream via `react-native-webrtc`
+ *    MediaMTX publishes the RTSP stream as WHEP; the app negotiates a
+ *    peer connection and renders the remote track with `RTCView`.
  *
  * 2. **Recognition Layer** — WebSocket detection metadata (~200 bytes/msg)
  *    The backend samples frames at ~1.5 FPS, runs face detection + FaceNet
- *    recognition, and pushes only detection coordinates + names via WebSocket.
- *    A transparent `DetectionOverlay` renders bounding boxes on top of the video.
+ *    recognition, and pushes fused track data via WebSocket.
+ *    A transparent `FusedDetectionOverlay` renders bounding boxes on top of
+ *    the video.
  *
  * WebSocket endpoint: ws://<host>/api/v1/stream/{scheduleId}
  *
  * Features:
- * - 30 FPS smooth hardware-decoded video
+ * - Low-latency WebRTC video
  * - Real-time face recognition overlay (bounding boxes + names)
  * - Connection status indicator
  * - Detected-students panel with confidence percentages
@@ -38,19 +39,17 @@ import {
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
-import { useVideoPlayer, VideoView } from 'expo-video';
 import { RTCView } from 'react-native-webrtc';
-import { Wifi, WifiOff, Video, Users, RefreshCw, Play, Square, ClipboardList } from 'lucide-react-native';
+import { Wifi, WifiOff, VideoOff, Users, RefreshCw, Play, Square, ClipboardList } from 'lucide-react-native';
 import { theme, strings } from '../../constants';
 import { formatPercentage } from '../../utils/formatters';
 import type { FacultyStackParamList, StudentAttendanceStatus } from '../../types';
 import { AttendanceStatus } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
 import { Text, Card, Button } from '../../components/ui';
-import { DetectionOverlay, FusedDetectionOverlay } from '../../components/video/DetectionOverlay';
+import { FusedDetectionOverlay } from '../../components/video/DetectionOverlay';
 import { useDetectionWebSocket } from '../../hooks/useDetectionWebSocket';
 import type { DetectedStudent } from '../../hooks/useDetectionWebSocket';
-import { useDetectionTracker } from '../../hooks/useDetectionTracker';
 import { useWebRTC } from '../../hooks/useWebRTC';
 import { useSession } from '../../hooks';
 import { attendanceService } from '../../services/attendanceService';
@@ -175,13 +174,12 @@ export const FacultyLiveFeedScreen: React.FC = () => {
 
   const sessionActive = isSessionActive(scheduleId);
 
-  // Detection WebSocket (also extracts HLS URL from connected message)
+  // Detection WebSocket
   const {
-    detections,
     fusedTracks,
     isConnected,
     isConnecting,
-    hlsUrl,
+    isWaitingForCamera,
     streamMode,
     studentMap,
     connectionError,
@@ -190,72 +188,12 @@ export const FacultyLiveFeedScreen: React.FC = () => {
     detectionHeight,
   } = useDetectionWebSocket(scheduleId);
 
-  // Assign stable track IDs for smooth interpolation
-  const trackedDetections = useDetectionTracker(detections);
-
   // WebRTC video (enabled only in webrtc mode)
   const {
     remoteStream,
     connectionState: rtcConnectionState,
     reconnect: rtcReconnect,
   } = useWebRTC(scheduleId, streamMode === 'webrtc');
-
-  // HLS video player — pass null when in WebRTC mode to avoid starting HLS connection.
-  // The setup callback runs immediately with the initial (null) hlsUrl, so p.play()
-  // would never execute there. Instead, a useEffect below calls play() once the URL
-  // arrives and streamMode is confirmed.
-  const player = useVideoPlayer(
-    streamMode === 'hls' || streamMode === 'legacy' ? hlsUrl : null,
-    (p) => {
-      p.loop = false;
-      // Minimise buffering so the live edge stays as close to real-time as
-      // possible.  ExoPlayer defaults are 20 s forward / 2.5 s start; iOS
-      // AVFoundation waits to minimise stalling by default.
-      p.bufferOptions = {
-        preferredForwardBufferDuration: 0.5,  // iOS: look-ahead 0.5 s (was 1 s)
-        minBufferForPlayback: 0.2,            // start after 200 ms buffered (was 500 ms)
-        waitsToMinimizeStalling: false,       // iOS: start immediately, tolerate micro-stalls
-      };
-    },
-  );
-
-  // Start playback as soon as the HLS URL is available.
-  useEffect(() => {
-    if ((streamMode === 'hls' || streamMode === 'legacy') && hlsUrl) {
-      player.play();
-    }
-  }, [hlsUrl, streamMode, player]);
-
-  // Auto-reload on player error.  A guard prevents multiple concurrent timers
-  // from being spawned if the player fires repeated error events.
-  // replaceAsync offloads asset loading off the main thread (avoids UI freeze).
-  const isRecovering = useRef(false);
-  useEffect(() => {
-    // Reset guard whenever the URL changes (new stream or WebSocket reconnect).
-    isRecovering.current = false;
-  }, [hlsUrl]);
-
-  useEffect(() => {
-    const subscription = player.addListener('statusChange', ({ status }) => {
-      if (streamMode !== 'hls' && streamMode !== 'legacy') return;
-      if (!hlsUrl) return;
-
-      if (status === 'readyToPlay') {
-        isRecovering.current = false;
-      } else if (status === 'error' && !isRecovering.current) {
-        isRecovering.current = true;
-        setTimeout(async () => {
-          try {
-            await player.replaceAsync(hlsUrl);
-            player.play();
-          } finally {
-            isRecovering.current = false;
-          }
-        }, 3_000);
-      }
-    });
-    return () => subscription.remove();
-  }, [player, hlsUrl, streamMode]);
 
   // Combined reconnect: resets both WS and WebRTC connections
   const handleReconnect = useCallback(() => {
@@ -359,21 +297,20 @@ export const FacultyLiveFeedScreen: React.FC = () => {
   );
 
   const detectedCount = useMemo(() => {
-    // Count unique recognized faces (by user_id) + unknown faces
     const recognizedIds = new Set<string>();
     let unknowns = 0;
-    for (const d of detections) {
-      if (d.user_id) {
-        recognizedIds.add(d.user_id);
+    for (const t of fusedTracks) {
+      if (t.user_id) {
+        recognizedIds.add(t.user_id);
       } else {
         unknowns++;
       }
     }
     return recognizedIds.size + unknowns;
-  }, [detections]);
+  }, [fusedTracks]);
   const unknownCount = useMemo(
-    () => detections.filter(d => !d.user_id).length,
-    [detections],
+    () => fusedTracks.filter(t => !t.user_id).length,
+    [fusedTracks],
   );
 
   // --------------------------------------------------
@@ -535,12 +472,10 @@ export const FacultyLiveFeedScreen: React.FC = () => {
   }
 
   // --------------------------------------------------
-  // Loading state (waiting for HLS URL)
+  // Loading state (waiting for WebRTC stream)
   // --------------------------------------------------
 
-  const isVideoReady =
-    (streamMode === 'webrtc' && remoteStream !== null) ||
-    ((streamMode === 'hls' || streamMode === 'legacy') && hlsUrl !== null);
+  const isVideoReady = streamMode === 'webrtc' && remoteStream !== null;
 
   if (isConnecting && !isVideoReady) {
     return (
@@ -576,14 +511,20 @@ export const FacultyLiveFeedScreen: React.FC = () => {
             styles.statusBar,
             {
               backgroundColor: isConnected
-                ? theme.colors.status.present.bg
+                ? isWaitingForCamera
+                  ? theme.colors.status.late.bg
+                  : theme.colors.status.present.bg
                 : theme.colors.status.absent.bg,
             },
           ]}
         >
           <View style={styles.statusLeft}>
             {isConnected ? (
-              <Wifi size={14} color={theme.colors.status.present.fg} />
+              isWaitingForCamera ? (
+                <VideoOff size={14} color={theme.colors.status.late.fg} />
+              ) : (
+                <Wifi size={14} color={theme.colors.status.present.fg} />
+              )
             ) : (
               <WifiOff size={14} color={theme.colors.status.absent.fg} />
             )}
@@ -592,12 +533,18 @@ export const FacultyLiveFeedScreen: React.FC = () => {
               weight="600"
               color={
                 isConnected
-                  ? theme.colors.status.present.fg
+                  ? isWaitingForCamera
+                    ? theme.colors.status.late.fg
+                    : theme.colors.status.present.fg
                   : theme.colors.status.absent.fg
               }
               style={styles.statusText}
             >
-              {isConnected ? 'Connected' : 'Reconnecting...'}
+              {isConnected
+                ? isWaitingForCamera
+                  ? 'Waiting for camera...'
+                  : 'Connected'
+                : 'Reconnecting...'}
             </Text>
           </View>
 
@@ -680,9 +627,9 @@ export const FacultyLiveFeedScreen: React.FC = () => {
           )}
         </View>
 
-        {/* Camera feed: WebRTC or HLS video + detection overlay */}
+        {/* Camera feed: WebRTC video + fused detection overlay */}
         <View style={styles.feedContainer} onLayout={handleVideoLayout}>
-          {streamMode === 'webrtc' && remoteStream ? (
+          {remoteStream ? (
             <>
               <RTCView
                 streamURL={remoteStream.toURL()}
@@ -691,55 +638,39 @@ export const FacultyLiveFeedScreen: React.FC = () => {
                 mirror={false}
                 zOrder={0}
               />
-              {fusedTracks.length > 0 ? (
-                <FusedDetectionOverlay
-                  tracks={fusedTracks}
-                  videoWidth={detectionWidth}
-                  videoHeight={detectionHeight}
-                  containerWidth={containerLayout.width}
-                  containerHeight={containerLayout.height}
-                />
-              ) : (
-                <DetectionOverlay
-                  detections={trackedDetections}
-                  videoWidth={detectionWidth}
-                  videoHeight={detectionHeight}
-                  containerWidth={containerLayout.width}
-                  containerHeight={containerLayout.height}
-                  resizeMode="contain"
-                />
-              )}
-            </>
-          ) : (streamMode === 'hls' || streamMode === 'legacy') && hlsUrl ? (
-            <>
-              <VideoView
-                player={player}
-                style={styles.video}
-                contentFit="contain"
-                nativeControls={false}
+              <FusedDetectionOverlay
+                tracks={fusedTracks}
+                videoWidth={detectionWidth}
+                videoHeight={detectionHeight}
+                containerWidth={containerLayout.width}
+                containerHeight={containerLayout.height}
               />
-              {fusedTracks.length > 0 ? (
-                <FusedDetectionOverlay
-                  tracks={fusedTracks}
-                  videoWidth={detectionWidth}
-                  videoHeight={detectionHeight}
-                  containerWidth={containerLayout.width}
-                  containerHeight={containerLayout.height}
-                />
-              ) : (
-                <DetectionOverlay
-                  detections={trackedDetections}
-                  videoWidth={detectionWidth}
-                  videoHeight={detectionHeight}
-                  containerWidth={containerLayout.width}
-                  containerHeight={containerLayout.height}
-                  resizeMode="contain"
-                />
-              )}
             </>
           ) : (
             <View style={styles.noFeedPlaceholder}>
-              {rtcConnectionState === 'failed' ? (
+              {isWaitingForCamera ? (
+                <>
+                  <VideoOff size={48} color={theme.colors.text.disabled} />
+                  <Text
+                    variant="body"
+                    weight="600"
+                    color={theme.colors.text.tertiary}
+                    align="center"
+                    style={styles.noFeedText}
+                  >
+                    Waiting for camera
+                  </Text>
+                  <Text
+                    variant="caption"
+                    color={theme.colors.text.disabled}
+                    align="center"
+                    style={styles.noFeedSubtext}
+                  >
+                    The edge device is not streaming yet.{'\n'}The feed will
+                    appear automatically once connected.
+                  </Text>
+                </>
+              ) : rtcConnectionState === 'failed' ? (
                 <>
                   <RefreshCw size={48} color={theme.colors.text.disabled} />
                   <Text
@@ -996,6 +927,10 @@ const styles = StyleSheet.create({
   },
   noFeedText: {
     marginTop: theme.spacing[3],
+  },
+  noFeedSubtext: {
+    marginTop: theme.spacing[2],
+    paddingHorizontal: theme.spacing[6],
   },
   noFeedRetryButton: {
     marginTop: theme.spacing[3],
