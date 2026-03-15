@@ -352,6 +352,26 @@ class TrackFusionService:
         with room.lock:
             return (room.frame_width, room.frame_height)
 
+    def get_unidentified_track_ids(self, room_id: str) -> list[int]:
+        """Return edge_track_ids of confirmed tracks that have no identity."""
+        room = self._rooms.get(room_id)
+        if room is None:
+            return []
+        with room.lock:
+            return [
+                t.edge_track_id
+                for t in room.tracks.values()
+                if t.is_confirmed and t.user_id is None
+            ]
+
+    def get_track_count(self, room_id: str) -> int:
+        """Return total number of active tracks."""
+        room = self._rooms.get(room_id)
+        if room is None:
+            return 0
+        with room.lock:
+            return len(room.tracks)
+
     def cleanup_room(self, room_id: str) -> None:
         """Remove all state for a room."""
         with self._rooms_lock:

@@ -63,6 +63,7 @@ class RecognitionState:
     frame_width: int = 0
     frame_height: int = 0
     reconnect_backoff: float = 0.0  # seconds to sleep before next reconnect (exponential)
+    frame_provider: object | None = None  # callable returning np.ndarray | None
 
 
 class RecognitionService:
@@ -122,16 +123,22 @@ class RecognitionService:
             state.viewers.add(viewer_id)
             self._active[room_id] = state
 
-        # Open capture in executor
-        loop = asyncio.get_event_loop()
-        opened = await loop.run_in_executor(None, self._open_capture, state)
-        if not opened:
-            with self._lock:
-                self._active.pop(room_id, None)
-            return False
-
         # Ensure lazy components are initialized
         self._ensure_ml()
+
+        # If local camera is providing frames, use it instead of RTSP
+        if settings.DETECTION_SOURCE == "local":
+            from app.services.local_camera_service import local_camera_service
+            state.frame_provider = lambda: local_camera_service.get_latest_frame()
+
+        # Open capture in executor (skip if frame provider is set)
+        if state.frame_provider is None:
+            loop = asyncio.get_event_loop()
+            opened = await loop.run_in_executor(None, self._open_capture, state)
+            if not opened:
+                with self._lock:
+                    self._active.pop(room_id, None)
+                return False
 
         # Start recognition loop
         asyncio.ensure_future(self._recognition_loop(state))
@@ -189,11 +196,19 @@ class RecognitionService:
         try:
             import os
 
+            # Suppress non-fatal h264 decode warnings (cabac errors, MB decode
+            # failures) that flood the console but don't affect pipeline health.
+            os.environ["OPENCV_FFMPEG_LOGLEVEL"] = "error"
+
             # Reduce RTSP connect timeout from default 30s to 5s.
             # The stream may not be available yet (RPi still starting),
             # and the recognition loop will retry with backoff anyway.
             prev = os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS", "")
-            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;5000000"
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+                "rtsp_transport;tcp|stimeout;5000000"
+                "|err_detect;ignore_err"
+                "|fflags;discardcorrupt"
+            )
             cap = cv2.VideoCapture(state.rtsp_url, cv2.CAP_FFMPEG)
             # Restore previous env var
             if prev:
@@ -239,6 +254,11 @@ class RecognitionService:
                         break
                     continue
 
+                # Skip corrupted / unusable frames (stream is alive but frame is bad)
+                if frame is None:
+                    await asyncio.sleep(target_interval * 0.5)
+                    continue
+
                 # Process frame (detect + recognize)
                 detections, fw, fh = await loop.run_in_executor(None, self._process_frame, frame)
 
@@ -273,16 +293,31 @@ class RecognitionService:
             logger.info(f"Recognition: loop ended for room {state.room_id}")
 
     def _read_frame(self, state: RecognitionState):
-        """Read the freshest frame (drain buffer first)."""
+        """Read the freshest frame (from provider or RTSP capture)."""
+        # Try frame provider first (local camera mode)
+        if state.frame_provider is not None:
+            frame = state.frame_provider()
+            if frame is not None:
+                return True, frame
+            return True, None  # Provider exists but no frame yet
+
+        # Original RTSP capture logic follows...
         if state.capture is None or not state.capture.isOpened():
             return False, None
         try:
-            # Drain buffer
+            # Drain buffer — grab without decode to reach the latest frame
             for _ in range(4):
                 if not state.capture.grab():
                     break
             ret, frame = state.capture.read()
-            return ret, frame if ret else None
+            if not ret or frame is None:
+                return False, None
+            # Quick corruption check: if frame is nearly all black or all
+            # one colour it's likely a decode artefact — skip it.
+            mean_val = frame.mean()
+            if mean_val < 3.0 or mean_val > 252.0:
+                return True, None  # signal success (stream alive) but no usable frame
+            return True, frame
         except Exception as exc:
             logger.error(f"Recognition: frame read error: {exc}")
             return False, None
