@@ -28,10 +28,10 @@ from app.config import logger
 H = np.eye(4, 8, dtype=np.float64)
 
 # Base process noise (scaled by dt)
-Q_BASE = np.diag([1.0, 1.0, 0.5, 0.5, 5.0, 5.0, 1.0, 1.0])
+Q_BASE = np.diag([0.5, 0.5, 0.25, 0.25, 3.0, 3.0, 0.5, 0.5])
 
 # Measurement noise
-R = np.diag([4.0, 4.0, 4.0, 4.0])
+R = np.diag([6.0, 6.0, 6.0, 6.0])
 
 
 def _make_F(dt: float) -> np.ndarray:
@@ -111,6 +111,9 @@ class RoomState:
     frame_height: int = 0
     update_seq: int = 0
     lock: threading.Lock = field(default_factory=threading.Lock)
+    # Recently removed tracks for identity inheritance (fused_id → FusedTrack)
+    _graveyard: dict[int, FusedTrack] = field(default_factory=dict)
+    _graveyard_ts: dict[int, float] = field(default_factory=dict)  # fused_id → removal time
 
 
 # ── Kalman helpers ───────────────────────────────────────────────────────────
@@ -156,7 +159,7 @@ class TrackFusionService:
     Kalman-predicted tracks, one state per room.
     """
 
-    def __init__(self, max_missed_frames: int = 10, confirm_threshold: int = 3):
+    def __init__(self, max_missed_frames: int = 8, confirm_threshold: int = 3):
         self.max_missed_frames = max_missed_frames
         self.confirm_threshold = confirm_threshold
         self._rooms: dict[str, RoomState] = {}
@@ -233,6 +236,24 @@ class TrackFusionService:
                     )
                     track._covariance = np.eye(8, dtype=np.float64) * 100.0
 
+                    # Inherit identity from recently-removed nearby track
+                    best_grave_dist = 150.0  # max px distance
+                    best_grave_id = None
+                    cx, cy = measurement[0], measurement[1]
+                    for gid, gtrak in room._graveyard.items():
+                        gcx, gcy = gtrak._state[0], gtrak._state[1]
+                        dist = ((cx - gcx) ** 2 + (cy - gcy) ** 2) ** 0.5
+                        if dist < best_grave_dist:
+                            best_grave_dist = dist
+                            best_grave_id = gid
+                    if best_grave_id is not None:
+                        donor = room._graveyard.pop(best_grave_id)
+                        room._graveyard_ts.pop(best_grave_id, None)
+                        track.user_id = donor.user_id
+                        track.name = donor.name
+                        track.student_id = donor.student_id
+                        track.similarity = donor.similarity
+
                     room.tracks[fused_id] = track
                     room.edge_to_fused[edge_tid] = fused_id
 
@@ -247,6 +268,19 @@ class TrackFusionService:
             for fused_id in stale_ids:
                 track = room.tracks.pop(fused_id)
                 room.edge_to_fused.pop(track.edge_track_id, None)
+                # Store in graveyard for identity inheritance (keep for 5s)
+                if track.user_id:
+                    room._graveyard[fused_id] = track
+                    room._graveyard_ts[fused_id] = now
+
+            # Purge graveyard entries older than 5 seconds
+            expired = [
+                fid for fid, ts in room._graveyard_ts.items()
+                if now - ts > 5.0
+            ]
+            for fid in expired:
+                room._graveyard.pop(fid, None)
+                room._graveyard_ts.pop(fid, None)
 
             room.update_seq += 1
 
