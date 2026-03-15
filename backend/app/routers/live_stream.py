@@ -309,6 +309,7 @@ async def _hls_mode(
     FUSED_INTERVAL = 1.0 / 30.0  # 33ms for 30 FPS
     last_fused_send = 0.0
     fused_seq = 0
+    last_update_seq = track_fusion_service.get_update_seq(room_id)
     last_heartbeat = _time.time()
     last_health_check = _time.time()
     health_check_interval = 10.0  # check FFmpeg liveness every 10 s
@@ -327,7 +328,13 @@ async def _hls_mode(
             elapsed = now - last_fused_send
 
             if elapsed >= FUSED_INTERVAL:
-                track_fusion_service.predict(room_id, dt=elapsed)
+                # Only predict when no edge update arrived since the last tick
+                # to avoid double prediction (update_from_edge already does predict+update)
+                current_seq = track_fusion_service.get_update_seq(room_id)
+                if current_seq == last_update_seq:
+                    track_fusion_service.predict(room_id, dt=min(elapsed, 0.1))
+                last_update_seq = current_seq
+
                 tracks = track_fusion_service.get_tracks(room_id)
                 fw, fh = track_fusion_service.get_room_dimensions(room_id)
                 fused_seq += 1
@@ -441,6 +448,7 @@ async def _webrtc_mode(
     FUSED_INTERVAL = 1.0 / 30.0  # 33ms for 30 FPS
     last_fused_send = 0.0
     fused_seq = 0
+    last_update_seq = track_fusion_service.get_update_seq(room_id)
     last_heartbeat = _time.time()
 
     try:
@@ -449,7 +457,13 @@ async def _webrtc_mode(
             elapsed = now - last_fused_send
 
             if elapsed >= FUSED_INTERVAL:
-                track_fusion_service.predict(room_id, dt=elapsed)
+                # Only predict when no edge update arrived since the last tick
+                # to avoid double prediction (update_from_edge already does predict+update)
+                current_seq = track_fusion_service.get_update_seq(room_id)
+                if current_seq == last_update_seq:
+                    track_fusion_service.predict(room_id, dt=min(elapsed, 0.1))
+                last_update_seq = current_seq
+
                 tracks = track_fusion_service.get_tracks(room_id)
                 fw, fh = track_fusion_service.get_room_dimensions(room_id)
                 fused_seq += 1

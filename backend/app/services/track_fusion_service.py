@@ -109,6 +109,7 @@ class RoomState:
     next_fused_id: int = 1
     frame_width: int = 0
     frame_height: int = 0
+    update_seq: int = 0
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -247,6 +248,8 @@ class TrackFusionService:
                 track = room.tracks.pop(fused_id)
                 room.edge_to_fused.pop(track.edge_track_id, None)
 
+            room.update_seq += 1
+
     def update_identity(
         self,
         room_id: str,
@@ -288,6 +291,14 @@ class TrackFusionService:
         with room.lock:
             for track in room.tracks.values():
                 _kalman_predict(track, dt)
+
+    def get_update_seq(self, room_id: str) -> int:
+        """Return the current update sequence number for a room."""
+        room = self._rooms.get(room_id)
+        if room is None:
+            return 0
+        with room.lock:
+            return room.update_seq
 
     def get_tracks(self, room_id: str) -> list[dict]:
         """Return all tracks for a room as dicts."""
