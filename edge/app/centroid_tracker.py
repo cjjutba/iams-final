@@ -7,7 +7,7 @@ bounding box centroids.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -124,14 +124,11 @@ class CentroidTracker:
         matched_tracks: set[int] = set()
         matched_dets: set[int] = set()
 
-        # Collect all (distance, track_idx, det_idx) pairs and sort.
-        pairs = []
-        for ti in range(len(track_ids)):
-            for di in range(len(detections)):
-                pairs.append((dist_matrix[ti, di], ti, di))
-        pairs.sort(key=lambda p: p[0])
-
-        for dist, ti, di in pairs:
+        # Use numpy argsort for efficient pair ordering.
+        flat_indices = np.argsort(dist_matrix, axis=None)
+        for idx in flat_indices:
+            ti, di = divmod(int(idx), dist_matrix.shape[1])
+            dist = dist_matrix[ti, di]
             if dist > self.max_distance:
                 break
             if ti in matched_tracks or di in matched_dets:
@@ -180,6 +177,11 @@ class CentroidTracker:
         confidence: float,
     ) -> None:
         """Create a new tracked object with the next available ID."""
+        start = self._next_id
+        while self._next_id in self._objects:
+            self._next_id = (self._next_id + 1) % (self._MAX_TRACK_ID + 1)
+            if self._next_id == start:
+                return  # ID space exhausted, skip registration
         obj = TrackedObject(
             track_id=self._next_id,
             centroid=centroid,
