@@ -47,7 +47,7 @@ import type { FacultyStackParamList, StudentAttendanceStatus } from '../../types
 import { AttendanceStatus } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
 import { Text, Card, Button } from '../../components/ui';
-import { DetectionOverlay } from '../../components/video/DetectionOverlay';
+import { DetectionOverlay, FusedDetectionOverlay } from '../../components/video/DetectionOverlay';
 import { useDetectionWebSocket } from '../../hooks/useDetectionWebSocket';
 import type { DetectedStudent } from '../../hooks/useDetectionWebSocket';
 import { useDetectionTracker } from '../../hooks/useDetectionTracker';
@@ -178,6 +178,7 @@ export const FacultyLiveFeedScreen: React.FC = () => {
   // Detection WebSocket (also extracts HLS URL from connected message)
   const {
     detections,
+    fusedTracks,
     isConnected,
     isConnecting,
     hlsUrl,
@@ -690,14 +691,24 @@ export const FacultyLiveFeedScreen: React.FC = () => {
                 mirror={false}
                 zOrder={0}
               />
-              <DetectionOverlay
-                detections={trackedDetections}
-                videoWidth={detectionWidth}
-                videoHeight={detectionHeight}
-                containerWidth={containerLayout.width}
-                containerHeight={containerLayout.height}
-                resizeMode="contain"
-              />
+              {fusedTracks.length > 0 ? (
+                <FusedDetectionOverlay
+                  tracks={fusedTracks}
+                  videoWidth={detectionWidth}
+                  videoHeight={detectionHeight}
+                  containerWidth={containerLayout.width}
+                  containerHeight={containerLayout.height}
+                />
+              ) : (
+                <DetectionOverlay
+                  detections={trackedDetections}
+                  videoWidth={detectionWidth}
+                  videoHeight={detectionHeight}
+                  containerWidth={containerLayout.width}
+                  containerHeight={containerLayout.height}
+                  resizeMode="contain"
+                />
+              )}
             </>
           ) : (streamMode === 'hls' || streamMode === 'legacy') && hlsUrl ? (
             <>
@@ -707,14 +718,24 @@ export const FacultyLiveFeedScreen: React.FC = () => {
                 contentFit="contain"
                 nativeControls={false}
               />
-              <DetectionOverlay
-                detections={trackedDetections}
-                videoWidth={detectionWidth}
-                videoHeight={detectionHeight}
-                containerWidth={containerLayout.width}
-                containerHeight={containerLayout.height}
-                resizeMode="contain"
-              />
+              {fusedTracks.length > 0 ? (
+                <FusedDetectionOverlay
+                  tracks={fusedTracks}
+                  videoWidth={detectionWidth}
+                  videoHeight={detectionHeight}
+                  containerWidth={containerLayout.width}
+                  containerHeight={containerLayout.height}
+                />
+              ) : (
+                <DetectionOverlay
+                  detections={trackedDetections}
+                  videoWidth={detectionWidth}
+                  videoHeight={detectionHeight}
+                  containerWidth={containerLayout.width}
+                  containerHeight={containerLayout.height}
+                  resizeMode="contain"
+                />
+              )}
             </>
           ) : (
             <View style={styles.noFeedPlaceholder}>

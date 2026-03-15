@@ -26,6 +26,7 @@ import { AppState, AppStateStatus } from 'react-native';
 import { config } from '../constants/config';
 import { storage } from '../utils/storage';
 import type { DetectionItem } from '../components/video/DetectionOverlay';
+import type { FusedTrack } from '../engines/TrackAnimationEngine';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -87,10 +88,31 @@ interface IdentityUpdateMessage {
   }>;
 }
 
-type WsMessage = ConnectedMessage | DetectionsMessage | EdgeDetectionsMessage | IdentityUpdateMessage | { type: string };
+interface FusedTracksMessage {
+  type: 'fused_tracks';
+  room_id: string;
+  timestamp: string;
+  seq: number;
+  frame_width: number;
+  frame_height: number;
+  tracks: Array<{
+    track_id: number;
+    bbox: [number, number, number, number];
+    confidence: number;
+    user_id: string | null;
+    name: string | null;
+    student_id: string | null;
+    similarity: number | null;
+    state: 'confirmed' | 'tentative';
+    missed_frames: number;
+  }>;
+}
+
+type WsMessage = ConnectedMessage | DetectionsMessage | EdgeDetectionsMessage | IdentityUpdateMessage | FusedTracksMessage | { type: string };
 
 export interface UseDetectionWebSocketReturn {
   detections: DetectionItem[];
+  fusedTracks: FusedTrack[];
   isConnected: boolean;
   isConnecting: boolean;
   hlsUrl: string | null;
@@ -140,6 +162,7 @@ const getStreamWsUrl = (scheduleId: string): string => {
 
 export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocketReturn {
   const [detections, setDetections] = useState<DetectionItem[]>([]);
+  const [fusedTracks, setFusedTracks] = useState<FusedTrack[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(true);
   const [hlsUrl, setHlsUrl] = useState<string | null>(null);
@@ -440,6 +463,53 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
               return changed ? next : prev;
             });
           }
+        } else if (message.type === 'fused_tracks') {
+          const ftMsg = message as FusedTracksMessage;
+
+          // Update frame dimensions
+          if (ftMsg.frame_width && ftMsg.frame_height) {
+            setDetectionWidth(ftMsg.frame_width);
+            setDetectionHeight(ftMsg.frame_height);
+          }
+
+          // Convert to FusedTrack format
+          const tracks: FusedTrack[] = (ftMsg.tracks ?? []).map((t) => ({
+            track_id: t.track_id,
+            bbox: t.bbox,
+            confidence: t.confidence,
+            user_id: t.user_id,
+            name: t.name,
+            student_id: t.student_id,
+            similarity: t.similarity,
+            state: t.state,
+            missed_frames: t.missed_frames,
+          }));
+
+          setFusedTracks(tracks);
+
+          // Also update studentMap for detected students panel
+          setStudentMap((prev) => {
+            const next = new Map(prev);
+            // Mark all as not currently detected
+            next.forEach((student, key) => {
+              if (student.currentlyDetected) {
+                next.set(key, { ...student, currentlyDetected: false });
+              }
+            });
+            // Mark detected students
+            for (const t of tracks) {
+              if (!t.user_id) continue;
+              next.set(t.user_id, {
+                user_id: t.user_id,
+                name: t.name || 'Unknown',
+                student_id: t.student_id || '',
+                confidence: t.confidence,
+                currentlyDetected: true,
+                lastSeen: ftMsg.timestamp,
+              });
+            }
+            return next;
+          });
         } else if (message.type === 'identity_update') {
           const idMsg = message as IdentityUpdateMessage;
           const cache = identityCacheRef.current;
@@ -607,6 +677,7 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
 
   return {
     detections,
+    fusedTracks,
     isConnected,
     isConnecting,
     hlsUrl,
