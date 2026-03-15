@@ -178,8 +178,17 @@ class EdgeWebSocketClient:
 
         try:
             self._queue.put_nowait(message)
-        except Exception:
-            pass
+        except queue.Full:
+            # Drop the oldest message and enqueue the new one
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._queue.put_nowait(message)
+            except queue.Full:
+                pass
+            self._stats["messages_dropped"] += 1
 
     def get_status(self) -> dict:
         """Return current status and stats for diagnostics."""

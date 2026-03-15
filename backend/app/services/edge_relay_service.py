@@ -130,8 +130,8 @@ class EdgeRelayManager:
             for det in raw_detections:
                 out = dict(det)  # shallow copy
                 track_id = det.get("track_id")
-                if track_id and track_id in room.identity_cache:
-                    identity = room.identity_cache[track_id]
+                if track_id and str(track_id) in room.identity_cache:
+                    identity = room.identity_cache[str(track_id)]
                     out["user_id"] = identity.get("user_id")
                     out["name"] = identity.get("name")
                     out["student_id"] = identity.get("student_id")
@@ -269,7 +269,7 @@ class EdgeRelayManager:
                         m["track_id"] = track_id
 
                 if track_id:
-                    room.identity_cache[track_id] = {
+                    room.identity_cache[str(track_id)] = {
                         "user_id": m.get("user_id"),
                         "name": m.get("name"),
                         "student_id": m.get("student_id"),

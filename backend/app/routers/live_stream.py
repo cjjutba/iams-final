@@ -375,6 +375,7 @@ async def _hls_mode(
         await edge_relay_manager.unregister_mobile(room_id, websocket)
         await hls_service.stop_stream(room_id, viewer_id)
         await recognition_service.stop(room_id, viewer_id)
+        track_fusion_service.cleanup_room(room_id)
 
         if websocket.client_state == WebSocketState.CONNECTED:
             with contextlib.suppress(Exception):
@@ -503,6 +504,7 @@ async def _webrtc_mode(
 
         await edge_relay_manager.unregister_mobile(room_id, websocket)
         await recognition_service.stop(room_id, viewer_id)
+        track_fusion_service.cleanup_room(room_id)
 
         if websocket.client_state == WebSocketState.CONNECTED:
             with contextlib.suppress(Exception):
