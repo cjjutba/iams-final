@@ -11,7 +11,7 @@
  * so its width isn't constrained by the tiny face-crop rectangle.
  */
 
-import React, { useRef, useEffect, useMemo, useState } from 'react';
+import React, { useRef, useEffect, useMemo } from 'react';
 import { View, Text, Animated, Easing, StyleSheet, Platform } from 'react-native';
 import {
   TrackAnimationEngine,
@@ -410,7 +410,11 @@ export const FusedDetectionOverlay: React.FC<FusedDetectionOverlayProps> =
       resizeMode = 'contain',
     }) => {
       const engineRef = useRef(new TrackAnimationEngine());
-      const [animatedTracks, setAnimatedTracks] = useState<AnimatedTrack[]>([]);
+
+      // Update engine with new tracks — this triggers spring animations
+      // on Animated.Value instances, no state update needed. The component
+      // re-renders only when the `tracks` prop changes (once per message).
+      const animatedTracks = engineRef.current.update(tracks);
 
       const scaleInfo = useMemo(
         () =>
@@ -423,11 +427,6 @@ export const FusedDetectionOverlay: React.FC<FusedDetectionOverlayProps> =
           ),
         [videoWidth, videoHeight, containerWidth, containerHeight, resizeMode],
       );
-
-      useEffect(() => {
-        const updated = engineRef.current.update(tracks);
-        setAnimatedTracks(updated);
-      }, [tracks]);
 
       // Cleanup on unmount
       useEffect(() => {

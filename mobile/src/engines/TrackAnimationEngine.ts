@@ -31,11 +31,16 @@ export interface AnimatedTrack {
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
+// Note: useNativeDriver: false is required because React Native's native
+// driver cannot animate layout properties (left/top/width/height).
+// For 50+ boxes, consider migrating to react-native-reanimated which
+// supports layout animations on the UI thread. Current approach is
+// adequate for most Android devices at 30 FPS with batched animations.
 const SPRING_CONFIG = {
   stiffness: 300,
   damping: 25,
   mass: 0.8,
-  useNativeDriver: false, // layout props can't use native driver
+  useNativeDriver: false,
 };
 
 const FADE_IN_DURATION = 150; // ms
@@ -58,6 +63,7 @@ export class TrackAnimationEngine {
   update(incomingTracks: FusedTrack[]): AnimatedTrack[] {
     const now = Date.now();
     const incomingIds = new Set<number>();
+    const animations: Animated.CompositeAnimation[] = [];
 
     // 1. Process each incoming track
     for (const ft of incomingTracks) {
@@ -67,15 +73,15 @@ export class TrackAnimationEngine {
       const existing = this.tracks.get(ft.track_id);
 
       if (existing) {
-        // Spring-animate position & size to new values
-        this._animateTo(existing.x, ft.bbox[0]);
-        this._animateTo(existing.y, ft.bbox[1]);
-        this._animateTo(existing.w, ft.bbox[2]);
-        this._animateTo(existing.h, ft.bbox[3]);
+        // Collect spring animations for batched start
+        animations.push(this._springTo(existing.x, ft.bbox[0]));
+        animations.push(this._springTo(existing.y, ft.bbox[1]));
+        animations.push(this._springTo(existing.w, ft.bbox[2]));
+        animations.push(this._springTo(existing.h, ft.bbox[3]));
 
         // Update opacity: 1.0 normal, 0.5 if missed_frames > 0
         const targetOpacity = ft.missed_frames > 0 ? 0.5 : 1.0;
-        this._animateTo(existing.opacity, targetOpacity);
+        animations.push(this._springTo(existing.opacity, targetOpacity));
 
         // Update metadata
         existing.userId = ft.user_id;
@@ -87,11 +93,13 @@ export class TrackAnimationEngine {
       } else {
         // New track: create and fade in
         const track = this._createTrack(ft, now);
-        Animated.timing(track.opacity, {
-          toValue: ft.missed_frames > 0 ? 0.5 : 1.0,
-          duration: FADE_IN_DURATION,
-          useNativeDriver: false,
-        }).start();
+        animations.push(
+          Animated.timing(track.opacity, {
+            toValue: ft.missed_frames > 0 ? 0.5 : 1.0,
+            duration: FADE_IN_DURATION,
+            useNativeDriver: false,
+          }),
+        );
         this.tracks.set(ft.track_id, track);
       }
     }
@@ -106,16 +114,30 @@ export class TrackAnimationEngine {
 
       if (missed >= STALE_THRESHOLD) {
         // Fade out, then delete and return to pool
-        Animated.timing(track.opacity, {
-          toValue: 0,
-          duration: FADE_OUT_DURATION,
-          useNativeDriver: false,
-        }).start(() => {
-          this.tracks.delete(trackId);
-          this.missedCount.delete(trackId);
-          this._returnToPool(track);
-        });
+        animations.push(
+          Animated.timing(track.opacity, {
+            toValue: 0,
+            duration: FADE_OUT_DURATION,
+            useNativeDriver: false,
+          }),
+        );
+        // Schedule cleanup after fade completes (handled by parallel callback)
+        const capturedTrackId = trackId;
+        const capturedTrack = track;
+        // We'll clean up after the batch completes for stale tracks
+        setTimeout(() => {
+          if (this.tracks.get(capturedTrackId) === capturedTrack) {
+            this.tracks.delete(capturedTrackId);
+            this.missedCount.delete(capturedTrackId);
+            this._returnToPool(capturedTrack);
+          }
+        }, FADE_OUT_DURATION + 50);
       }
+    }
+
+    // 3. Start all animations in a single batched call
+    if (animations.length > 0) {
+      Animated.parallel(animations, { stopTogether: false }).start();
     }
 
     return Array.from(this.tracks.values());
@@ -143,15 +165,18 @@ export class TrackAnimationEngine {
 
   // ── Private helpers ────────────────────────────────────────────────────────
 
-  /** Spring-animate an Animated.Value to a target number. */
-  private _animateTo(animValue: Animated.Value, target: number): void {
-    Animated.spring(animValue, {
+  /** Create a spring animation for an Animated.Value (does not start it). */
+  private _springTo(
+    animValue: Animated.Value,
+    target: number,
+  ): Animated.CompositeAnimation {
+    return Animated.spring(animValue, {
       toValue: target,
       stiffness: SPRING_CONFIG.stiffness,
       damping: SPRING_CONFIG.damping,
       mass: SPRING_CONFIG.mass,
       useNativeDriver: SPRING_CONFIG.useNativeDriver,
-    }).start();
+    });
   }
 
   /**
