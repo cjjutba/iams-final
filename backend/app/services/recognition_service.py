@@ -187,7 +187,20 @@ class RecognitionService:
     def _open_capture(self, state: RecognitionState) -> bool:
         """Open a separate RTSP capture for recognition sampling."""
         try:
-            cap = cv2.VideoCapture(state.rtsp_url)
+            import os
+
+            # Reduce RTSP connect timeout from default 30s to 5s.
+            # The stream may not be available yet (RPi still starting),
+            # and the recognition loop will retry with backoff anyway.
+            prev = os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS", "")
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;5000000"
+            cap = cv2.VideoCapture(state.rtsp_url, cv2.CAP_FFMPEG)
+            # Restore previous env var
+            if prev:
+                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = prev
+            else:
+                os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
+
             if not cap.isOpened():
                 logger.error(f"Recognition: failed to open RTSP: {state.rtsp_url}")
                 return False

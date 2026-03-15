@@ -2,8 +2,7 @@
  * FacultyScheduleCard Component
  *
  * Enhanced schedule card for faculty showing per-class attendance statistics.
- * Displays subject info, time range, attendance summary badges,
- * attendance rate percentage, and session status indicator.
+ * Clean flat card with 1px border, no accent bar.
  */
 
 import React from 'react';
@@ -11,10 +10,6 @@ import { View, StyleSheet, TouchableOpacity } from 'react-native';
 import { theme } from '../../constants';
 import { formatTime } from '../../utils';
 import { Text } from '../ui';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 export interface FacultyScheduleCardProps {
   scheduleId: string;
@@ -30,10 +25,6 @@ export interface FacultyScheduleCardProps {
   sessionActive?: boolean;
   onPress?: () => void;
 }
-
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
 
 export const FacultyScheduleCard: React.FC<FacultyScheduleCardProps> = ({
   subjectCode,
@@ -57,96 +48,83 @@ export const FacultyScheduleCard: React.FC<FacultyScheduleCardProps> = ({
 
   const content = (
     <View style={styles.card}>
-      {/* Left accent bar */}
-      <View
-        style={[
-          styles.accentBar,
-          sessionActive ? styles.accentBarActive : styles.accentBarDefault,
-        ]}
-      />
-
-      <View style={styles.mainContent}>
-        {/* Top row: subject info + session status */}
-        <View style={styles.topRow}>
-          <View style={styles.subjectInfo}>
-            <Text variant="caption" color={theme.colors.text.tertiary} style={styles.subjectCode}>
-              {subjectCode}
-            </Text>
-            <Text variant="body" weight="600" numberOfLines={1}>
-              {subjectName}
-            </Text>
-          </View>
-
-          {/* Session status dot */}
-          <View style={styles.statusContainer}>
-            <View
-              style={[
-                styles.statusDot,
-                sessionActive ? styles.statusDotActive : styles.statusDotInactive,
-              ]}
-            />
-            <Text
-              variant="caption"
-              color={sessionActive ? theme.colors.success : theme.colors.text.tertiary}
-            >
-              {sessionActive ? 'Active' : 'Inactive'}
-            </Text>
-          </View>
+      {/* Top row: subject info + session status */}
+      <View style={styles.topRow}>
+        <View style={styles.subjectInfo}>
+          <Text variant="caption" color={theme.colors.text.tertiary} style={styles.subjectCode}>
+            {subjectCode}
+          </Text>
+          <Text variant="body" weight="600" numberOfLines={1}>
+            {subjectName}
+          </Text>
         </View>
 
-        {/* Time and room */}
-        <Text variant="bodySmall" color={theme.colors.text.secondary} style={styles.timeRow}>
-          {formatTime(startTime)} - {formatTime(endTime)}
-          {roomName ? ` \u2022 ${roomName}` : ''}
-        </Text>
+        <View style={styles.statusContainer}>
+          <View
+            style={[
+              styles.statusDot,
+              sessionActive ? styles.statusDotActive : styles.statusDotInactive,
+            ]}
+          />
+          <Text
+            variant="caption"
+            color={sessionActive ? theme.colors.success : theme.colors.text.tertiary}
+          >
+            {sessionActive ? 'Active' : 'Inactive'}
+          </Text>
+        </View>
+      </View>
 
-        {/* Attendance stats row */}
-        {hasAttendanceData && (
-          <View style={styles.statsRow}>
-            {/* Attendance badges */}
-            <View style={styles.badgesRow}>
-              {presentCount !== undefined && (
-                <View style={[styles.badge, styles.badgePresent]}>
-                  <Text variant="caption" weight="600" color={theme.colors.status.present.fg}>
-                    {presentCount} P
-                  </Text>
-                </View>
-              )}
-              {lateCount !== undefined && lateCount > 0 && (
-                <View style={[styles.badge, styles.badgeLate]}>
-                  <Text variant="caption" weight="600" color={theme.colors.status.late.fg}>
-                    {lateCount} L
-                  </Text>
-                </View>
-              )}
-              {absentCount !== undefined && (
-                <View style={[styles.badge, styles.badgeAbsent]}>
-                  <Text variant="caption" weight="600" color={theme.colors.status.absent.fg}>
-                    {absentCount} A
-                  </Text>
-                </View>
-              )}
-            </View>
+      {/* Time and room */}
+      <Text variant="bodySmall" color={theme.colors.text.secondary} style={styles.timeRow}>
+        {formatTime(startTime)} - {formatTime(endTime)}
+        {roomName ? ` \u2022 ${roomName}` : ''}
+      </Text>
 
-            {/* Attendance rate */}
-            {attendanceRate !== undefined && (
-              <Text
-                variant="bodySmall"
-                weight="700"
-                color={
-                  rateValue >= 80
-                    ? theme.colors.success
-                    : rateValue >= 60
-                    ? theme.colors.warning
-                    : theme.colors.error
-                }
-              >
-                {rateValue.toFixed(0)}%
-              </Text>
+      {/* Attendance stats row */}
+      {hasAttendanceData && (
+        <View style={styles.statsRow}>
+          <View style={styles.badgesRow}>
+            {presentCount !== undefined && (
+              <View style={[styles.badge, styles.badgePresent]}>
+                <Text variant="caption" weight="600" color={theme.colors.status.present.fg}>
+                  {presentCount} P
+                </Text>
+              </View>
+            )}
+            {lateCount !== undefined && lateCount > 0 && (
+              <View style={[styles.badge, styles.badgeLate]}>
+                <Text variant="caption" weight="600" color={theme.colors.status.late.fg}>
+                  {lateCount} L
+                </Text>
+              </View>
+            )}
+            {absentCount !== undefined && (
+              <View style={[styles.badge, styles.badgeAbsent]}>
+                <Text variant="caption" weight="600" color={theme.colors.status.absent.fg}>
+                  {absentCount} A
+                </Text>
+              </View>
             )}
           </View>
-        )}
-      </View>
+
+          {attendanceRate !== undefined && (
+            <Text
+              variant="bodySmall"
+              weight="700"
+              color={
+                rateValue >= 80
+                  ? theme.colors.success
+                  : rateValue >= 60
+                  ? theme.colors.warning
+                  : theme.colors.error
+              }
+            >
+              {rateValue.toFixed(0)}%
+            </Text>
+          )}
+        </View>
+      )}
     </View>
   );
 
@@ -164,32 +142,14 @@ export const FacultyScheduleCard: React.FC<FacultyScheduleCardProps> = ({
   return content;
 };
 
-// ---------------------------------------------------------------------------
-// Styles
-// ---------------------------------------------------------------------------
-
 const styles = StyleSheet.create({
   card: {
-    flexDirection: 'row',
     backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.lg,
-    marginBottom: theme.spacing[3],
-    ...theme.shadows.sm,
-  },
-  accentBar: {
-    width: 4,
-    borderTopLeftRadius: theme.borderRadius.lg,
-    borderBottomLeftRadius: theme.borderRadius.lg,
-  },
-  accentBarDefault: {
-    backgroundColor: theme.colors.primary,
-  },
-  accentBarActive: {
-    backgroundColor: theme.colors.success,
-  },
-  mainContent: {
-    flex: 1,
-    padding: theme.spacing[4],
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: theme.spacing[3],
+    marginBottom: theme.spacing[2],
   },
   topRow: {
     flexDirection: 'row',
@@ -202,7 +162,7 @@ const styles = StyleSheet.create({
     marginRight: theme.spacing[3],
   },
   subjectCode: {
-    marginBottom: theme.spacing[1],
+    marginBottom: 2,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
@@ -211,9 +171,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
     marginRight: theme.spacing[1],
   },
   statusDotActive: {
@@ -223,13 +183,13 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.text.tertiary,
   },
   timeRow: {
-    marginBottom: theme.spacing[3],
+    marginBottom: theme.spacing[2],
   },
   statsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: theme.spacing[3],
+    paddingTop: theme.spacing[2],
     borderTopWidth: 1,
     borderTopColor: theme.colors.border,
   },
@@ -239,7 +199,7 @@ const styles = StyleSheet.create({
   },
   badge: {
     paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[1],
+    paddingVertical: 2,
     borderRadius: theme.borderRadius.sm,
   },
   badgePresent: {

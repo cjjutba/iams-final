@@ -26,7 +26,7 @@ import { theme, strings } from '../../constants';
 import { formatDate, formatTime, formatPercentage } from '../../utils';
 import type { StudentStackParamList, AttendanceRecord, AttendanceStatus } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
-import { Text, Card, Badge, Button, Loader } from '../../components/ui';
+import { Text, Card, Badge, Button } from '../../components/ui';
 
 type StudentHistoryNavigationProp = StackNavigationProp<StudentStackParamList, 'StudentTabs'>;
 

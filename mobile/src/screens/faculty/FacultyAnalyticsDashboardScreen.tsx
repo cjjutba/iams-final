@@ -17,7 +17,6 @@ import {
   ScrollView,
   TouchableOpacity,
   RefreshControl,
-  ActivityIndicator,
 } from 'react-native';
 import { AlertTriangle, Users, TrendingDown, BarChart3 } from 'lucide-react-native';
 import { useSchedule } from '../../hooks';
@@ -25,7 +24,7 @@ import { analyticsService } from '../../services/analyticsService';
 import { theme } from '../../constants';
 import type { ClassOverview, AtRiskStudent, AnomalyItem } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
-import { Text, Card, Loader } from '../../components/ui';
+import { Text, Card, Skeleton, AnalyticsSummarySkeleton, ClassOverviewCardSkeleton } from '../../components/ui';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -142,15 +141,13 @@ export const FacultyAnalyticsDashboardScreen: React.FC = () => {
     return (
       <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
         <Header title="Analytics" />
-        <View style={styles.centerContainer}>
-          <Loader size="large" />
-          <Text
-            variant="body"
-            color={theme.colors.text.secondary}
-            style={styles.loadingText}
-          >
-            Loading analytics...
-          </Text>
+        <View style={styles.scrollContent}>
+          <AnalyticsSummarySkeleton />
+          <View style={styles.gap16} />
+          <Skeleton width={140} height={20} />
+          <View style={styles.gap12} />
+          <ClassOverviewCardSkeleton />
+          <ClassOverviewCardSkeleton />
         </View>
       </ScreenLayout>
     );
@@ -733,5 +730,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: theme.spacing[3],
     marginBottom: theme.spacing[2],
+  },
+  gap12: {
+    height: theme.spacing[3],
+  },
+  gap16: {
+    height: theme.spacing[4],
   },
 });

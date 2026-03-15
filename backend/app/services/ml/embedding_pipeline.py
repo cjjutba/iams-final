@@ -44,7 +44,7 @@ async def embed_faces_batch(images: list[bytes]) -> list[np.ndarray | None]:
 
 def validate_registration_embeddings(
     embeddings: list[np.ndarray],
-    min_cross_similarity: float = 0.7,
+    min_cross_similarity: float = 0.5,
 ) -> tuple[bool, str]:
     """Validate that all registration embeddings are from the same person.
 

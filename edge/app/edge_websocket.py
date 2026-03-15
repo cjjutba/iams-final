@@ -196,7 +196,7 @@ class EdgeWebSocketClient:
         logger.info("Edge WebSocket: connecting to %s", ws_url)
 
         ws = websocket.WebSocket()
-        ws.settimeout(5)
+        ws.settimeout(30)  # 30s timeout — long enough for idle periods
         ws.connect(ws_url)
 
         with self._lock:
@@ -209,30 +209,60 @@ class EdgeWebSocketClient:
         """
         Drain the queue and send messages over the WebSocket.
 
-        On queue.Empty (no messages for 0.1s), sends a ping to keep
-        the connection alive. Exits on stop signal or connection error.
+        Sends application-level JSON pings every 10s when idle.
+        Also drains incoming pong/response frames to prevent buffer
+        accumulation from causing connection issues.
         """
+        import select
+        import time as _time
+
+        last_send = _time.monotonic()
+        ping_interval = 10.0  # seconds between keepalive pings
+
         while not self._stop_event.is_set():
             try:
-                message = self._queue.get(timeout=0.1)
+                message = self._queue.get(timeout=0.5)
                 self._ws.send(json.dumps(message))
                 self._stats["messages_sent"] += 1
+                last_send = _time.monotonic()
             except queue.Empty:
-                # No messages pending — send a ping to keep alive
-                try:
-                    self._ws.ping()
-                except (
-                    websocket.WebSocketConnectionClosedException,
-                    OSError,
-                ):
-                    logger.warning("Edge WebSocket: connection lost (ping)")
-                    return
+                pass  # No messages to send — handled below
             except websocket.WebSocketConnectionClosedException:
                 logger.warning("Edge WebSocket: connection closed (send)")
                 return
             except OSError as e:
                 logger.warning("Edge WebSocket: socket error: %s", e)
                 return
+
+            # Drain any incoming frames (pong responses) to prevent
+            # receive buffer from accumulating and killing the connection.
+            try:
+                sock = self._ws.sock
+                if sock is not None:
+                    while True:
+                        readable, _, _ = select.select([sock], [], [], 0)
+                        if not readable:
+                            break
+                        # Read and discard the frame
+                        self._ws.recv()
+            except websocket.WebSocketConnectionClosedException:
+                logger.warning("Edge WebSocket: connection closed (drain)")
+                return
+            except (OSError, websocket.WebSocketException):
+                pass  # Non-fatal — continue
+
+            # Send keepalive ping if idle long enough
+            now = _time.monotonic()
+            if now - last_send >= ping_interval:
+                try:
+                    self._ws.send(json.dumps({"type": "ping"}))
+                    last_send = now
+                except (
+                    websocket.WebSocketConnectionClosedException,
+                    OSError,
+                ):
+                    logger.warning("Edge WebSocket: connection lost (ping)")
+                    return
 
     def _close_ws(self) -> None:
         """Close the WebSocket connection if open."""

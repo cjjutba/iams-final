@@ -24,7 +24,7 @@ import { theme, strings } from '../../constants';
 import { getDayName, getShortDayName, formatTime } from '../../utils';
 import type { StudentStackParamList, Schedule } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
-import { Text, Card, Button, Loader } from '../../components/ui';
+import { Text, Card, Button } from '../../components/ui';
 
 type StudentScheduleNavigationProp = StackNavigationProp<StudentStackParamList, 'StudentTabs'>;
 
@@ -103,46 +103,24 @@ export const StudentScheduleScreen: React.FC = () => {
 
   const renderScheduleCard = ({ item }: { item: Schedule }) => (
     <Card onPress={() => handleCardPress(item)} style={styles.scheduleCard}>
-      <View style={styles.cardRow}>
-        {/* Accent bar */}
-        <View style={styles.accentBar} />
-
-        {/* Content */}
-        <View style={styles.cardContent}>
-          <Text variant="h3" weight="700" style={styles.cardTime}>
-            {formatTime(item.start_time)}
-          </Text>
-
-          <Text variant="body" weight="600" numberOfLines={1} style={styles.cardSubject}>
-            {item.subject_name}
-          </Text>
-          <Text variant="caption" color={theme.colors.text.tertiary} style={styles.cardCode}>
-            {item.subject_code}
-          </Text>
-
-          <View style={styles.cardMeta}>
-            <Text variant="bodySmall" color={theme.colors.text.secondary}>
-              {formatTime(item.start_time)} - {formatTime(item.end_time)}
-            </Text>
-            {item.room_name && (
-              <>
-                <Text variant="bodySmall" color={theme.colors.text.tertiary}>
-                  {' \u2022 '}
-                </Text>
-                <Text variant="bodySmall" color={theme.colors.text.secondary}>
-                  {item.room_name}
-                </Text>
-              </>
-            )}
-          </View>
-
-          {item.faculty_name && (
-            <Text variant="bodySmall" color={theme.colors.text.tertiary} style={styles.cardFaculty}>
-              {item.faculty_name}
-            </Text>
-          )}
-        </View>
-      </View>
+      <Text variant="body" weight="700">
+        {formatTime(item.start_time)}
+      </Text>
+      <Text variant="body" weight="600" numberOfLines={1} style={styles.cardSubject}>
+        {item.subject_name}
+      </Text>
+      <Text variant="caption" color={theme.colors.text.tertiary}>
+        {item.subject_code}
+      </Text>
+      <Text variant="bodySmall" color={theme.colors.text.secondary} style={styles.cardMeta}>
+        {formatTime(item.start_time)} - {formatTime(item.end_time)}
+        {item.room_name ? ` \u2022 ${item.room_name}` : ''}
+      </Text>
+      {item.faculty_name && (
+        <Text variant="caption" color={theme.colors.text.tertiary}>
+          {item.faculty_name}
+        </Text>
+      )}
     </Card>
   );
 
@@ -267,40 +245,14 @@ const styles = StyleSheet.create({
     padding: theme.spacing[4],
   },
   scheduleCard: {
-    marginBottom: theme.spacing[3],
-    paddingLeft: 0,
-  },
-  cardRow: {
-    flexDirection: 'row',
-  },
-  accentBar: {
-    width: 4,
-    backgroundColor: theme.colors.primary,
-    borderTopLeftRadius: theme.borderRadius.md,
-    borderBottomLeftRadius: theme.borderRadius.md,
-    marginRight: theme.spacing[4],
-  },
-  cardContent: {
-    flex: 1,
-    paddingVertical: theme.spacing[2],
-    paddingRight: theme.spacing[4],
-  },
-  cardTime: {
     marginBottom: theme.spacing[2],
   },
   cardSubject: {
-    marginBottom: theme.spacing[1],
-  },
-  cardCode: {
-    marginBottom: theme.spacing[2],
+    marginTop: theme.spacing[1],
+    marginBottom: 2,
   },
   cardMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-  },
-  cardFaculty: {
-    marginTop: theme.spacing[1],
+    marginTop: theme.spacing[2],
   },
   emptyContainer: {
     paddingVertical: theme.spacing[12],

@@ -138,6 +138,15 @@ class StreamRelay:
             "-hide_banner",
             "-loglevel",
             "warning",
+            # Low-latency input flags
+            "-fflags",
+            "nobuffer",
+            "-flags",
+            "low_delay",
+            "-probesize",
+            "32768",
+            "-analyzeduration",
+            "0",
             "-rtsp_transport",
             config.RTSP_TRANSPORT,
             "-i",
@@ -145,6 +154,9 @@ class StreamRelay:
             "-an",  # Drop audio (avoids codec issues with mediamtx)
             "-c:v",
             "copy",
+            # Low-latency output flags
+            "-flush_packets",
+            "1",
             "-rtsp_transport",
             "tcp",  # Force TCP for output (VPS only exposes RTSP TCP port)
             "-f",

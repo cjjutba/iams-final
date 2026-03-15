@@ -69,7 +69,13 @@ hls: no
 srt: no
 rtmp: no
 
+# Low-latency: smaller write queue means faster frame delivery to viewers.
+# Default is 512 which adds buffering. Lower = less latency but more drops.
+writeQueueSize: 8
+
 # Accept any path — RPi pushes RTSP dynamically.
 # "all_others" is mediamtx's catch-all for unconfigured paths.
 paths:
   all_others:
+    # Allow reconnection without waiting for old session to time out
+    overridePublisher: yes

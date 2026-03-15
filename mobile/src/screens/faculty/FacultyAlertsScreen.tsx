@@ -14,7 +14,6 @@ import {
   ScrollView,
   TouchableOpacity,
   RefreshControl,
-  ActivityIndicator,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
@@ -25,7 +24,7 @@ import { theme, strings } from '../../constants';
 import { getErrorMessage } from '../../utils';
 import type { FacultyStackParamList, EarlyLeaveEvent } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
-import { Text, Button } from '../../components/ui';
+import { Text, Button, AlertCardSkeleton } from '../../components/ui';
 import { AlertCard } from '../../components/cards';
 
 type FacultyAlertsNavigationProp = StackNavigationProp<FacultyStackParamList, 'FacultyTabs'>;
@@ -163,7 +162,6 @@ export const FacultyAlertsScreen: React.FC = () => {
       <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
         <Header title={strings.faculty.alerts} />
 
-        {/* Filters */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -173,16 +171,10 @@ export const FacultyAlertsScreen: React.FC = () => {
           {FILTERS.map(renderFilterButton)}
         </ScrollView>
 
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-          <Text
-            variant="bodySmall"
-            color={theme.colors.text.secondary}
-            align="center"
-            style={styles.loadingText}
-          >
-            {strings.common.loading}
-          </Text>
+        <View style={styles.skeletonContainer}>
+          <AlertCardSkeleton />
+          <AlertCardSkeleton />
+          <AlertCardSkeleton />
         </View>
       </ScreenLayout>
     );
@@ -273,13 +265,8 @@ const styles = StyleSheet.create({
   emptySubtext: {
     marginTop: theme.spacing[2],
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    marginTop: theme.spacing[3],
+  skeletonContainer: {
+    padding: theme.spacing[4],
   },
   errorContainer: {
     flex: 1,

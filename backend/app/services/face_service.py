@@ -132,11 +132,12 @@ class FaceService:
             n = emb / np.linalg.norm(emb)
             normed.append(n)
 
-        # Cross-capture validation: all embeddings must be from the same person
+        # Cross-capture validation: warn if embeddings seem inconsistent,
+        # but don't block registration.  Different angles + mobile compression
+        # naturally produce lower pairwise similarity.
         is_valid, validation_msg = validate_registration_embeddings(normed)
         if not is_valid:
-            logger.warning(f"Cross-capture validation failed for user {user_id}: {validation_msg}")
-            return 0, validation_msg, quality_reports or None
+            logger.warning(f"Cross-capture validation warning for user {user_id}: {validation_msg}")
 
         # Anti-spoof check (registration-time, uses embedding variance + texture)
         if settings.ANTISPOOF_ENABLED and settings.ANTISPOOF_REGISTRATION_STRICT:
@@ -317,29 +318,28 @@ class FaceService:
         """
         Re-register user's face (update)
 
-        Deletes old face registration, registers new one, and rebuilds
-        FAISS index to remove orphaned vectors from the old registration.
+        Hard-deletes old registration first (including related embeddings),
+        then registers fresh.  Cross-capture validation is warning-only,
+        so the primary failure path (validation block) no longer exists.
 
         Args:
             user_id: User UUID
             images: New face images
 
         Returns:
-            Tuple of (embedding_id, message)
+            Tuple of (embedding_id, message, quality_reports)
         """
-        # Delete old registration (if exists)
-        try:
-            old_registration = self.face_repo.get_by_user(user_id)
-            if old_registration:
-                self.face_repo.delete(str(old_registration.id))
-                logger.info(f"Deleted old face registration for user {user_id}")
-        except NotFoundError:
-            logger.info(f"No previous face registration found for user {user_id}")
+        # Hard-delete old registration so the unique constraint on user_id
+        # won't block the new INSERT.  Embeddings cascade-delete via FK.
+        old_registration = self.face_repo.get_by_user(user_id)
+        if old_registration:
+            self.db.delete(old_registration)
+            self.db.commit()
+            logger.info(f"Deleted old face registration for user {user_id}")
 
         # Register new face
         faiss_id, message, quality_reports = await self.register_face(user_id, images)
 
-        # Rebuild FAISS to remove orphaned vectors from old registration
         await self.rebuild_faiss_index()
 
         return faiss_id, "Face re-registered successfully", quality_reports

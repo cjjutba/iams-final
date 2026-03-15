@@ -1,11 +1,11 @@
 /**
- * Card Component - Container with Shadow
+ * Card Component - Flat Container with Border
  *
- * Card container matching UA app style:
+ * Card container with clean, minimal style:
  * - White background
- * - 16px padding
+ * - 12px padding (compact)
  * - 12px border radius
- * - Subtle shadow
+ * - 1px border, no shadow
  * - Optional press feedback
  */
 
@@ -28,13 +28,10 @@ export const Card: React.FC<CardProps> = ({
 }) => {
   const cardStyle: ViewStyle = {
     backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.lg,
-    padding: theme.layout.cardPadding,
-    ...(variant === 'default' ? theme.shadows.sm : {}),
-    ...(variant === 'outlined' && {
-      borderWidth: 1,
-      borderColor: theme.colors.border,
-    }),
+    borderRadius: 12,
+    padding: theme.spacing[3],
+    borderWidth: 1,
+    borderColor: theme.colors.border,
   };
 
   if (onPress) {

@@ -25,7 +25,6 @@ import {
   Linking,
   Platform,
   RefreshControl,
-  ActivityIndicator,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { ChevronRight } from 'lucide-react-native';
@@ -33,7 +32,7 @@ import { useAuth } from '../../hooks';
 import { useToast } from '../../hooks/useToast';
 import { theme, config } from '../../constants';
 import { ScreenLayout, Header } from '../../components/layouts';
-import { Text, Card } from '../../components/ui';
+import { Text, Card, Skeleton } from '../../components/ui';
 import {
   notificationService,
   type NotificationPreference,
@@ -116,14 +115,16 @@ export const SettingsScreen: React.FC = () => {
 
           {isLoading ? (
             <View style={styles.loadingContainer}>
-              <ActivityIndicator size="small" color={theme.colors.primary} />
-              <Text
-                variant="bodySmall"
-                color={theme.colors.text.tertiary}
-                style={styles.loadingText}
-              >
-                Loading preferences...
-              </Text>
+              {[1, 2, 3, 4].map((i) => (
+                <View key={i} style={styles.skeletonToggleRow}>
+                  <View style={{ flex: 1, marginRight: theme.spacing[3] }}>
+                    <Skeleton width="60%" height={14} />
+                    <View style={{ height: 4 }} />
+                    <Skeleton width="85%" height={10} />
+                  </View>
+                  <Skeleton width={44} height={26} borderRadius={13} />
+                </View>
+              ))}
             </View>
           ) : prefs ? (
             <>
@@ -364,12 +365,15 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing[1],
   },
   loadingContainer: {
+    paddingVertical: theme.spacing[2],
+  },
+  skeletonToggleRow: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
     paddingVertical: theme.spacing[4],
-  },
-  loadingText: {
-    marginLeft: theme.spacing[2],
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
   },
   footer: {
     marginTop: theme.spacing[8],

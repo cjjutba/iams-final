@@ -265,16 +265,11 @@ async def _hls_mode(
         await websocket.close(code=4002, reason="HLS unavailable")
         return
 
-    # Start recognition pipeline (use high-res stream if configured)
-    recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
-    recog_ok = await recognition_service.start(room_id, recog_url, viewer_id)
-    if not recog_ok:
-        logger.warning("Recognition service failed to start — HLS video will stream without overlays")
-
     # Build HLS URL relative to API base
     hls_url = f"{settings.API_PREFIX}/hls/{room_id}/playlist.m3u8"
 
-    # Send initial connected message with HLS URL
+    # Send initial connected message FIRST — recognition startup can take
+    # 30+ seconds (RTSP timeout) and must not block the mobile UI.
     await websocket.send_json(
         {
             "type": "connected",
@@ -289,6 +284,12 @@ async def _hls_mode(
 
     # Register this mobile client with the edge relay manager
     await edge_relay_manager.register_mobile(room_id, websocket)
+
+    # Start recognition pipeline (use high-res stream if configured)
+    recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
+    recog_ok = await recognition_service.start(room_id, recog_url, viewer_id)
+    if not recog_ok:
+        logger.warning("Recognition service failed to start — HLS video will stream without overlays")
 
     # --- Receive task (handle pings/close) ---
     stop_event = asyncio.Event()
@@ -447,17 +448,8 @@ async def _webrtc_mode(
     device is connected, falls back to the original behaviour (send
     ``detections`` messages directly from the recognition service).
     """
-    # Start recognition pipeline (use high-res stream if configured)
-    recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
-    # In push mode (RPi → mediamtx), pull frames from mediamtx's internal RTSP
-    if not recog_url:
-        recog_url = f"{settings.MEDIAMTX_RTSP_URL}/{room_id}"
-        logger.info(f"Recognition: push mode — pulling frames from mediamtx at {recog_url}")
-    recog_ok = await recognition_service.start(room_id, recog_url, viewer_id)
-    if not recog_ok:
-        logger.warning("Recognition service failed to start — WebRTC stream will have no overlays")
-
-    # Send initial connected message (no hls_url)
+    # Send initial connected message FIRST — recognition startup can take
+    # 30+ seconds (RTSP timeout) and must not block the mobile UI.
     await websocket.send_json(
         {
             "type": "connected",
@@ -471,6 +463,16 @@ async def _webrtc_mode(
 
     # Register this mobile client with the edge relay manager
     await edge_relay_manager.register_mobile(room_id, websocket)
+
+    # Start recognition pipeline in the background (use high-res stream if configured)
+    recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
+    # In push mode (RPi → mediamtx), pull frames from mediamtx's internal RTSP
+    if not recog_url:
+        recog_url = f"{settings.MEDIAMTX_RTSP_URL}/{room_id}"
+        logger.info(f"Recognition: push mode — pulling frames from mediamtx at {recog_url}")
+    recog_ok = await recognition_service.start(room_id, recog_url, viewer_id)
+    if not recog_ok:
+        logger.warning("Recognition service failed to start — WebRTC stream will have no overlays")
 
     # --- Receive task (handle pings/close) ---
     stop_event = asyncio.Event()

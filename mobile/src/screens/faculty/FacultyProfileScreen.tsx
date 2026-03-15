@@ -197,7 +197,7 @@ const styles = StyleSheet.create({
   },
   profileHeader: {
     alignItems: 'center',
-    marginBottom: theme.spacing[8],
+    marginBottom: theme.spacing[6],
   },
   avatar: {
     marginBottom: theme.spacing[4],

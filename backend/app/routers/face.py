@@ -11,7 +11,7 @@ import io
 import time
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, File, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -587,8 +587,6 @@ async def deregister_face(user_id: str, current_user: User = Depends(get_current
 
     Requires authentication.
     """
-    from fastapi import HTTPException
-
     from app.models.user import UserRole
 
     # Students can only deregister their own face

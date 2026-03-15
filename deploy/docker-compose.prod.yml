@@ -111,6 +111,19 @@ services:
       admin:
         condition: service_completed_successfully
 
+  # Log viewer (web UI for Docker container logs)
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: iams-dozzle
+    restart: unless-stopped
+    ports:
+      - "9999:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./dozzle-users.yml:/data/users.yml:ro
+    environment:
+      - DOZZLE_AUTH_PROVIDER=simple
+
   # Certbot for free HTTPS certificates (run once, then renew via cron)
   certbot:
     image: certbot/certbot

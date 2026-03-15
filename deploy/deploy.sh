@@ -65,6 +65,7 @@ ssh "${VPS_USER}@${VPS_IP}" << 'REMOTE'
     ufw allow 3478/tcp comment "coturn TURN listening" 2>/dev/null || true
     ufw allow 3478/udp comment "coturn TURN listening" 2>/dev/null || true
     ufw allow 49152:49252/udp comment "coturn TURN relay range" 2>/dev/null || true
+    ufw allow 9999/tcp comment "Dozzle log viewer" 2>/dev/null || true
 
     # Build backend image
     echo "Building Docker image..."

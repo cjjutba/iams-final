@@ -2,7 +2,7 @@
  * StudentCard Component
  *
  * Displays student information in live attendance view.
- * Shows avatar, name, student ID, status badge, and detection indicator.
+ * Compact flat card with 1px border.
  */
 
 import React from 'react';
@@ -26,31 +26,18 @@ export const StudentCard: React.FC<StudentCardProps> = ({ student, onPress }) =>
   return (
     <Card onPress={onPress} style={styles.card}>
       <View style={styles.content}>
-        {/* Avatar */}
-        <View style={styles.avatar}>
-          <Avatar
-            firstName={firstName}
-            lastName={lastName}
-            size="md"
-          />
-        </View>
+        <Avatar firstName={firstName} lastName={lastName} size="md" />
 
-        {/* Info */}
         <View style={styles.info}>
-          {/* Name and detection indicator */}
           <View style={styles.nameRow}>
-            <Text variant="body" weight="600" numberOfLines={1} style={styles.name}>
+            <Text variant="bodySmall" weight="600" numberOfLines={1} style={styles.name}>
               {student.student_name}
             </Text>
             {isCurrentlyDetected && <View style={styles.detectionDot} />}
           </View>
-
-          {/* Student ID */}
-          <Text variant="bodySmall" color={theme.colors.text.secondary} style={styles.studentId}>
+          <Text variant="caption" color={theme.colors.text.secondary}>
             {student.student_id}
           </Text>
-
-          {/* Last seen */}
           {student.last_seen_at && !isCurrentlyDetected && (
             <Text variant="caption" color={theme.colors.text.tertiary}>
               Last seen {formatTimeAgo(student.last_seen_at)}
@@ -58,7 +45,6 @@ export const StudentCard: React.FC<StudentCardProps> = ({ student, onPress }) =>
           )}
         </View>
 
-        {/* Status badge */}
         <Badge status={student.status} size="sm" />
       </View>
     </Card>
@@ -67,35 +53,29 @@ export const StudentCard: React.FC<StudentCardProps> = ({ student, onPress }) =>
 
 const styles = StyleSheet.create({
   card: {
-    marginBottom: theme.spacing[2], // 8px
+    marginBottom: theme.spacing[2],
   },
   content: {
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  avatar: {
-    marginRight: theme.spacing[3], // 12px
+    gap: theme.spacing[3],
   },
   info: {
     flex: 1,
-    marginRight: theme.spacing[3], // 12px
+    gap: 2,
   },
   nameRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: theme.spacing[1], // 4px
   },
   name: {
     flex: 1,
   },
   detectionDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
     backgroundColor: theme.colors.success,
-    marginLeft: theme.spacing[2], // 8px
-  },
-  studentId: {
-    marginBottom: theme.spacing[1], // 4px
+    marginLeft: theme.spacing[2],
   },
 });

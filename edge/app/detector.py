@@ -180,7 +180,7 @@ class FaceDetector:
     # Minimum face bounding box size in pixels. Detections smaller than this
     # in either dimension are discarded — they produce poor-quality embeddings
     # and waste backend resources.
-    MIN_FACE_PIXELS = 80
+    MIN_FACE_PIXELS = 40
 
     def detect(self, frame: np.ndarray) -> list[FaceBox]:
         """

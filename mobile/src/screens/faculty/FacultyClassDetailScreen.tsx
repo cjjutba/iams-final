@@ -12,7 +12,6 @@ import {
   StyleSheet,
   FlatList,
   RefreshControl,
-  ActivityIndicator,
 } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
@@ -28,7 +27,7 @@ import type {
   StudentAttendanceStatus,
 } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
-import { Text, Card, Loader, Button } from '../../components/ui';
+import { Text, Card, Skeleton, Button } from '../../components/ui';
 
 type ClassDetailRouteProp = RouteProp<FacultyStackParamList, 'ClassDetail'>;
 type ClassDetailNavigationProp = StackNavigationProp<FacultyStackParamList, 'ClassDetail'>;
@@ -109,7 +108,48 @@ export const FacultyClassDetailScreen: React.FC = () => {
     return (
       <ScreenLayout safeArea padded={false}>
         <Header showBack title={strings.faculty.classDetail} />
-        <Loader fullScreen message={strings.common.loading} />
+        <View style={{ padding: theme.spacing[4] }}>
+          {/* Class info skeleton */}
+          <View style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginBottom: 12 }}>
+            <Skeleton width="65%" height={16} />
+            <View style={{ height: 4 }} />
+            <Skeleton width="40%" height={12} />
+            <View style={{ height: 8 }} />
+            <Skeleton width="50%" height={12} />
+          </View>
+
+          {/* Summary card skeleton */}
+          <View style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginBottom: 16 }}>
+            <Skeleton width={140} height={16} style={{ marginBottom: 16 }} />
+            <View style={{ flexDirection: 'row', justifyContent: 'space-around' }}>
+              {[1, 2, 3, 4].map((i) => (
+                <View key={i} style={{ alignItems: 'center' }}>
+                  <Skeleton width={28} height={22} />
+                  <View style={{ height: 4 }} />
+                  <Skeleton width={40} height={10} />
+                </View>
+              ))}
+            </View>
+          </View>
+
+          {/* Section title skeleton */}
+          <Skeleton width={100} height={16} style={{ marginBottom: 16 }} />
+
+          {/* Student cards skeleton */}
+          {[1, 2, 3, 4, 5].map((i) => (
+            <View key={i} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginBottom: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Skeleton width={40} height={40} borderRadius={20} style={{ marginRight: 12 }} />
+                <View style={{ flex: 1 }}>
+                  <Skeleton width="55%" height={14} />
+                  <View style={{ height: 4 }} />
+                  <Skeleton width="35%" height={12} />
+                </View>
+                <Skeleton width={56} height={24} borderRadius={12} />
+              </View>
+            </View>
+          ))}
+        </View>
       </ScreenLayout>
     );
   }

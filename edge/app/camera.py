@@ -166,15 +166,17 @@ class CameraManager:
                     safe_url = prefix.rsplit(":", 1)[0] + ":****@" + rtsp_url.split("@")[1]
             logger.info(f"RTSP URL: {safe_url}")
 
-            # Set RTSP transport before opening
-            # TCP is more reliable than UDP for PoE cameras
+            # Set RTSP transport via FFmpeg environment variable BEFORE opening.
+            # CAP_PROP_FOURCC only sets the codec, NOT the transport protocol.
+            # TCP is critical for reliable RTSP over WiFi — UDP drops packets,
+            # causing h264 decode errors and corrupted frames.
             transport = config.RTSP_TRANSPORT.lower()
+            if transport == "tcp":
+                import os
+                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+                logger.info("RTSP transport: TCP (via OPENCV_FFMPEG_CAPTURE_OPTIONS)")
 
             self.camera = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
-
-            # Set RTSP transport protocol
-            if transport == "tcp":
-                self.camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"H264"))
 
             # Set buffer size to 1 frame to minimize latency
             self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -321,6 +323,12 @@ class CameraManager:
                 return frame_bgr
 
             elif self.camera_type in ("opencv", "rtsp"):
+                # For RTSP, drain buffered frames to get the freshest one
+                if self.camera_type == "rtsp":
+                    for _ in range(3):
+                        if not self.camera.grab():
+                            break
+
                 # OpenCV/RTSP returns BGR
                 ret, frame_bgr = self.camera.read()
 
