@@ -36,7 +36,7 @@ from app.config import logger, settings
 from app.database import SessionLocal
 from app.repositories.schedule_repository import ScheduleRepository
 from app.services.camera_config import get_camera_url
-from app.services.edge_relay_service import edge_relay_manager
+from app.services.edge_relay_service import edge_relay_manager, track_fusion_service
 from app.services.hls_service import hls_service
 from app.services.recognition_service import recognition_service
 from app.services.webrtc_service import webrtc_service
@@ -305,18 +305,17 @@ async def _hls_mode(
 
     receive_task = asyncio.create_task(_receive_loop())
 
-    # --- Push detection metadata ---
-    poll_interval = 0.1  # 100ms — catch every recognition update at 5 FPS
-    last_seq = -1
-    last_send_time = asyncio.get_event_loop().time()
-    heartbeat_interval = 5.0  # send heartbeat every 5s even when no detections change
-    stale_count = 0
-    last_health_check = asyncio.get_event_loop().time()
+    # --- Push fused track metadata at 30 FPS ---
+    FUSED_INTERVAL = 1.0 / 30.0  # 33ms for 30 FPS
+    last_fused_send = 0.0
+    fused_seq = 0
+    last_heartbeat = _time.time()
+    last_health_check = _time.time()
     health_check_interval = 10.0  # check FFmpeg liveness every 10 s
 
     try:
         while not stop_event.is_set():
-            now = asyncio.get_event_loop().time()
+            now = _time.time()
 
             # Periodically verify FFmpeg is still alive; restart if it died
             if now - last_health_check >= health_check_interval:
@@ -325,66 +324,36 @@ async def _hls_mode(
                     logger.info(f"HLS: health check detected dead FFmpeg for room {room_id}, restarting...")
                     await hls_service.ensure_healthy(room_id)
 
-            result = recognition_service.get_latest_detections(room_id)
+            elapsed = now - last_fused_send
 
-            if result is not None:
-                detections_dicts, update_seq, det_w, det_h = result
-                stale_count = 0
+            if elapsed >= FUSED_INTERVAL:
+                track_fusion_service.predict(room_id, dt=elapsed)
+                tracks = track_fusion_service.get_tracks(room_id)
+                fw, fh = track_fusion_service.get_room_dimensions(room_id)
+                fused_seq += 1
 
-                if update_seq != last_seq:
-                    last_seq = update_seq
+                if tracks:
+                    message = {
+                        "type": "fused_tracks",
+                        "room_id": room_id,
+                        "timestamp": datetime.now(UTC).isoformat(),
+                        "seq": fused_seq,
+                        "frame_width": fw,
+                        "frame_height": fh,
+                        "tracks": tracks,
+                    }
+                    await websocket.send_json(message)
 
-                    # Enrich with cached names
-                    if any(d.get("user_id") for d in detections_dicts):
-                        det_objects = recognition_service.get_detections_objects(room_id)
-                        detections_dicts = _enrich_and_cache(detections_dicts, det_objects, SessionLocal)
+                last_fused_send = now
 
-                    # Always send detections directly to mobile.
-                    # The VPS recognition service is the authoritative source
-                    # of bounding boxes and identities.
-                    ts = datetime.now(UTC).isoformat()
-                    await websocket.send_json(
-                        {
-                            "type": "detections",
-                            "timestamp": ts,
-                            "detections": detections_dicts,
-                            "detection_width": det_w,
-                            "detection_height": det_h,
-                        }
-                    )
-                    last_send_time = now
+            if now - last_heartbeat > 5.0:
+                await websocket.send_json({
+                    "type": "heartbeat",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                })
+                last_heartbeat = now
 
-                elif (now - last_send_time) >= heartbeat_interval:
-                    # Heartbeat keeps client connection alive
-                    await websocket.send_json(
-                        {
-                            "type": "heartbeat",
-                            "timestamp": datetime.now(UTC).isoformat(),
-                        }
-                    )
-                    last_send_time = now
-            else:
-                # Recognition service not running for this room
-                stale_count += 1
-                if stale_count >= 100:  # ~10s of no recognition service (100 × 100ms)
-                    logger.warning(f"Live stream: recognition service gone for room {room_id}, attempting restart")
-                    _recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
-                    if not _recog_url:
-                        _recog_url = f"{settings.MEDIAMTX_RTSP_URL}/{room_id}"
-                    await recognition_service.start(room_id, _recog_url, viewer_id)
-                    stale_count = 0
-
-                # Still send heartbeat
-                if (now - last_send_time) >= heartbeat_interval:
-                    await websocket.send_json(
-                        {
-                            "type": "heartbeat",
-                            "timestamp": datetime.now(UTC).isoformat(),
-                        }
-                    )
-                    last_send_time = now
-
-            await asyncio.sleep(poll_interval)
+            await asyncio.sleep(0.01)
 
     except WebSocketDisconnect:
         logger.info(f"Live stream WS disconnected (HLS): viewer={viewer_id}")
@@ -468,77 +437,45 @@ async def _webrtc_mode(
 
     receive_task = asyncio.create_task(_receive_loop())
 
-    # --- Push detection metadata ---
-    poll_interval = 0.1  # 100ms — catch every recognition update at 5 FPS
-    last_seq = -1
-    last_send_time = asyncio.get_event_loop().time()
-    heartbeat_interval = 5.0  # send heartbeat every 5s even when no detections change
-    stale_count = 0
+    # --- Push fused track metadata at 30 FPS ---
+    FUSED_INTERVAL = 1.0 / 30.0  # 33ms for 30 FPS
+    last_fused_send = 0.0
+    fused_seq = 0
+    last_heartbeat = _time.time()
 
     try:
         while not stop_event.is_set():
-            now = asyncio.get_event_loop().time()
+            now = _time.time()
+            elapsed = now - last_fused_send
 
-            result = recognition_service.get_latest_detections(room_id)
+            if elapsed >= FUSED_INTERVAL:
+                track_fusion_service.predict(room_id, dt=elapsed)
+                tracks = track_fusion_service.get_tracks(room_id)
+                fw, fh = track_fusion_service.get_room_dimensions(room_id)
+                fused_seq += 1
 
-            if result is not None:
-                detections_dicts, update_seq, det_w, det_h = result
-                stale_count = 0
+                if tracks:
+                    message = {
+                        "type": "fused_tracks",
+                        "room_id": room_id,
+                        "timestamp": datetime.now(UTC).isoformat(),
+                        "seq": fused_seq,
+                        "frame_width": fw,
+                        "frame_height": fh,
+                        "tracks": tracks,
+                    }
+                    await websocket.send_json(message)
 
-                if update_seq != last_seq:
-                    last_seq = update_seq
+                last_fused_send = now
 
-                    # Enrich with cached names
-                    if any(d.get("user_id") for d in detections_dicts):
-                        det_objects = recognition_service.get_detections_objects(room_id)
-                        detections_dicts = _enrich_and_cache(detections_dicts, det_objects, SessionLocal)
+            if now - last_heartbeat > 5.0:
+                await websocket.send_json({
+                    "type": "heartbeat",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                })
+                last_heartbeat = now
 
-                    # Always send detections directly to mobile.
-                    # The VPS recognition service is the authoritative source
-                    # of bounding boxes and identities.
-                    ts = datetime.now(UTC).isoformat()
-                    await websocket.send_json(
-                        {
-                            "type": "detections",
-                            "timestamp": ts,
-                            "detections": detections_dicts,
-                            "detection_width": det_w,
-                            "detection_height": det_h,
-                        }
-                    )
-                    last_send_time = now
-
-                elif (now - last_send_time) >= heartbeat_interval:
-                    # Heartbeat keeps client connection alive
-                    await websocket.send_json(
-                        {
-                            "type": "heartbeat",
-                            "timestamp": datetime.now(UTC).isoformat(),
-                        }
-                    )
-                    last_send_time = now
-            else:
-                # Recognition service not running for this room
-                stale_count += 1
-                if stale_count >= 100:  # ~10s of no recognition service (100 × 100ms)
-                    logger.warning(f"Live stream: recognition service gone for room {room_id}, attempting restart")
-                    _recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
-                    if not _recog_url:
-                        _recog_url = f"{settings.MEDIAMTX_RTSP_URL}/{room_id}"
-                    await recognition_service.start(room_id, _recog_url, viewer_id)
-                    stale_count = 0
-
-                # Still send heartbeat
-                if (now - last_send_time) >= heartbeat_interval:
-                    await websocket.send_json(
-                        {
-                            "type": "heartbeat",
-                            "timestamp": datetime.now(UTC).isoformat(),
-                        }
-                    )
-                    last_send_time = now
-
-            await asyncio.sleep(poll_interval)
+            await asyncio.sleep(0.01)
 
     except WebSocketDisconnect:
         logger.info(f"Live stream WS disconnected (WebRTC): viewer={viewer_id}")

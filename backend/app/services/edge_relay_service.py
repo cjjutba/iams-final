@@ -23,6 +23,7 @@ from fastapi import WebSocket
 from starlette.websockets import WebSocketState
 
 from app.config import logger
+from app.services.track_fusion_service import TrackFusionService
 
 
 @dataclass
@@ -169,6 +170,14 @@ class EdgeRelayManager:
                         f"for room {room_id}"
                     )
 
+        # Feed edge detections into track fusion service
+        track_fusion_service.update_from_edge(
+            room_id,
+            message.get("detections", []),
+            message.get("frame_width", 640),
+            message.get("frame_height", 480),
+        )
+
     # ------------------------------------------------------------------
     # Push identity updates from recognition service
     # ------------------------------------------------------------------
@@ -274,6 +283,23 @@ class EdgeRelayManager:
                 for k in keys_to_remove:
                     del room.identity_cache[k]
 
+            # Feed identity updates into track fusion service
+            for mapping in mappings:
+                edge_track_id = mapping.get("track_id")
+                if edge_track_id is not None:
+                    try:
+                        edge_tid = int(edge_track_id) if isinstance(edge_track_id, str) else edge_track_id
+                        track_fusion_service.update_identity(
+                            room_id,
+                            edge_track_id=edge_tid,
+                            user_id=mapping.get("user_id", ""),
+                            name=mapping.get("name", ""),
+                            student_id=mapping.get("student_id", ""),
+                            similarity=mapping.get("confidence", 0.0),
+                        )
+                    except (ValueError, TypeError):
+                        pass
+
             clients = list(room.mobile_clients)
 
         # Build identity_update message
@@ -331,5 +357,6 @@ class EdgeRelayManager:
         return room is not None and room.edge_ws is not None
 
 
-# Module-level singleton
+# Module-level singletons
 edge_relay_manager = EdgeRelayManager()
+track_fusion_service = TrackFusionService()
