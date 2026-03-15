@@ -313,6 +313,8 @@ async def _hls_mode(
     last_heartbeat = _time.time()
     last_health_check = _time.time()
     health_check_interval = 10.0  # check FFmpeg liveness every 10 s
+    last_recog_check = _time.time()
+    last_recog_seq = 0
 
     try:
         while not stop_event.is_set():
@@ -324,6 +326,16 @@ async def _hls_mode(
                 if not hls_service.is_active(room_id):
                     logger.info(f"HLS: health check detected dead FFmpeg for room {room_id}, restarting...")
                     await hls_service.ensure_healthy(room_id)
+
+            # Periodically check if recognition service has stalled
+            if now - last_recog_check > 10.0:
+                current_recog_seq = track_fusion_service.get_update_seq(room_id)
+                if current_recog_seq == last_recog_seq and current_recog_seq > 0:
+                    logger.warning(f"Recognition service appears stalled for room {room_id}, restarting")
+                    await recognition_service.stop(room_id, viewer_id)
+                    await recognition_service.start(room_id, recog_url, viewer_id)
+                last_recog_seq = current_recog_seq
+                last_recog_check = now
 
             elapsed = now - last_fused_send
 
@@ -451,10 +463,23 @@ async def _webrtc_mode(
     fused_seq = 0
     last_update_seq = track_fusion_service.get_update_seq(room_id)
     last_heartbeat = _time.time()
+    last_recog_check = _time.time()
+    last_recog_seq = 0
 
     try:
         while not stop_event.is_set():
             now = _time.time()
+
+            # Periodically check if recognition service has stalled
+            if now - last_recog_check > 10.0:
+                current_recog_seq = track_fusion_service.get_update_seq(room_id)
+                if current_recog_seq == last_recog_seq and current_recog_seq > 0:
+                    logger.warning(f"Recognition service appears stalled for room {room_id}, restarting")
+                    await recognition_service.stop(room_id, viewer_id)
+                    await recognition_service.start(room_id, recog_url, viewer_id)
+                last_recog_seq = current_recog_seq
+                last_recog_check = now
+
             elapsed = now - last_fused_send
 
             if elapsed >= FUSED_INTERVAL:
