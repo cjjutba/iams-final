@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useForm } from 'react-hook-form'
@@ -21,8 +20,6 @@ export default function LoginPage() {
   usePageTitle('Login')
   const navigate = useNavigate()
   const login = useAuthStore((s) => s.login)
-  const [error, setError] = useState<string | null>(null)
-
   const {
     register,
     handleSubmit,
@@ -32,14 +29,12 @@ export default function LoginPage() {
   })
 
   const onSubmit = async (data: LoginForm) => {
-    setError(null)
     try {
       await login(data.identifier, data.password)
       toast.success('Signed in successfully')
       navigate('/dashboard', { replace: true })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Login failed. Please try again.'
-      setError(message)
       toast.error(message)
     }
   }
@@ -57,12 +52,6 @@ export default function LoginPage() {
 
         {/* Form */}
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-          {error && (
-            <div className="rounded-lg bg-destructive/10 px-4 py-3 text-sm text-destructive">
-              {error}
-            </div>
-          )}
-
           <div className="space-y-2">
             <Input
               id="identifier"

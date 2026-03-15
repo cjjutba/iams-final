@@ -55,8 +55,6 @@ export function CreateUserDialog({ role, open, onOpenChange }: CreateUserDialogP
     contact_number: '',
   })
 
-  const [error, setError] = useState('')
-
   function resetForm() {
     setForm({
       first_name: '',
@@ -72,7 +70,6 @@ export function CreateUserDialog({ role, open, onOpenChange }: CreateUserDialogP
       birthdate: '',
       contact_number: '',
     })
-    setError('')
   }
 
   function handleChange(field: string, value: string) {
@@ -87,10 +84,9 @@ export function CreateUserDialog({ role, open, onOpenChange }: CreateUserDialogP
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    setError('')
 
     if (!form.first_name || !form.last_name) {
-      setError('First name and last name are required.')
+      toast.error('First name and last name are required.')
       return
     }
 
@@ -98,11 +94,11 @@ export function CreateUserDialog({ role, open, onOpenChange }: CreateUserDialogP
       if (role === 'student') {
         // Student: create student_records entry only (no auth account)
         if (!form.student_id) {
-          setError('Student ID is required.')
+          toast.error('Student ID is required.')
           return
         }
         if (form.contact_number && form.contact_number.length !== 11) {
-          setError('Contact number must be exactly 11 digits (e.g. 09xxxxxxxxx).')
+          toast.error('Contact number must be exactly 11 digits (e.g. 09xxxxxxxxx).')
           return
         }
 
@@ -121,15 +117,15 @@ export function CreateUserDialog({ role, open, onOpenChange }: CreateUserDialogP
       } else {
         // Faculty/Admin: create users table entry with auth
         if (!form.email || !form.password) {
-          setError('Email and password are required.')
+          toast.error('Email and password are required.')
           return
         }
         if (form.password.length < 8) {
-          setError('Password must be at least 8 characters.')
+          toast.error('Password must be at least 8 characters.')
           return
         }
         if (form.phone && form.phone.length !== 11) {
-          setError('Phone number must be exactly 11 digits (e.g. 09xxxxxxxxx).')
+          toast.error('Phone number must be exactly 11 digits (e.g. 09xxxxxxxxx).')
           return
         }
 
@@ -152,7 +148,6 @@ export function CreateUserDialog({ role, open, onOpenChange }: CreateUserDialogP
     } catch (err: any) {
       const msg = err?.response?.data?.detail || err?.message || 'Failed to create record'
       const errorMsg = typeof msg === 'string' ? msg : JSON.stringify(msg)
-      setError(errorMsg)
       toast.error(errorMsg)
     }
   }
@@ -353,8 +348,6 @@ export function CreateUserDialog({ role, open, onOpenChange }: CreateUserDialogP
               </div>
             </>
           )}
-
-          {error && <p className="text-sm text-destructive">{error}</p>}
 
           <DialogFooter>
             <Button

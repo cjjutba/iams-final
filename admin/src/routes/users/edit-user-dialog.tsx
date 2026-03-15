@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -38,8 +38,6 @@ export function EditUserDialog({ user, open, onOpenChange }: EditUserDialogProps
     phone: '',
   })
 
-  const [error, setError] = useState('')
-
   useEffect(() => {
     if (open && user) {
       setForm({
@@ -48,7 +46,6 @@ export function EditUserDialog({ user, open, onOpenChange }: EditUserDialogProps
         email: user.email,
         phone: user.phone ?? '',
       })
-      setError('')
     }
   }, [open, user])
 
@@ -63,16 +60,15 @@ export function EditUserDialog({ user, open, onOpenChange }: EditUserDialogProps
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    setError('')
 
     if (!user) return
 
     if (!form.first_name || !form.last_name) {
-      setError('First name and last name are required.')
+      toast.error('First name and last name are required.')
       return
     }
     if (form.phone && form.phone.length !== 11) {
-      setError('Phone number must be exactly 11 digits (e.g. 09xxxxxxxxx).')
+      toast.error('Phone number must be exactly 11 digits (e.g. 09xxxxxxxxx).')
       return
     }
 
@@ -91,7 +87,6 @@ export function EditUserDialog({ user, open, onOpenChange }: EditUserDialogProps
     } catch (err: any) {
       const msg = err?.response?.data?.detail || err?.message || 'Failed to update user'
       const errorMsg = typeof msg === 'string' ? msg : JSON.stringify(msg)
-      setError(errorMsg)
       toast.error(errorMsg)
     }
   }
@@ -155,8 +150,6 @@ export function EditUserDialog({ user, open, onOpenChange }: EditUserDialogProps
               onChange={(e) => handleChange('phone', e.target.value)}
             />
           </div>
-
-          {error && <p className="text-sm text-destructive">{error}</p>}
 
           <DialogFooter>
             <Button

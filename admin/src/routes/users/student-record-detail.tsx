@@ -116,8 +116,6 @@ export default function StudentRecordDetailPage() {
     birthdate: '',
     contact_number: '',
   })
-  const [editError, setEditError] = useState('')
-
   useEffect(() => {
     if (editOpen && student) {
       setForm({
@@ -131,7 +129,6 @@ export default function StudentRecordDetailPage() {
         birthdate: student.birthdate ?? '',
         contact_number: student.contact_number ?? '',
       })
-      setEditError('')
     }
   }, [editOpen, student])
 
@@ -141,10 +138,9 @@ export default function StudentRecordDetailPage() {
 
   async function handleEditSubmit(e: React.FormEvent) {
     e.preventDefault()
-    setEditError('')
     if (!student) return
     if (!form.first_name || !form.last_name) {
-      setEditError('First name and last name are required.')
+      toast.error('First name and last name are required.')
       return
     }
     try {
@@ -167,7 +163,6 @@ export default function StudentRecordDetailPage() {
     } catch (err: any) {
       const msg = err?.response?.data?.detail || err?.message || 'Failed to update'
       const errorMsg = typeof msg === 'string' ? msg : JSON.stringify(msg)
-      setEditError(errorMsg)
       toast.error(errorMsg)
     }
   }
@@ -552,8 +547,6 @@ export default function StudentRecordDetailPage() {
                 onChange={(e) => handleChange('contact_number', e.target.value)}
               />
             </div>
-
-            {editError && <p className="text-sm text-destructive">{editError}</p>}
 
             <DialogFooter>
               <Button

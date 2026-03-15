@@ -19,13 +19,22 @@ export const useAuthStore = create<AuthState>((set) => ({
   isAuthenticated: false,
 
   login: async (email, password) => {
-    const response = await authService.login({ identifier: email, password })
-    const { access_token, user } = response
-    if (user.role !== 'admin') {
-      throw new Error('Access denied. Admin role required.')
+    try {
+      const response = await authService.login({ identifier: email, password })
+      const { access_token, user } = response
+      if (user.role !== 'admin') {
+        throw new Error('Access denied. Admin role required.')
+      }
+      localStorage.setItem('access_token', access_token)
+      set({ user, token: access_token, isAuthenticated: true })
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message === 'Access denied. Admin role required.') {
+        throw err
+      }
+      const axiosError = err as { response?: { data?: { error?: { message?: string } } } }
+      const message = axiosError.response?.data?.error?.message || 'Login failed. Please try again.'
+      throw new Error(message)
     }
-    localStorage.setItem('access_token', access_token)
-    set({ user, token: access_token, isAuthenticated: true })
   },
 
   logout: () => {

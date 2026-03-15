@@ -1,12 +1,17 @@
 """
 Local Camera Service
 
-Captures from a local webcam (MacBook), runs MediaPipe face detection on each
-frame, pushes the video stream to mediamtx via FFmpeg RTSP, and feeds detections
-into the track fusion service.
+Runs MediaPipe face detection and feeds detections into the track fusion
+service.  Supports two camera sources:
 
-This replaces the RPi edge device for localhost development. The rest of the
-pipeline (track fusion, WebSocket broadcast, mobile app) is identical.
+- **Webcam mode** (``CAMERA_SOURCE=0``): Opens the MacBook webcam, pushes
+  video to mediamtx via FFmpeg RTSP, and runs detection on each frame.
+- **External mode** (``CAMERA_SOURCE=mediamtx``): Reads from an external
+  stream already being pushed to mediamtx (e.g. via ``dev-stream.sh camera``).
+  No FFmpeg push — just pulls frames from mediamtx RTSP for detection.
+
+Either way, the rest of the pipeline (track fusion, WebSocket broadcast,
+mobile WebRTC) is identical.
 """
 
 from __future__ import annotations
@@ -187,8 +192,11 @@ class _CentroidTracker:
 
 class LocalCameraService:
     """
-    Captures from a local webcam, runs MediaPipe face detection, pushes RTSP
-    via FFmpeg, and feeds detections into track_fusion_service.
+    Runs MediaPipe face detection and feeds detections into track_fusion_service.
+
+    Two modes based on ``CAMERA_SOURCE``:
+    - Integer (e.g. ``"0"``) → webcam mode: capture + FFmpeg RTSP push + detection
+    - ``"mediamtx"`` → external mode: pull from mediamtx RTSP for detection only
 
     Thread-safe: capture loop runs in a background thread with async
     start/stop API.
@@ -219,6 +227,15 @@ class LocalCameraService:
     def running(self) -> bool:
         return self._running
 
+    @property
+    def is_external(self) -> bool:
+        """True when reading from an external stream (not the local webcam)."""
+        try:
+            int(settings.CAMERA_SOURCE)
+            return False
+        except ValueError:
+            return True
+
     def get_latest_frame(self) -> np.ndarray | None:
         """Return the most recent captured frame (BGR), or None."""
         with self._frame_lock:
@@ -238,10 +255,12 @@ class LocalCameraService:
                 daemon=True,
             )
             self._thread.start()
+
+        mode = "external (mediamtx pull)" if self.is_external else f"webcam ({settings.CAMERA_SOURCE})"
         logger.info(
-            "LocalCameraService started (room=%s, source=%s, fps=%.1f)",
+            "LocalCameraService started (room=%s, mode=%s, fps=%.1f)",
             room_id,
-            settings.CAMERA_SOURCE,
+            mode,
             settings.LOCAL_DETECTION_FPS,
         )
 
@@ -261,11 +280,38 @@ class LocalCameraService:
     # ── Capture loop (runs in background thread) ─────────────────────────
 
     def _capture_loop(self) -> None:
-        """Main loop: open camera, detect faces, push RTSP, feed fusion."""
+        """Main loop: open camera, detect faces, optionally push RTSP, feed fusion."""
+        import os
+
+        # Suppress non-fatal H.264 decode warnings that flood the console
+        os.environ["OPENCV_FFMPEG_LOGLEVEL"] = "error"
+
         try:
-            self._open_camera()
+            # In external mode, the stream might not exist in mediamtx yet
+            # (dev-stream.sh hasn't started). Retry up to 60 seconds.
+            if self.is_external:
+                max_wait = 60.0
+                waited = 0.0
+                while self._running and waited < max_wait:
+                    self._open_camera()
+                    if self._cap is not None and self._cap.isOpened():
+                        break
+                    if self._cap is not None:
+                        self._cap.release()
+                        self._cap = None
+                    if waited == 0:
+                        logger.info(
+                            "LocalCameraService: waiting for external stream at "
+                            "rtsp://localhost:8554/%s (start dev-stream.sh)",
+                            self._room_id,
+                        )
+                    time.sleep(2.0)
+                    waited += 2.0
+            else:
+                self._open_camera()
+
             if self._cap is None or not self._cap.isOpened():
-                logger.error("LocalCameraService: failed to open camera")
+                logger.error("LocalCameraService: failed to open camera source")
                 self._running = False
                 return
 
@@ -273,26 +319,33 @@ class LocalCameraService:
             frame_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             fps = settings.LOCAL_DETECTION_FPS
 
-            self._start_ffmpeg(frame_w, frame_h, fps)
+            # Only push via FFmpeg in webcam mode (external streams are
+            # already being pushed to mediamtx by dev-stream.sh or RPi)
+            if not self.is_external:
+                self._start_ffmpeg(frame_w, frame_h, fps)
 
-            # Initialize MediaPipe face detector (Tasks API)
-            model_path = _ensure_model()
-            base_options = mp.tasks.BaseOptions(model_asset_path=model_path)
-            detector_options = mp.tasks.vision.FaceDetectorOptions(
-                base_options=base_options,
-                running_mode=mp.tasks.vision.RunningMode.IMAGE,
-                min_detection_confidence=0.5,
-            )
-            self._detector = mp.tasks.vision.FaceDetector.create_from_options(
-                detector_options
-            )
+                # Initialize MediaPipe face detector (Tasks API)
+                # Only needed in webcam mode — external/CCTV uses InsightFace
+                # via recognition_service (BlazeFace short-range fails at >2 m)
+                model_path = _ensure_model()
+                base_options = mp.tasks.BaseOptions(model_asset_path=model_path)
+                detector_options = mp.tasks.vision.FaceDetectorOptions(
+                    base_options=base_options,
+                    running_mode=mp.tasks.vision.RunningMode.IMAGE,
+                    min_detection_confidence=0.5,
+                )
+                self._detector = mp.tasks.vision.FaceDetector.create_from_options(
+                    detector_options
+                )
 
+            mode_label = "external" if self.is_external else "webcam"
             target_interval = 1.0 / fps
             logger.info(
-                "LocalCameraService: capture loop started (%dx%d @ %.0f FPS)",
+                "LocalCameraService: capture loop started (%dx%d @ %.0f FPS, %s)",
                 frame_w,
                 frame_h,
                 fps,
+                mode_label,
             )
 
             while self._running:
@@ -304,23 +357,33 @@ class LocalCameraService:
                     time.sleep(0.1)
                     continue
 
+                # Skip corrupted frames (nearly all black or all white)
+                mean_val = frame.mean()
+                if mean_val < 3.0 or mean_val > 252.0:
+                    time.sleep(target_interval * 0.5)
+                    continue
+
                 # Store latest frame for recognition service
                 with self._frame_lock:
                     self._frame = frame
 
-                # Push frame to FFmpeg → mediamtx RTSP
-                self._push_frame(frame)
+                # Push frame to FFmpeg → mediamtx RTSP (webcam mode only)
+                if not self.is_external:
+                    self._push_frame(frame)
 
-                # Run MediaPipe face detection
-                detections = self._detect_faces(frame, frame_w, frame_h)
-
-                # Feed into track fusion service
-                track_fusion_service.update_from_edge(
-                    self._room_id,
-                    detections,
-                    frame_w,
-                    frame_h,
-                )
+                # In external mode (CCTV), skip MediaPipe detection —
+                # BlazeFace short-range fails at CCTV distances (>2 m).
+                # InsightFace SCRFD (via recognition_service) handles
+                # detection + identity and feeds track_fusion_service
+                # from the live_stream router push loop instead.
+                if not self.is_external:
+                    detections = self._detect_faces(frame, frame_w, frame_h)
+                    track_fusion_service.update_from_edge(
+                        self._room_id,
+                        detections,
+                        frame_w,
+                        frame_h,
+                    )
 
                 # Maintain target FPS
                 elapsed = time.monotonic() - loop_start
@@ -384,7 +447,7 @@ class LocalCameraService:
 
         return detections
 
-    # ── FFmpeg RTSP push ─────────────────────────────────────────────────
+    # ── FFmpeg RTSP push (webcam mode only) ───────────────────────────────
 
     def _start_ffmpeg(self, width: int, height: int, fps: float) -> None:
         """Start an FFmpeg subprocess to push rawvideo → RTSP."""
@@ -398,7 +461,10 @@ class LocalCameraService:
             "-s", f"{width}x{height}",
             "-r", str(fps),
             "-i", "-",
+            "-pix_fmt", "yuv420p",
             "-c:v", "libx264",
+            "-profile:v", "baseline",
+            "-level:v", "3.1",
             "-preset", "ultrafast",
             "-tune", "zerolatency",
             "-g", str(int(fps)),
@@ -435,14 +501,37 @@ class LocalCameraService:
     # ── Camera / cleanup ─────────────────────────────────────────────────
 
     def _open_camera(self) -> None:
-        """Open the webcam (index or RTSP URL)."""
+        """Open the video source (webcam index or mediamtx RTSP)."""
+        import os
+
         source = settings.CAMERA_SOURCE
         try:
             index = int(source)
             self._cap = cv2.VideoCapture(index)
         except ValueError:
-            # Treat as RTSP URL
-            self._cap = cv2.VideoCapture(source)
+            # External mode: read from mediamtx RTSP for this room.
+            # Force TCP transport and discard corrupt frames to avoid
+            # H.264 decode errors that prevent face detection.
+            rtsp_url = f"{settings.MEDIAMTX_RTSP_URL}/{self._room_id}"
+            logger.info(
+                "LocalCameraService: external mode — pulling from %s", rtsp_url
+            )
+            prev = os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS", "")
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+                "rtsp_transport;tcp"
+                "|stimeout;5000000"
+                "|err_detect;ignore_err"
+                "|fflags;discardcorrupt"
+            )
+            self._cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+            # Restore previous env var
+            if prev:
+                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = prev
+            else:
+                os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
+
+            if self._cap is not None and self._cap.isOpened():
+                self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     def _cleanup(self) -> None:
         """Release camera and FFmpeg resources."""

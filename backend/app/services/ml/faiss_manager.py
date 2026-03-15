@@ -295,8 +295,12 @@ class FAISSManager:
         # Get all k results (unfiltered by threshold)
         results = self.search(embedding, k=k, threshold=0.0)
 
-        if not results or results[0][1] < threshold:
+        if not results:
             return {"user_id": None, "confidence": 0.0, "is_ambiguous": False}
+
+        top_raw_score = results[0][1]
+        if top_raw_score < threshold:
+            return {"user_id": None, "confidence": float(top_raw_score), "is_ambiguous": False}
 
         top_user, top_score = results[0]
         second_score = results[1][1] if len(results) > 1 else 0.0

@@ -17,6 +17,7 @@ const queryClient = new QueryClient({
   },
 })
 
+const LandingPage = lazy(() => import('@/routes/landing'))
 const LoginPage = lazy(() => import('@/routes/login'))
 const DashboardPage = lazy(() => import('@/routes/dashboard'))
 const StudentsPage = lazy(() => import('@/routes/users/students'))
@@ -60,6 +61,7 @@ export default function App() {
       <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, '')}>
         <Suspense fallback={<LoadingFallback />}>
           <Routes>
+            <Route path="/" element={<LandingPage />} />
             <Route path="/login" element={<LoginPage />} />
             <Route
               element={
@@ -68,7 +70,6 @@ export default function App() {
                 </ProtectedRoute>
               }
             >
-              <Route index element={<Navigate to="/dashboard" replace />} />
               <Route path="dashboard" element={<DashboardPage />} />
               <Route path="students" element={<StudentsPage />} />
               <Route path="students/:studentId" element={<StudentRecordDetailPage />} />

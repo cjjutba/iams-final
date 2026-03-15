@@ -101,8 +101,10 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
   const [studentMap, setStudentMap] = useState<Map<string, DetectedStudent>>(new Map());
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [isWaitingForCamera, setIsWaitingForCamera] = useState(false);
-  const [detectionWidth, setDetectionWidth] = useState(1280);
-  const [detectionHeight, setDetectionHeight] = useState(720);
+  // Defaults match Reolink sub-stream (896x512). Updated once the first
+  // fused_tracks message arrives with actual recognition frame dimensions.
+  const [detectionWidth, setDetectionWidth] = useState(896);
+  const [detectionHeight, setDetectionHeight] = useState(512);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);

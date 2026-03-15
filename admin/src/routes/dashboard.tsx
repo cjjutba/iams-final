@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
 import { usePageTitle } from '@/hooks/use-page-title'
@@ -9,6 +9,7 @@ import {
   TrendingUp,
 } from 'lucide-react'
 
+import { toast } from 'sonner'
 import { StatCard, LineChartCard, BarChartCard } from '@/components/charts'
 import { DataTable } from '@/components/data-tables'
 import { Badge } from '@/components/ui/badge'
@@ -44,6 +45,10 @@ export default function DashboardPage() {
   const { data: trendData = [], isLoading: trendLoading } = useDailyTrend(30)
   const { data: weekdayData = [], isLoading: weekdayLoading } = useWeekdayBreakdown()
 
+  useEffect(() => {
+    if (metricsError) toast.error('Failed to load metrics')
+  }, [metricsError])
+
   const sessions = useMemo(() => summaries.filter((s) => s.session_active), [summaries])
 
   // Format trend dates for display
@@ -65,9 +70,6 @@ export default function DashboardPage() {
       </div>
 
       {/* Stat cards — 4 cards */}
-      {metricsError && (
-        <p className="text-sm text-destructive">Failed to load metrics</p>
-      )}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {metricsLoading ? (
           Array.from({ length: 4 }).map((_, i) => (

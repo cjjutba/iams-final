@@ -31,17 +31,21 @@ authInternalUsers:
 
 # REST API — used by FastAPI backend to manage paths
 api: yes
-apiAddress: :9997
+apiAddress: 0.0.0.0:9997
 
 # RTSP — accepts push from dev-stream.sh (simulating RPi relay)
 rtsp: yes
-rtspAddress: :8554
+rtspAddress: 0.0.0.0:8554
 
 # WebRTC (WHEP) — mobile clients connect here via FastAPI proxy
 # Bind to all interfaces so phones on the same WiFi can reach it
 webrtc: yes
-webrtcAddress: :8889
-webrtcLocalUDPAddress: :8887
+webrtcAddress: 0.0.0.0:8889
+webrtcLocalUDPAddress: 0.0.0.0:8887
+# Force ICE candidates to use the LAN IP so mobile devices can connect.
+# Update this if your Mac's WiFi IP changes (run: ipconfig getifaddr en0).
+webrtcICEHostNAT1To1IPs:
+  - 192.168.1.224
 
 # Disable unused protocols
 hls: no

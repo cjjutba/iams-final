@@ -36,10 +36,13 @@ export interface AnimatedTrack {
 // For 50+ boxes, consider migrating to react-native-reanimated which
 // supports layout animations on the UI thread. Current approach is
 // adequate for most Android devices at 30 FPS with batched animations.
+// Critically damped spring: settles without overshoot in ~150ms.
+// At 5 FPS recognition (200ms between updates), the box reaches its
+// target before the next measurement arrives — no oscillation or jitter.
 const SPRING_CONFIG = {
-  stiffness: 300,
-  damping: 25,
-  mass: 0.8,
+  stiffness: 200,
+  damping: 28,
+  mass: 1.0,
   useNativeDriver: false,
 };
 

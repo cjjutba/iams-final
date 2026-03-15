@@ -99,7 +99,12 @@ class RecognitionService:
                     self._insight = insightface_model
                     self._faiss = faiss_manager
                     self._ml_available = True
-                    logger.info("Recognition: InsightFace + FAISS available")
+                    logger.info(
+                        "Recognition: InsightFace + FAISS available "
+                        "(index=%d vectors, user_map=%d entries)",
+                        faiss_manager.index.ntotal,
+                        len(faiss_manager.user_map),
+                    )
                 else:
                     logger.warning("Recognition: InsightFace/FAISS not loaded")
             except Exception as exc:
@@ -442,11 +447,25 @@ class RecognitionService:
             # Deduplicate overlapping detections from SCRFD multi-scale anchors
             insight_faces = self._deduplicate_faces(insight_faces)
 
+            # Filter low-confidence detections (SCRFD false positives at
+            # CCTV angles/distances). 0.5 is the InsightFace default but
+            # CCTV views produce many sub-0.5 false positives on edges,
+            # watermarks, and high-contrast objects.
+            insight_faces = [f for f in insight_faces if f.confidence >= 0.5]
+
             detections = []
             for face in insight_faces:
                 user_id, similarity = None, None
                 if self._faiss is not None:
                     result = self._faiss.search_with_margin(face.embedding)
+                    logger.info(
+                        "FAISS search: user=%s conf=%.3f ambiguous=%s det_conf=%.2f bbox=[%d,%d,%d,%d]",
+                        result.get("user_id", "None"),
+                        result.get("confidence", 0),
+                        result.get("is_ambiguous"),
+                        face.confidence,
+                        face.x, face.y, face.width, face.height,
+                    )
                     if result["user_id"] is not None and not result["is_ambiguous"]:
                         user_id = result["user_id"]
                         similarity = result["confidence"]

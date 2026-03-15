@@ -57,6 +57,18 @@ pnpm install
 pnpm android   # or pnpm ios
 ```
 
+### Mobile APK Build & Distribution
+After building the React Native app for Android, place the APK in the admin portal's public directory so students can download it from the landing page:
+```bash
+# Build the APK (from mobile/)
+cd mobile
+npx react-native build-android --mode=release   # or use EAS Build
+
+# Copy the APK to admin public directory
+cp android/app/build/outputs/apk/release/app-release.apk ../admin/public/iams.apk
+```
+The landing page at `/` (or `/admin/` in production) serves a download button that points to `/iams.apk`. Vite serves all files in `admin/public/` as static assets.
+
 ## Key Technical Details
 
 ### Face Recognition Pipeline

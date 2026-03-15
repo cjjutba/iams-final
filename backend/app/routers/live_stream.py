@@ -452,8 +452,43 @@ async def _webrtc_mode(
     """
     using_local = settings.DETECTION_SOURCE == "local"
 
-    # Send initial connected message FIRST — recognition startup can take
-    # 30+ seconds (RTSP timeout) and must not block the mobile UI.
+    # Register this mobile client with the edge relay manager
+    await edge_relay_manager.register_mobile(room_id, websocket)
+
+    # Start local camera service if using local detection source
+    if using_local:
+        await local_camera_service.start(room_id)
+        recog_url = f"{settings.MEDIAMTX_RTSP_URL}/{room_id}"
+        logger.info(f"Local camera started for room {room_id}, recognition URL: {recog_url}")
+
+        # Wait for the RTSP stream to appear in mediamtx before telling the
+        # mobile app to start WebRTC — avoids 503 on first offer.
+        # In external mode (dev-stream.sh), the stream might not be pushing
+        # yet, so send a "waiting" message and poll until it appears.
+        stream_ready = False
+        for _ in range(120):  # up to 60 seconds (120 × 0.5s)
+            if await webrtc_service.check_path_exists(room_id):
+                stream_ready = True
+                break
+            # Let the mobile app know we're waiting for the camera
+            if not stream_ready and local_camera_service.is_external:
+                await websocket.send_json({
+                    "type": "waiting",
+                    "message": "Waiting for camera stream — start dev-stream.sh",
+                })
+            await asyncio.sleep(0.5)
+
+        if not stream_ready:
+            logger.warning(f"Stream not available in mediamtx for room {room_id} after 60s")
+    else:
+        # Start recognition pipeline in the background (use high-res stream if configured)
+        recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
+        # In push mode (RPi -> mediamtx), pull frames from mediamtx's internal RTSP
+        if not recog_url:
+            recog_url = f"{settings.MEDIAMTX_RTSP_URL}/{room_id}"
+            logger.info(f"Recognition: push mode — pulling frames from mediamtx at {recog_url}")
+
+    # Send connected message — tells the mobile app to start WebRTC.
     await websocket.send_json(
         {
             "type": "connected",
@@ -465,22 +500,6 @@ async def _webrtc_mode(
             "stream_resolution": f"{settings.STREAM_WIDTH}x{settings.STREAM_HEIGHT}",
         }
     )
-
-    # Register this mobile client with the edge relay manager
-    await edge_relay_manager.register_mobile(room_id, websocket)
-
-    # Start local camera service if using local detection source
-    if using_local:
-        await local_camera_service.start(room_id)
-        recog_url = f"{settings.MEDIAMTX_RTSP_URL}/{room_id}"
-        logger.info(f"Local camera started for room {room_id}, recognition URL: {recog_url}")
-    else:
-        # Start recognition pipeline in the background (use high-res stream if configured)
-        recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
-        # In push mode (RPi -> mediamtx), pull frames from mediamtx's internal RTSP
-        if not recog_url:
-            recog_url = f"{settings.MEDIAMTX_RTSP_URL}/{room_id}"
-            logger.info(f"Recognition: push mode — pulling frames from mediamtx at {recog_url}")
 
     recog_ok = await recognition_service.start(room_id, recog_url, viewer_id)
     if not recog_ok:
@@ -524,10 +543,12 @@ async def _webrtc_mode(
                 last_recog_seq = current_recog_seq
                 last_recog_check = now
 
-            # When no edge device is connected (and not using local camera),
-            # feed recognition results into the track fusion service so
-            # bounding boxes appear.
-            if not using_local and not edge_relay_manager.has_edge_device(room_id):
+            # Feed recognition results (InsightFace SCRFD, 2 FPS) into the
+            # track fusion service for bounding boxes + identity.  Works for
+            # both local-camera mode (Reolink via mediamtx) and edge mode.
+            # MediaPipe BlazeFace short-range fails at CCTV distance (>2 m),
+            # so InsightFace is the primary detection source for all modes.
+            if not edge_relay_manager.has_edge_device(room_id):
                 recog_result = recognition_service.get_latest_detections(room_id)
                 if recog_result is not None:
                     det_dicts, recog_seq, fw, fh = recog_result

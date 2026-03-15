@@ -26,7 +26,7 @@ ROOM_ID="${ROOM_ID:-36168673-34de-4c64-8ace-c6b72cbaba3f}"
 MEDIAMTX_URL="rtsp://localhost:8554"
 
 # Reolink camera (when on the same WiFi network)
-CAMERA_RTSP_URL="${CAMERA_RTSP_URL:-rtsp://admin:Iams2026THESIS@192.168.1.100:554/h264Preview_01_sub}"
+CAMERA_RTSP_URL="${CAMERA_RTSP_URL:-rtsp://admin:%40Iams2026THESIS%21@192.168.88.10:554/h264Preview_01_sub}"
 
 # Test video file (for 'video' mode)
 TEST_VIDEO="${TEST_VIDEO:-}"
@@ -55,7 +55,10 @@ case "${MODE}" in
       -framerate 15 \
       -video_size 640x480 \
       -i "0" \
+      -pix_fmt yuv420p \
       -c:v libx264 \
+      -profile:v baseline \
+      -level:v 3.1 \
       -preset ultrafast \
       -tune zerolatency \
       -g 30 \
@@ -68,17 +71,30 @@ case "${MODE}" in
   camera)
     echo ""
     echo "Relaying Reolink camera to local mediamtx..."
-    echo "Make sure you're on the same WiFi as the camera (192.168.1.x)."
+    echo "Make sure you're on the same network as the camera (IAMS-Net / 192.168.88.x)."
     echo "Press Ctrl+C to stop."
     echo ""
 
-    # Same command as the RPi relay (production)
+    # Re-encode to H.264 Baseline for WebRTC compatibility.
+    # Reolink streams H.264 High profile which mobile WebRTC can't decode.
+    # -err_detect ignore_err: tolerate minor decode errors from Reolink
+    # -fflags +discardcorrupt: drop corrupted input packets
+    # -r 15: lock output at 15 FPS for consistent frame timing
     ffmpeg \
       -hide_banner -loglevel warning \
       -rtsp_transport tcp \
       -use_wallclock_as_timestamps 1 \
+      -err_detect ignore_err \
+      -fflags +discardcorrupt \
       -i "${CAMERA_RTSP_URL}" \
-      -c copy \
+      -r 15 \
+      -pix_fmt yuv420p \
+      -c:v libx264 \
+      -profile:v baseline \
+      -level:v 3.1 \
+      -preset ultrafast \
+      -tune zerolatency \
+      -g 30 \
       -an \
       -f rtsp \
       -rtsp_transport tcp \
@@ -110,7 +126,10 @@ case "${MODE}" in
       -stream_loop -1 \
       -re \
       -i "${TEST_VIDEO}" \
+      -pix_fmt yuv420p \
       -c:v libx264 \
+      -profile:v baseline \
+      -level:v 3.1 \
       -preset ultrafast \
       -tune zerolatency \
       -g 30 \

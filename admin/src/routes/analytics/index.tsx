@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Users,
@@ -10,6 +11,7 @@ import {
   UserX,
   ShieldAlert,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { usePageTitle } from '@/hooks/use-page-title'
 
 import { StatCard, LineChartCard } from '@/components/charts'
@@ -21,6 +23,10 @@ export default function AnalyticsPage() {
   usePageTitle('Analytics')
   const { data: metrics, isLoading: loading, error } = useSystemMetrics()
   const { data: trendRaw, isLoading: trendLoading } = useDailyTrend(30)
+
+  useEffect(() => {
+    if (error) toast.error('Failed to load system metrics')
+  }, [error])
 
   const trendData = Array.isArray(trendRaw)
     ? trendRaw.map((d: Record<string, unknown>) => ({
@@ -37,8 +43,6 @@ export default function AnalyticsPage() {
         <h1 className="text-2xl font-semibold tracking-tight">Analytics Dashboard</h1>
         <p className="text-muted-foreground">System-wide metrics and insights</p>
       </div>
-
-      {error && <p className="text-sm text-destructive">Failed to load system metrics</p>}
 
       {/* System Metrics */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">

@@ -27,11 +27,13 @@ from app.config import logger
 # Measurement matrix H: observes [cx, cy, w, h] from 8-dim state
 H = np.eye(4, 8, dtype=np.float64)
 
-# Base process noise (scaled by dt)
-Q_BASE = np.diag([0.5, 0.5, 0.25, 0.25, 3.0, 3.0, 0.5, 0.5])
+# Base process noise (scaled by dt).
+# Low velocity noise (1.0) prevents Kalman drift between slow (5 FPS)
+# recognition updates — keeps bounding boxes stable on mostly-still CCTV subjects.
+Q_BASE = np.diag([0.5, 0.5, 0.25, 0.25, 1.0, 1.0, 0.5, 0.5])
 
-# Measurement noise
-R = np.diag([6.0, 6.0, 6.0, 6.0])
+# Measurement noise — trust InsightFace detections closely
+R = np.diag([4.0, 4.0, 4.0, 4.0])
 
 
 def _make_F(dt: float) -> np.ndarray:
