@@ -245,8 +245,8 @@ class EdgeDevice:
             logger.warning("Failed to capture frame, skipping scan")
             return True
 
-        # Detect faces
-        face_boxes = self.detector.detect(frame)
+        # Detect faces and track with centroid tracker
+        face_boxes, tracked_objects = self.detector.detect_and_track(frame)
         face_count = len(face_boxes)
 
         self.total_faces_detected += face_count
@@ -256,7 +256,7 @@ class EdgeDevice:
         if face_count == 0:
             # Send empty detections so mobile clears overlay boxes
             if edge_ws_client.is_connected:
-                edge_ws_client.send_detections([], frame.shape[1], frame.shape[0])
+                edge_ws_client.send_tracked_detections([], frame.shape[1], frame.shape[0], self.detector.frame_seq)
 
             # Even with no detections, update smart sampler so it can
             # detect gone faces (tracks that timed out).
@@ -275,17 +275,11 @@ class EdgeDevice:
         # When the smart sampler IS active, we defer until after its update()
         # so we can attach real track IDs.
         if edge_ws_client.is_connected and self.smart_sampler is None:
-            ws_detections = []
-            for i, fb in enumerate(face_boxes):
-                ws_detections.append({
-                    "bbox": fb.to_list(),
-                    "confidence": fb.confidence,
-                    "track_id": str(i),
-                })
-            edge_ws_client.send_detections(
-                ws_detections,
+            edge_ws_client.send_tracked_detections(
+                tracked_objects,
                 frame_width=frame.shape[1],
                 frame_height=frame.shape[0],
+                frame_seq=self.detector.frame_seq,
             )
 
         # Process faces
@@ -303,19 +297,13 @@ class EdgeDevice:
             detections = [fd.bbox for fd in face_data_list]
             faces_to_send, gone_track_ids = self.smart_sampler.update(detections, face_data_list)
 
-            # Push bounding boxes with real track IDs from the sampler
+            # Push bounding boxes with real track IDs from the centroid tracker
             if edge_ws_client.is_connected:
-                ws_detections = []
-                for tid, track in self.smart_sampler._tracks.items():
-                    ws_detections.append({
-                        "bbox": track.bbox,
-                        "confidence": track.confidence,
-                        "track_id": str(tid),
-                    })
-                edge_ws_client.send_detections(
-                    ws_detections,
+                edge_ws_client.send_tracked_detections(
+                    tracked_objects,
                     frame_width=frame.shape[1],
                     frame_height=frame.shape[0],
+                    frame_seq=self.detector.frame_seq,
                 )
 
             if gone_track_ids:
