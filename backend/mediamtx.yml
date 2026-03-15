@@ -1,32 +1,57 @@
-# mediamtx configuration for IAMS
-# mediamtx bridges RTSP camera streams to WebRTC (WHEP) for mobile playback.
-# Paths are created dynamically at runtime via the REST API by webrtc_service.py.
+# mediamtx LOCAL DEV configuration for IAMS
+#
+# Mirrors the production Docker setup (deploy/mediamtx.yml):
+# - Accepts RTSP push from dev-stream.sh (simulating RPi relay)
+# - Serves WebRTC (WHEP) to mobile clients on the same LAN
+# - Backend pulls RTSP for face recognition
+#
+# Differences from production:
+# - Binds to 0.0.0.0 so mobile devices on the LAN can reach WebRTC
+# - No TURN server (LAN doesn't need NAT traversal)
+# - No ICE additionalHosts (LAN IP is directly reachable)
 
-logLevel: warn        # suppress routine logs; FastAPI has its own logging
+logLevel: warn
 
-# REST API — used by FastAPI's webrtc_service to create/delete paths
-# Bound to loopback: FastAPI is the only caller; never expose :9997 externally.
+# Authentication: allow anything locally (same as production)
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+        path:
+      - action: read
+        path:
+      - action: playback
+        path:
+      - action: api
+      - action: metrics
+      - action: pprof
+
+# REST API — used by FastAPI backend to manage paths
 api: yes
-apiAddress: 127.0.0.1:9997
+apiAddress: :9997
 
-# RTSP — mediamtx pulls from the camera outbound (sourceOnDemand).
-# Port 8554 is occupied by the QEMU RPi emulator; use 8556 to avoid conflict.
-# Bound to loopback: no external RTSP push ingest is needed in this setup.
+# RTSP — accepts push from dev-stream.sh (simulating RPi relay)
 rtsp: yes
-rtspAddress: 127.0.0.1:8556
-rtspsAddress: 127.0.0.1:8323
+rtspAddress: :8554
 
-# WebRTC (WHEP) — mobile clients negotiate here via FastAPI proxy
-# webrtcLocalUDPAddress: explicit ICE UDP port (default :8000 collides with orphaned instances)
+# WebRTC (WHEP) — mobile clients connect here via FastAPI proxy
+# Bind to all interfaces so phones on the same WiFi can reach it
 webrtc: yes
-webrtcAddress: 127.0.0.1:8889
+webrtcAddress: :8889
 webrtcLocalUDPAddress: :8887
 
-# No HLS or other protocols needed
+# Disable unused protocols
 hls: no
 srt: no
 rtmp: no
 
-# All paths are added dynamically via the API (sourceOnDemand=true)
-# FastAPI calls POST /v3/config/paths/add/{room_id} for each active room.
-paths: {}
+# Low-latency (same as production)
+writeQueueSize: 8
+
+# Accept any path — dev-stream.sh pushes RTSP dynamically (same as production)
+paths:
+  all_others:
+    overridePublisher: yes

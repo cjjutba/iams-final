@@ -1,0 +1,37 @@
+[Unit]
+Description=IAMS RTSP Relay (Reolink → VPS mediamtx)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+EnvironmentFile=/home/pi/iams-relay.env
+ExecStart=/usr/bin/ffmpeg \
+    -hide_banner -loglevel warning \
+    -rtsp_transport tcp \
+    -use_wallclock_as_timestamps 1 \
+    -i ${CAMERA_RTSP_URL} \
+    -c copy \
+    -an \
+    -f rtsp \
+    -rtsp_transport tcp \
+    ${VPS_RTSP_URL}/${ROOM_ID}
+
+# Restart aggressively — relay must stay up
+Restart=always
+RestartSec=3
+StartLimitInterval=120
+StartLimitBurst=20
+
+# Low resource usage (copy-only, no transcoding)
+MemoryLimit=128M
+CPUQuota=20%
+
+# Logging
+StandardOutput=append:/home/pi/iams-relay.log
+StandardError=append:/home/pi/iams-relay.log
+
+[Install]
+WantedBy=multi-user.target

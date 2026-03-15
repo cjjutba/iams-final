@@ -200,6 +200,64 @@ async def startup_event():
             max_instances=1,  # Prevent overlapping runs
         )
 
+        # Bridge: feed VPS recognition detections into presence tracking
+        # Runs every 5 seconds. Maps room_id → schedule_id via active sessions,
+        # then feeds identified faces into the tracking service so the 60-second
+        # scan cycle can use them for attendance marking.
+        async def bridge_recognition_to_presence():
+            """Feed recognition detections into presence tracking service."""
+            from app.services.presence_service import PresenceService
+            from app.services.recognition_service import recognition_service
+
+            active_sessions = PresenceService._active_sessions
+            if not active_sessions:
+                return
+
+            # Build room_id → schedule_id mapping from active sessions
+            room_to_schedule: dict[str, str] = {}
+            for schedule_id, session in active_sessions.items():
+                rid = getattr(session.schedule, "room_id", None)
+                if rid:
+                    room_to_schedule[str(rid)] = schedule_id
+
+            if not room_to_schedule:
+                return
+
+            fed_count = 0
+            for room_id, schedule_id in room_to_schedule.items():
+                detections = recognition_service.get_detections_objects(room_id)
+                if not detections:
+                    continue
+
+                db = SessionLocal()
+                try:
+                    presence_svc = PresenceService(db)
+                    for det in detections:
+                        if not det.user_id:
+                            continue
+                        # Convert recognition bbox (x, y, w, h) to tracking bbox (x1, y1, x2, y2)
+                        bbox = [det.x, det.y, det.x + det.width, det.y + det.height]
+                        await presence_svc.feed_detection(
+                            schedule_id, det.user_id, det.similarity or 0.0, bbox
+                        )
+                        fed_count += 1
+                except Exception as e:
+                    logger.error(f"Recognition→Presence bridge error for room {room_id}: {e}")
+                finally:
+                    db.close()
+
+            if fed_count:
+                logger.debug(f"Recognition→Presence bridge: fed {fed_count} detection(s)")
+
+        scheduler.add_job(
+            bridge_recognition_to_presence,
+            "interval",
+            seconds=5,
+            id="recognition_presence_bridge",
+            replace_existing=True,
+            max_instances=1,
+        )
+
         # Periodic FAISS health check (every 30 minutes)
         async def run_faiss_health_check():
             """Compare FAISS vector count with DB active registrations."""
@@ -314,6 +372,7 @@ async def startup_event():
         # Start the scheduler
         scheduler.start()
         logger.info(f"Presence tracking scheduler started (scan interval: {settings.SCAN_INTERVAL_SECONDS}s)")
+        logger.info("Recognition→Presence bridge started (every 5s)")
         logger.info("Auto-session scheduler started (checks every 60s)")
         logger.info("Digest scheduler started (daily 8PM, weekly Mon 8AM)")
 

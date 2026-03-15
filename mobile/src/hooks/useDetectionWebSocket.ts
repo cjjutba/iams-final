@@ -113,7 +113,7 @@ export interface UseDetectionWebSocketReturn {
 const DETECTION_DELAY: Record<string, number> = {
   hls: 1500,     // HLS: FFmpeg encode + segment + delivery + decode ≈ 1.5 s
   legacy: 500,   // Legacy MJPEG: smaller pipeline ≈ 0.5 s
-  webrtc: 150,   // WebRTC: very low latency ≈ 150 ms
+  webrtc: 0,     // WebRTC: detections already lag behind video due to processing time
 };
 
 interface QueuedDetection {

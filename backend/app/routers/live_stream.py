@@ -306,7 +306,7 @@ async def _hls_mode(
     receive_task = asyncio.create_task(_receive_loop())
 
     # --- Push detection metadata ---
-    poll_interval = 0.5  # 500ms ≈ 2Hz, matching RECOGNITION_FPS (edge relay handles real-time boxes)
+    poll_interval = 0.1  # 100ms — catch every recognition update at 5 FPS
     last_seq = -1
     last_send_time = asyncio.get_event_loop().time()
     heartbeat_interval = 5.0  # send heartbeat every 5s even when no detections change
@@ -325,9 +325,6 @@ async def _hls_mode(
                     logger.info(f"HLS: health check detected dead FFmpeg for room {room_id}, restarting...")
                     await hls_service.ensure_healthy(room_id)
 
-            # Check if an edge device is connected for this room
-            edge_connected = edge_relay_manager.has_edge_device(room_id)
-
             result = recognition_service.get_latest_detections(room_id)
 
             if result is not None:
@@ -342,36 +339,19 @@ async def _hls_mode(
                         det_objects = recognition_service.get_detections_objects(room_id)
                         detections_dicts = _enrich_and_cache(detections_dicts, det_objects, SessionLocal)
 
-                    if edge_connected:
-                        # Edge device handles bounding boxes — push identity
-                        # mappings so they merge into the relay stream.
-                        mappings = []
-                        for d in detections_dicts:
-                            if d.get("user_id"):
-                                mappings.append(
-                                    {
-                                        "track_id": d.get("track_id"),
-                                        "user_id": d["user_id"],
-                                        "name": d.get("name"),
-                                        "student_id": d.get("student_id"),
-                                        "confidence": d.get("similarity"),
-                                        "bbox": d.get("bbox"),
-                                    }
-                                )
-                        if mappings:
-                            await edge_relay_manager.push_identity_update(room_id, mappings)
-                    else:
-                        # No edge device — fall back to sending detections directly
-                        ts = datetime.now(UTC).isoformat()
-                        await websocket.send_json(
-                            {
-                                "type": "detections",
-                                "timestamp": ts,
-                                "detections": detections_dicts,
-                                "detection_width": det_w,
-                                "detection_height": det_h,
-                            }
-                        )
+                    # Always send detections directly to mobile.
+                    # The VPS recognition service is the authoritative source
+                    # of bounding boxes and identities.
+                    ts = datetime.now(UTC).isoformat()
+                    await websocket.send_json(
+                        {
+                            "type": "detections",
+                            "timestamp": ts,
+                            "detections": detections_dicts,
+                            "detection_width": det_w,
+                            "detection_height": det_h,
+                        }
+                    )
                     last_send_time = now
 
                 elif (now - last_send_time) >= heartbeat_interval:
@@ -489,7 +469,7 @@ async def _webrtc_mode(
     receive_task = asyncio.create_task(_receive_loop())
 
     # --- Push detection metadata ---
-    poll_interval = 0.5  # 500ms ≈ 2Hz, matching RECOGNITION_FPS (edge relay handles real-time boxes)
+    poll_interval = 0.1  # 100ms — catch every recognition update at 5 FPS
     last_seq = -1
     last_send_time = asyncio.get_event_loop().time()
     heartbeat_interval = 5.0  # send heartbeat every 5s even when no detections change
@@ -498,11 +478,6 @@ async def _webrtc_mode(
     try:
         while not stop_event.is_set():
             now = asyncio.get_event_loop().time()
-
-            # Check if an edge device is connected for this room.
-            # If yes, bounding boxes are relayed by EdgeRelayManager — we only
-            # need to push identity updates from the recognition service.
-            edge_connected = edge_relay_manager.has_edge_device(room_id)
 
             result = recognition_service.get_latest_detections(room_id)
 
@@ -518,36 +493,19 @@ async def _webrtc_mode(
                         det_objects = recognition_service.get_detections_objects(room_id)
                         detections_dicts = _enrich_and_cache(detections_dicts, det_objects, SessionLocal)
 
-                    if edge_connected:
-                        # Edge device handles bounding boxes — push identity
-                        # mappings so they merge into the relay stream.
-                        mappings = []
-                        for d in detections_dicts:
-                            if d.get("user_id"):
-                                mappings.append(
-                                    {
-                                        "track_id": d.get("track_id"),
-                                        "user_id": d["user_id"],
-                                        "name": d.get("name"),
-                                        "student_id": d.get("student_id"),
-                                        "confidence": d.get("similarity"),
-                                        "bbox": d.get("bbox"),
-                                    }
-                                )
-                        if mappings:
-                            await edge_relay_manager.push_identity_update(room_id, mappings)
-                    else:
-                        # No edge device — fall back to sending detections directly
-                        ts = datetime.now(UTC).isoformat()
-                        await websocket.send_json(
-                            {
-                                "type": "detections",
-                                "timestamp": ts,
-                                "detections": detections_dicts,
-                                "detection_width": det_w,
-                                "detection_height": det_h,
-                            }
-                        )
+                    # Always send detections directly to mobile.
+                    # The VPS recognition service is the authoritative source
+                    # of bounding boxes and identities.
+                    ts = datetime.now(UTC).isoformat()
+                    await websocket.send_json(
+                        {
+                            "type": "detections",
+                            "timestamp": ts,
+                            "detections": detections_dicts,
+                            "detection_width": det_w,
+                            "detection_height": det_h,
+                        }
+                    )
                     last_send_time = now
 
                 elif (now - last_send_time) >= heartbeat_interval:

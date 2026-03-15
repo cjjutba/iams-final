@@ -2,8 +2,8 @@
  * Detection Overlay
  *
  * Renders face detection bounding boxes on top of RTCView / video.
- * Uses plain View components (not react-native-reanimated) to ensure
- * rendering works on Android's SurfaceView (RTCView).
+ * Uses React Native's Animated API for smooth interpolation between
+ * detection frames — boxes glide to new positions instead of jumping.
  *
  * The box and its name label are rendered as **separate** absolutely-
  * positioned Views (siblings in the overlay). This avoids Android's
@@ -11,8 +11,8 @@
  * so its width isn't constrained by the tiny face-crop rectangle.
  */
 
-import React, { useMemo } from 'react';
-import { View, Text, StyleSheet, Platform } from 'react-native';
+import React, { useRef, useEffect, useMemo } from 'react';
+import { View, Text, Animated, Easing, StyleSheet, Platform } from 'react-native';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -110,12 +110,16 @@ const COLOR_UNKNOWN = '#F59E0B';
 
 const LABEL_OFFSET = 10; // px above the box top
 
+/** Duration for position interpolation (ms). Should roughly match the
+ *  interval between detection updates (~100ms at 10 FPS). */
+const INTERPOLATION_DURATION = 100;
+
 function getDetectionColor(userId: string | null): string {
   return userId ? COLOR_RECOGNIZED : COLOR_UNKNOWN;
 }
 
 // ---------------------------------------------------------------------------
-// DetectionBox — plain View (works on top of Android SurfaceView/RTCView)
+// AnimatedDetectionBox — smooth position interpolation
 // ---------------------------------------------------------------------------
 
 interface BoxProps {
@@ -126,7 +130,7 @@ interface BoxProps {
   scaleInfo: ScaleInfo;
 }
 
-const DetectionBox: React.FC<BoxProps> = React.memo(({
+const AnimatedDetectionBox: React.FC<BoxProps> = React.memo(({
   bbox,
   userId,
   label,
@@ -135,51 +139,122 @@ const DetectionBox: React.FC<BoxProps> = React.memo(({
 }) => {
   const { scale, offsetX, offsetY } = scaleInfo;
 
-  const left = bbox.x * scale + offsetX;
-  const top = bbox.y * scale + offsetY;
-  const width = bbox.width * scale;
-  const height = bbox.height * scale;
+  const targetLeft = bbox.x * scale + offsetX;
+  const targetTop = bbox.y * scale + offsetY;
+  const targetWidth = bbox.width * scale;
+  const targetHeight = bbox.height * scale;
   const borderColor = getDetectionColor(userId);
-  const opacity = staleFrames > 0 ? 0.3 : 1;
+  const targetOpacity = staleFrames > 0 ? 0.3 : 1;
   const hasLabel = label.length > 0;
+
+  // Label position (centered above box)
+  const targetLabelLeft = targetLeft + targetWidth / 2;
+  const targetLabelTop = Math.max(0, targetTop - LABEL_OFFSET);
+
+  // Animated values — initialized to target on first render
+  const anim = useRef({
+    left: new Animated.Value(targetLeft),
+    top: new Animated.Value(targetTop),
+    width: new Animated.Value(targetWidth),
+    height: new Animated.Value(targetHeight),
+    opacity: new Animated.Value(targetOpacity),
+    labelLeft: new Animated.Value(targetLabelLeft),
+    labelTop: new Animated.Value(targetLabelTop),
+  }).current;
+
+  const isFirstRender = useRef(true);
+
+  useEffect(() => {
+    if (isFirstRender.current) {
+      // First render: snap to position (no animation)
+      isFirstRender.current = false;
+      return;
+    }
+
+    // Animate smoothly to new position
+    Animated.parallel([
+      Animated.timing(anim.left, {
+        toValue: targetLeft,
+        duration: INTERPOLATION_DURATION,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      }),
+      Animated.timing(anim.top, {
+        toValue: targetTop,
+        duration: INTERPOLATION_DURATION,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      }),
+      Animated.timing(anim.width, {
+        toValue: targetWidth,
+        duration: INTERPOLATION_DURATION,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      }),
+      Animated.timing(anim.height, {
+        toValue: targetHeight,
+        duration: INTERPOLATION_DURATION,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      }),
+      Animated.timing(anim.opacity, {
+        toValue: targetOpacity,
+        duration: 200,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      }),
+      Animated.timing(anim.labelLeft, {
+        toValue: targetLabelLeft,
+        duration: INTERPOLATION_DURATION,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      }),
+      Animated.timing(anim.labelTop, {
+        toValue: targetLabelTop,
+        duration: INTERPOLATION_DURATION,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      }),
+    ]).start();
+  }, [targetLeft, targetTop, targetWidth, targetHeight, targetOpacity, targetLabelLeft, targetLabelTop]);
 
   return (
     <>
       {/* Bounding box */}
-      <View
+      <Animated.View
         style={[
           styles.box,
           {
-            left,
-            top,
-            width,
-            height,
+            left: anim.left,
+            top: anim.top,
+            width: anim.width,
+            height: anim.height,
             borderColor,
-            opacity,
+            opacity: anim.opacity,
           },
         ]}
       />
       {/* Name label (separate element — not clipped by box width) */}
       {hasLabel && (
-        <View
+        <Animated.View
           style={[
             styles.labelAnchor,
             {
-              left: left + width / 2,
-              top: Math.max(0, top - LABEL_OFFSET),
-              opacity,
+              left: anim.labelLeft,
+              top: anim.labelTop,
+              opacity: anim.opacity,
             },
           ]}
         >
           <Text style={[styles.labelText, { color: borderColor }]} numberOfLines={1}>
             {label}
           </Text>
-        </View>
+        </Animated.View>
       )}
     </>
   );
 });
-DetectionBox.displayName = 'DetectionBox';
+AnimatedDetectionBox.displayName = 'AnimatedDetectionBox';
 
 // ---------------------------------------------------------------------------
 // UnknownBadge
@@ -242,7 +317,7 @@ export const DetectionOverlay: React.FC<DetectionOverlayProps> = React.memo(
           const staleFrames = (det as any).staleFrames ?? 0;
 
           return (
-            <DetectionBox
+            <AnimatedDetectionBox
               key={trackId}
               bbox={det.bbox}
               userId={det.user_id}
