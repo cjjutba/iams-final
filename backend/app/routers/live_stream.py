@@ -3,23 +3,17 @@ Live Stream Router
 
 WebSocket endpoint for live camera streaming to the mobile app.
 
-Supports three modes, selected in priority order:
-
-**WebRTC mode (USE_WEBRTC_STREAMING=true, default):**
-    Video is delivered via mediamtx → WebRTC (WHEP protocol) at <300ms latency.
+**WebRTC mode (always):**
+    Video is delivered via mediamtx -> WebRTC (WHEP protocol) at <300ms latency.
     This WebSocket only pushes lightweight detection metadata (~200 bytes):
         { "type": "detections", "timestamp": "...", "detections": [...] }
-    The ``connected`` message includes ``"mode": "webrtc"`` (no hls_url).
+    The ``connected`` message includes ``"mode": "webrtc"``.
     The mobile app simultaneously calls POST /api/v1/webrtc/{schedule_id}/offer
     to establish the WebRTC peer connection for video.
 
-**HLS mode (USE_WEBRTC_STREAMING=false, USE_HLS_STREAMING=true):**
-    Video is delivered via FFmpeg → HLS segments (see hls.py router).
-    The ``connected`` message includes ``hls_url`` for the native video player.
-
-**Legacy mode (both streaming flags false):**
-    Frames are JPEG-encoded, base64'd, and sent as ``type: "frame"``
-    messages (~50-100KB per frame).
+**Detection sources:**
+    - ``DETECTION_SOURCE="local"``: local camera service pushes to mediamtx
+    - ``DETECTION_SOURCE="edge"``: RPi edge device pushes to mediamtx
 """
 
 import asyncio
@@ -37,11 +31,134 @@ from app.database import SessionLocal
 from app.repositories.schedule_repository import ScheduleRepository
 from app.services.camera_config import get_camera_url
 from app.services.edge_relay_service import edge_relay_manager, track_fusion_service
-from app.services.hls_service import hls_service
+from app.services.local_camera_service import local_camera_service
 from app.services.recognition_service import recognition_service
 from app.services.webrtc_service import webrtc_service
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Lightweight centroid/IoU tracker for stable track IDs across recognition
+# frames.  InsightFace doesn't guarantee detection ordering, so we match
+# detections between consecutive frames using IoU to maintain persistent IDs.
+# ---------------------------------------------------------------------------
+
+
+class RecognitionTracker:
+    """
+    Assign stable track IDs to recognition detections using IoU matching
+    with centroid distance fallback.
+
+    When recognition runs slowly (due to h264 errors or CPU load), a person
+    may move significantly between frames. IoU drops to zero, but centroid
+    distance can still match them. This prevents track ID churn that causes
+    identity loss in the fusion service.
+    """
+
+    def __init__(
+        self,
+        iou_threshold: float = 0.25,
+        max_centroid_dist: float = 120.0,
+    ):
+        self._iou_threshold = iou_threshold
+        self._max_centroid_dist = max_centroid_dist
+        self._next_id: int = 1
+        # room_id -> list of (track_id, bbox_dict, user_id, det_dict)
+        self._prev: dict[str, list[tuple]] = {}
+
+    @staticmethod
+    def _iou(a: dict, b: dict) -> float:
+        """Compute IoU between two bbox dicts {x, y, width, height}."""
+        ax1, ay1 = a["x"], a["y"]
+        ax2, ay2 = ax1 + a["width"], ay1 + a["height"]
+        bx1, by1 = b["x"], b["y"]
+        bx2, by2 = bx1 + b["width"], by1 + b["height"]
+
+        ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+        ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+        inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+        if inter == 0:
+            return 0.0
+        area_a = a["width"] * a["height"]
+        area_b = b["width"] * b["height"]
+        union = area_a + area_b - inter
+        return inter / union if union > 0 else 0.0
+
+    @staticmethod
+    def _centroid_dist(a: dict, b: dict) -> float:
+        """Euclidean distance between bbox centroids."""
+        acx = a.get("x", 0) + a.get("width", 0) / 2
+        acy = a.get("y", 0) + a.get("height", 0) / 2
+        bcx = b.get("x", 0) + b.get("width", 0) / 2
+        bcy = b.get("y", 0) + b.get("height", 0) / 2
+        return ((acx - bcx) ** 2 + (acy - bcy) ** 2) ** 0.5
+
+    def assign(self, room_id: str, det_dicts: list[dict]) -> list[tuple[int, dict]]:
+        """
+        Match current detections to previous frame via IoU, falling back
+        to centroid distance when IoU is too low (e.g. person moved).
+        Returns list of (stable_track_id, det_dict) pairs.
+        """
+        prev = self._prev.get(room_id, [])
+        results: list[tuple[int, dict]] = []
+        used_prev: set[int] = set()
+
+        for det in det_dicts:
+            bbox = det.get("bbox", {})
+            if not bbox:
+                continue
+
+            best_iou = 0.0
+            best_idx = -1
+            for idx, (_, prev_bbox, _, _) in enumerate(prev):
+                if idx in used_prev:
+                    continue
+                iou = self._iou(bbox, prev_bbox)
+                if iou > best_iou:
+                    best_iou = iou
+                    best_idx = idx
+
+            if best_iou >= self._iou_threshold and best_idx >= 0:
+                # IoU match — reuse previous track ID
+                tid = prev[best_idx][0]
+                used_prev.add(best_idx)
+            else:
+                # IoU too low — try centroid distance fallback
+                best_dist = float("inf")
+                best_dist_idx = -1
+                for idx, (_, prev_bbox, _, _) in enumerate(prev):
+                    if idx in used_prev:
+                        continue
+                    dist = self._centroid_dist(bbox, prev_bbox)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_dist_idx = idx
+
+                if best_dist <= self._max_centroid_dist and best_dist_idx >= 0:
+                    tid = prev[best_dist_idx][0]
+                    used_prev.add(best_dist_idx)
+                else:
+                    # Truly new face
+                    tid = self._next_id
+                    self._next_id += 1
+
+            results.append((tid, det))
+
+        # Store current frame for next matching
+        self._prev[room_id] = [
+            (tid, det.get("bbox", {}), det.get("user_id"), det)
+            for tid, det in results
+        ]
+        return results
+
+    def cleanup(self, room_id: str) -> None:
+        """Remove state for a room."""
+        self._prev.pop(room_id, None)
+
+
+# Global tracker instance shared across all rooms
+_recognition_tracker = RecognitionTracker(iou_threshold=0.25, max_centroid_dist=120.0)
 
 
 class NameCache:
@@ -49,7 +166,7 @@ class NameCache:
 
     def __init__(self, ttl_seconds: float = 300.0):
         self._lock = _threading.Lock()
-        # uid → ((name, student_id), inserted_at_monotonic)
+        # uid -> ((name, student_id), inserted_at_monotonic)
         self._store: dict[str, tuple] = {}
         self._ttl = ttl_seconds
 
@@ -116,11 +233,10 @@ async def live_stream_ws(schedule_id: str, websocket: WebSocket):
     Live stream WebSocket endpoint.
 
     Accepts a WebSocket connection, verifies the schedule, resolves the
-    camera RTSP URL, then either:
-    - (HLS mode) starts HLS + recognition and pushes detection metadata
-    - (Legacy mode) pushes annotated JPEG frames
+    camera RTSP URL, then runs WebRTC mode with detection metadata push.
     """
     viewer_id = str(uuid_mod.uuid4())
+    using_local = settings.DETECTION_SOURCE == "local"
 
     # --- Validate schedule and resolve camera URL ---
     db = SessionLocal()
@@ -142,19 +258,6 @@ async def live_stream_ws(schedule_id: str, websocket: WebSocket):
         room_id = str(schedule.room_id)
         rtsp_url = get_camera_url(room_id, db)
 
-        # In push mode (RPi → mediamtx), rtsp_url may be None.
-        # Only error out if WebRTC is also unavailable.
-        if rtsp_url is None and not settings.USE_WEBRTC_STREAMING:
-            await websocket.accept()
-            await websocket.send_json(
-                {
-                    "type": "error",
-                    "message": "No camera configured for this room",
-                }
-            )
-            await websocket.close(code=4003, reason="No camera configured")
-            return
-
     except Exception as exc:
         logger.error(f"Live stream setup error: {exc}")
         try:
@@ -175,123 +278,77 @@ async def live_stream_ws(schedule_id: str, websocket: WebSocket):
     # --- Accept WebSocket ---
     await websocket.accept()
 
-    # Determine stream mode, with automatic fallback.
-    # If WebRTC is configured but mediamtx is unreachable, fall back to HLS
-    # so the client always gets video rather than an endless retry loop.
-    use_webrtc = False
-    if settings.USE_WEBRTC_STREAMING:
+    if using_local:
+        # Local camera mode: skip mediamtx path check — local_camera_service
+        # will push to mediamtx itself.
+        logger.info(
+            f"Live stream WS connected: viewer={viewer_id}, schedule={schedule_id}, "
+            f"room={room_id}, mode=webrtc, detection_source=local"
+        )
+    else:
+        # Edge mode: check mediamtx path, wait for camera if needed
         if rtsp_url:
-            # Pull mode: tell mediamtx to pull from the camera RTSP URL
             mediamtx_ok = await webrtc_service.ensure_path(room_id, rtsp_url)
         else:
-            # Push mode: RPi pushes RTSP to mediamtx, just check path exists
             mediamtx_ok = await webrtc_service.check_path_exists(room_id)
-        if mediamtx_ok:
-            use_webrtc = True
-        else:
-            if rtsp_url:
-                logger.warning(
-                    f"Live stream: mediamtx unreachable, falling back to "
-                    f"{'HLS' if settings.USE_HLS_STREAMING else 'legacy'} "
-                    f"for room {room_id}"
-                )
-            else:
-                logger.warning(
-                    f"Live stream: no RTSP URL and mediamtx path not found "
-                    f"for room {room_id} — is the edge device streaming?"
-                )
 
-    if use_webrtc:
-        _mode_label = "webrtc"
-    elif settings.USE_HLS_STREAMING:
-        _mode_label = "hls"
-    else:
-        _mode_label = "legacy"
+        if not mediamtx_ok and rtsp_url is None:
+            # No RTSP URL and mediamtx path not found — wait for edge device
+            logger.warning(
+                f"Live stream: no RTSP URL and mediamtx path not found "
+                f"for room {room_id} — is the edge device streaming?"
+            )
+            resolved = await _wait_for_camera(
+                websocket, schedule_id, room_id, db_factory=SessionLocal,
+            )
+            if resolved is None:
+                return
+            _, rtsp_url = resolved
+        elif not mediamtx_ok:
+            logger.warning(
+                f"Live stream: mediamtx unreachable for room {room_id}, "
+                f"proceeding anyway"
+            )
 
-    logger.info(
-        f"Live stream WS connected: viewer={viewer_id}, schedule={schedule_id}, room={room_id}, mode={_mode_label}"
-    )
-
-    # If WebRTC failed and we have no rtsp_url, there's nothing to stream.
-    # Send a "waiting" status so the mobile app shows a friendly state
-    # instead of a hard error, then close so the client can retry.
-    if not use_webrtc and rtsp_url is None:
-        await websocket.send_json(
-            {
-                "type": "waiting",
-                "message": "Waiting for camera — edge device is not streaming yet",
-            }
+        logger.info(
+            f"Live stream WS connected: viewer={viewer_id}, schedule={schedule_id}, "
+            f"room={room_id}, mode=webrtc, detection_source=edge"
         )
-        await websocket.close(code=4003, reason="No stream available")
-        return
 
-    if use_webrtc:
-        await _webrtc_mode(websocket, viewer_id, schedule_id, room_id, rtsp_url)
-    elif settings.USE_HLS_STREAMING:
-        await _hls_mode(websocket, viewer_id, schedule_id, room_id, rtsp_url)
-    else:
-        await _legacy_mode(websocket, viewer_id, schedule_id, room_id, rtsp_url)
+    await _webrtc_mode(websocket, viewer_id, schedule_id, room_id, rtsp_url)
 
 
 # ---------------------------------------------------------------------------
-# HLS mode: metadata-only WebSocket
+# Camera availability polling (keeps WebSocket open)
 # ---------------------------------------------------------------------------
 
+_CAMERA_POLL_INTERVAL = 5.0  # seconds between checks
+_CAMERA_POLL_MAX_WAIT = 300.0  # give up after 5 minutes
 
-async def _hls_mode(
+
+async def _wait_for_camera(
     websocket: WebSocket,
-    viewer_id: str,
     schedule_id: str,
     room_id: str,
-    rtsp_url: str,
-):
+    *,
+    db_factory,
+) -> tuple[bool, str] | None:
     """
-    HLS mode: start FFmpeg HLS stream + recognition pipeline,
-    then push only detection metadata over WebSocket.
+    Keep the WebSocket open while waiting for a camera stream to become
+    available.  Sends periodic ``waiting`` messages so the mobile app can
+    show a friendly "Waiting for camera" indicator.
 
-    When an edge device is connected, bounding-box relay is handled by
-    EdgeRelayManager and this loop only pushes identity updates.
-    Falls back to direct ``detections`` messages when no edge device.
+    Returns ``(use_webrtc, rtsp_url)`` once a stream is found, or ``None``
+    if the client disconnected or the timeout was reached.
     """
-    # Start HLS stream
-    hls_ok = await hls_service.start_stream(room_id, rtsp_url, viewer_id)
-    if not hls_ok:
-        await websocket.send_json(
-            {
-                "type": "error",
-                "message": "Failed to start HLS stream (is FFmpeg installed?)",
-            }
-        )
-        await websocket.close(code=4002, reason="HLS unavailable")
-        return
-
-    # Build HLS URL relative to API base
-    hls_url = f"{settings.API_PREFIX}/hls/{room_id}/playlist.m3u8"
-
-    # Send initial connected message FIRST — recognition startup can take
-    # 30+ seconds (RTSP timeout) and must not block the mobile UI.
     await websocket.send_json(
         {
-            "type": "connected",
-            "schedule_id": schedule_id,
-            "room_id": room_id,
-            "hls_url": hls_url,
-            "stream_fps": settings.STREAM_FPS,
-            "stream_resolution": f"{settings.STREAM_WIDTH}x{settings.STREAM_HEIGHT}",
-            "mode": "hls",
+            "type": "waiting",
+            "message": "Waiting for camera — edge device is not streaming yet",
         }
     )
 
-    # Register this mobile client with the edge relay manager
-    await edge_relay_manager.register_mobile(room_id, websocket)
-
-    # Start recognition pipeline (use high-res stream if configured)
-    recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
-    recog_ok = await recognition_service.start(room_id, recog_url, viewer_id)
-    if not recog_ok:
-        logger.warning("Recognition service failed to start — HLS video will stream without overlays")
-
-    # --- Receive task (handle pings/close) ---
+    # Receive task so we notice if the client disconnects
     stop_event = asyncio.Event()
 
     async def _receive_loop():
@@ -304,94 +361,67 @@ async def _hls_mode(
             stop_event.set()
 
     receive_task = asyncio.create_task(_receive_loop())
-
-    # --- Push fused track metadata at 30 FPS ---
-    FUSED_INTERVAL = 1.0 / 30.0  # 33ms for 30 FPS
-    last_fused_send = 0.0
-    fused_seq = 0
-    last_update_seq = track_fusion_service.get_update_seq(room_id)
-    last_heartbeat = _time.time()
-    last_health_check = _time.time()
-    health_check_interval = 10.0  # check FFmpeg liveness every 10 s
-    last_recog_check = _time.time()
-    last_recog_seq = 0
+    start = _time.monotonic()
 
     try:
         while not stop_event.is_set():
-            now = _time.time()
+            await asyncio.sleep(_CAMERA_POLL_INTERVAL)
+            if stop_event.is_set():
+                break
 
-            # Periodically verify FFmpeg is still alive; restart if it died
-            if now - last_health_check >= health_check_interval:
-                last_health_check = now
-                if not hls_service.is_active(room_id):
-                    logger.info(f"HLS: health check detected dead FFmpeg for room {room_id}, restarting...")
-                    await hls_service.ensure_healthy(room_id)
-
-            # Periodically check if recognition service has stalled
-            if now - last_recog_check > 10.0:
-                current_recog_seq = track_fusion_service.get_update_seq(room_id)
-                if current_recog_seq == last_recog_seq and current_recog_seq > 0:
-                    logger.warning(f"Recognition service appears stalled for room {room_id}, restarting")
-                    await recognition_service.stop(room_id, viewer_id)
-                    await recognition_service.start(room_id, recog_url, viewer_id)
-                last_recog_seq = current_recog_seq
-                last_recog_check = now
-
-            elapsed = now - last_fused_send
-
-            if elapsed >= FUSED_INTERVAL:
-                # Only predict when no edge update arrived since the last tick
-                # to avoid double prediction (update_from_edge already does predict+update)
-                current_seq = track_fusion_service.get_update_seq(room_id)
-                if current_seq == last_update_seq:
-                    track_fusion_service.predict(room_id, dt=min(elapsed, 0.1))
-                last_update_seq = current_seq
-
-                tracks = track_fusion_service.get_tracks(room_id)
-                fw, fh = track_fusion_service.get_room_dimensions(room_id)
-                fused_seq += 1
-
-                if tracks:
-                    message = {
-                        "type": "fused_tracks",
-                        "room_id": room_id,
-                        "timestamp": datetime.now(UTC).isoformat(),
-                        "seq": fused_seq,
-                        "frame_width": fw,
-                        "frame_height": fh,
-                        "tracks": tracks,
+            elapsed = _time.monotonic() - start
+            if elapsed > _CAMERA_POLL_MAX_WAIT:
+                logger.info(
+                    f"Camera wait timed out for room {room_id} after {elapsed:.0f}s"
+                )
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "message": "Camera did not become available. Please check the edge device.",
                     }
-                    await websocket.send_json(message)
+                )
+                await websocket.close(code=4003, reason="Camera timeout")
+                return None
 
-                last_fused_send = now
+            # Re-check camera availability
+            db = db_factory()
+            try:
+                rtsp_url = get_camera_url(room_id, db)
+            finally:
+                db.close()
 
-            if now - last_heartbeat > 5.0:
-                await websocket.send_json({
-                    "type": "heartbeat",
-                    "timestamp": datetime.now(UTC).isoformat(),
-                })
-                last_heartbeat = now
+            use_webrtc = False
+            if rtsp_url:
+                mediamtx_ok = await webrtc_service.ensure_path(room_id, rtsp_url)
+            else:
+                mediamtx_ok = await webrtc_service.check_path_exists(room_id)
+            if mediamtx_ok:
+                use_webrtc = True
 
-            await asyncio.sleep(0.01)
+            if use_webrtc or rtsp_url:
+                logger.info(
+                    f"Camera became available for room {room_id} "
+                    f"(mode=webrtc) after {elapsed:.0f}s"
+                )
+                return (use_webrtc, rtsp_url)
 
-    except WebSocketDisconnect:
-        logger.info(f"Live stream WS disconnected (HLS): viewer={viewer_id}")
-    except Exception as exc:
-        logger.error(f"Live stream WS error (HLS, viewer={viewer_id}): {exc}")
+            # Still waiting — send heartbeat so mobile knows we're alive
+            await websocket.send_json(
+                {
+                    "type": "waiting",
+                    "message": "Waiting for camera — edge device is not streaming yet",
+                }
+            )
+
+    except (WebSocketDisconnect, Exception):
+        pass
     finally:
         stop_event.set()
         receive_task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await receive_task
 
-        await edge_relay_manager.unregister_mobile(room_id, websocket)
-        await hls_service.stop_stream(room_id, viewer_id)
-        await recognition_service.stop(room_id, viewer_id)
-        track_fusion_service.cleanup_room(room_id)
-
-        if websocket.client_state == WebSocketState.CONNECTED:
-            with contextlib.suppress(Exception):
-                await websocket.close()
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -409,14 +439,19 @@ async def _webrtc_mode(
     """
     WebRTC mode: start only the recognition pipeline and push detection
     metadata over WebSocket.  Video delivery is handled separately by the
-    WebRTC signalling layer — this socket never touches hls_service.
+    WebRTC signalling layer.
+
+    When ``DETECTION_SOURCE="local"``, starts the local camera service which
+    feeds detections directly into track_fusion_service.
 
     When an edge device is connected for the room, bounding-box data is
     relayed by EdgeRelayManager (real-time from RPi).  This loop only
     pushes identity updates from the recognition service.  When no edge
-    device is connected, falls back to the original behaviour (send
-    ``detections`` messages directly from the recognition service).
+    device is connected, falls back to feeding recognition results into
+    the fusion service for bounding boxes.
     """
+    using_local = settings.DETECTION_SOURCE == "local"
+
     # Send initial connected message FIRST — recognition startup can take
     # 30+ seconds (RTSP timeout) and must not block the mobile UI.
     await websocket.send_json(
@@ -425,6 +460,7 @@ async def _webrtc_mode(
             "schedule_id": schedule_id,
             "room_id": room_id,
             "mode": "webrtc",
+            "detection_source": settings.DETECTION_SOURCE,
             "stream_fps": settings.STREAM_FPS,
             "stream_resolution": f"{settings.STREAM_WIDTH}x{settings.STREAM_HEIGHT}",
         }
@@ -433,12 +469,19 @@ async def _webrtc_mode(
     # Register this mobile client with the edge relay manager
     await edge_relay_manager.register_mobile(room_id, websocket)
 
-    # Start recognition pipeline in the background (use high-res stream if configured)
-    recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
-    # In push mode (RPi → mediamtx), pull frames from mediamtx's internal RTSP
-    if not recog_url:
+    # Start local camera service if using local detection source
+    if using_local:
+        await local_camera_service.start(room_id)
         recog_url = f"{settings.MEDIAMTX_RTSP_URL}/{room_id}"
-        logger.info(f"Recognition: push mode — pulling frames from mediamtx at {recog_url}")
+        logger.info(f"Local camera started for room {room_id}, recognition URL: {recog_url}")
+    else:
+        # Start recognition pipeline in the background (use high-res stream if configured)
+        recog_url = settings.RECOGNITION_RTSP_URL or rtsp_url
+        # In push mode (RPi -> mediamtx), pull frames from mediamtx's internal RTSP
+        if not recog_url:
+            recog_url = f"{settings.MEDIAMTX_RTSP_URL}/{room_id}"
+            logger.info(f"Recognition: push mode — pulling frames from mediamtx at {recog_url}")
+
     recog_ok = await recognition_service.start(room_id, recog_url, viewer_id)
     if not recog_ok:
         logger.warning("Recognition service failed to start — WebRTC stream will have no overlays")
@@ -465,6 +508,7 @@ async def _webrtc_mode(
     last_heartbeat = _time.time()
     last_recog_check = _time.time()
     last_recog_seq = 0
+    last_recog_feed_seq = 0  # track when we last fed recognition results into fusion
 
     try:
         while not stop_event.is_set():
@@ -479,6 +523,48 @@ async def _webrtc_mode(
                     await recognition_service.start(room_id, recog_url, viewer_id)
                 last_recog_seq = current_recog_seq
                 last_recog_check = now
+
+            # When no edge device is connected (and not using local camera),
+            # feed recognition results into the track fusion service so
+            # bounding boxes appear.
+            if not using_local and not edge_relay_manager.has_edge_device(room_id):
+                recog_result = recognition_service.get_latest_detections(room_id)
+                if recog_result is not None:
+                    det_dicts, recog_seq, fw, fh = recog_result
+                    if recog_seq > last_recog_feed_seq and det_dicts:
+                        last_recog_feed_seq = recog_seq
+
+                        # Enrich names via cache before pushing identity
+                        det_objects = recognition_service.get_detections_objects(room_id)
+                        det_dicts = _enrich_and_cache(det_dicts, det_objects, SessionLocal)
+
+                        # Assign stable track IDs via IoU matching
+                        tracked = _recognition_tracker.assign(room_id, det_dicts)
+
+                        edge_dets = []
+                        for tid, det in tracked:
+                            bbox = det.get("bbox", {})
+                            edge_dets.append({
+                                "track_id": tid,
+                                "bbox": [bbox.get("x", 0), bbox.get("y", 0),
+                                         bbox.get("width", 0), bbox.get("height", 0)],
+                                "confidence": det.get("confidence", 0.5),
+                                "velocity": [0.0, 0.0],
+                            })
+                        track_fusion_service.update_from_edge(
+                            room_id, edge_dets, fw, fh,
+                        )
+                        # Push identity for recognized faces (only if name is available)
+                        for tid, det in tracked:
+                            if det.get("user_id") and det.get("name"):
+                                track_fusion_service.update_identity(
+                                    room_id,
+                                    tid,
+                                    det["user_id"],
+                                    det.get("name", ""),
+                                    det.get("student_id", ""),
+                                    det.get("similarity", 0.0),
+                                )
 
             elapsed = now - last_fused_send
 
@@ -528,112 +614,11 @@ async def _webrtc_mode(
             await receive_task
 
         await edge_relay_manager.unregister_mobile(room_id, websocket)
+        if using_local:
+            await local_camera_service.stop()
         await recognition_service.stop(room_id, viewer_id)
         track_fusion_service.cleanup_room(room_id)
-
-        if websocket.client_state == WebSocketState.CONNECTED:
-            with contextlib.suppress(Exception):
-                await websocket.close()
-
-
-# ---------------------------------------------------------------------------
-# Legacy mode: base64 JPEG frames over WebSocket
-# ---------------------------------------------------------------------------
-
-
-async def _legacy_mode(
-    websocket: WebSocket,
-    viewer_id: str,
-    schedule_id: str,
-    room_id: str,
-    rtsp_url: str,
-):
-    """
-    Legacy mode: push annotated base64 JPEG frames (original behaviour).
-    Kept for backward compatibility when USE_HLS_STREAMING=false.
-    """
-    from app.services.live_stream_service import live_stream_service
-
-    # Send initial metadata
-    await websocket.send_json(
-        {
-            "type": "connected",
-            "schedule_id": schedule_id,
-            "room_id": room_id,
-            "stream_fps": settings.STREAM_FPS,
-            "stream_resolution": f"{settings.STREAM_WIDTH}x{settings.STREAM_HEIGHT}",
-            "mode": "legacy",
-        }
-    )
-
-    # Start or join stream
-    started = await live_stream_service.start_stream(room_id, rtsp_url, viewer_id)
-    if not started:
-        await websocket.send_json(
-            {
-                "type": "error",
-                "message": "Failed to open camera stream",
-            }
-        )
-        await websocket.close(code=4002, reason="Camera unavailable")
-        return
-
-    # --- Receive task ---
-    stop_event = asyncio.Event()
-
-    async def _receive_loop():
-        try:
-            while not stop_event.is_set():
-                msg = await websocket.receive_json()
-                if isinstance(msg, dict) and msg.get("type") == "ping":
-                    await websocket.send_json({"type": "pong"})
-        except (WebSocketDisconnect, Exception):
-            stop_event.set()
-
-    receive_task = asyncio.create_task(_receive_loop())
-
-    # --- Push frames ---
-    poll_interval = 0.025
-    last_seq = -1
-
-    try:
-        while not stop_event.is_set():
-            result = live_stream_service.get_latest(room_id)
-
-            if result is not None:
-                b64_jpeg, detections_dicts, timestamp, frame_seq = result
-
-                if frame_seq != last_seq:
-                    last_seq = frame_seq
-
-                    # Enrich with cached names
-                    state = live_stream_service._active_streams.get(room_id)
-                    if state and any(d.get("user_id") for d in detections_dicts):
-                        det_objects = state.last_detections
-                        detections_dicts = _enrich_and_cache(detections_dicts, det_objects, SessionLocal)
-
-                    await websocket.send_json(
-                        {
-                            "type": "frame",
-                            "data": b64_jpeg,
-                            "timestamp": timestamp,
-                            "detections": detections_dicts,
-                        }
-                    )
-
-            await asyncio.sleep(poll_interval)
-
-    except WebSocketDisconnect:
-        logger.info(f"Live stream WS disconnected (legacy): viewer={viewer_id}")
-    except Exception as exc:
-        logger.error(f"Live stream WS error (legacy, viewer={viewer_id}): {exc}")
-    finally:
-        stop_event.set()
-        receive_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await receive_task
-
-        await live_stream_service.stop_stream(room_id, viewer_id)
+        _recognition_tracker.cleanup(room_id)
 
         if websocket.client_state == WebSocketState.CONNECTED:
             with contextlib.suppress(Exception):
@@ -647,50 +632,11 @@ async def _legacy_mode(
 
 @router.get("/status")
 async def stream_status():
-    """Get live stream system status (works for all modes)."""
-    if settings.USE_WEBRTC_STREAMING:
-        # WebRTC: video is peer-to-peer via mediamtx; no server-side room tracking
-        return {
-            "success": True,
-            "data": {
-                "mode": "webrtc",
-                "active_streams": 0,
-                "rooms": [],
-                "stream_fps": settings.STREAM_FPS,
-                "stream_resolution": f"{settings.STREAM_WIDTH}x{settings.STREAM_HEIGHT}",
-            },
-        }
-    elif settings.USE_HLS_STREAMING:
-        from app.services.hls_service import hls_service
-
-        active_rooms = hls_service.get_active_rooms()
-        rooms = [
-            {
-                "room_id": rid,
-                "viewers": hls_service.get_viewer_count(rid),
-            }
-            for rid in active_rooms
-        ]
-        mode = "hls"
-    else:
-        from app.services.live_stream_service import live_stream_service
-
-        active_rooms = live_stream_service.get_active_rooms()
-        rooms = [
-            {
-                "room_id": rid,
-                "viewers": live_stream_service.get_viewer_count(rid),
-            }
-            for rid in active_rooms
-        ]
-        mode = "legacy"
-
     return {
         "success": True,
         "data": {
-            "mode": mode,
-            "active_streams": len(active_rooms),
-            "rooms": rooms,
+            "mode": "webrtc",
+            "detection_source": settings.DETECTION_SOURCE,
             "stream_fps": settings.STREAM_FPS,
             "stream_resolution": f"{settings.STREAM_WIDTH}x{settings.STREAM_HEIGHT}",
         },
