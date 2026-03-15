@@ -20,6 +20,7 @@ import numpy as np
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
+from app.centroid_tracker import CentroidTracker
 from app.config import config, logger
 
 # MediaPipe model URLs — only the short-range model is compatible with the
@@ -121,6 +122,7 @@ class FaceDetector:
         self.is_initialized = False
         self._consecutive_errors = 0
         self._max_consecutive_errors = 3
+        self._centroid_tracker = CentroidTracker(max_disappeared=5, max_distance=50.0)
 
     def initialize(self) -> bool:
         """
@@ -273,6 +275,29 @@ class FaceDetector:
                     logger.error("MediaPipe detector recovery failed")
 
             return []
+
+    def detect_and_track(self, frame: np.ndarray) -> tuple[list, list]:
+        """Detect faces and assign stable track IDs via centroid tracking.
+
+        Returns:
+            Tuple of (face_boxes, tracked_objects) where tracked_objects
+            have stable track_id, centroid, and velocity.
+        """
+        faces = self.detect(frame)
+        if not faces:
+            tracked = self._centroid_tracker.update([])
+            return faces, tracked
+
+        detections = [
+            {"bbox": [f.x, f.y, f.width, f.height], "confidence": f.confidence}
+            for f in faces
+        ]
+        tracked = self._centroid_tracker.update(detections)
+        return faces, tracked
+
+    @property
+    def frame_seq(self) -> int:
+        return self._centroid_tracker.frame_seq
 
     def detect_and_visualize(self, frame: np.ndarray, draw_boxes: bool = True) -> tuple[list[FaceBox], np.ndarray]:
         """

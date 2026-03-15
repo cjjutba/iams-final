@@ -145,6 +145,42 @@ class EdgeWebSocketClient:
                 pass
             self._stats["messages_dropped"] += 1
 
+    def send_tracked_detections(
+        self,
+        tracked_objects: list,
+        frame_width: int,
+        frame_height: int,
+        frame_seq: int,
+    ) -> None:
+        """Send tracked detections with centroid and velocity data."""
+        if not self.is_connected:
+            return
+
+        detections = []
+        for t in tracked_objects:
+            detections.append({
+                "track_id": t.track_id,
+                "bbox": t.bbox,
+                "confidence": t.confidence,
+                "centroid": list(t.centroid),
+                "velocity": list(t.velocity),
+            })
+
+        message = {
+            "type": "edge_detections",
+            "room_id": self._room_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "frame_seq": frame_seq,
+            "frame_width": frame_width,
+            "frame_height": frame_height,
+            "detections": detections,
+        }
+
+        try:
+            self._queue.put_nowait(message)
+        except Exception:
+            pass
+
     def get_status(self) -> dict:
         """Return current status and stats for diagnostics."""
         return {
