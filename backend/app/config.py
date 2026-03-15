@@ -131,6 +131,11 @@ class Settings(BaseSettings):
     MEDIAMTX_BIN_PATH: str = "bin/mediamtx"  # Path to mediamtx binary (relative to backend/)
     MEDIAMTX_CONFIG_PATH: str = "mediamtx.yml"  # Path to mediamtx config (relative to backend/)
 
+    # Detection source (local = backend runs MediaPipe, edge = RPi sends via WebSocket)
+    DETECTION_SOURCE: str = "local"  # "local" for dev (MacBook webcam), "edge" for production (RPi)
+    CAMERA_SOURCE: str = "0"  # Webcam index (e.g. "0") or RTSP URL for local mode
+    LOCAL_DETECTION_FPS: float = 30.0  # MediaPipe detection FPS in local mode
+
     # Recognition (decoupled from video, runs at lower FPS)
     RECOGNITION_FPS: float = 10.0  # Frames/sec — match source stream FPS for near-real-time tracking
     RECOGNITION_MAX_BATCH_SIZE: int = 50  # Max faces per batch forward pass
