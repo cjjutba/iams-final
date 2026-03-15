@@ -26,7 +26,7 @@ class TestFusedTrackCreation:
         t = tracks[0]
         assert t["edge_track_id"] == 1
         assert t["confidence"] == 0.9
-        assert t["detection_count"] == 1
+        assert t["state"] == "tentative"
 
     def test_track_persists_across_updates(self):
         """Same edge_track_id maps to same fused track across updates."""
@@ -44,7 +44,7 @@ class TestFusedTrackCreation:
 
         assert len(tracks2) == 1
         assert tracks2[0]["track_id"] == fused_id
-        assert tracks2[0]["detection_count"] == 2
+        assert tracks2[0]["state"] == "tentative"
 
 
 class TestIdentityFusion:

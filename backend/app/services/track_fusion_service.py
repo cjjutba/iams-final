@@ -80,8 +80,8 @@ class FusedTrack:
         return [
             round(cx - w / 2, 1),
             round(cy - h / 2, 1),
-            round(w, 1),
-            round(h, 1),
+            round(max(w, 1), 1),
+            round(max(h, 1), 1),
         ]
 
     def to_dict(self) -> dict:
@@ -93,10 +93,9 @@ class FusedTrack:
             "name": self.name,
             "student_id": self.student_id,
             "similarity": self.similarity,
-            "confidence": self.confidence,
+            "confidence": round(self.confidence, 2),
             "missed_frames": self.missed_frames,
-            "is_confirmed": self.is_confirmed,
-            "detection_count": self.detection_count,
+            "state": "confirmed" if self.is_confirmed else "tentative",
             "bbox": self.bbox,
         }
 
@@ -224,10 +223,11 @@ class TrackFusionService:
                         detection_count=1,
                         _last_update=now,
                     )
-                    # Seed state from measurement (zero velocity)
+                    # Seed state from measurement + edge velocity
+                    vel = det.get("velocity", [0.0, 0.0])
                     track._state = np.array(
                         [measurement[0], measurement[1], measurement[2], measurement[3],
-                         0.0, 0.0, 0.0, 0.0],
+                         vel[0], vel[1], 0.0, 0.0],
                         dtype=np.float64,
                     )
                     track._covariance = np.eye(8, dtype=np.float64) * 100.0
@@ -281,7 +281,9 @@ class TrackFusionService:
 
     def predict(self, room_id: str, dt: float) -> None:
         """Advance all Kalman filters forward by dt (predict-only, no measurement)."""
-        room = self._get_room(room_id)
+        room = self._rooms.get(room_id)
+        if room is None:
+            return
 
         with room.lock:
             for track in room.tracks.values():
@@ -289,14 +291,18 @@ class TrackFusionService:
 
     def get_tracks(self, room_id: str) -> list[dict]:
         """Return all tracks for a room as dicts."""
-        room = self._get_room(room_id)
+        room = self._rooms.get(room_id)
+        if room is None:
+            return []
 
         with room.lock:
             return [track.to_dict() for track in room.tracks.values()]
 
     def get_room_dimensions(self, room_id: str) -> tuple[int, int]:
         """Return (frame_width, frame_height) for a room."""
-        room = self._get_room(room_id)
+        room = self._rooms.get(room_id)
+        if room is None:
+            return (0, 0)
 
         with room.lock:
             return (room.frame_width, room.frame_height)
