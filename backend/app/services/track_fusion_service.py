@@ -1,380 +1,301 @@
+# backend/app/services/track_fusion_service.py
 """
-Track Fusion Service
+Track Fusion Engine — Merges detections + recognitions into smooth 30 FPS output.
 
-Fuses fast edge detections (15 FPS) with slow identity recognition (2 FPS)
-into smooth Kalman-predicted tracks at 30 FPS output. Uses a constant-velocity
-Kalman filter to predict bounding box positions between measurements.
-
-Architecture:
-- Edge detections arrive via update_from_edge() at ~15 FPS
-- Identity results arrive via update_identity() at ~2 FPS
-- predict() advances all tracks forward for smooth interpolation
-- get_tracks() returns current fused state for WebSocket broadcast
+Runs as a background task inside the API Gateway container.
+Consumes: stream:detections:{room_id}, stream:recognitions
+Provides: get_tracks(room_id) for WebSocket broadcaster
 """
-
-from __future__ import annotations
-
-import threading
+import asyncio
+import logging
 import time
 from dataclasses import dataclass, field
 
 import numpy as np
 
-from app.config import logger
+from app.config import settings
+from app.services.stream_bus import (
+    STREAM_DETECTIONS,
+    STREAM_RECOGNITIONS,
+    get_stream_bus,
+)
 
-# ── Kalman filter constants ──────────────────────────────────────────────────
-
-# Measurement matrix H: observes [cx, cy, w, h] from 8-dim state
-H = np.eye(4, 8, dtype=np.float64)
-
-# Base process noise (scaled by dt).
-# Low velocity noise (1.0) prevents Kalman drift between slow (5 FPS)
-# recognition updates — keeps bounding boxes stable on mostly-still CCTV subjects.
-Q_BASE = np.diag([0.5, 0.5, 0.25, 0.25, 1.0, 1.0, 0.5, 0.5])
-
-# Measurement noise — trust InsightFace detections closely
-R = np.diag([4.0, 4.0, 4.0, 4.0])
-
-
-def _make_F(dt: float) -> np.ndarray:
-    """Build state transition matrix F(dt) for constant-velocity model."""
-    F = np.eye(8, dtype=np.float64)
-    F[0, 4] = dt
-    F[1, 5] = dt
-    F[2, 6] = dt
-    F[3, 7] = dt
-    return F
-
-
-# ── Data classes ─────────────────────────────────────────────────────────────
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class FusedTrack:
-    """
-    A fused track combining edge detection and identity recognition.
-
-    Kalman state is 8-dimensional: [cx, cy, w, h, vx, vy, vw, vh]
-    where (cx, cy) is center, (w, h) is size, and v* are velocities.
-    """
-
     track_id: int
-    edge_track_id: int
+    bbox: list[float]  # [x1, y1, x2, y2] normalized 0-1
+    confidence: float
+    state: str  # "tentative" | "confirmed" | "lost"
+    hit_count: int = 0
+    lost_count: int = 0
+    last_update: float = 0.0
+    # Identity (filled by recognition stream)
     user_id: str | None = None
     name: str | None = None
     student_id: str | None = None
     similarity: float | None = None
-    confidence: float = 0.0
-    missed_frames: int = 0
-    is_confirmed: bool = False
-    detection_count: int = 0
-
-    _state: np.ndarray = field(default_factory=lambda: np.zeros(8, dtype=np.float64))
-    _covariance: np.ndarray = field(
-        default_factory=lambda: np.eye(8, dtype=np.float64) * 100.0
-    )
-    _last_update: float = field(default_factory=time.time)
-
-    @property
-    def bbox(self) -> list[float]:
-        """Return [x, y, w, h] from Kalman state (cx - w/2, cy - h/2, w, h)."""
-        cx, cy, w, h = self._state[:4]
-        return [
-            round(cx - w / 2, 1),
-            round(cy - h / 2, 1),
-            round(max(w, 1), 1),
-            round(max(h, 1), 1),
-        ]
-
-    def to_dict(self) -> dict:
-        """Return all public fields as a dictionary."""
-        return {
-            "track_id": self.track_id,
-            "edge_track_id": self.edge_track_id,
-            "user_id": self.user_id,
-            "name": self.name,
-            "student_id": self.student_id,
-            "similarity": self.similarity,
-            "confidence": round(self.confidence, 2),
-            "missed_frames": self.missed_frames,
-            "state": "confirmed" if self.is_confirmed else "tentative",
-            "bbox": self.bbox,
-        }
+    # Kalman state
+    kalman_state: np.ndarray | None = None
+    kalman_cov: np.ndarray | None = None
 
 
-@dataclass
-class RoomState:
-    """Per-room tracking state."""
+class TrackFusionEngine:
+    """Fuses detections and recognitions into smooth, identified tracks."""
 
-    tracks: dict[int, FusedTrack] = field(default_factory=dict)
-    edge_to_fused: dict[int, int] = field(default_factory=dict)
-    next_fused_id: int = 1
-    frame_width: int = 0
-    frame_height: int = 0
-    update_seq: int = 0
-    lock: threading.Lock = field(default_factory=threading.Lock)
-    # Recently removed tracks for identity inheritance (fused_id → FusedTrack)
-    _graveyard: dict[int, FusedTrack] = field(default_factory=dict)
-    _graveyard_ts: dict[int, float] = field(default_factory=dict)  # fused_id → removal time
+    def __init__(self):
+        self.rooms: dict[str, dict[int, FusedTrack]] = {}  # room_id -> {track_id -> track}
+        self._running = False
+        self._task: asyncio.Task | None = None
+        # Kalman matrices (shared across all tracks)
+        self._dt = 1.0 / settings.FUSION_OUTPUT_FPS
+        self._init_kalman_matrices()
 
+    def _init_kalman_matrices(self):
+        """8-dim Kalman: [cx, cy, w, h, vx, vy, vw, vh]"""
+        dt = self._dt
+        self.F = np.eye(8)
+        self.F[0, 4] = dt
+        self.F[1, 5] = dt
+        self.F[2, 6] = dt
+        self.F[3, 7] = dt
+        self.H = np.zeros((4, 8))
+        self.H[0, 0] = 1
+        self.H[1, 1] = 1
+        self.H[2, 2] = 1
+        self.H[3, 3] = 1
+        self.Q = np.eye(8) * 1.0
+        self.Q[4:, 4:] *= 0.1  # Low velocity noise (seated students)
+        self.R = np.eye(4) * 4.0  # Trust detections closely
 
-# ── Kalman helpers ───────────────────────────────────────────────────────────
+    async def start(self, room_ids: list[str] | None = None):
+        """Start consuming detection and recognition streams."""
+        self._running = True
+        self._task = asyncio.create_task(self._consume_loop())
+        logger.info("[track-fusion] Started")
 
+    async def stop(self):
+        self._running = False
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        logger.info("[track-fusion] Stopped")
 
-def _kalman_predict(track: FusedTrack, dt: float) -> None:
-    """Predict-only step: advance state forward by dt."""
-    F = _make_F(dt)
-    track._state = F @ track._state
-    track._covariance = F @ track._covariance @ F.T + Q_BASE * dt
+    async def _consume_loop(self):
+        """Background task consuming detection and recognition streams."""
+        bus = await get_stream_bus()
 
+        # We'll poll for detection streams dynamically
+        det_group = "track-fusion"
+        rec_group = "track-fusion"
 
-def _kalman_update(track: FusedTrack, measurement: np.ndarray, dt: float) -> None:
-    """Full predict + update step with a measurement [cx, cy, w, h]."""
-    F = _make_F(dt)
+        await bus.ensure_group(STREAM_RECOGNITIONS, rec_group)
 
-    # Predict
-    predicted_state = F @ track._state
-    predicted_cov = F @ track._covariance @ F.T + Q_BASE * dt
+        while self._running:
+            try:
+                # Discover detection streams
+                r = bus.redis
+                det_streams = []
+                async for key in r.scan_iter(match=b"stream:detections:*"):
+                    key_str = key.decode() if isinstance(key, bytes) else key
+                    det_streams.append(key_str)
+                    await bus.ensure_group(key_str, det_group)
 
-    # Update
-    y = measurement - H @ predicted_state
-    S = H @ predicted_cov @ H.T + R
-    K = predicted_cov @ H.T @ np.linalg.inv(S)
+                if not det_streams:
+                    await asyncio.sleep(0.5)
+                    continue
 
-    track._state = predicted_state + K @ y
-    track._covariance = (np.eye(8) - K @ H) @ predicted_cov
-    track._last_update = time.time()
+                # Build stream dict
+                streams = {s: ">" for s in det_streams}
+                streams[STREAM_RECOGNITIONS] = ">"
 
-
-def _bbox_to_measurement(bbox: list[float]) -> np.ndarray:
-    """Convert [x, y, w, h] to measurement [cx, cy, w, h]."""
-    x, y, w, h = bbox
-    return np.array([x + w / 2, y + h / 2, w, h], dtype=np.float64)
-
-
-# ── Service ──────────────────────────────────────────────────────────────────
-
-
-class TrackFusionService:
-    """
-    Fuses edge detections and backend identity recognition into smooth
-    Kalman-predicted tracks, one state per room.
-    """
-
-    def __init__(self, max_missed_frames: int = 8, confirm_threshold: int = 3):
-        self.max_missed_frames = max_missed_frames
-        self.confirm_threshold = confirm_threshold
-        self._rooms: dict[str, RoomState] = {}
-        self._rooms_lock = threading.Lock()
-
-    def _get_room(self, room_id: str) -> RoomState:
-        """Get or create room state (thread-safe)."""
-        with self._rooms_lock:
-            if room_id not in self._rooms:
-                self._rooms[room_id] = RoomState()
-            return self._rooms[room_id]
-
-    def update_from_edge(
-        self,
-        room_id: str,
-        detections: list[dict],
-        frame_width: int,
-        frame_height: int,
-    ) -> None:
-        """
-        Process edge detections for a room.
-
-        Each detection dict has: track_id, bbox [x,y,w,h], confidence.
-        Matches to existing tracks via edge_track_id mapping.
-        """
-        room = self._get_room(room_id)
-
-        with room.lock:
-            room.frame_width = frame_width
-            room.frame_height = frame_height
-
-            now = time.time()
-            seen_edge_ids: set[int] = set()
-
-            for det in detections:
-                edge_tid = det["track_id"]
-                bbox = det["bbox"]
-                conf = det["confidence"]
-                measurement = _bbox_to_measurement(bbox)
-                seen_edge_ids.add(edge_tid)
-
-                if edge_tid in room.edge_to_fused:
-                    # Matched — update existing track
-                    fused_id = room.edge_to_fused[edge_tid]
-                    track = room.tracks[fused_id]
-                    dt = now - track._last_update
-                    dt = max(dt, 1e-4)  # guard against zero
-
-                    _kalman_update(track, measurement, dt)
-                    track.confidence = conf
-                    track.missed_frames = 0
-                    track.detection_count += 1
-                    track.is_confirmed = (
-                        track.detection_count >= self.confirm_threshold
-                    )
-                else:
-                    # New track
-                    fused_id = room.next_fused_id
-                    room.next_fused_id += 1
-
-                    track = FusedTrack(
-                        track_id=fused_id,
-                        edge_track_id=edge_tid,
-                        confidence=conf,
-                        detection_count=1,
-                        _last_update=now,
-                    )
-                    # Seed state from measurement + edge velocity
-                    vel = det.get("velocity", [0.0, 0.0])
-                    track._state = np.array(
-                        [measurement[0], measurement[1], measurement[2], measurement[3],
-                         vel[0], vel[1], 0.0, 0.0],
-                        dtype=np.float64,
-                    )
-                    track._covariance = np.eye(8, dtype=np.float64) * 100.0
-
-                    # Inherit identity from recently-removed nearby track
-                    best_grave_dist = 150.0  # max px distance
-                    best_grave_id = None
-                    cx, cy = measurement[0], measurement[1]
-                    for gid, gtrak in room._graveyard.items():
-                        gcx, gcy = gtrak._state[0], gtrak._state[1]
-                        dist = ((cx - gcx) ** 2 + (cy - gcy) ** 2) ** 0.5
-                        if dist < best_grave_dist:
-                            best_grave_dist = dist
-                            best_grave_id = gid
-                    if best_grave_id is not None:
-                        donor = room._graveyard.pop(best_grave_id)
-                        room._graveyard_ts.pop(best_grave_id, None)
-                        track.user_id = donor.user_id
-                        track.name = donor.name
-                        track.student_id = donor.student_id
-                        track.similarity = donor.similarity
-
-                    room.tracks[fused_id] = track
-                    room.edge_to_fused[edge_tid] = fused_id
-
-            # Increment missed_frames for unmatched tracks and delete stale ones
-            stale_ids = []
-            for fused_id, track in room.tracks.items():
-                if track.edge_track_id not in seen_edge_ids:
-                    track.missed_frames += 1
-                    if track.missed_frames > self.max_missed_frames:
-                        stale_ids.append(fused_id)
-
-            for fused_id in stale_ids:
-                track = room.tracks.pop(fused_id)
-                room.edge_to_fused.pop(track.edge_track_id, None)
-                # Store in graveyard for identity inheritance (keep for 5s)
-                if track.user_id:
-                    room._graveyard[fused_id] = track
-                    room._graveyard_ts[fused_id] = now
-
-            # Purge graveyard entries older than 5 seconds
-            expired = [
-                fid for fid, ts in room._graveyard_ts.items()
-                if now - ts > 5.0
-            ]
-            for fid in expired:
-                room._graveyard.pop(fid, None)
-                room._graveyard_ts.pop(fid, None)
-
-            room.update_seq += 1
-
-    def update_identity(
-        self,
-        room_id: str,
-        edge_track_id: int,
-        user_id: str,
-        name: str,
-        student_id: str,
-        similarity: float,
-    ) -> None:
-        """
-        Update identity for a track. Only updates if similarity is better
-        than existing or no identity exists yet.
-        """
-        room = self._get_room(room_id)
-
-        with room.lock:
-            fused_id = room.edge_to_fused.get(edge_track_id)
-            if fused_id is None:
-                logger.warning(
-                    "update_identity: edge_track_id %d not found in room %s",
-                    edge_track_id,
-                    room_id,
+                messages = await bus.consume_multiple(
+                    streams=streams,
+                    group=det_group,
+                    consumer="fusion-1",
+                    count=10,
+                    block=100,  # 100ms block for responsive fusion
                 )
-                return
 
-            track = room.tracks[fused_id]
-            if track.similarity is None or similarity > track.similarity:
-                track.user_id = user_id
-                track.name = name
-                track.student_id = student_id
-                track.similarity = similarity
+                for stream, msg_id, data in messages:
+                    if "detections" in stream:
+                        self._handle_detections(data)
+                    elif "recognitions" in stream:
+                        self._handle_recognition(data)
+                    await bus.ack(stream, det_group, msg_id)
 
-    def predict(self, room_id: str, dt: float) -> None:
-        """Advance all Kalman filters forward by dt (predict-only, no measurement)."""
-        room = self._rooms.get(room_id)
-        if room is None:
+                # Predict step for all rooms (Kalman coast)
+                self._predict_all()
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"[track-fusion] Error: {e}", exc_info=True)
+                await asyncio.sleep(0.5)
+
+    def _handle_detections(self, data: dict):
+        """Update tracks from detection worker output."""
+        room_id = data.get("room_id", "unknown")
+        detections = data.get("detections", [])
+        now = time.time()
+
+        if room_id not in self.rooms:
+            self.rooms[room_id] = {}
+
+        tracks = self.rooms[room_id]
+
+        # Update existing tracks and create new ones
+        seen_track_ids = set()
+        for det in detections:
+            tid = det.get("track_id", -1)
+            bbox = det.get("bbox", [0, 0, 0, 0])
+            conf = det.get("confidence", 0.0)
+            is_new = det.get("is_new", False)
+            seen_track_ids.add(tid)
+
+            if tid in tracks:
+                track = tracks[tid]
+                track.bbox = bbox
+                track.confidence = conf
+                track.hit_count += 1
+                track.lost_count = 0
+                track.last_update = now
+                if track.state == "tentative" and track.hit_count >= settings.TRACK_CONFIRM_HITS:
+                    track.state = "confirmed"
+                elif track.state == "lost":
+                    track.state = "confirmed"
+                # Kalman update
+                self._kalman_update(track, bbox)
+            elif is_new:
+                track = FusedTrack(
+                    track_id=tid,
+                    bbox=bbox,
+                    confidence=conf,
+                    state="tentative",
+                    hit_count=1,
+                    last_update=now,
+                )
+                self._kalman_init(track, bbox)
+                tracks[tid] = track
+
+        # Mark unseen tracks as losing
+        for tid, track in list(tracks.items()):
+            if tid not in seen_track_ids:
+                track.lost_count += 1
+                coast_ms = settings.TRACK_COAST_MS
+                delete_ms = settings.TRACK_DELETE_MS
+                elapsed_ms = (now - track.last_update) * 1000
+
+                if elapsed_ms > delete_ms:
+                    del tracks[tid]
+                elif elapsed_ms > coast_ms and track.state != "lost":
+                    track.state = "lost"
+
+    def _handle_recognition(self, data: dict):
+        """Merge identity from recognition worker into a track."""
+        room_id = data.get("room_id", "unknown")
+        track_id = data.get("track_id", -1)
+
+        if room_id not in self.rooms:
             return
 
-        with room.lock:
-            for track in room.tracks.values():
-                _kalman_predict(track, dt)
+        track = self.rooms[room_id].get(track_id)
+        if track:
+            track.user_id = data.get("user_id")
+            track.name = data.get("name")
+            track.student_id = data.get("student_id")
+            track.similarity = data.get("similarity")
 
-    def get_update_seq(self, room_id: str) -> int:
-        """Return the current update sequence number for a room."""
-        room = self._rooms.get(room_id)
-        if room is None:
-            return 0
-        with room.lock:
-            return room.update_seq
+    def _predict_all(self):
+        """Kalman predict step for all active tracks."""
+        for room_id, tracks in self.rooms.items():
+            for track in tracks.values():
+                if track.kalman_state is not None:
+                    self._kalman_predict(track)
+
+    def _kalman_init(self, track: FusedTrack, bbox: list[float]):
+        cx = (bbox[0] + bbox[2]) / 2
+        cy = (bbox[1] + bbox[3]) / 2
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+        track.kalman_state = np.array([cx, cy, w, h, 0, 0, 0, 0], dtype=float)
+        track.kalman_cov = np.eye(8) * 10.0
+
+    def _kalman_predict(self, track: FusedTrack):
+        if track.kalman_state is None:
+            return
+        track.kalman_state = self.F @ track.kalman_state
+        track.kalman_cov = self.F @ track.kalman_cov @ self.F.T + self.Q
+        # Update bbox from predicted state
+        s = track.kalman_state
+        track.bbox = [s[0] - s[2] / 2, s[1] - s[3] / 2, s[0] + s[2] / 2, s[1] + s[3] / 2]
+
+    def _kalman_update(self, track: FusedTrack, bbox: list[float]):
+        if track.kalman_state is None:
+            self._kalman_init(track, bbox)
+            return
+        cx = (bbox[0] + bbox[2]) / 2
+        cy = (bbox[1] + bbox[3]) / 2
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+        z = np.array([cx, cy, w, h])
+        S = self.H @ track.kalman_cov @ self.H.T + self.R
+        K = track.kalman_cov @ self.H.T @ np.linalg.inv(S)
+        track.kalman_state = track.kalman_state + K @ (z - self.H @ track.kalman_state)
+        track.kalman_cov = (np.eye(8) - K @ self.H) @ track.kalman_cov
+        # Update bbox from corrected state
+        s = track.kalman_state
+        track.bbox = [s[0] - s[2] / 2, s[1] - s[3] / 2, s[0] + s[2] / 2, s[1] + s[3] / 2]
 
     def get_tracks(self, room_id: str) -> list[dict]:
-        """Return all tracks for a room as dicts."""
-        room = self._rooms.get(room_id)
-        if room is None:
-            return []
+        """Get current fused tracks for a room (called by WebSocket broadcaster)."""
+        tracks = self.rooms.get(room_id, {})
+        result = []
+        for track in tracks.values():
+            if track.state == "lost":
+                continue  # Don't send lost tracks to mobile
+            entry = {
+                "id": track.track_id,
+                "bbox": track.bbox,
+                "conf": track.confidence,
+                "state": track.state,
+            }
+            if track.user_id:
+                entry["identity"] = {
+                    "user_id": track.user_id,
+                    "name": track.name,
+                    "student_id": track.student_id,
+                    "similarity": track.similarity,
+                }
+            result.append(entry)
+        return result
 
-        with room.lock:
-            return [track.to_dict() for track in room.tracks.values()]
+    def get_identified_users(self, room_id: str) -> dict[str, dict]:
+        """Get all identified users in a room. Used by presence engine."""
+        tracks = self.rooms.get(room_id, {})
+        users = {}
+        for track in tracks.values():
+            if track.user_id and track.state == "confirmed":
+                users[track.user_id] = {
+                    "name": track.name,
+                    "student_id": track.student_id,
+                    "similarity": track.similarity,
+                    "track_id": track.track_id,
+                }
+        return users
 
-    def get_room_dimensions(self, room_id: str) -> tuple[int, int]:
-        """Return (frame_width, frame_height) for a room."""
-        room = self._rooms.get(room_id)
-        if room is None:
-            return (0, 0)
 
-        with room.lock:
-            return (room.frame_width, room.frame_height)
+# Singleton
+_engine: TrackFusionEngine | None = None
 
-    def get_unidentified_track_ids(self, room_id: str) -> list[int]:
-        """Return edge_track_ids of confirmed tracks that have no identity."""
-        room = self._rooms.get(room_id)
-        if room is None:
-            return []
-        with room.lock:
-            return [
-                t.edge_track_id
-                for t in room.tracks.values()
-                if t.is_confirmed and t.user_id is None
-            ]
 
-    def get_track_count(self, room_id: str) -> int:
-        """Return total number of active tracks."""
-        room = self._rooms.get(room_id)
-        if room is None:
-            return 0
-        with room.lock:
-            return len(room.tracks)
-
-    def cleanup_room(self, room_id: str) -> None:
-        """Remove all state for a room."""
-        with self._rooms_lock:
-            self._rooms.pop(room_id, None)
+def get_track_fusion_engine() -> TrackFusionEngine:
+    global _engine
+    if _engine is None:
+        _engine = TrackFusionEngine()
+    return _engine
