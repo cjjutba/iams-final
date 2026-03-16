@@ -1,31 +1,22 @@
 /**
  * useDetectionWebSocket
  *
- * Custom hook for the WebRTC-mode live stream WebSocket. The WebSocket
- * carries lightweight `fused_tracks` metadata (~200 bytes per message),
- * while video is delivered via WebRTC.
+ * Custom hook for the live stream WebSocket. The WebSocket carries
+ * lightweight recognition metadata while video is delivered via WebRTC
+ * with bounding boxes burned in by the backend.
  *
  * Responsibilities:
  * - Connect/reconnect to ws://<host>/api/v1/stream/{scheduleId}
- * - Parse `type: "connected"` → set stream mode
- * - Parse `type: "fused_tracks"` → update fusedTracks + studentMap
+ * - Parse `type: "connected"` to set stream mode
+ * - Parse `type: "fused_tracks"` to update the detected-students panel
  * - Ping/pong heartbeat
  * - Auto-reconnect on disconnect (exponential backoff)
- *
- * Wire format (fused_tracks):
- * - `id` (number) — track ID
- * - `bbox` ([x1, y1, x2, y2]) — normalized 0-1 coordinates (converted to [x, y, w, h] internally)
- * - `conf` (number) — detection confidence
- * - `state` ("confirmed" | "tentative")
- * - `identity?` — nested { user_id, name, student_id, similarity }
- * - `ts` (number) — unix ms timestamp
  */
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
 import { config } from '../constants/config';
 import { storage } from '../utils/storage';
-import type { FusedTrack } from '../engines/TrackAnimationEngine';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -45,7 +36,6 @@ interface ConnectedMessage {
   schedule_id: string;
   room_id: string;
   mode: 'webrtc';
-  detection_source?: string;
   stream_fps: number;
   stream_resolution: string;
 }
@@ -58,10 +48,9 @@ interface TrackIdentity {
   similarity: number;
 }
 
-/** A single track in the new fused_tracks wire format. */
+/** A single track in the fused_tracks wire format. */
 interface WireTrack {
   id: number;
-  bbox: [number, number, number, number];
   conf: number;
   state: 'confirmed' | 'tentative';
   identity?: TrackIdentity;
@@ -71,25 +60,23 @@ interface FusedTracksMessage {
   type: 'fused_tracks';
   room_id: string;
   ts: number;
-  frame_width?: number;
-  frame_height?: number;
   tracks: WireTrack[];
 }
 
 type WsMessage = ConnectedMessage | FusedTracksMessage | { type: string };
 
 export interface UseDetectionWebSocketReturn {
-  fusedTracks: FusedTrack[];
   isConnected: boolean;
   isConnecting: boolean;
   /** True when connected but waiting for camera/edge device to come online. */
   isWaitingForCamera: boolean;
   streamMode: 'webrtc' | null;
-  /** True when server draws bboxes onto video (no overlay needed). */
-  isComposited: boolean;
-  /** Frame dimensions from backend detection (for overlay coordinate mapping). */
-  frameDims: { width: number; height: number };
+  /** Detected/recognized students for the bottom panel. */
   studentMap: Map<string, DetectedStudent>;
+  /** Total faces currently in frame (recognized + unknown). */
+  detectedCount: number;
+  /** Number of unrecognized faces currently in frame. */
+  unknownCount: number;
   connectionError: string | null;
   reconnect: () => void;
 }
@@ -108,15 +95,14 @@ const getStreamWsUrl = (scheduleId: string): string => {
 // ---------------------------------------------------------------------------
 
 export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocketReturn {
-  const [fusedTracks, setFusedTracks] = useState<FusedTrack[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(true);
   const [streamMode, setStreamMode] = useState<'webrtc' | null>(null);
   const [studentMap, setStudentMap] = useState<Map<string, DetectedStudent>>(new Map());
+  const [detectedCount, setDetectedCount] = useState(0);
+  const [unknownCount, setUnknownCount] = useState(0);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [isWaitingForCamera, setIsWaitingForCamera] = useState(false);
-  const [isComposited, setIsComposited] = useState(false);
-  const [frameDims, setFrameDims] = useState({ width: 896, height: 512 });
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -126,8 +112,6 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
   const reconnectAttemptRef = useRef(0);
   const MAX_RECONNECT_DELAY_MS = 30_000;
   const BASE_RECONNECT_DELAY_MS = 1_000;
-
-  const streamModeRef = useRef<'webrtc' | null>(null);
 
   // --------------------------------------------------
   // Connect
@@ -186,46 +170,29 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
         const message: WsMessage = JSON.parse(event.data);
 
         if (message.type === 'connected') {
-          const connMsg = message as ConnectedMessage;
           setStreamMode('webrtc');
-          streamModeRef.current = 'webrtc';
           setIsWaitingForCamera(false);
-          setIsComposited(connMsg.detection_source === 'composited');
-          // Now we know the stream mode — stop showing loading spinner
+          // Now we know the stream mode -- stop showing loading spinner
           setIsConnecting(false);
         } else if (message.type === 'fused_tracks') {
           const ftMsg = message as FusedTracksMessage;
           const tsIso = new Date(ftMsg.ts).toISOString();
+          const wireTracks = ftMsg.tracks ?? [];
 
-          // Update frame dimensions for overlay coordinate mapping
-          if (ftMsg.frame_width && ftMsg.frame_height) {
-            setFrameDims({ width: ftMsg.frame_width, height: ftMsg.frame_height });
+          // Update status bar counts
+          const recognizedIds = new Set<string>();
+          let unknowns = 0;
+          for (const t of wireTracks) {
+            if (t.identity?.user_id) {
+              recognizedIds.add(t.identity.user_id);
+            } else {
+              unknowns++;
+            }
           }
+          setDetectedCount(recognizedIds.size + unknowns);
+          setUnknownCount(unknowns);
 
-          // Convert wire format to FusedTrack (adapting field names).
-          // Bboxes are normalized (0-1); the overlay multiplies by
-          // container dimensions to get screen-space pixel coords.
-          const tracks: FusedTrack[] = (ftMsg.tracks ?? []).map((t) => ({
-            track_id: t.id,
-            // Backend sends [x1, y1, x2, y2] normalized; convert to [x, y, w, h]
-            bbox: [
-              t.bbox[0],
-              t.bbox[1],
-              t.bbox[2] - t.bbox[0],
-              t.bbox[3] - t.bbox[1],
-            ] as [number, number, number, number],
-            confidence: t.conf,
-            user_id: t.identity?.user_id ?? null,
-            name: t.identity?.name ?? null,
-            student_id: t.identity?.student_id ?? null,
-            similarity: t.identity?.similarity ?? null,
-            state: t.state,
-            missed_frames: 0,
-          }));
-
-          setFusedTracks(tracks);
-
-          // Also update studentMap for detected students panel
+          // Update studentMap for the detected-students panel
           setStudentMap((prev) => {
             const next = new Map(prev);
             // Mark all as not currently detected
@@ -235,13 +202,14 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
               }
             });
             // Mark detected students
-            for (const t of tracks) {
-              if (!t.user_id) continue;
-              next.set(t.user_id, {
-                user_id: t.user_id,
-                name: t.name || 'Unknown',
-                student_id: t.student_id || '',
-                confidence: t.similarity ?? t.confidence,
+            for (const t of wireTracks) {
+              if (!t.identity?.user_id) continue;
+              const id = t.identity;
+              next.set(id.user_id, {
+                user_id: id.user_id,
+                name: id.name || 'Unknown',
+                student_id: id.student_id || '',
+                confidence: id.similarity ?? t.conf,
                 currentlyDetected: true,
                 lastSeen: tsIso,
               });
@@ -249,9 +217,9 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
             return next;
           });
         } else if (message.type === 'pong' || message.type === 'heartbeat') {
-          // Keep-alive responses — no action needed
+          // Keep-alive responses -- no action needed
         } else if (message.type === 'waiting') {
-          // Camera not streaming yet — backend keeps WS open and polls
+          // Camera not streaming yet -- backend keeps WS open and polls
           setConnectionError(null);
           setIsWaitingForCamera(true);
           setIsConnecting(false);
@@ -349,14 +317,13 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
   }, [connectWebSocket]);
 
   return {
-    fusedTracks,
     isConnected,
     isConnecting,
     isWaitingForCamera,
     streamMode,
-    isComposited,
-    frameDims,
     studentMap,
+    detectedCount,
+    unknownCount,
     connectionError,
     reconnect,
   };

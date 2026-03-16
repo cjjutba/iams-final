@@ -1,26 +1,21 @@
 /**
  * Faculty Live Feed Screen
  *
- * Displays a live camera feed using two independent layers:
+ * Displays a live camera feed via WebRTC. The backend burns bounding boxes
+ * and recognition labels directly into the video stream, so the mobile app
+ * simply plays the annotated WebRTC feed with no overlay rendering.
  *
- * 1. **Video Layer** — WebRTC stream via `react-native-webrtc`
- *    MediaMTX publishes the RTSP stream as WHEP; the app negotiates a
- *    peer connection and renders the remote track with `RTCView`.
- *
- * 2. **Recognition Layer** — WebSocket detection metadata (~200 bytes/msg)
- *    The backend samples frames at ~1.5 FPS, runs face detection + FaceNet
- *    recognition, and pushes fused track data via WebSocket.
- *    A transparent `FusedDetectionOverlay` renders bounding boxes on top of
- *    the video.
+ * A WebSocket connection provides lightweight metadata (detected student
+ * identities) for the bottom attendance panel.
  *
  * WebSocket endpoint: ws://<host>/api/v1/stream/{scheduleId}
  *
  * Features:
- * - Low-latency WebRTC video
- * - Real-time face recognition overlay (bounding boxes + names)
+ * - Low-latency WebRTC video with server-side annotations
  * - Connection status indicator
  * - Detected-students panel with confidence percentages
- * - Auto-reconnect with 3-second delay
+ * - Session start/end controls
+ * - Auto-reconnect with exponential backoff
  * - Navigation to the list-based LiveAttendance screen
  */
 
@@ -31,7 +26,6 @@ import {
   FlatList,
   SectionList,
   ActivityIndicator,
-  LayoutChangeEvent,
   Animated,
   TouchableOpacity,
   Alert,
@@ -47,7 +41,6 @@ import type { FacultyStackParamList, StudentAttendanceStatus } from '../../types
 import { AttendanceStatus } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
 import { Text, Card, Button } from '../../components/ui';
-import { FusedDetectionOverlay } from '../../components/video/DetectionOverlay';
 import { useDetectionWebSocket } from '../../hooks/useDetectionWebSocket';
 import type { DetectedStudent } from '../../hooks/useDetectionWebSocket';
 import { useWebRTC } from '../../hooks/useWebRTC';
@@ -174,16 +167,15 @@ export const FacultyLiveFeedScreen: React.FC = () => {
 
   const sessionActive = isSessionActive(scheduleId);
 
-  // Detection WebSocket
+  // Detection WebSocket (metadata only -- video annotations are server-side)
   const {
-    fusedTracks,
     isConnected,
     isConnecting,
     isWaitingForCamera,
     streamMode,
-    isComposited,
-    frameDims,
     studentMap,
+    detectedCount,
+    unknownCount,
     connectionError,
     reconnect,
   } = useDetectionWebSocket(scheduleId);
@@ -256,14 +248,6 @@ export const FacultyLiveFeedScreen: React.FC = () => {
     }
   }, [activeTab, fetchAttendanceData]);
 
-  // Track container dimensions for overlay coordinate scaling
-  const [containerLayout, setContainerLayout] = useState({ width: 0, height: 0 });
-
-  const handleVideoLayout = useCallback((event: LayoutChangeEvent) => {
-    const { width, height } = event.nativeEvent.layout;
-    setContainerLayout({ width, height });
-  }, []);
-
   // --------------------------------------------------
   // Navigation helpers
   // --------------------------------------------------
@@ -294,23 +278,6 @@ export const FacultyLiveFeedScreen: React.FC = () => {
   const currentlyDetectedCount = useMemo(
     () => studentsList.filter((s) => s.currentlyDetected).length,
     [studentsList],
-  );
-
-  const detectedCount = useMemo(() => {
-    const recognizedIds = new Set<string>();
-    let unknowns = 0;
-    for (const t of fusedTracks) {
-      if (t.user_id) {
-        recognizedIds.add(t.user_id);
-      } else {
-        unknowns++;
-      }
-    }
-    return recognizedIds.size + unknowns;
-  }, [fusedTracks]);
-  const unknownCount = useMemo(
-    () => fusedTracks.filter(t => !t.user_id).length,
-    [fusedTracks],
   );
 
   // --------------------------------------------------
@@ -627,27 +594,16 @@ export const FacultyLiveFeedScreen: React.FC = () => {
           )}
         </View>
 
-        {/* Camera feed: WebRTC video + fused detection overlay */}
-        <View style={styles.feedContainer} onLayout={handleVideoLayout}>
+        {/* Camera feed: annotated WebRTC video (bboxes burned in by backend) */}
+        <View style={styles.feedContainer}>
           {remoteStream ? (
-            <>
-              <RTCView
-                streamURL={remoteStream.toURL()}
-                style={styles.video}
-                objectFit="contain"
-                mirror={false}
-                zOrder={0}
-              />
-              {!isComposited && (
-                <FusedDetectionOverlay
-                  tracks={fusedTracks}
-                  videoWidth={frameDims.width}
-                  videoHeight={frameDims.height}
-                  containerWidth={containerLayout.width}
-                  containerHeight={containerLayout.height}
-                />
-              )}
-            </>
+            <RTCView
+              streamURL={remoteStream.toURL()}
+              style={styles.video}
+              objectFit="contain"
+              mirror={false}
+              zOrder={0}
+            />
           ) : (
             <View style={styles.noFeedPlaceholder}>
               {isWaitingForCamera ? (
