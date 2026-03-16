@@ -1,31 +1,3 @@
-# IAMS Edge Device Dependencies
-# Raspberry Pi ARM64 (aarch64) compatible packages
-# Tested on: Raspberry Pi 4/5 with Raspberry Pi OS (64-bit) + Python 3.11
-
-# Core dependencies
-numpy>=1.24,<2.0
-Pillow>=10.0,<11.0
-
-# OpenCV — use headless on RPi (no GUI/Qt required)
-# On RPi: pip install opencv-python-headless
-# On desktop (for testing): pip install opencv-python
-opencv-python-headless>=4.8,<5.0
-
-# MediaPipe Face Detection
-# ARM64 support available since 0.10.9+
-# Note: If pip fails on RPi, try: pip install mediapipe --no-deps
-#   then install missing deps manually
-mediapipe>=0.10.9
-
-# HTTP client (async)
-httpx>=0.25,<1.0
-
-# WebSocket client (edge → VPS real-time bbox relay)
-websocket-client>=1.6.0
-
-# Environment variables
-python-dotenv>=1.0,<2.0
-
-# Raspberry Pi Camera (Pi Camera Module)
-# Uncomment if using Pi Camera Module instead of RTSP IP camera
-# picamera2>=0.3.12
+opencv-python-headless==4.9.0.80
+websockets>=12.0
+psutil>=5.9
