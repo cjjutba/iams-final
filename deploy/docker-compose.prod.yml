@@ -1,24 +1,42 @@
-# IAMS Production Docker Compose
+# IAMS Production Docker Compose — Multi-Container Architecture
 # Usage: docker compose -f docker-compose.prod.yml up -d
+#
+# Architecture:
+#   api-gateway          — FastAPI REST + WebSocket (serves clients)
+#   detection-worker     — Pulls frames from Redis, runs face detection
+#   recognition-worker   — Pulls crops from Redis, runs face recognition
+#   redis                — Event bus (Redis Streams) + cache
+#   mediamtx             — RTSP ingest + WebRTC bridge
+#   coturn               — TURN relay for NAT traversal
+#   admin                — Builds static admin dashboard files
+#   nginx                — Reverse proxy + SSL termination
+#   dozzle               — Container log viewer
+#   certbot              — HTTPS certificate renewal
 
 services:
-  backend:
+  # ── Core Application Services ──────────────────────────────────────
+
+  api-gateway:
     build:
       context: ../backend
       dockerfile: Dockerfile
-    container_name: iams-backend
+    container_name: iams-api-gateway
     restart: unless-stopped
     env_file:
       - ../backend/.env.production
+    environment:
+      - SERVICE_ROLE=api-gateway
+      - REDIS_URL=redis://redis:6379/0
+      - MEDIAMTX_EXTERNAL=true
+      - MEDIAMTX_API_URL=http://mediamtx:9997
+      - MEDIAMTX_WEBRTC_URL=http://mediamtx:8889
+      - MEDIAMTX_RTSP_URL=rtsp://mediamtx:8554
     volumes:
-      # Persist FAISS index and uploaded face images across restarts
       - faiss_data:/app/data/faiss
       - face_uploads:/app/data/uploads/faces
       - app_logs:/app/logs
     ports:
       - "127.0.0.1:8000:8000"
-    environment:
-      - REDIS_URL=redis://redis:6379/0
     depends_on:
       mediamtx:
         condition: service_started
@@ -29,18 +47,90 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s  # InsightFace model takes time to load
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+          cpus: "2.0"
+
+  detection-worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: iams-detection-worker
+    restart: unless-stopped
+    env_file:
+      - ../backend/.env.production
+    environment:
+      - SERVICE_ROLE=detection-worker
+      - REDIS_URL=redis://redis:6379/0
+      - ORT_INTRA_OP_NUM_THREADS=2
+      - ORT_INTER_OP_NUM_THREADS=1
+    command: python -m app.workers.detection_worker
+    volumes:
+      - app_logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis; r=redis.from_url('redis://redis:6379'); r.ping()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
+
+  recognition-worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: iams-recognition-worker
+    restart: unless-stopped
+    env_file:
+      - ../backend/.env.production
+    environment:
+      - SERVICE_ROLE=recognition-worker
+      - REDIS_URL=redis://redis:6379/0
+      - ORT_INTRA_OP_NUM_THREADS=2
+      - ORT_INTER_OP_NUM_THREADS=1
+    command: python -m app.workers.recognition_worker
+    volumes:
+      - faiss_data:/app/data/faiss
+      - app_logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis; r=redis.from_url('redis://redis:6379'); r.ping()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
+
+  # ── Infrastructure Services ────────────────────────────────────────
 
   redis:
     image: redis:7-alpine
     container_name: iams-redis
     restart: unless-stopped
-    command: redis-server --maxmemory 64mb --maxmemory-policy allkeys-lru --save ""
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save ""
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 300M
 
   mediamtx:
     image: bluenviron/mediamtx:latest
@@ -54,9 +144,12 @@ services:
       # WebRTC media UDP (ICE candidates point here)
       - "8887:8887/udp"
     # API (9997) and WHEP (8889) are internal only — accessed
-    # by backend and nginx via Docker network, not exposed to host.
+    # by api-gateway and nginx via Docker network, not exposed to host.
     # No healthcheck: mediamtx image is scratch-based (no shell/wget/curl).
-    # Backend's mediamtx_service.start() polls the API on startup instead.
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
   # TURN relay server — ensures WebRTC connectivity when mobile phones
   # are behind symmetric NATs (where STUN alone fails).
@@ -79,6 +172,12 @@ services:
       - "--no-tls"
       - "--no-dtls"
       - "--log-file=stdout"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ── Frontend & Proxy ───────────────────────────────────────────────
 
   admin:
     build:
@@ -104,12 +203,18 @@ services:
       - certbot_www:/var/www/certbot:ro
       - admin_static:/usr/share/nginx/html:ro
     depends_on:
-      backend:
+      api-gateway:
         condition: service_healthy
       mediamtx:
         condition: service_started
       admin:
         condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # ── Observability & Certs ──────────────────────────────────────────
 
   # Log viewer (web UI for Docker container logs)
   dozzle:
@@ -123,6 +228,10 @@ services:
       - ./dozzle-users.yml:/data/users.yml:ro
     environment:
       - DOZZLE_AUTH_PROVIDER=simple
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
   # Certbot for free HTTPS certificates (run once, then renew via cron)
   certbot:
