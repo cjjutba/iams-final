@@ -35,6 +35,7 @@ from app.routers import (
     health,
     live_stream,
     notifications,
+    pipeline,
     presence,
     rooms,
     schedules,
@@ -526,6 +527,9 @@ app.include_router(settings_router.router, prefix=f"{settings.API_PREFIX}/settin
 
 # Health check (deep system status for Docker HEALTHCHECK + monitoring dashboard)
 app.include_router(health.router, prefix=f"{settings.API_PREFIX}/health", tags=["System"])
+
+# Video pipeline management (start/stop/status)
+app.include_router(pipeline.router, prefix=f"{settings.API_PREFIX}/pipeline", tags=["Pipeline"])
 
 
 # ===== Development Server =====
