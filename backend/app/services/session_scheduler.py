@@ -2,12 +2,17 @@
 Automatic Session Scheduler
 
 Manages automatic start/stop of attendance sessions based on schedule times.
-Runs as an APScheduler job every 60 seconds.
+Runs as an APScheduler job every 60 seconds inside the API gateway.
 
 Dual-mode design:
 - Automatic: Sessions auto-start at schedule.start_time, auto-end at schedule.end_time
 - Manual: Faculty can start/end sessions early from the mobile app
 - Override: Manual actions take priority; scheduler won't restart a manually-ended session
+
+I/O contract:
+  - Reads:    schedules table (via ScheduleRepository)
+  - Calls:    PresenceService.start_session(), .end_session()
+  - State:    Module-level set tracks manually-ended sessions per day
 """
 
 from datetime import date, datetime
@@ -17,8 +22,11 @@ from app.database import SessionLocal
 from app.repositories.schedule_repository import ScheduleRepository
 from app.services.presence_service import PresenceService
 
-# Track sessions that were manually ended today so the scheduler doesn't restart them
-_manually_ended_today: set[str] = {}  # schedule_id → set
+# ── module-level state ────────────────────────────────────────
+
+# Track sessions that were manually ended today so the scheduler
+# doesn't restart them.  Reset daily.
+_manually_ended_today: set[str] = set()
 _last_reset_date: date = date.today()
 
 
@@ -29,13 +37,15 @@ def _reset_daily_tracking():
     if today != _last_reset_date:
         _manually_ended_today = set()
         _last_reset_date = today
-        logger.info("Auto-session scheduler: daily tracking reset")
+        logger.info("Session scheduler: daily tracking reset")
 
 
 def mark_manually_ended(schedule_id: str):
     """
     Mark a session as manually ended so the auto-scheduler won't restart it.
-    Called from the end_session API endpoint.
+
+    Called from the end_session API endpoint when faculty manually ends
+    a session before the scheduled end time.
 
     Args:
         schedule_id: Schedule UUID string
@@ -51,20 +61,28 @@ def is_manually_ended(schedule_id: str) -> bool:
     return schedule_id in _manually_ended_today
 
 
+# ── scheduler entry point ────────────────────────────────────
+
 async def auto_manage_sessions():
     """
     Automatically start and stop attendance sessions based on schedule times.
 
-    Called every 60 seconds by APScheduler.
+    Called every 60 seconds by APScheduler (job id: ``auto_session_manager``).
 
-    Logic:
-    1. Get all active schedules for today's day of week
-    2. For each schedule where now >= start_time and no active session → auto-start
-    3. For each active session where now >= end_time → auto-end
+    Algorithm per schedule for today's day-of-week:
+      1. If now is within [start_time, end_time) **and** no active session
+         **and** not manually ended -> auto-start.
+      2. If an active session exists **and** now >= end_time -> auto-end.
 
     Respects manual overrides:
-    - If faculty already started a session manually, scheduler won't interfere
-    - If faculty manually ended a session, scheduler won't restart it
+      - If faculty already started a session manually, the scheduler won't
+        interfere (``is_session_active`` returns True, so auto-start is skipped).
+      - If faculty manually ended a session, the scheduler won't restart it
+        (checked via ``is_manually_ended``).
+
+    Note: The 60-second presence scan cycle (``run_scan_cycle``) is scheduled
+    as a *separate* APScheduler job in ``main.py``.  This function only handles
+    session lifecycle (start / end).
     """
     _reset_daily_tracking()
 
@@ -77,7 +95,7 @@ async def auto_manage_sessions():
         schedule_repo = ScheduleRepository(db)
         presence_service = PresenceService(db)
 
-        # Get all schedules for today
+        # Get all active schedules for today's day-of-week
         today_schedules = schedule_repo.get_by_day(current_day)
 
         if not today_schedules:
@@ -88,8 +106,12 @@ async def auto_manage_sessions():
             is_active = presence_service.is_session_active(schedule_id)
 
             # --- Auto-start logic ---
-            if not is_active and current_time >= schedule.start_time and current_time < schedule.end_time:
-                # Don't restart if manually ended
+            if (
+                not is_active
+                and current_time >= schedule.start_time
+                and current_time < schedule.end_time
+            ):
+                # Don't restart if manually ended by faculty
                 if is_manually_ended(schedule_id):
                     continue
 
@@ -101,7 +123,9 @@ async def auto_manage_sessions():
                     await presence_service.start_session(schedule_id)
                     logger.info(f"Auto-session started: {schedule.subject_code}")
                 except Exception as e:
-                    logger.error(f"Failed to auto-start session for {schedule.subject_code}: {e}")
+                    logger.error(
+                        f"Failed to auto-start session for {schedule.subject_code}: {e}"
+                    )
 
             # --- Auto-end logic ---
             elif is_active and current_time >= schedule.end_time:
@@ -113,7 +137,9 @@ async def auto_manage_sessions():
                     await presence_service.end_session(schedule_id)
                     logger.info(f"Auto-session ended: {schedule.subject_code}")
                 except Exception as e:
-                    logger.error(f"Failed to auto-end session for {schedule.subject_code}: {e}")
+                    logger.error(
+                        f"Failed to auto-end session for {schedule.subject_code}: {e}"
+                    )
 
     except Exception as e:
         logger.error(f"Error in auto_manage_sessions: {e}")
