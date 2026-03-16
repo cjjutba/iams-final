@@ -3,6 +3,12 @@ IAMS Backend - FastAPI Application Entry Point
 
 Main application file that initializes FastAPI, configures middleware,
 registers routers, and handles application lifecycle events.
+
+Supports role-based startup via settings.SERVICE_ROLE:
+  - "api-gateway"  : FastAPI + TrackFusion + BroadcastManager + mediamtx + APScheduler
+  - "detection-worker" : Workers are started via their own __main__ (not here)
+  - "recognition-worker": Workers are started via their own __main__ (not here)
+  - "all" (default, dev): Same as api-gateway (everything in one process)
 """
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -26,7 +32,6 @@ from app.routers import (
     edge,
     edge_ws,
     face,
-    hls,
     live_stream,
     notifications,
     presence,
@@ -46,6 +51,9 @@ from app.utils.exceptions import (
 
 # Global scheduler instance for background tasks
 scheduler = AsyncIOScheduler()
+
+# Roles that run the full API gateway stack
+_GATEWAY_ROLES = {"api-gateway", "all"}
 
 
 # ===== FastAPI Application =====
@@ -102,25 +110,34 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 @app.on_event("startup")
 async def startup_event():
     """
-    Application startup event handler
+    Application startup event handler.
 
-    Performs initialization tasks:
+    For api-gateway / all roles:
     - Check database connection
-    - Load FAISS index (once face service is implemented)
-    - Load InsightFace model (buffalo_l)
+    - Initialize Redis
+    - Load InsightFace model + FAISS index
+    - Start TrackFusionEngine (background stream consumer)
+    - Start BroadcastManager (WebSocket broadcaster)
+    - Start mediamtx (WebRTC bridge)
+    - Start APScheduler (presence scans, session management, digests)
     """
-    logger.info(f"Starting {settings.APP_NAME}...")
+    role = settings.SERVICE_ROLE
+    logger.info(f"Starting {settings.APP_NAME} (role={role})...")
     logger.info(f"Debug mode: {settings.DEBUG}")
     logger.info(f"API prefix: {settings.API_PREFIX}")
 
-    # Check database connection
+    if role not in _GATEWAY_ROLES:
+        logger.info(f"Role '{role}' — skipping gateway startup (workers start via __main__)")
+        return
+
+    # ── Database ──────────────────────────────────────────────────
     db_connected = check_db_connection()
     if not db_connected:
         logger.error("Failed to connect to database. Application may not function correctly.")
     else:
         logger.info("Database connection established")
 
-    # Initialize Redis connection pool
+    # ── Redis ─────────────────────────────────────────────────────
     try:
         from app.redis_client import get_redis
 
@@ -129,16 +146,7 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to initialize Redis: {e}")
 
-    # Start Redis pub/sub listener for WebSocket broadcast (multi-worker)
-    try:
-        from app.routers.websocket import manager
-
-        await manager.start_redis_listener()
-        logger.info("WebSocket Redis pub/sub listener started")
-    except Exception as e:
-        logger.error(f"Failed to start WebSocket Redis listener: {e}")
-
-    # Load InsightFace model and FAISS index
+    # ── ML Models ─────────────────────────────────────────────────
     try:
         from app.services.ml.faiss_manager import faiss_manager
         from app.services.ml.insightface_model import insightface_model
@@ -162,7 +170,7 @@ async def startup_event():
         except Exception as e:
             logger.error(f"FAISS reconciliation failed: {e}")
 
-        # Start background listener for FAISS reload notifications (multi-worker sync)
+        # Background listener for FAISS reload notifications (multi-worker sync)
         import asyncio
 
         asyncio.create_task(faiss_manager.subscribe_index_changes())
@@ -171,16 +179,50 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to initialize face recognition: {e}")
 
-    # Initialize APScheduler for continuous presence tracking
+    # ── Track Fusion Engine ───────────────────────────────────────
+    try:
+        from app.services.track_fusion_service import get_track_fusion_engine
+
+        engine = get_track_fusion_engine()
+        await engine.start()
+        logger.info("TrackFusionEngine started")
+    except Exception as e:
+        logger.error(f"Failed to start TrackFusionEngine: {e}")
+
+    # ── WebSocket Broadcaster ─────────────────────────────────────
+    try:
+        from app.routers.websocket import get_broadcast_manager
+
+        broadcaster = get_broadcast_manager()
+        await broadcaster.start()
+        logger.info("BroadcastManager started")
+    except Exception as e:
+        logger.error(f"Failed to start BroadcastManager: {e}")
+
+    # ── mediamtx (WebRTC bridge: RTSP -> WHEP) ────────────────────
+    if settings.USE_WEBRTC_STREAMING:
+        try:
+            from app.services.mediamtx_service import mediamtx_service
+
+            started = await mediamtx_service.start()
+            if started:
+                logger.info("WebRTC streaming ready (mediamtx running)")
+            else:
+                logger.warning("mediamtx failed to start — WebRTC unavailable")
+        except Exception as e:
+            logger.error(f"Failed to start mediamtx: {e}")
+
+    # ── APScheduler ───────────────────────────────────────────────
     try:
         from app.database import SessionLocal
         from app.services.presence_service import PresenceService
+        from app.services.session_scheduler import auto_manage_sessions
 
-        logger.info("Initializing presence tracking scheduler...")
+        logger.info("Initializing APScheduler...")
 
-        # Create presence service instance (will be called by scheduler)
+        # Presence scan cycle (every SCAN_INTERVAL_SECONDS)
         async def run_presence_scan_cycle():
-            """Background task to run presence scan cycles"""
+            """Background task to run presence scan cycles."""
             db = SessionLocal()
             try:
                 presence_service = PresenceService(db)
@@ -190,75 +232,26 @@ async def startup_event():
             finally:
                 db.close()
 
-        # Schedule continuous presence tracking (every 60 seconds)
         scheduler.add_job(
             run_presence_scan_cycle,
             "interval",
             seconds=settings.SCAN_INTERVAL_SECONDS,
             id="presence_scan_cycle",
             replace_existing=True,
-            max_instances=1,  # Prevent overlapping runs
+            max_instances=1,
         )
 
-        # Bridge: feed VPS recognition detections into presence tracking
-        # Runs every 5 seconds. Maps room_id → schedule_id via active sessions,
-        # then feeds identified faces into the tracking service so the 60-second
-        # scan cycle can use them for attendance marking.
-        async def bridge_recognition_to_presence():
-            """Feed recognition detections into presence tracking service."""
-            from app.services.presence_service import PresenceService
-            from app.services.recognition_service import recognition_service
-
-            active_sessions = PresenceService._active_sessions
-            if not active_sessions:
-                return
-
-            # Build room_id → schedule_id mapping from active sessions
-            room_to_schedule: dict[str, str] = {}
-            for schedule_id, session in active_sessions.items():
-                rid = getattr(session.schedule, "room_id", None)
-                if rid:
-                    room_to_schedule[str(rid)] = schedule_id
-
-            if not room_to_schedule:
-                return
-
-            fed_count = 0
-            for room_id, schedule_id in room_to_schedule.items():
-                detections = recognition_service.get_detections_objects(room_id)
-                if not detections:
-                    continue
-
-                db = SessionLocal()
-                try:
-                    presence_svc = PresenceService(db)
-                    for det in detections:
-                        if not det.user_id:
-                            continue
-                        # Convert recognition bbox (x, y, w, h) to tracking bbox (x1, y1, x2, y2)
-                        bbox = [det.x, det.y, det.x + det.width, det.y + det.height]
-                        await presence_svc.feed_detection(
-                            schedule_id, det.user_id, det.similarity or 0.0, bbox
-                        )
-                        fed_count += 1
-                except Exception as e:
-                    logger.error(f"Recognition→Presence bridge error for room {room_id}: {e}")
-                finally:
-                    db.close()
-
-            if fed_count:
-                logger.debug(f"Recognition→Presence bridge: fed {fed_count} detection(s)")
-
+        # Auto-session scheduler: starts/ends sessions based on schedule times
         scheduler.add_job(
-            bridge_recognition_to_presence,
+            auto_manage_sessions,
             "interval",
-            seconds=5,
-            id="recognition_presence_bridge",
+            seconds=60,
+            id="auto_session_manager",
             replace_existing=True,
             max_instances=1,
         )
 
-        # Periodic FAISS health check (every 30 minutes)
+        # FAISS health check (every 30 minutes)
         async def run_faiss_health_check():
             """Compare FAISS vector count with DB active registrations."""
             db = SessionLocal()
@@ -290,33 +283,23 @@ async def startup_event():
             max_instances=1,
         )
 
-        # Auto-session scheduler: starts/ends sessions based on schedule times
-        from app.services.session_scheduler import auto_manage_sessions
-
-        scheduler.add_job(
-            auto_manage_sessions,
-            "interval",
-            seconds=60,
-            id="auto_session_manager",
-            replace_existing=True,
-            max_instances=1,
-        )
-
         # Daily digest for faculty (8 PM Manila time, Mon-Sat)
         async def run_daily_digests():
             """Generate daily attendance digests for faculty."""
             db = SessionLocal()
             try:
-                from app.routers.websocket import manager
+                from app.routers.websocket import get_broadcast_manager
                 from app.services.digest_service import DigestService
                 from app.services.notification_service import NotificationService
 
                 email_svc = None
                 if settings.EMAIL_ENABLED:
                     from app.services.email_service import EmailService
+
                     email_svc = EmailService()
 
-                ns = NotificationService(manager, db, email_service=email_svc)
+                broadcaster = get_broadcast_manager()
+                ns = NotificationService(broadcaster, db, email_service=email_svc)
                 ds = DigestService(db, notification_service=ns, email_service=email_svc)
                 ds.generate_faculty_daily_digests()
             except Exception as e:
@@ -340,16 +323,18 @@ async def startup_event():
             """Generate weekly attendance digests for students."""
             db = SessionLocal()
             try:
-                from app.routers.websocket import manager
+                from app.routers.websocket import get_broadcast_manager
                 from app.services.digest_service import DigestService
                 from app.services.notification_service import NotificationService
 
                 email_svc = None
                 if settings.EMAIL_ENABLED:
                     from app.services.email_service import EmailService
+
                     email_svc = EmailService()
 
-                ns = NotificationService(manager, db, email_service=email_svc)
+                broadcaster = get_broadcast_manager()
+                ns = NotificationService(broadcaster, db, email_service=email_svc)
                 ds = DigestService(db, notification_service=ns, email_service=email_svc)
                 ds.generate_student_weekly_digests()
             except Exception as e:
@@ -371,78 +356,58 @@ async def startup_event():
 
         # Start the scheduler
         scheduler.start()
-        logger.info(f"Presence tracking scheduler started (scan interval: {settings.SCAN_INTERVAL_SECONDS}s)")
-        logger.info("Recognition→Presence bridge started (every 5s)")
-        logger.info("Auto-session scheduler started (checks every 60s)")
+        logger.info(f"APScheduler started — presence scan every {settings.SCAN_INTERVAL_SECONDS}s, "
+                     f"session management every 60s, FAISS health every 30m")
         logger.info("Digest scheduler started (daily 8PM, weekly Mon 8AM)")
 
     except Exception as e:
-        logger.error(f"Failed to initialize presence tracking scheduler: {e}")
+        logger.error(f"Failed to initialize APScheduler: {e}")
 
-    # Start mediamtx (WebRTC bridge: RTSP → WHEP)
-    if settings.USE_WEBRTC_STREAMING:
-        try:
-            from app.services.mediamtx_service import mediamtx_service
-
-            started = await mediamtx_service.start()
-            if started:
-                logger.info("WebRTC streaming ready (mediamtx running)")
-            else:
-                logger.warning("mediamtx failed to start — WebRTC unavailable, falling back to HLS")
-        except Exception as e:
-            logger.error(f"Failed to start mediamtx: {e}")
-
-    # Create HLS segment directory (if HLS streaming enabled)
-    if settings.USE_HLS_STREAMING:
-        import os
-
-        os.makedirs(settings.HLS_SEGMENT_DIR, exist_ok=True)
-        logger.info(f"HLS streaming enabled (segment dir: {settings.HLS_SEGMENT_DIR})")
-
-    # Start batch face processor (if enabled)
-    if settings.USE_BATCH_PROCESSING:
-        try:
-            from app.services.batch_processor import batch_processor
-
-            await batch_processor.start()
-            logger.info("Batch face processor started")
-        except Exception as e:
-            logger.error(f"Failed to start batch processor: {e}")
-
-    logger.info(f"{settings.APP_NAME} startup complete")
+    logger.info(f"{settings.APP_NAME} startup complete (role={role})")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """
-    Application shutdown event handler
+    Application shutdown event handler.
 
-    Performs cleanup tasks:
-    - Save FAISS index
-    - Close database connections
+    Stops all background services and cleans up resources.
     """
-    logger.info(f"Shutting down {settings.APP_NAME}...")
+    role = settings.SERVICE_ROLE
+    logger.info(f"Shutting down {settings.APP_NAME} (role={role})...")
+
+    if role not in _GATEWAY_ROLES:
+        logger.info(f"Role '{role}' — nothing to tear down in main.py")
+        return
 
     # Stop APScheduler
     try:
         if scheduler.running:
-            logger.info("Stopping presence tracking scheduler...")
+            logger.info("Stopping APScheduler...")
             scheduler.shutdown(wait=False)
-            logger.info("Scheduler stopped")
+            logger.info("APScheduler stopped")
     except Exception as e:
         logger.error(f"Failed to stop scheduler: {e}")
 
-    # Stop HLS and recognition services
-    if settings.USE_HLS_STREAMING:
-        try:
-            from app.services.hls_service import hls_service
-            from app.services.recognition_service import recognition_service
+    # Stop TrackFusionEngine
+    try:
+        from app.services.track_fusion_service import get_track_fusion_engine
 
-            logger.info("Stopping HLS and recognition services...")
-            await hls_service.cleanup_all()
-            await recognition_service.cleanup_all()
-        except Exception as e:
-            logger.error(f"Failed to stop HLS/recognition services: {e}")
+        engine = get_track_fusion_engine()
+        await engine.stop()
+        logger.info("TrackFusionEngine stopped")
+    except Exception as e:
+        logger.error(f"Failed to stop TrackFusionEngine: {e}")
+
+    # Stop BroadcastManager
+    try:
+        from app.routers.websocket import get_broadcast_manager
+
+        broadcaster = get_broadcast_manager()
+        await broadcaster.stop()
+        logger.info("BroadcastManager stopped")
+    except Exception as e:
+        logger.error(f"Failed to stop BroadcastManager: {e}")
 
     # Stop mediamtx
     if settings.USE_WEBRTC_STREAMING:
@@ -454,29 +419,12 @@ async def shutdown_event():
         except Exception as e:
             logger.error(f"Failed to stop mediamtx: {e}")
 
-    # Stop batch face processor
-    if settings.USE_BATCH_PROCESSING:
-        try:
-            from app.services.batch_processor import batch_processor
-
-            await batch_processor.stop()
-            logger.info("Batch face processor stopped")
-        except Exception as e:
-            logger.error(f"Failed to stop batch processor: {e}")
-
-    # Stop WebSocket Redis pub/sub listener
-    try:
-        from app.routers.websocket import manager
-
-        await manager.stop_redis_listener()
-    except Exception as e:
-        logger.error(f"Failed to stop WebSocket Redis listener: {e}")
-
     # Close Redis connection pool
     try:
         from app.redis_client import close_redis
 
         await close_redis()
+        logger.info("Redis connection closed")
     except Exception as e:
         logger.error(f"Failed to close Redis: {e}")
 
@@ -505,7 +453,13 @@ async def health_check():
     Returns:
         dict: Health status
     """
-    return {"status": "healthy", "app": settings.APP_NAME, "version": "1.0.0", "debug": settings.DEBUG}
+    return {
+        "status": "healthy",
+        "app": settings.APP_NAME,
+        "version": "1.0.0",
+        "debug": settings.DEBUG,
+        "role": settings.SERVICE_ROLE,
+    }
 
 
 @app.get("/", tags=["System"])
@@ -564,18 +518,13 @@ app.include_router(notifications.router, prefix=f"{settings.API_PREFIX}/notifica
 # Presence tracking routes
 app.include_router(presence.router, prefix=f"{settings.API_PREFIX}/presence", tags=["Presence Tracking"])
 
-# Live Stream routes (WebSocket-based camera streaming)
+# Live Stream routes (fused tracks over WebSocket)
 app.include_router(live_stream.router, prefix=f"{settings.API_PREFIX}/stream", tags=["Live Stream"])
 
-# HLS routes (serve .m3u8 playlists and .ts segments)
-if settings.USE_HLS_STREAMING:
-    app.include_router(hls.router, prefix=f"{settings.API_PREFIX}/hls", tags=["HLS Streaming"])
-
 # WebRTC routes (WHEP signaling proxy + ICE config)
-if settings.USE_WEBRTC_STREAMING:
-    app.include_router(webrtc.router, prefix=f"{settings.API_PREFIX}/webrtc", tags=["WebRTC Streaming"])
+app.include_router(webrtc.router, prefix=f"{settings.API_PREFIX}/webrtc", tags=["WebRTC Streaming"])
 
-# WebSocket routes
+# WebSocket routes (attendance + alerts broadcast)
 app.include_router(websocket.router, prefix=f"{settings.API_PREFIX}/ws", tags=["WebSocket"])
 
 # Analytics routes
