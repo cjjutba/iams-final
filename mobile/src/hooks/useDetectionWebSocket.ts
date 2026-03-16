@@ -37,8 +37,22 @@ interface ConnectedMessage {
   schedule_id: string;
   room_id: string;
   mode: 'webrtc';
+  detection_source?: string;
   stream_fps: number;
   stream_resolution: string;
+}
+
+interface DetectionSummaryMessage {
+  type: 'detection_summary';
+  timestamp: string;
+  detected: Array<{
+    user_id: string;
+    name: string;
+    student_id: string;
+    similarity: number;
+  }>;
+  total_detected: number;
+  total_unknown: number;
 }
 
 interface FusedTracksMessage {
@@ -61,7 +75,7 @@ interface FusedTracksMessage {
   }>;
 }
 
-type WsMessage = ConnectedMessage | FusedTracksMessage | { type: string };
+type WsMessage = ConnectedMessage | FusedTracksMessage | DetectionSummaryMessage | { type: string };
 
 export interface UseDetectionWebSocketReturn {
   fusedTracks: FusedTrack[];
@@ -70,6 +84,8 @@ export interface UseDetectionWebSocketReturn {
   /** True when connected but waiting for camera/edge device to come online. */
   isWaitingForCamera: boolean;
   streamMode: 'webrtc' | null;
+  /** True when server draws bboxes onto video (no overlay needed). */
+  isComposited: boolean;
   studentMap: Map<string, DetectedStudent>;
   connectionError: string | null;
   reconnect: () => void;
@@ -101,6 +117,7 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
   const [studentMap, setStudentMap] = useState<Map<string, DetectedStudent>>(new Map());
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [isWaitingForCamera, setIsWaitingForCamera] = useState(false);
+  const [isComposited, setIsComposited] = useState(false);
   // Defaults match Reolink sub-stream (896x512). Updated once the first
   // fused_tracks message arrives with actual recognition frame dimensions.
   const [detectionWidth, setDetectionWidth] = useState(896);
@@ -174,11 +191,35 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
         const message: WsMessage = JSON.parse(event.data);
 
         if (message.type === 'connected') {
+          const connMsg = message as ConnectedMessage;
           setStreamMode('webrtc');
           streamModeRef.current = 'webrtc';
           setIsWaitingForCamera(false);
+          setIsComposited(connMsg.detection_source === 'composited');
           // Now we know the stream mode — stop showing loading spinner
           setIsConnecting(false);
+        } else if (message.type === 'detection_summary') {
+          // Composited mode: server draws bboxes, we only update student panel
+          const sumMsg = message as DetectionSummaryMessage;
+          setStudentMap((prev) => {
+            const next = new Map(prev);
+            next.forEach((student, key) => {
+              if (student.currentlyDetected) {
+                next.set(key, { ...student, currentlyDetected: false });
+              }
+            });
+            for (const d of sumMsg.detected) {
+              next.set(d.user_id, {
+                user_id: d.user_id,
+                name: d.name,
+                student_id: d.student_id,
+                confidence: d.similarity,
+                currentlyDetected: true,
+                lastSeen: sumMsg.timestamp,
+              });
+            }
+            return next;
+          });
         } else if (message.type === 'fused_tracks') {
           const ftMsg = message as FusedTracksMessage;
 
@@ -332,6 +373,7 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
     isConnecting,
     isWaitingForCamera,
     streamMode,
+    isComposited,
     studentMap,
     connectionError,
     reconnect,

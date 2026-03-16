@@ -37,6 +37,16 @@ from app.services.webrtc_service import webrtc_service
 
 router = APIRouter()
 
+# Lazy import to avoid circular dependency at module load
+_compositor_service = None
+
+def _get_compositor():
+    global _compositor_service
+    if _compositor_service is None:
+        from app.services.compositor_service import CompositorService
+        _compositor_service = CompositorService()
+    return _compositor_service
+
 
 # ---------------------------------------------------------------------------
 # Lightweight centroid/IoU tracker for stable track IDs across recognition
@@ -450,6 +460,11 @@ async def _webrtc_mode(
     device is connected, falls back to feeding recognition results into
     the fusion service for bounding boxes.
     """
+    # ── Composited mode: server draws bboxes onto video frames ──────────
+    if settings.DETECTION_SOURCE == "composited":
+        await _composited_mode(websocket, viewer_id, schedule_id, room_id)
+        return
+
     using_local = settings.DETECTION_SOURCE == "local"
 
     # Register this mobile client with the edge relay manager
@@ -639,6 +654,111 @@ async def _webrtc_mode(
             await local_camera_service.stop()
         await recognition_service.stop(room_id, viewer_id)
         track_fusion_service.cleanup_room(room_id)
+        _recognition_tracker.cleanup(room_id)
+
+        if websocket.client_state == WebSocketState.CONNECTED:
+            with contextlib.suppress(Exception):
+                await websocket.close()
+
+
+# ---------------------------------------------------------------------------
+# Composited mode: server draws bboxes onto video → mediamtx → WebRTC
+# ---------------------------------------------------------------------------
+
+
+async def _composited_mode(
+    websocket: WebSocket,
+    viewer_id: str,
+    schedule_id: str,
+    room_id: str,
+):
+    """
+    Composited mode: the CompositorService reads the camera directly,
+    draws bounding boxes onto frames, and pushes to mediamtx via FFmpeg.
+    This WebSocket only sends a 2 Hz detection_summary for the student panel.
+    """
+    compositor = _get_compositor()
+    started = compositor.start(room_id)
+    if not started:
+        await websocket.send_json({
+            "type": "error",
+            "message": "Failed to start compositor — check COMPOSITED_CAMERA_URL",
+        })
+        await websocket.close(code=4003, reason="Compositor failed")
+        return
+
+    # Wait for the RTSP stream to appear in mediamtx
+    stream_ready = False
+    for _ in range(120):  # up to 60s
+        if await webrtc_service.check_path_exists(room_id):
+            stream_ready = True
+            break
+        await websocket.send_json({"type": "waiting", "message": "Starting composited stream..."})
+        await asyncio.sleep(0.5)
+
+    if not stream_ready:
+        logger.warning("CompositorService: stream not in mediamtx after 60s")
+
+    # Tell mobile to start WebRTC — video already has bboxes baked in
+    await websocket.send_json({
+        "type": "connected",
+        "schedule_id": schedule_id,
+        "room_id": room_id,
+        "mode": "webrtc",
+        "detection_source": "composited",
+        "stream_fps": settings.STREAM_FPS,
+        "stream_resolution": f"{settings.STREAM_WIDTH}x{settings.STREAM_HEIGHT}",
+    })
+
+    # Receive task (pings/close)
+    stop_event = asyncio.Event()
+
+    async def _receive_loop():
+        try:
+            while not stop_event.is_set():
+                msg = await websocket.receive_json()
+                if isinstance(msg, dict) and msg.get("type") == "ping":
+                    await websocket.send_json({"type": "pong"})
+        except (WebSocketDisconnect, Exception):
+            stop_event.set()
+
+    receive_task = asyncio.create_task(_receive_loop())
+
+    # Push detection_summary at 2 Hz
+    SUMMARY_INTERVAL = 0.5
+    last_heartbeat = _time.time()
+
+    try:
+        while not stop_event.is_set():
+            now = _time.time()
+
+            summary = compositor.get_summary()
+            await websocket.send_json({
+                "type": "detection_summary",
+                "timestamp": datetime.now(UTC).isoformat(),
+                **summary,
+            })
+
+            if now - last_heartbeat > 5.0:
+                await websocket.send_json({
+                    "type": "heartbeat",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                })
+                last_heartbeat = now
+
+            await asyncio.sleep(SUMMARY_INTERVAL)
+
+    except WebSocketDisconnect:
+        logger.info("Composited WS disconnected: viewer=%s", viewer_id)
+    except Exception as exc:
+        logger.error("Composited WS error (viewer=%s): %s", viewer_id, exc)
+    finally:
+        stop_event.set()
+        receive_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await receive_task
+
+        compositor.stop()
         _recognition_tracker.cleanup(room_id)
 
         if websocket.client_state == WebSocketState.CONNECTED:

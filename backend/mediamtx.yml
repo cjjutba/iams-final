@@ -45,7 +45,7 @@ webrtcLocalUDPAddress: 0.0.0.0:8887
 # Force ICE candidates to use the LAN IP so mobile devices can connect.
 # Update this if your Mac's WiFi IP changes (run: ipconfig getifaddr en0).
 webrtcICEHostNAT1To1IPs:
-  - 192.168.1.224
+  - 192.168.88.254
 
 # Disable unused protocols
 hls: no

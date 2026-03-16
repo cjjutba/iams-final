@@ -19,6 +19,7 @@ import { CheckSquare, Square, CheckCircle } from 'lucide-react-native';
 import { useToast } from '../../hooks';
 import { authService, faceService } from '../../services';
 import { useAuthStore } from '../../stores';
+import { storage } from '../../utils';
 import { theme, strings, config } from '../../constants';
 import type { AuthStackParamList } from '../../types';
 import { AuthLayout } from '../../components/layouts';
@@ -73,7 +74,8 @@ export const RegisterReviewScreen: React.FC = () => {
         }
       } else if (faceImages.length > 0 && !result.tokens) {
         // Supabase mode: tokens not available yet (email verification required).
-        // Let the user know face registration will happen after they log in.
+        // Save face images to storage so they can be registered after first login.
+        await storage.setPendingFaceImages(faceImages);
         showSuccess(
           'Account created! Your face photos will be registered after you verify your email and log in.',
           'Welcome to IAMS',

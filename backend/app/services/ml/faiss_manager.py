@@ -307,6 +307,16 @@ class FAISSManager:
         score_gap = top_score - second_score
         is_ambiguous = score_gap <= margin
 
+        # When there's no second candidate (few enrolled users), require a
+        # higher absolute score to avoid matching every face to the same person.
+        # The ceiling (default 0.65) ensures only strong matches are accepted.
+        if len(results) <= 1 and top_score < settings.ADAPTIVE_THRESHOLD_CEILING:
+            logger.info(
+                f"Weak solo match rejected: {top_user} ({top_score:.3f}) "
+                f"< ceiling {settings.ADAPTIVE_THRESHOLD_CEILING}"
+            )
+            return {"user_id": None, "confidence": float(top_score), "is_ambiguous": False}
+
         if is_ambiguous:
             logger.warning(
                 f"Ambiguous match: top={top_user} ({top_score:.3f}), "
