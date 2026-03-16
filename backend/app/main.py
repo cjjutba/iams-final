@@ -5,9 +5,7 @@ Main application file that initializes FastAPI, configures middleware,
 registers routers, and handles application lifecycle events.
 
 Supports role-based startup via settings.SERVICE_ROLE:
-  - "api-gateway"  : FastAPI + TrackFusion + BroadcastManager + mediamtx + APScheduler
-  - "detection-worker" : Workers are started via their own __main__ (not here)
-  - "recognition-worker": Workers are started via their own __main__ (not here)
+  - "api-gateway"  : FastAPI + PipelineManager + BroadcastManager + mediamtx + APScheduler
   - "all" (default, dev): Same as api-gateway (everything in one process)
 """
 
@@ -33,7 +31,6 @@ from app.routers import (
     edge_ws,
     face,
     health,
-    live_stream,
     notifications,
     pipeline,
     presence,
@@ -118,7 +115,7 @@ async def startup_event():
     - Check database connection
     - Initialize Redis
     - Load InsightFace model + FAISS index
-    - Start TrackFusionEngine (background stream consumer)
+    - Start PipelineManager (video pipeline orchestrator)
     - Start BroadcastManager (WebSocket broadcaster)
     - Start mediamtx (WebRTC bridge)
     - Start APScheduler (presence scans, session management, digests)
@@ -500,9 +497,6 @@ app.include_router(notifications.router, prefix=f"{settings.API_PREFIX}/notifica
 
 # Presence tracking routes
 app.include_router(presence.router, prefix=f"{settings.API_PREFIX}/presence", tags=["Presence Tracking"])
-
-# Live Stream routes (fused tracks over WebSocket)
-app.include_router(live_stream.router, prefix=f"{settings.API_PREFIX}/ws/stream", tags=["Live Stream"])
 
 # WebRTC routes (WHEP signaling proxy + ICE config)
 app.include_router(webrtc.router, prefix=f"{settings.API_PREFIX}/webrtc", tags=["WebRTC Streaming"])

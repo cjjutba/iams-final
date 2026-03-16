@@ -6,8 +6,8 @@ Business logic for continuous presence monitoring and early-leave detection.
 This is the core service that implements IAMS's unique feature:
 continuous attendance tracking throughout the class session.
 
-I/O contract (Redis Streams pipeline):
-  - INPUT:  TrackFusionEngine.get_identified_users(room_id)
+I/O contract (video pipeline → Redis state → presence scan):
+  - INPUT:  pipeline:{room_id}:state Redis key (written by VideoPipeline)
   - OUTPUT: StreamBus.publish_attendance() / StreamBus.publish_alert()
   - DB:     attendance_records, presence_logs, early_leave_events (unchanged)
 """
@@ -29,7 +29,6 @@ from app.repositories.schedule_repository import ScheduleRepository
 from app.repositories.user_repository import UserRepository
 from app.services import session_manager
 from app.services.stream_bus import get_stream_bus
-from app.services.track_fusion_service import get_track_fusion_engine
 from app.utils.exceptions import NotFoundError
 
 
@@ -353,7 +352,7 @@ class PresenceService:
         """
         Process one scan cycle for a session.
 
-        Queries the TrackFusionEngine for identified users in the room,
+        Reads identified users from the video pipeline Redis state,
         compares against enrolled students, updates attendance records,
         and publishes events via Redis Streams.
 
@@ -379,19 +378,11 @@ class PresenceService:
 
         logger.debug(f"Processing scan #{scan_count} for schedule {schedule_id}")
 
-        # Try pipeline Redis first, fall back to TrackFusionEngine
+        # Read identified users from pipeline Redis state (sole data source)
         pipeline_users = self._get_identified_users_from_pipeline(room_id)
-        if pipeline_users:
-            # Pipeline returns list[dict] — convert to dict keyed by user_id
-            identified_users = {
-                u["user_id"]: u for u in pipeline_users if "user_id" in u
-            }
-        else:
-            try:
-                engine = get_track_fusion_engine()
-                identified_users = engine.get_identified_users(room_id)
-            except Exception:
-                identified_users = {}
+        identified_users = {
+            u["user_id"]: u for u in pipeline_users if "user_id" in u
+        }
         present_user_ids = set(identified_users.keys())
 
         logger.debug(

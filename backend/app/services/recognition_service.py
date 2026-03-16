@@ -270,8 +270,8 @@ class RecognitionService:
                 state.last_timestamp = time.monotonic()
                 state.update_seq += 1
 
-                # Identity push is handled by live_stream router (which enriches
-                # names via DB cache before pushing). No duplicate push here.
+                # Identity push is handled by the video pipeline (which enriches
+                # names via DB cache before compositing). No duplicate push here.
 
                 # Throttle to target FPS
                 elapsed = time.monotonic() - frame_start
