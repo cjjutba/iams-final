@@ -14,7 +14,10 @@ I/O contract (Redis Streams pipeline):
 
 import asyncio
 import contextlib
+import json
 from datetime import date, datetime, time, timedelta
+
+import redis as redis_lib
 
 from sqlalchemy.orm import Session
 
@@ -119,9 +122,6 @@ class PresenceService:
         # Reference the class-level dict so all instances share session state
         self.active_sessions = PresenceService._active_sessions
 
-        # Track fusion engine for querying identified users
-        self.fusion_engine = get_track_fusion_engine()
-
     # ── helpers ──────────────────────────────────────────────────
 
     async def _publish_attendance(self, schedule_id: str, payload: dict):
@@ -143,6 +143,19 @@ class PresenceService:
     def _get_room_id(self, schedule: Schedule) -> str:
         """Extract the room_id string from a schedule (used as fusion engine key)."""
         return str(schedule.room_id)
+
+    def _get_identified_users_from_pipeline(self, room_id: str) -> list[dict]:
+        """Read identified users from the video pipeline's Redis state."""
+        try:
+            r = redis_lib.Redis.from_url(settings.REDIS_URL)
+            raw = r.get(f"pipeline:{room_id}:state")
+            if raw is None:
+                return []
+            state = json.loads(raw)
+            return state.get("identified_users", [])
+        except Exception as e:
+            logger.error(f"Failed to read pipeline state for {room_id}: {e}")
+            return []
 
     def _get_student_info(self, student_id: str) -> dict:
         """Look up student name/student_id from the user repository."""
@@ -366,8 +379,19 @@ class PresenceService:
 
         logger.debug(f"Processing scan #{scan_count} for schedule {schedule_id}")
 
-        # Query TrackFusionEngine for identified users (keyed by room_id)
-        identified_users = self.fusion_engine.get_identified_users(room_id)
+        # Try pipeline Redis first, fall back to TrackFusionEngine
+        pipeline_users = self._get_identified_users_from_pipeline(room_id)
+        if pipeline_users:
+            # Pipeline returns list[dict] — convert to dict keyed by user_id
+            identified_users = {
+                u["user_id"]: u for u in pipeline_users if "user_id" in u
+            }
+        else:
+            try:
+                engine = get_track_fusion_engine()
+                identified_users = engine.get_identified_users(room_id)
+            except Exception:
+                identified_users = {}
         present_user_ids = set(identified_users.keys())
 
         logger.debug(
