@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import JSONResponse
+
 from sqlalchemy.orm import Session
 
 from app.config import logger, settings
@@ -376,28 +376,7 @@ async def process_faces(request: EdgeProcessRequest, db: Session = Depends(get_d
             data=EdgeProcessResponseData(processed=0, matched=[], unmatched=0, processing_time_ms=0, presence_logged=0),
         )
 
-    # --- Async batch path: queue faces and return 202 immediately ---
-    if settings.USE_BATCH_PROCESSING:
-        from app.services.batch_processor import batch_processor
-
-        queued = 0
-        for face_data in request.faces:
-            face_dict = {
-                "image": face_data.image,
-                "bbox": face_data.bbox,
-                "request_id": request.request_id,
-                "timestamp": request.timestamp.isoformat(),
-            }
-            await batch_processor.enqueue_face(request.room_id, face_dict)
-            queued += 1
-
-        logger.info(f"Batch mode: queued {queued} faces for room {request.room_id}")
-        return JSONResponse(
-            status_code=202,
-            content={"status": "queued", "faces_queued": queued},
-        )
-
-    # --- Synchronous path (original behaviour) ---
+    # --- Synchronous path ---
     face_service = FaceService(db)
 
     processed_count = 0

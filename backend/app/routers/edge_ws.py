@@ -25,7 +25,7 @@ def get_edge_devices() -> dict:
     return _edge_devices
 
 
-@router.websocket("/ws/edge/{room_id}")
+@router.websocket("/{room_id}")
 async def edge_websocket(websocket: WebSocket, room_id: str):
     """Accept WebSocket from RPi camera gateway."""
     # Verify API key from query params

@@ -26,11 +26,17 @@ class StreamRelay:
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "warning",
+            # Low-latency input flags
+            "-fflags", "nobuffer",
+            "-flags", "low_delay",
+            "-probesize", "32",
+            "-analyzeduration", "0",
             "-rtsp_transport", "tcp",
             "-i", RTSP_SUB,
             "-c", "copy",
             "-f", "rtsp",
             "-rtsp_transport", "tcp",
+            "-muxdelay", "0",
             target_url,
         ]
         logger.info(f"Starting RTSP relay: {RTSP_SUB} -> {target_url}")

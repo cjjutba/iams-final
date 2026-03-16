@@ -37,6 +37,7 @@ class Room(Base):
     building = Column(String(100), nullable=False)
     capacity = Column(Integer, nullable=True)
     camera_endpoint = Column(String(255), nullable=True)
+    stream_key = Column(String(100), nullable=True)  # mediamtx path / Redis stream key (e.g. "eb-226")
 
     # Status
     is_active = Column(Boolean, default=True, nullable=False)

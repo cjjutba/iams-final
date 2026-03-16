@@ -57,8 +57,25 @@ class BaseWorker(ABC):
 
         logger.info(f"[{self.name}] Listening on streams: {list(streams.keys())}")
 
+        last_stream_refresh = time.time()
+
         while self.running:
             try:
+                # Periodically re-discover streams (every 5 seconds)
+                now = time.time()
+                if now - last_stream_refresh >= 5:
+                    new_streams = await self.get_streams()
+                    for s in new_streams:
+                        if s not in streams:
+                            await self.bus.ensure_group(s, self.group)
+                            streams[s] = ">"
+                            logger.info(f"[{self.name}] Discovered new stream: {s}")
+                    last_stream_refresh = now
+
+                if not streams:
+                    await asyncio.sleep(1)
+                    continue
+
                 messages = await self.bus.consume_multiple(
                     streams={s: ">" for s in streams},
                     group=self.group,
@@ -80,7 +97,6 @@ class BaseWorker(ABC):
                         )
 
                 # Publish metrics every 10 seconds
-                now = time.time()
                 if now - self._last_metrics_time >= 10:
                     await self._publish_metrics()
                     self._last_metrics_time = now

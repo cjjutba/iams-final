@@ -182,6 +182,7 @@ export const FacultyLiveFeedScreen: React.FC = () => {
     isWaitingForCamera,
     streamMode,
     isComposited,
+    frameDims,
     studentMap,
     connectionError,
     reconnect,
@@ -640,8 +641,8 @@ export const FacultyLiveFeedScreen: React.FC = () => {
               {!isComposited && (
                 <FusedDetectionOverlay
                   tracks={fusedTracks}
-                  videoWidth={1}
-                  videoHeight={1}
+                  videoWidth={frameDims.width}
+                  videoHeight={frameDims.height}
                   containerWidth={containerLayout.width}
                   containerHeight={containerLayout.height}
                 />

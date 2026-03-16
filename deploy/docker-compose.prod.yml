@@ -26,6 +26,7 @@ services:
       - ../backend/.env.production
     environment:
       - SERVICE_ROLE=api-gateway
+      - EDGE_API_KEY=iams-edge-key-2026-prod
       - REDIS_URL=redis://redis:6379/0
       - MEDIAMTX_EXTERNAL=true
       - MEDIAMTX_API_URL=http://mediamtx:9997

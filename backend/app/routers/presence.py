@@ -24,7 +24,7 @@ from app.repositories.schedule_repository import ScheduleRepository
 from app.schemas.attendance import EarlyLeaveEventResponse, PresenceLogResponse
 from app.services.presence_service import PresenceService
 from app.services.session_scheduler import mark_manually_ended
-from app.services.tracking_service import get_tracking_service
+
 from app.utils.dependencies import get_current_user
 from app.utils.exceptions import NotFoundError
 
@@ -52,14 +52,6 @@ class SessionEndResponse(BaseModel):
     present_count: int
     early_leave_count: int
     message: str
-
-
-class TrackingStatsResponse(BaseModel):
-    schedule_id: str
-    total_tracks: int
-    confirmed_tracks: int
-    identified_tracks: int
-    unidentified_tracks: int
 
 
 class ActiveSessionsResponse(BaseModel):
@@ -357,38 +349,3 @@ async def get_early_leave_events(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get early leave events: {str(e)}"
         ) from e
 
-
-# ===== Tracking Statistics Endpoints =====
-
-
-@router.get(
-    "/tracking/stats/{schedule_id}",
-    response_model=TrackingStatsResponse,
-    summary="Get Tracking Statistics",
-    description="Get real-time tracking statistics for a session",
-)
-async def get_tracking_stats(schedule_id: str, current_user: User = Depends(get_current_user)):
-    """
-    Get tracking stats
-
-    Returns real-time tracking statistics including active tracks,
-    confirmed tracks, and identified users.
-
-    Requires: Faculty or Admin role
-    """
-    # Check permissions
-    if current_user.role not in [UserRole.FACULTY, UserRole.ADMIN]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Only faculty and admins can view tracking stats"
-        )
-
-    try:
-        tracking_service = get_tracking_service()
-        stats = tracking_service.get_session_stats(schedule_id)
-
-        return TrackingStatsResponse(schedule_id=schedule_id, **stats)
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get tracking stats: {str(e)}"
-        ) from e

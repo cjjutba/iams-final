@@ -4,6 +4,7 @@ sends to VPS via WebSocket. Ultra-lightweight, no ML.
 """
 import base64
 import logging
+import os
 import time
 from collections import deque
 from datetime import datetime
@@ -15,7 +16,7 @@ from app.config import (
     QUEUE_MAXLEN,
     QUEUE_TTL_SECONDS,
     ROOM_ID,
-    RTSP_MAIN,
+    RTSP_SUB,
     SAMPLE_FPS,
 )
 
@@ -32,14 +33,17 @@ class FrameSampler:
         self._frame_interval = 1.0 / SAMPLE_FPS
 
     def start(self):
-        """Open RTSP connection to Reolink main stream."""
-        logger.info(f"Opening RTSP main stream: {RTSP_MAIN}")
-        self.cap = cv2.VideoCapture(RTSP_MAIN, cv2.CAP_FFMPEG)
+        """Open RTSP connection to Reolink sub stream (H.264)."""
+        logger.info(f"Opening RTSP sub stream: {RTSP_SUB}")
+        # Use sub-stream (H.264) because main stream is HEVC which
+        # opencv-python-headless on ARM can't decode reliably
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+        self.cap = cv2.VideoCapture(RTSP_SUB, cv2.CAP_FFMPEG)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         if not self.cap.isOpened():
-            raise RuntimeError(f"Failed to open RTSP: {RTSP_MAIN}")
+            raise RuntimeError(f"Failed to open RTSP: {RTSP_SUB}")
         self.running = True
-        logger.info("Main stream opened successfully")
+        logger.info("Sub stream opened successfully")
 
     def stop(self):
         self.running = False

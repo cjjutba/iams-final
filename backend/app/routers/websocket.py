@@ -144,7 +144,7 @@ def get_broadcast_manager() -> BroadcastManager:
 # ── Endpoints ─────────────────────────────────────────────────
 
 
-@router.websocket("/ws/attendance/{schedule_id}")
+@router.websocket("/attendance/{schedule_id}")
 async def attendance_websocket(websocket: WebSocket, schedule_id: str):
     await websocket.accept()
     manager = get_broadcast_manager()
@@ -163,7 +163,7 @@ async def attendance_websocket(websocket: WebSocket, schedule_id: str):
         manager.remove_attendance_client(schedule_id, websocket)
 
 
-@router.websocket("/ws/alerts/{user_id}")
+@router.websocket("/alerts/{user_id}")
 async def alerts_websocket(websocket: WebSocket, user_id: str):
     await websocket.accept()
     manager = get_broadcast_manager()

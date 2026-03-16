@@ -14,7 +14,7 @@
  *
  * Wire format (fused_tracks):
  * - `id` (number) — track ID
- * - `bbox` ([x, y, w, h]) — normalized 0-1 coordinates
+ * - `bbox` ([x1, y1, x2, y2]) — normalized 0-1 coordinates (converted to [x, y, w, h] internally)
  * - `conf` (number) — detection confidence
  * - `state` ("confirmed" | "tentative")
  * - `identity?` — nested { user_id, name, student_id, similarity }
@@ -71,6 +71,8 @@ interface FusedTracksMessage {
   type: 'fused_tracks';
   room_id: string;
   ts: number;
+  frame_width?: number;
+  frame_height?: number;
   tracks: WireTrack[];
 }
 
@@ -85,6 +87,8 @@ export interface UseDetectionWebSocketReturn {
   streamMode: 'webrtc' | null;
   /** True when server draws bboxes onto video (no overlay needed). */
   isComposited: boolean;
+  /** Frame dimensions from backend detection (for overlay coordinate mapping). */
+  frameDims: { width: number; height: number };
   studentMap: Map<string, DetectedStudent>;
   connectionError: string | null;
   reconnect: () => void;
@@ -95,9 +99,8 @@ export interface UseDetectionWebSocketReturn {
 // ---------------------------------------------------------------------------
 
 const getStreamWsUrl = (scheduleId: string): string => {
-  const baseUrl = config.API_BASE_URL;
-  const wsBase = baseUrl.replace(/^http/, 'ws');
-  return wsBase.replace(/\/api\/v1$/, `/api/v1/stream/${scheduleId}`);
+  // config.WS_URL is ws://<host>/api/v1/ws
+  return `${config.WS_URL}/stream/${scheduleId}`;
 };
 
 // ---------------------------------------------------------------------------
@@ -113,6 +116,7 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [isWaitingForCamera, setIsWaitingForCamera] = useState(false);
   const [isComposited, setIsComposited] = useState(false);
+  const [frameDims, setFrameDims] = useState({ width: 896, height: 512 });
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -193,12 +197,23 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
           const ftMsg = message as FusedTracksMessage;
           const tsIso = new Date(ftMsg.ts).toISOString();
 
+          // Update frame dimensions for overlay coordinate mapping
+          if (ftMsg.frame_width && ftMsg.frame_height) {
+            setFrameDims({ width: ftMsg.frame_width, height: ftMsg.frame_height });
+          }
+
           // Convert wire format to FusedTrack (adapting field names).
           // Bboxes are normalized (0-1); the overlay multiplies by
           // container dimensions to get screen-space pixel coords.
           const tracks: FusedTrack[] = (ftMsg.tracks ?? []).map((t) => ({
             track_id: t.id,
-            bbox: t.bbox,
+            // Backend sends [x1, y1, x2, y2] normalized; convert to [x, y, w, h]
+            bbox: [
+              t.bbox[0],
+              t.bbox[1],
+              t.bbox[2] - t.bbox[0],
+              t.bbox[3] - t.bbox[1],
+            ] as [number, number, number, number],
             confidence: t.conf,
             user_id: t.identity?.user_id ?? null,
             name: t.identity?.name ?? null,
@@ -340,6 +355,7 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
     isWaitingForCamera,
     streamMode,
     isComposited,
+    frameDims,
     studentMap,
     connectionError,
     reconnect,

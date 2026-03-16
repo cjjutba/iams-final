@@ -107,7 +107,7 @@ class WebSocketService {
     );
 
     try {
-      const wsUrl = `${config.WS_URL}/${userId}`;
+      const wsUrl = `${config.WS_URL}/alerts/${userId}`;
       this.socket = new WebSocket(wsUrl);
 
       this.socket.onopen = () => {

@@ -503,7 +503,7 @@ app.include_router(notifications.router, prefix=f"{settings.API_PREFIX}/notifica
 app.include_router(presence.router, prefix=f"{settings.API_PREFIX}/presence", tags=["Presence Tracking"])
 
 # Live Stream routes (fused tracks over WebSocket)
-app.include_router(live_stream.router, prefix=f"{settings.API_PREFIX}/stream", tags=["Live Stream"])
+app.include_router(live_stream.router, prefix=f"{settings.API_PREFIX}/ws/stream", tags=["Live Stream"])
 
 # WebRTC routes (WHEP signaling proxy + ICE config)
 app.include_router(webrtc.router, prefix=f"{settings.API_PREFIX}/webrtc", tags=["WebRTC Streaming"])
@@ -520,8 +520,8 @@ app.include_router(audit.router, prefix=f"{settings.API_PREFIX}/audit", tags=["A
 # Edge device monitoring routes
 app.include_router(edge.router, prefix=f"{settings.API_PREFIX}/edge", tags=["Edge Devices"])
 
-# Edge device WebSocket routes (RPi detection relay)
-app.include_router(edge_ws.router, prefix=f"{settings.API_PREFIX}/edge", tags=["Edge Devices"])
+# Edge device WebSocket routes (RPi frame ingestion)
+app.include_router(edge_ws.router, prefix=f"{settings.API_PREFIX}/ws/edge", tags=["Edge Devices"])
 
 # System settings routes
 app.include_router(settings_router.router, prefix=f"{settings.API_PREFIX}/settings", tags=["Settings"])

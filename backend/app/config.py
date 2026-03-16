@@ -50,9 +50,9 @@ class Settings(BaseSettings):
     ONNX_INTER_OP_THREADS: int = 1  # threads between ops (per worker)
 
     # Face Recognition
-    USE_BATCH_PROCESSING: bool = False  # batch mode toggle (Task 4)
     INSIGHTFACE_MODEL: str = "buffalo_l"
     INSIGHTFACE_DET_SIZE: int = 640
+    INSIGHTFACE_DET_THRESH: float = 0.3  # Lower threshold for surveillance cameras
     FAISS_INDEX_PATH: str = "data/faiss/faces.index"
     RECOGNITION_THRESHOLD: float = 0.45  # Cosine similarity threshold (lowered for cross-camera matching)
     RECOGNITION_MARGIN: float = 0.1  # Min gap between top-1 and top-2 scores
@@ -130,17 +130,6 @@ class Settings(BaseSettings):
     # mediamtx subprocess settings
     MEDIAMTX_BIN_PATH: str = "bin/mediamtx"  # Path to mediamtx binary (relative to backend/)
     MEDIAMTX_CONFIG_PATH: str = "mediamtx.yml"  # Path to mediamtx config (relative to backend/)
-
-    # Detection source (local = backend runs MediaPipe, edge = RPi sends via WebSocket,
-    #                   composited = server draws bboxes onto video frames)
-    DETECTION_SOURCE: str = "local"  # "local", "edge", or "composited"
-    CAMERA_SOURCE: str = "0"  # Webcam index (e.g. "0") or RTSP URL for local mode
-    LOCAL_DETECTION_FPS: float = 30.0  # MediaPipe detection FPS in local mode
-
-    # Composited mode — server draws bboxes onto video frames before encoding
-    COMPOSITED_CAMERA_URL: str = ""  # Direct RTSP URL to camera (set in .env)
-    COMPOSITED_FPS: float = 15.0  # Output frame rate
-    COMPOSITED_DETECT_EVERY_N: int = 3  # Run detection every Nth frame (others use Kalman predict)
 
     # Recognition (decoupled from video, runs at lower FPS)
     RECOGNITION_FPS: float = 10.0  # Frames/sec — match source stream FPS for near-real-time tracking

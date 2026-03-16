@@ -30,7 +30,6 @@ slowapi>=0.1.9
 insightface>=0.7.3
 onnxruntime>=1.21.0
 faiss-cpu==1.13.2
-mediapipe>=0.10.20
 numpy==2.4.2
 pillow==12.1.0
 opencv-python-headless==4.13.0.90

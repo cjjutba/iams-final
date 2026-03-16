@@ -47,6 +47,7 @@ class TrackFusionEngine:
 
     def __init__(self):
         self.rooms: dict[str, dict[int, FusedTrack]] = {}  # room_id -> {track_id -> track}
+        self.room_frame_dims: dict[str, tuple[int, int]] = {}  # room_id -> (width, height)
         self._running = False
         self._task: asyncio.Task | None = None
         # Kalman matrices (shared across all tracks)
@@ -143,6 +144,12 @@ class TrackFusionEngine:
         room_id = data.get("room_id", "unknown")
         detections = data.get("detections", [])
         now = time.time()
+
+        # Store frame dimensions for overlay coordinate mapping
+        fw = data.get("frame_width", 0)
+        fh = data.get("frame_height", 0)
+        if fw > 0 and fh > 0:
+            self.room_frame_dims[room_id] = (fw, fh)
 
         if room_id not in self.rooms:
             self.rooms[room_id] = {}
@@ -274,6 +281,10 @@ class TrackFusionEngine:
                 }
             result.append(entry)
         return result
+
+    def get_frame_dims(self, room_id: str) -> tuple[int, int]:
+        """Get last known frame dimensions for a room (for overlay scaling)."""
+        return self.room_frame_dims.get(room_id, (896, 512))
 
     def get_identified_users(self, room_id: str) -> dict[str, dict]:
         """Get all identified users in a room. Used by presence engine."""

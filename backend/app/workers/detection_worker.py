@@ -151,21 +151,16 @@ class DetectionWorker(BaseWorker):
         # We'll dynamically add rooms as frames arrive
 
     async def get_streams(self) -> dict[str, str]:
-        # We consume from all room frame streams
-        # Start with known rooms, dynamically add more
+        """Discover all room frame streams dynamically from Redis."""
         r = self.bus.redis if self.bus else None
         streams = {}
         if r:
-            # Scan for existing frame streams
             async for key in r.scan_iter(match=b"stream:frames:*"):
                 key_str = key.decode() if isinstance(key, bytes) else key
                 streams[key_str] = ">"
                 room_id = key_str.replace("stream:frames:", "")
-                self.room_ids.append(room_id)
-        # If no streams exist yet, create placeholder streams for known rooms
-        if not streams:
-            # We'll handle dynamic room discovery in the consume loop
-            streams["stream:frames:default"] = ">"
+                if room_id not in self.room_ids:
+                    self.room_ids.append(room_id)
         return streams
 
     async def process_message(self, stream: str, msg_id: str, data: dict):

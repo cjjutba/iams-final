@@ -131,11 +131,6 @@ class RecognitionService:
         # Ensure lazy components are initialized
         self._ensure_ml()
 
-        # If local camera is providing frames, use it instead of RTSP
-        if settings.DETECTION_SOURCE == "local":
-            from app.services.local_camera_service import local_camera_service
-            state.frame_provider = lambda: local_camera_service.get_latest_frame()
-
         # Open capture in executor (skip if frame provider is set)
         if state.frame_provider is None:
             loop = asyncio.get_event_loop()

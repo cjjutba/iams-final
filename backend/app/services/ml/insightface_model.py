@@ -97,7 +97,7 @@ class InsightFaceModel:
                 f"Loading InsightFace '{self._model_name}' (providers={providers}, det_size={self._det_size})..."
             )
             self.app = FaceAnalysis(name=self._model_name, providers=providers)
-            self.app.prepare(ctx_id=0, det_size=self._det_size)
+            self.app.prepare(ctx_id=0, det_size=self._det_size, det_thresh=settings.INSIGHTFACE_DET_THRESH)
 
             # Configure thread counts on the already-created ORT sessions.
             # InsightFace stores sub-models in self.app.models; each has a
