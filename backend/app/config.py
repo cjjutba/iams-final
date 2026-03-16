@@ -91,6 +91,13 @@ class Settings(BaseSettings):
     GRACE_PERIOD_MINUTES: int = 15  # Late grace period after class starts
     SESSION_BUFFER_MINUTES: int = 5  # Buffer before/after class for session
 
+    # Video Pipeline
+    PIPELINE_ENABLED: bool = True
+    PIPELINE_FPS: int = 25
+    PIPELINE_WIDTH: int = 640
+    PIPELINE_HEIGHT: int = 480
+    PIPELINE_DET_MODEL: str = "buffalo_sc"
+
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_BATCH_QUEUE_PREFIX: str = "face_queue"
@@ -180,6 +187,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
 
 # Initialize settings

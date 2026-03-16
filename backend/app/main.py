@@ -180,15 +180,15 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to initialize face recognition: {e}")
 
-    # ── Track Fusion Engine ───────────────────────────────────────
-    try:
-        from app.services.track_fusion_service import get_track_fusion_engine
-
-        engine = get_track_fusion_engine()
-        await engine.start()
-        logger.info("TrackFusionEngine started")
-    except Exception as e:
-        logger.error(f"Failed to start TrackFusionEngine: {e}")
+    # ── Video Pipeline Manager ──────────────────────────────────────
+    if settings.PIPELINE_ENABLED:
+        try:
+            from app.pipeline.pipeline_manager import PipelineManager
+            pipeline_manager = PipelineManager(redis_url=settings.REDIS_URL)
+            app.state.pipeline_manager = pipeline_manager
+            logger.info("PipelineManager initialized (pipelines start on session start)")
+        except Exception as e:
+            logger.error(f"Failed to initialize PipelineManager: {e}")
 
     # ── WebSocket Broadcaster ─────────────────────────────────────
     try:
@@ -390,15 +390,13 @@ async def shutdown_event():
     except Exception as e:
         logger.error(f"Failed to stop scheduler: {e}")
 
-    # Stop TrackFusionEngine
-    try:
-        from app.services.track_fusion_service import get_track_fusion_engine
-
-        engine = get_track_fusion_engine()
-        await engine.stop()
-        logger.info("TrackFusionEngine stopped")
-    except Exception as e:
-        logger.error(f"Failed to stop TrackFusionEngine: {e}")
+    # Stop Pipeline Manager
+    if hasattr(app.state, "pipeline_manager"):
+        try:
+            app.state.pipeline_manager.stop_all()
+            logger.info("All video pipelines stopped")
+        except Exception as e:
+            logger.error(f"Failed to stop pipelines: {e}")
 
     # Stop BroadcastManager
     try:
