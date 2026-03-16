@@ -148,6 +148,26 @@ class Settings(BaseSettings):
     RECOGNITION_RTSP_URL: str = ""  # High-res RTSP URL for recognition (empty = use DEFAULT_RTSP_URL)
     RECOGNITION_MAX_DIM: int = 1280  # Cap frame dimension for detection (balances accuracy vs speed)
 
+    # Service Role (determines which components start)
+    # "api-gateway" | "detection-worker" | "recognition-worker" | "all" (dev)
+    SERVICE_ROLE: str = "all"
+
+    # Worker Settings
+    DETECTION_FPS: float = 3.0  # Frames per second to process for detection
+    RECOGNITION_BATCH_SIZE: int = 10  # Max faces to recognize in one batch
+    TRACK_COAST_MS: int = 500  # Track coast duration before LOST (ms)
+    TRACK_DELETE_MS: int = 2000  # Time in LOST before deletion (ms)
+    TRACK_CONFIRM_HITS: int = 3  # Consecutive detections to confirm track
+    FUSION_OUTPUT_FPS: float = 30.0  # Track fusion output rate
+
+    # Edge Gateway
+    EDGE_API_KEY: str = "edge-secret-key-change-in-production"  # RPi auth
+
+    # Stream Consumer Groups
+    DETECTION_GROUP: str = "detection-workers"
+    RECOGNITION_GROUP: str = "recognition-workers"
+    ATTENDANCE_GROUP: str = "attendance-writers"
+
     # Re-enrollment Monitoring
     REENROLL_CHECK_ENABLED: bool = True
     REENROLL_SIMILARITY_THRESHOLD: float = 0.55  # Mean similarity below this triggers re-enroll prompt
