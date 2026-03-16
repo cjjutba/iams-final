@@ -32,6 +32,7 @@ from app.routers import (
     edge,
     edge_ws,
     face,
+    health,
     live_stream,
     notifications,
     presence,
@@ -440,26 +441,9 @@ async def shutdown_event():
     logger.info(f"{settings.APP_NAME} shutdown complete")
 
 
-# ===== Health Check Endpoint =====
+# ===== Health Check =====
 
-
-@app.get(f"{settings.API_PREFIX}/health", tags=["System"])
-async def health_check():
-    """
-    Health check endpoint
-
-    Returns the system status and version information.
-
-    Returns:
-        dict: Health status
-    """
-    return {
-        "status": "healthy",
-        "app": settings.APP_NAME,
-        "version": "1.0.0",
-        "debug": settings.DEBUG,
-        "role": settings.SERVICE_ROLE,
-    }
+# Deep health check is registered below via health.router at /api/v1/health
 
 
 @app.get("/", tags=["System"])
@@ -541,6 +525,9 @@ app.include_router(edge_ws.router, prefix=f"{settings.API_PREFIX}/edge", tags=["
 
 # System settings routes
 app.include_router(settings_router.router, prefix=f"{settings.API_PREFIX}/settings", tags=["Settings"])
+
+# Health check (deep system status for Docker HEALTHCHECK + monitoring dashboard)
+app.include_router(health.router, prefix=f"{settings.API_PREFIX}/health", tags=["System"])
 
 
 # ===== Development Server =====
