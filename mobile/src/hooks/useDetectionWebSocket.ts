@@ -11,6 +11,14 @@
  * - Parse `type: "fused_tracks"` → update fusedTracks + studentMap
  * - Ping/pong heartbeat
  * - Auto-reconnect on disconnect (exponential backoff)
+ *
+ * Wire format (fused_tracks):
+ * - `id` (number) — track ID
+ * - `bbox` ([x, y, w, h]) — normalized 0-1 coordinates
+ * - `conf` (number) — detection confidence
+ * - `state` ("confirmed" | "tentative")
+ * - `identity?` — nested { user_id, name, student_id, similarity }
+ * - `ts` (number) — unix ms timestamp
  */
 
 import { useEffect, useState, useCallback, useRef } from 'react';
@@ -42,40 +50,31 @@ interface ConnectedMessage {
   stream_resolution: string;
 }
 
-interface DetectionSummaryMessage {
-  type: 'detection_summary';
-  timestamp: string;
-  detected: Array<{
-    user_id: string;
-    name: string;
-    student_id: string;
-    similarity: number;
-  }>;
-  total_detected: number;
-  total_unknown: number;
+/** Identity info nested inside a fused track. */
+interface TrackIdentity {
+  user_id: string;
+  name: string;
+  student_id: string;
+  similarity: number;
+}
+
+/** A single track in the new fused_tracks wire format. */
+interface WireTrack {
+  id: number;
+  bbox: [number, number, number, number];
+  conf: number;
+  state: 'confirmed' | 'tentative';
+  identity?: TrackIdentity;
 }
 
 interface FusedTracksMessage {
   type: 'fused_tracks';
   room_id: string;
-  timestamp: string;
-  seq: number;
-  frame_width: number;
-  frame_height: number;
-  tracks: Array<{
-    track_id: number;
-    bbox: [number, number, number, number];
-    confidence: number;
-    user_id: string | null;
-    name: string | null;
-    student_id: string | null;
-    similarity: number | null;
-    state: 'confirmed' | 'tentative';
-    missed_frames: number;
-  }>;
+  ts: number;
+  tracks: WireTrack[];
 }
 
-type WsMessage = ConnectedMessage | FusedTracksMessage | DetectionSummaryMessage | { type: string };
+type WsMessage = ConnectedMessage | FusedTracksMessage | { type: string };
 
 export interface UseDetectionWebSocketReturn {
   fusedTracks: FusedTrack[];
@@ -89,10 +88,6 @@ export interface UseDetectionWebSocketReturn {
   studentMap: Map<string, DetectedStudent>;
   connectionError: string | null;
   reconnect: () => void;
-  /** Detection frame width (from recognition service). */
-  detectionWidth: number;
-  /** Detection frame height (from recognition service). */
-  detectionHeight: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,10 +113,6 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [isWaitingForCamera, setIsWaitingForCamera] = useState(false);
   const [isComposited, setIsComposited] = useState(false);
-  // Defaults match Reolink sub-stream (896x512). Updated once the first
-  // fused_tracks message arrives with actual recognition frame dimensions.
-  const [detectionWidth, setDetectionWidth] = useState(896);
-  const [detectionHeight, setDetectionHeight] = useState(512);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -198,48 +189,23 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
           setIsComposited(connMsg.detection_source === 'composited');
           // Now we know the stream mode — stop showing loading spinner
           setIsConnecting(false);
-        } else if (message.type === 'detection_summary') {
-          // Composited mode: server draws bboxes, we only update student panel
-          const sumMsg = message as DetectionSummaryMessage;
-          setStudentMap((prev) => {
-            const next = new Map(prev);
-            next.forEach((student, key) => {
-              if (student.currentlyDetected) {
-                next.set(key, { ...student, currentlyDetected: false });
-              }
-            });
-            for (const d of sumMsg.detected) {
-              next.set(d.user_id, {
-                user_id: d.user_id,
-                name: d.name,
-                student_id: d.student_id,
-                confidence: d.similarity,
-                currentlyDetected: true,
-                lastSeen: sumMsg.timestamp,
-              });
-            }
-            return next;
-          });
         } else if (message.type === 'fused_tracks') {
           const ftMsg = message as FusedTracksMessage;
+          const tsIso = new Date(ftMsg.ts).toISOString();
 
-          // Update frame dimensions
-          if (ftMsg.frame_width && ftMsg.frame_height) {
-            setDetectionWidth(ftMsg.frame_width);
-            setDetectionHeight(ftMsg.frame_height);
-          }
-
-          // Convert to FusedTrack format
+          // Convert wire format to FusedTrack (adapting field names).
+          // Bboxes are normalized (0-1); the overlay multiplies by
+          // container dimensions to get screen-space pixel coords.
           const tracks: FusedTrack[] = (ftMsg.tracks ?? []).map((t) => ({
-            track_id: t.track_id,
+            track_id: t.id,
             bbox: t.bbox,
-            confidence: t.confidence,
-            user_id: t.user_id,
-            name: t.name,
-            student_id: t.student_id,
-            similarity: t.similarity,
+            confidence: t.conf,
+            user_id: t.identity?.user_id ?? null,
+            name: t.identity?.name ?? null,
+            student_id: t.identity?.student_id ?? null,
+            similarity: t.identity?.similarity ?? null,
             state: t.state,
-            missed_frames: t.missed_frames,
+            missed_frames: 0,
           }));
 
           setFusedTracks(tracks);
@@ -260,9 +226,9 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
                 user_id: t.user_id,
                 name: t.name || 'Unknown',
                 student_id: t.student_id || '',
-                confidence: t.confidence,
+                confidence: t.similarity ?? t.confidence,
                 currentlyDetected: true,
-                lastSeen: ftMsg.timestamp,
+                lastSeen: tsIso,
               });
             }
             return next;
@@ -377,7 +343,5 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
     studentMap,
     connectionError,
     reconnect,
-    detectionWidth,
-    detectionHeight,
   };
 }

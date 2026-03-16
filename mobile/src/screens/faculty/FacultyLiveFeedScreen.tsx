@@ -185,8 +185,6 @@ export const FacultyLiveFeedScreen: React.FC = () => {
     studentMap,
     connectionError,
     reconnect,
-    detectionWidth,
-    detectionHeight,
   } = useDetectionWebSocket(scheduleId);
 
   // WebRTC video (enabled only in webrtc mode)
@@ -642,8 +640,8 @@ export const FacultyLiveFeedScreen: React.FC = () => {
               {!isComposited && (
                 <FusedDetectionOverlay
                   tracks={fusedTracks}
-                  videoWidth={detectionWidth}
-                  videoHeight={detectionHeight}
+                  videoWidth={1}
+                  videoHeight={1}
                   containerWidth={containerLayout.width}
                   containerHeight={containerLayout.height}
                 />
