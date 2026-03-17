@@ -284,9 +284,19 @@ async def startup_event():
                     room_id = str(session.schedule.room_id)
                     grabber = app.state.frame_grabbers.get(room_id)
 
-                    # Self-healing: create FrameGrabber + pipeline for active sessions
-                    # that were started before the current code was deployed
-                    if grabber is None:
+                    # Self-healing: create FrameGrabber + pipeline if missing
+                    needs_infra = grabber is None
+                    if not needs_infra:
+                        # Also check if pipeline died (grabber exists but pipeline doesn't)
+                        mgr = getattr(app.state, "pipeline_manager", None)
+                        if mgr:
+                            alive = any(
+                                p.get("room_id") == room_id and p.get("alive")
+                                for p in mgr.get_status()
+                            )
+                            if not alive:
+                                needs_infra = True
+                    if needs_infra:
                         try:
                             _ensure_room_infrastructure(app, db, session.schedule, schedule_id)
                             grabber = app.state.frame_grabbers.get(room_id)
