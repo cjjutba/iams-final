@@ -93,7 +93,7 @@ class Settings(BaseSettings):
 
     # Video Pipeline
     PIPELINE_ENABLED: bool = True
-    PIPELINE_FPS: int = 15
+    PIPELINE_FPS: int = 20
     PIPELINE_WIDTH: int = 1280
     PIPELINE_HEIGHT: int = 720
     PIPELINE_DET_MODEL: str = "buffalo_sc"

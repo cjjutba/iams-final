@@ -63,7 +63,6 @@ class FrameAnnotator:
         """
         for det in detections:
             self._draw_detection(frame, det)
-        self._draw_hud(frame, hud_info)
         return frame
 
     # ------------------------------------------------------------------
