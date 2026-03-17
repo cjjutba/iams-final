@@ -131,7 +131,8 @@ class FrameGrabber:
         Runs in a daemon thread until stop() sets the stop event.
         """
         while not self._stop_event.is_set():
-            cap = self._cap
+            with self._lock:
+                cap = self._cap
             if cap is None or not cap.isOpened():
                 # Wait briefly before retry to avoid busy-spin
                 self._stop_event.wait(0.5)
