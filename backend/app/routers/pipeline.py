@@ -15,6 +15,7 @@ class PipelineStartRequest(BaseModel):
     professor: str = ""
     total_enrolled: int = 0
     schedule_id: str | None = None
+    rtsp_source: str | None = None  # Direct camera RTSP URL (bypasses mediamtx raw)
 
 
 class PipelineStatusResponse(BaseModel):
@@ -31,7 +32,7 @@ async def start_pipeline(req: PipelineStartRequest, request: Request):
 
     config = {
         "room_id": req.room_id,
-        "rtsp_source": f"{settings.MEDIAMTX_RTSP_URL}/{req.room_id}/raw",
+        "rtsp_source": req.rtsp_source or f"{settings.MEDIAMTX_RTSP_URL}/{req.room_id}/raw",
         "rtsp_target": f"{settings.MEDIAMTX_RTSP_URL}/{req.room_id}/annotated",
         "width": settings.PIPELINE_WIDTH,
         "height": settings.PIPELINE_HEIGHT,
