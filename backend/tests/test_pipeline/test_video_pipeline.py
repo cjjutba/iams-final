@@ -162,6 +162,32 @@ class TestVideoPipeline:
         )
         assert abs(result.confidence[0] - 0.92) < 0.01
 
+    def test_detect_faces_scales_bboxes(self):
+        """Bboxes should be multiplied by scale factor."""
+        from app.pipeline.video_pipeline import VideoAnalyticsPipeline
+
+        config = self._make_config()
+        pipeline = VideoAnalyticsPipeline(config)
+
+        mock_face = MagicMock()
+        mock_face.x = 50
+        mock_face.y = 25
+        mock_face.width = 40
+        mock_face.height = 50
+        mock_face.confidence = 0.90
+
+        mock_detector = MagicMock()
+        mock_detector.get_faces.return_value = [mock_face]
+        pipeline._detector = mock_detector
+
+        frame = np.zeros((360, 640, 3), dtype=np.uint8)
+        result = pipeline._detect_faces(frame, scale=2.0)
+        assert len(result) == 1
+        # xyxy = [50, 25, 90, 75] * 2.0 = [100, 50, 180, 150]
+        np.testing.assert_array_almost_equal(
+            result.xyxy[0], [100, 50, 180, 150]
+        )
+
     def test_stop_sets_running_false(self):
         from app.pipeline.video_pipeline import VideoAnalyticsPipeline
 

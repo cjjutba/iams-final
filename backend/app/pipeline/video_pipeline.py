@@ -225,8 +225,14 @@ class VideoAnalyticsPipeline:
     # Detection
     # ------------------------------------------------------------------
 
-    def _detect_faces(self, frame: np.ndarray) -> sv.Detections:
-        """Run SCRFD face detection and return supervision Detections."""
+    def _detect_faces(self, frame: np.ndarray, scale: float = 1.0) -> sv.Detections:
+        """Run SCRFD face detection and return supervision Detections.
+
+        Args:
+            frame: BGR frame (possibly downscaled for detection).
+            scale: Multiply bounding boxes by this factor to map back to
+                the original (compositing) resolution.
+        """
         if self._detector is None:
             return sv.Detections.empty()
 
@@ -235,11 +241,12 @@ class VideoAnalyticsPipeline:
             if not faces:
                 return sv.Detections.empty()
 
-            # DetectedFace has x, y, width, height -- convert to xyxy
             bboxes = np.array(
                 [[f.x, f.y, f.x + f.width, f.y + f.height] for f in faces],
                 dtype=np.float32,
             )
+            if scale != 1.0:
+                bboxes *= scale
             scores = np.array([f.confidence for f in faces], dtype=np.float32)
             return sv.Detections(xyxy=bboxes, confidence=scores)
         except Exception as e:
