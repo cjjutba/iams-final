@@ -163,12 +163,12 @@ class FrameAnnotator:
         top_right = info.get("timestamp", "")
         cv2.putText(
             frame, top_left, (8, bh - 8),
-            _FONT, 0.45, (255, 255, 255), 1, cv2.LINE_AA,
+            _FONT, self.font_scale, (255, 255, 255), 1, cv2.LINE_AA,
         )
-        (trw, _), _ = cv2.getTextSize(top_right, _FONT, 0.45, 1)
+        (trw, _), _ = cv2.getTextSize(top_right, _FONT, self.font_scale, 1)
         cv2.putText(
             frame, top_right, (w - trw - 8, bh - 8),
-            _FONT, 0.45, (255, 255, 255), 1, cv2.LINE_AA,
+            _FONT, self.font_scale, (255, 255, 255), 1, cv2.LINE_AA,
         )
 
         # -- Bottom bar --
@@ -183,5 +183,5 @@ class FrameAnnotator:
         )
         cv2.putText(
             frame, bot_text, (8, h - 8),
-            _FONT, 0.45, (255, 255, 255), 1, cv2.LINE_AA,
+            _FONT, self.font_scale, (255, 255, 255), 1, cv2.LINE_AA,
         )
