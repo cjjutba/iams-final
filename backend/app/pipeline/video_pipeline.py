@@ -177,13 +177,11 @@ class VideoAnalyticsPipeline:
         frame_interval = 1.0 / fps
         det_interval = cfg.get("det_interval", settings.PIPELINE_DET_INTERVAL)
         comp_h, comp_w = cfg["height"], cfg["width"]
-        # Only downscale for detection if input is 720p+ (otherwise faces are too small)
-        if comp_h >= 720:
-            det_w, det_h = comp_w // 2, comp_h // 2
-            scale = comp_h / det_h
-        else:
-            det_w, det_h = comp_w, comp_h
-            scale = 1.0
+        # Run detection at full compositing resolution.
+        # Downscaling loses small/distant faces — not worth the CPU savings
+        # given we already limit FPS via det_interval.
+        det_w, det_h = comp_w, comp_h
+        scale = 1.0
 
         last_state_push = 0.0
         last_recognition_check = 0.0
@@ -225,6 +223,13 @@ class VideoAnalyticsPipeline:
 
             # Build detection list for annotator
             det_list = self._build_detection_list(tracked)
+
+            if det_list and frame_count % 50 == 0:
+                logger.info(
+                    f"[Pipeline:{self.room_id}] frame {frame_count}: "
+                    f"{len(det_list)} tracks, states={[d['track_state'] for d in det_list]}, "
+                    f"bboxes={[d['bbox'] for d in det_list[:3]]}"
+                )
 
             # Update HUD
             self._hud_info["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
