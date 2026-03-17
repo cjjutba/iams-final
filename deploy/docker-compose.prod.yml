@@ -2,10 +2,8 @@
 # Usage: docker compose -f docker-compose.prod.yml up -d
 #
 # Architecture:
-#   api-gateway          — FastAPI REST + WebSocket (serves clients)
-#   detection-worker     — Pulls frames from Redis, runs face detection
-#   recognition-worker   — Pulls crops from Redis, runs face recognition
-#   redis                — Event bus (Redis Streams) + cache
+#   api-gateway          — FastAPI REST + WebSocket + attendance engine + pipeline manager
+#   redis                — Pub/sub + cache
 #   mediamtx             — RTSP ingest + WebRTC bridge
 #   coturn               — TURN relay for NAT traversal
 #   admin                — Builds static admin dashboard files
@@ -54,67 +52,6 @@ services:
         limits:
           memory: 3G
           cpus: "2.0"
-
-  detection-worker:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-    container_name: iams-detection-worker
-    restart: unless-stopped
-    env_file:
-      - ../backend/.env.production
-    environment:
-      - SERVICE_ROLE=detection-worker
-      - REDIS_URL=redis://redis:6379/0
-      - ORT_INTRA_OP_NUM_THREADS=2
-      - ORT_INTER_OP_NUM_THREADS=1
-    command: python -m app.workers.detection_worker
-    volumes:
-      - app_logs:/app/logs
-    depends_on:
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import redis; r=redis.from_url('redis://redis:6379'); r.ping()"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: "1.0"
-
-  recognition-worker:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-    container_name: iams-recognition-worker
-    restart: unless-stopped
-    env_file:
-      - ../backend/.env.production
-    environment:
-      - SERVICE_ROLE=recognition-worker
-      - REDIS_URL=redis://redis:6379/0
-      - ORT_INTRA_OP_NUM_THREADS=2
-      - ORT_INTER_OP_NUM_THREADS=1
-    command: python -m app.workers.recognition_worker
-    volumes:
-      - faiss_data:/app/data/faiss
-      - app_logs:/app/logs
-    depends_on:
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import redis; r=redis.from_url('redis://redis:6379'); r.ping()"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: "1.0"
 
   # ── Infrastructure Services ────────────────────────────────────────
 
