@@ -59,9 +59,9 @@ class FFmpegPublisher:
         cmd += [
             "-pix_fmt", "yuv420p",
             "-bf", "0",
-            "-g", str(self.fps * 2),
-            "-b:v", "800k",
-            "-maxrate", "1000k",
+            "-g", "10",
+            "-b:v", "1200k",
+            "-maxrate", "1500k",
             "-bufsize", "500k",
             "-f", "rtsp",
             "-rtsp_transport", "tcp",
