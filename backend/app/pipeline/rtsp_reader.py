@@ -74,14 +74,18 @@ class RTSPReader:
         logger.info(f"RTSPReader started: {self.url} → {self.width}x{self.height}@{self.target_fps}fps")
         return self
 
-    def _read_exactly(self, n: int) -> bytes:
-        """Read exactly n bytes from stdout, looping until complete."""
+    def _read_exactly(self, n: int) -> bytes | None:
+        """Read exactly *n* bytes from stdout.
+
+        Returns the complete buffer on success, or ``None`` if the pipe
+        hits EOF before *n* bytes have been read (FFmpeg exited).
+        """
         data = b""
         while len(data) < n:
             remaining = n - len(data)
             chunk = self._process.stdout.read(remaining)
             if not chunk:
-                return data  # EOF
+                return None  # EOF — FFmpeg pipe closed
             data += chunk
         return data
 
@@ -91,13 +95,13 @@ class RTSPReader:
         warmup = self.WARMUP_FRAMES
         while not self._stopped:
             if self._process is None or self._process.poll() is not None:
-                time.sleep(0.1)
-                continue
+                logger.warning("RTSPReader: FFmpeg process exited, stopping reader loop")
+                break
             try:
                 raw = self._read_exactly(frame_bytes)
-                if len(raw) != frame_bytes:
-                    time.sleep(0.1)
-                    continue
+                if raw is None or len(raw) != frame_bytes:
+                    logger.warning("RTSPReader: EOF or short read from FFmpeg, stopping reader loop")
+                    break
                 if warmup > 0:
                     warmup -= 1
                     continue
