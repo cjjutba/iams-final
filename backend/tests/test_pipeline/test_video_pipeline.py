@@ -239,3 +239,62 @@ class TestVideoPipeline:
         assert pipeline._running is False
         pipeline._reader.stop.assert_called_once()
         pipeline._publisher.stop.assert_called_once()
+
+    def test_tracking_only_frames_use_predicted_positions(self):
+        """On non-detection frames, ByteTrack keeps tracks alive via Kalman
+        prediction in its ``lost_tracks`` buffer so they can be re-matched
+        when the next detection frame arrives.
+
+        This validates the core assumption of our detect-every-N pattern:
+        1. A track established with real detections survives empty-detection
+           gaps (held in ``lost_tracks`` with a Kalman-predicted position).
+        2. When detections resume, the track re-associates with the **same**
+           tracker ID -- no identity fragmentation.
+        """
+        import supervision as sv
+        from app.pipeline.video_pipeline import VideoAnalyticsPipeline
+
+        config = self._make_config(width=1280, height=720, fps=15, det_interval=3)
+        pipeline = VideoAnalyticsPipeline(config)
+
+        # Use a real ByteTrack instance
+        pipeline._tracker = sv.ByteTrack(
+            track_activation_threshold=0.20,
+            lost_track_buffer=90,
+            minimum_matching_threshold=0.7,
+            frame_rate=15,
+            minimum_consecutive_frames=1,
+        )
+
+        # Feed detection frames to establish a confirmed track
+        det = sv.Detections(
+            xyxy=np.array([[100, 100, 200, 200]], dtype=np.float32),
+            confidence=np.array([0.9]),
+        )
+        for _ in range(3):
+            pipeline._tracker.update_with_detections(det)
+
+        # Capture the tracker_id assigned to the established track
+        confirmed = pipeline._tracker.update_with_detections(det)
+        assert len(confirmed) == 1, "Track should be confirmed after repeated detections"
+        original_track_id = confirmed.tracker_id[0]
+
+        # Now feed empty detections (simulating tracking-only frames)
+        for _ in range(3):
+            pipeline._tracker.update_with_detections(sv.Detections.empty())
+
+        # Track should survive in lost_tracks buffer with Kalman-predicted position
+        alive_in_buffer = [
+            t for t in pipeline._tracker.lost_tracks if t.is_activated
+        ]
+        assert len(alive_in_buffer) >= 1, (
+            "Track should persist in lost_tracks buffer via Kalman prediction"
+        )
+
+        # When detections resume at approximately the same position,
+        # the track should re-associate with the same tracker_id
+        resumed = pipeline._tracker.update_with_detections(det)
+        assert len(resumed) >= 1, "Track should re-associate when detections resume"
+        assert resumed.tracker_id[0] == original_track_id, (
+            "Re-associated track should keep the same ID (no fragmentation)"
+        )
