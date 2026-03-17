@@ -97,7 +97,7 @@ async def live_stream_ws(
                 # Send pipeline state update every 5 seconds
                 if r:
                     try:
-                        state_raw = r.get(f"pipeline:{room_id}:state")
+                        state_raw = r.get(f"pipeline:{room_id}:status")
                         if state_raw:
                             state = json.loads(state_raw)
                             await websocket.send_json({

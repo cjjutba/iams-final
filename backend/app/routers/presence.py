@@ -123,6 +123,22 @@ async def start_session(
                 mgr.start_pipeline(pipeline_config)
                 logger.info(f"Auto-started pipeline for room {room_id}")
 
+        # Start FrameGrabber for attendance engine scans
+        schedule = schedule or ScheduleRepository(db).get_by_id(body.schedule_id)
+        if schedule:
+            room_id = str(schedule.room_id)
+            frame_grabbers = getattr(http_request.app.state, "frame_grabbers", None)
+            if frame_grabbers is not None and room_id not in frame_grabbers:
+                camera_url = get_camera_url(room_id, db)
+                if camera_url:
+                    try:
+                        from app.services.frame_grabber import FrameGrabber
+                        grabber = FrameGrabber(camera_url)
+                        frame_grabbers[room_id] = grabber
+                        logger.info(f"FrameGrabber started for room {room_id}")
+                    except Exception as fg_err:
+                        logger.error(f"Failed to start FrameGrabber for room {room_id}: {fg_err}")
+
         return SessionStartResponse(
             schedule_id=session_state.schedule_id,
             started_at=session_state.start_time,
@@ -184,6 +200,30 @@ async def end_session(
             room_id = str(schedule.room_id)
             mgr.stop_pipeline(room_id)
             logger.info(f"Auto-stopped pipeline for room {room_id}")
+
+        # Stop FrameGrabber and clear identity cache for this room
+        if schedule:
+            room_id = str(schedule.room_id)
+            frame_grabbers = getattr(http_request.app.state, "frame_grabbers", None)
+            if frame_grabbers and room_id in frame_grabbers:
+                try:
+                    frame_grabbers[room_id].stop()
+                    del frame_grabbers[room_id]
+                    logger.info(f"FrameGrabber stopped for room {room_id}")
+                except Exception as fg_err:
+                    logger.error(f"Failed to stop FrameGrabber for room {room_id}: {fg_err}")
+
+            # Clear identity cache for this session
+            try:
+                from app.redis_client import get_redis
+                from app.services.identity_cache import IdentityCache
+
+                redis_client = await get_redis()
+                cache = IdentityCache(redis_client)
+                await cache.clear_session(room_id, schedule_id)
+                logger.info(f"Identity cache cleared for room {room_id}, schedule {schedule_id}")
+            except Exception as cache_err:
+                logger.error(f"Failed to clear identity cache: {cache_err}")
 
         # Build summary
         return SessionEndResponse(

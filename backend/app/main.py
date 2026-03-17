@@ -179,6 +179,9 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to initialize face recognition: {e}")
 
+    # ── Frame Grabbers (attendance engine RTSP sources) ─────────────
+    app.state.frame_grabbers = {}  # room_id -> FrameGrabber
+
     # ── Video Pipeline Manager ──────────────────────────────────────
     if settings.PIPELINE_ENABLED:
         try:
@@ -214,26 +217,74 @@ async def startup_event():
 
     # ── APScheduler ───────────────────────────────────────────────
     try:
+        import time as _time
+
         from app.database import SessionLocal
         from app.services.presence_service import PresenceService
         from app.services.session_scheduler import auto_manage_sessions
 
         logger.info("Initializing APScheduler...")
 
-        # Presence scan cycle (every SCAN_INTERVAL_SECONDS)
-        async def run_presence_scan_cycle():
-            """Background task to run presence scan cycles."""
+        # Attendance scan cycle (every SCAN_INTERVAL_SECONDS, default 15s)
+        # Uses AttendanceScanEngine when a FrameGrabber is available for a room,
+        # otherwise falls back to pipeline Redis state.
+        async def run_attendance_scan_cycle():
+            """Background task: grab frames, run face recognition, feed presence service."""
             db = SessionLocal()
             try:
-                presence_service = PresenceService(db)
-                await presence_service.run_scan_cycle()
-            except Exception as e:
-                logger.error(f"Error in presence scan cycle: {e}")
+                presence_svc = PresenceService(db)
+                scan_results: dict = {}
+
+                for schedule_id, session in list(presence_svc._active_sessions.items()):
+                    room_id = str(session.schedule.room_id)
+                    grabber = app.state.frame_grabbers.get(room_id)
+                    if grabber is None:
+                        continue
+
+                    try:
+                        from app.services.attendance_engine import AttendanceScanEngine
+                        from app.services.identity_cache import IdentityCache
+                        from app.services.ml.faiss_manager import faiss_manager
+                        from app.services.ml.insightface_model import insightface_model
+
+                        engine = AttendanceScanEngine(
+                            frame_grabber=grabber,
+                            insightface_model=insightface_model,
+                            faiss_manager=faiss_manager,
+                        )
+                        result = engine.scan_frame()
+                        if result:
+                            scan_results[room_id] = result
+                            # Write to Redis identity cache for live feed pipeline
+                            from app.redis_client import get_redis
+
+                            redis_client = await get_redis()
+                            cache = IdentityCache(redis_client)
+                            await cache.write_identities(room_id, schedule_id, [
+                                {
+                                    "user_id": r.user_id,
+                                    "name": "",
+                                    "confidence": r.confidence,
+                                    "bbox": list(r.bbox),
+                                }
+                                for r in result.recognized
+                            ])
+                            await cache.write_scan_meta(room_id, schedule_id, {
+                                "last_scan_ts": int(_time.time()),
+                                "faces_detected": result.detected_faces,
+                                "faces_recognized": len(result.recognized),
+                            })
+                    except Exception:
+                        logger.exception(f"Attendance scan failed for room {room_id}")
+
+                await presence_svc.run_scan_cycle(scan_results=scan_results)
+            except Exception:
+                logger.exception("Attendance scan cycle failed")
             finally:
                 db.close()
 
         scheduler.add_job(
-            run_presence_scan_cycle,
+            run_attendance_scan_cycle,
             "interval",
             seconds=settings.SCAN_INTERVAL_SECONDS,
             id="presence_scan_cycle",
@@ -388,6 +439,16 @@ async def shutdown_event():
             logger.info("APScheduler stopped")
     except Exception as e:
         logger.error(f"Failed to stop scheduler: {e}")
+
+    # Stop all FrameGrabbers
+    if hasattr(app.state, "frame_grabbers"):
+        for room_id, grabber in list(app.state.frame_grabbers.items()):
+            try:
+                grabber.stop()
+                logger.info(f"FrameGrabber stopped for room {room_id}")
+            except Exception as e:
+                logger.error(f"Failed to stop FrameGrabber for room {room_id}: {e}")
+        app.state.frame_grabbers.clear()
 
     # Stop Pipeline Manager
     if hasattr(app.state, "pipeline_manager"):

@@ -7,8 +7,10 @@ Designed to run as a separate process per room.
 """
 
 import json
+import math
 import time
 from datetime import datetime
+from typing import Any
 
 import cv2
 import numpy as np
@@ -37,6 +39,7 @@ class VideoAnalyticsPipeline:
     def __init__(self, config: dict) -> None:
         self.config = config
         self.room_id: str = config["room_id"]
+        self._session_id: str | None = config.get("session_id")
         self._running = False
 
         # Sub-components (initialized on start)
@@ -283,20 +286,110 @@ class VideoAnalyticsPipeline:
             return sv.Detections.empty()
 
     # ------------------------------------------------------------------
+    # Identity cache (Redis bridge from Attendance Engine)
+    # ------------------------------------------------------------------
+
+    def _read_identity_cache(self) -> dict[str, dict[str, Any]]:
+        """Read cached identities written by the Attendance Engine.
+
+        Returns:
+            Mapping of ``user_id`` to identity dict (name, confidence, bbox).
+            Empty dict when Redis is unavailable, session_id is unset, or
+            the key does not exist.
+        """
+        if self._redis is None or self._session_id is None:
+            return {}
+
+        try:
+            key = f"attendance:{self.room_id}:{self._session_id}:identities"
+            raw: dict = self._redis.hgetall(key)
+            if not raw:
+                return {}
+
+            result: dict[str, dict[str, Any]] = {}
+            for field, value in raw.items():
+                uid = field.decode() if isinstance(field, bytes) else field
+                val = value.decode() if isinstance(value, bytes) else value
+                result[uid] = json.loads(val)
+            return result
+        except Exception as e:
+            logger.debug(f"[Pipeline:{self.room_id}] Identity cache read error: {e}")
+            return {}
+
+    @staticmethod
+    def _match_from_cache(
+        xyxy: tuple[int, int, int, int],
+        cached_identities: dict[str, dict[str, Any]],
+        max_distance: float = 100.0,
+    ) -> dict[str, Any] | None:
+        """Find the closest cached identity by centroid distance.
+
+        Args:
+            xyxy: Bounding box of the tracked face (x1, y1, x2, y2).
+            cached_identities: Mapping of user_id to identity dict.  Each
+                dict must contain a ``bbox`` key with [x1, y1, x2, y2].
+            max_distance: Maximum centroid distance in pixels for a match.
+
+        Returns:
+            Identity dict (with ``user_id`` added) if a match is found
+            within *max_distance*, otherwise ``None``.
+        """
+        if not cached_identities:
+            return None
+
+        x1, y1, x2, y2 = xyxy
+        cx = (x1 + x2) / 2.0
+        cy = (y1 + y2) / 2.0
+
+        best_uid: str | None = None
+        best_dist = float("inf")
+        best_identity: dict | None = None
+
+        for uid, identity in cached_identities.items():
+            bbox = identity.get("bbox")
+            if not bbox or len(bbox) < 4:
+                continue
+
+            cached_cx = (bbox[0] + bbox[2]) / 2.0
+            cached_cy = (bbox[1] + bbox[3]) / 2.0
+            dist = math.hypot(cx - cached_cx, cy - cached_cy)
+
+            if dist < best_dist:
+                best_dist = dist
+                best_uid = uid
+                best_identity = identity
+
+        if best_dist <= max_distance and best_uid is not None and best_identity is not None:
+            return {
+                "user_id": best_uid,
+                "name": best_identity.get("name", "Unknown"),
+                "student_id": best_identity.get("student_id", ""),
+                "confidence": best_identity.get("confidence", 0.0),
+            }
+
+        return None
+
+    # ------------------------------------------------------------------
     # Recognition
     # ------------------------------------------------------------------
 
     def _recognize_new_tracks(self, frame: np.ndarray, tracked: sv.Detections) -> None:
         """Run ArcFace recognition on new/unidentified confirmed tracks.
 
+        First checks the Redis identity cache written by the Attendance Engine.
+        If a cached identity matches the track's position (centroid distance
+        < 100 px), the cached identity is used and ArcFace is skipped.
+        Otherwise, ArcFace recognition is run as a fallback.
+
         Only processes tracks that are confirmed (3+ consecutive frames) but
         not yet identified.  Recognition is lazy -- once matched, the identity
         is cached and never re-queried unless the track is lost.
         """
-        if self._detector is None or self._faiss is None:
-            return
         if tracked.tracker_id is None:
             return
+
+        # Read cached identities from attendance engine (cheap sync Redis call)
+        cached_identities = self._read_identity_cache()
 
         for i, track_id in enumerate(tracked.tracker_id):
             tid = int(track_id)
@@ -304,8 +397,25 @@ class VideoAnalyticsPipeline:
             if tid in self._identities or tid not in self._confirmed_track_ids:
                 continue
 
+            xyxy = tuple(int(v) for v in tracked.xyxy[i])
+
+            # --- Cache-first path: use attendance engine's cached identity ---
+            if cached_identities:
+                cache_hit = self._match_from_cache(xyxy, cached_identities)
+                if cache_hit:
+                    self._identities[tid] = cache_hit
+                    logger.info(
+                        f"[Pipeline:{self.room_id}] Track {tid} -> "
+                        f"{cache_hit['name']} (cache, {cache_hit['confidence']:.2f})"
+                    )
+                    continue
+
+            # --- Fallback: ArcFace recognition ---
+            if self._detector is None or self._faiss is None:
+                continue
+
             try:
-                x1, y1, x2, y2 = (int(v) for v in tracked.xyxy[i])
+                x1, y1, x2, y2 = xyxy
                 # Pad crop by 20% for better alignment
                 bw, bh = x2 - x1, y2 - y1
                 pad_x, pad_y = int(bw * 0.2), int(bh * 0.2)
@@ -379,7 +489,7 @@ class VideoAnalyticsPipeline:
                 "status": "running",
             }
             self._redis.set(
-                f"pipeline:{self.room_id}:state",
+                f"pipeline:{self.room_id}:status",
                 json.dumps(state),
                 ex=30,
             )

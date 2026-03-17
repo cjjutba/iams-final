@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     ANTISPOOF_FFT_THRESHOLD: float = 0.20  # FFT high-freq energy threshold (lowered for mobile selfie)
 
     # Presence Tracking
-    SCAN_INTERVAL_SECONDS: int = 60  # How often to run presence scans
+    SCAN_INTERVAL_SECONDS: int = 15  # How often to run presence scans
     EARLY_LEAVE_THRESHOLD: int = 3  # Consecutive misses to flag early leave
     GRACE_PERIOD_MINUTES: int = 15  # Late grace period after class starts
     SESSION_BUFFER_MINUTES: int = 5  # Buffer before/after class for session

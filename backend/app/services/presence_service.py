@@ -6,8 +6,9 @@ Business logic for continuous presence monitoring and early-leave detection.
 This is the core service that implements IAMS's unique feature:
 continuous attendance tracking throughout the class session.
 
-I/O contract (video pipeline → Redis state → presence scan):
-  - INPUT:  pipeline:{room_id}:state Redis key (written by VideoPipeline)
+I/O contract (two data sources, used in priority order):
+  1. AttendanceScanEngine ScanResult (passed via run_scan_cycle(scan_results=...))
+  2. pipeline:{room_id}:state Redis key (legacy fallback, written by VideoPipeline)
   - OUTPUT: StreamBus.publish_attendance() / StreamBus.publish_alert()
   - DB:     attendance_records, presence_logs, early_leave_events (unchanged)
 """
@@ -147,7 +148,7 @@ class PresenceService:
         """Read identified users from the video pipeline's Redis state."""
         try:
             r = redis_lib.Redis.from_url(settings.REDIS_URL)
-            raw = r.get(f"pipeline:{room_id}:state")
+            raw = r.get(f"pipeline:{room_id}:status")
             if raw is None:
                 return []
             state = json.loads(raw)
@@ -155,6 +156,23 @@ class PresenceService:
         except Exception as e:
             logger.error(f"Failed to read pipeline state for {room_id}: {e}")
             return []
+
+    def _get_identified_users_from_scan(self, scan_result) -> list[dict]:
+        """Convert AttendanceScanEngine results to presence service format.
+
+        Args:
+            scan_result: A ScanResult from AttendanceScanEngine.
+
+        Returns:
+            List of dicts with user_id and confidence keys.
+        """
+        if scan_result is None:
+            return []
+        from app.services.attendance_engine import ScanResult
+        return [
+            {"user_id": r.user_id, "confidence": r.confidence}
+            for r in scan_result.recognized
+        ]
 
     def _get_student_info(self, student_id: str) -> dict:
         """Look up student name/student_id from the user repository."""
@@ -326,38 +344,49 @@ class PresenceService:
 
         logger.info(f"Session ended for schedule {schedule_id}")
 
-    # ── scan cycle (called by APScheduler every 60 s) ────────────
+    # ── scan cycle (called by APScheduler every 15 s) ────────────
 
-    async def run_scan_cycle(self):
+    async def run_scan_cycle(self, scan_results: dict | None = None) -> None:
         """
         Run scan cycle for all active sessions.
 
-        This should be called every 60 seconds (configurable).
+        This should be called every 15 seconds (configurable via SCAN_INTERVAL_SECONDS).
         Checks each student's detection status and flags early leaves.
 
         Called by background scheduler (APScheduler).
+
+        Args:
+            scan_results: Optional dict mapping room_id -> ScanResult from
+                AttendanceScanEngine. When provided, the engine results are used
+                instead of reading pipeline Redis state.
         """
         if not self.active_sessions:
             return
 
         logger.debug(f"Running scan cycle for {len(self.active_sessions)} active sessions")
 
-        for schedule_id, _session in list(self.active_sessions.items()):
+        for schedule_id, session in list(self.active_sessions.items()):
             try:
-                await self.process_session_scan(schedule_id)
+                # Look up scan_result for this session's room
+                scan_result = None
+                if scan_results is not None:
+                    room_id = self._get_room_id(session.schedule)
+                    scan_result = scan_results.get(room_id)
+                await self.process_session_scan(schedule_id, scan_result=scan_result)
             except Exception as e:
                 logger.error(f"Failed to process scan for session {schedule_id}: {e}")
 
-    async def process_session_scan(self, schedule_id: str):
+    async def process_session_scan(self, schedule_id: str, scan_result=None):
         """
         Process one scan cycle for a session.
 
-        Reads identified users from the video pipeline Redis state,
-        compares against enrolled students, updates attendance records,
-        and publishes events via Redis Streams.
+        When *scan_result* is provided (from AttendanceScanEngine), it is used
+        as the source of identified users.  Otherwise falls back to reading
+        the video pipeline's Redis state.
 
         Args:
             schedule_id: Schedule UUID
+            scan_result: Optional ScanResult from AttendanceScanEngine.
         """
         # Snapshot session state under lock
         async with self._lock:
@@ -378,8 +407,11 @@ class PresenceService:
 
         logger.debug(f"Processing scan #{scan_count} for schedule {schedule_id}")
 
-        # Read identified users from pipeline Redis state (sole data source)
-        pipeline_users = self._get_identified_users_from_pipeline(room_id)
+        # If scan_result provided, use it. Otherwise fall back to pipeline Redis state.
+        if scan_result is not None:
+            pipeline_users = self._get_identified_users_from_scan(scan_result)
+        else:
+            pipeline_users = self._get_identified_users_from_pipeline(room_id)
         identified_users = {
             u["user_id"]: u for u in pipeline_users if "user_id" in u
         }
@@ -782,5 +814,5 @@ class PresenceService:
         return list(self.active_sessions.keys())
 
 
-# Note: Background scheduler (APScheduler) would be initialized in main.py
-# and would call presence_service.run_scan_cycle() every 60 seconds
+# Note: Background scheduler (APScheduler) is initialized in main.py
+# and calls run_attendance_scan_cycle() every SCAN_INTERVAL_SECONDS (default 15s)
