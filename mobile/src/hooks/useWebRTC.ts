@@ -84,7 +84,9 @@ export function useWebRTC(scheduleId: string, enabled: boolean): UseWebRTCReturn
     );
     reconnectAttemptRef.current = attempt + 1;
     reconnectTimerRef.current = setTimeout(() => {
-      if (isMountedRef.current) connectRef.current();
+      if (isMountedRef.current && connectRef.current) {
+        connectRef.current();
+      }
     }, delay);
   }, []);
 
