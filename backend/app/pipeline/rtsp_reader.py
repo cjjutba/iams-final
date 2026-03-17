@@ -53,15 +53,13 @@ class RTSPReader:
         """Launch FFmpeg subprocess and start the background reader thread."""
         cmd = [
             "ffmpeg",
-            "-fflags", "+genpts+discardcorrupt+nobuffer",
-            "-flags", "low_delay",
+            "-fflags", "+genpts+discardcorrupt",
             "-rtsp_transport", "tcp",
             "-i", self.url,
-            "-vf", f"select=gte(n\\,30)",
-            "-vsync", "vfr",
             "-f", "rawvideo",
             "-pix_fmt", "bgr24",
             "-s", f"{self.width}x{self.height}",
+            "-r", str(self.target_fps),
             "-an",
             "-",
         ]
@@ -77,9 +75,17 @@ class RTSPReader:
         logger.info(f"RTSPReader started: {self.url} → {self.width}x{self.height}@{self.target_fps}fps")
         return self
 
+    # Discard this many initial frames to let H.264 decoder get a keyframe
+    WARMUP_FRAMES = 50
+
     def _reader_loop(self) -> None:
-        """Continuously read raw frames from FFmpeg stdout."""
+        """Continuously read raw frames from FFmpeg stdout.
+
+        Discards the first ``WARMUP_FRAMES`` frames so the H.264 decoder
+        has time to sync to a keyframe and produce clean output.
+        """
         frame_bytes = self.width * self.height * 3
+        warmup = self.WARMUP_FRAMES
         while not self._stopped:
             if self._process is None or self._process.poll() is not None:
                 time.sleep(0.1)
@@ -87,8 +93,10 @@ class RTSPReader:
             try:
                 raw = self._process.stdout.read(frame_bytes)
                 if len(raw) != frame_bytes:
-                    # Stream ended or broken — will retry via pipeline reconnect
                     time.sleep(0.1)
+                    continue
+                if warmup > 0:
+                    warmup -= 1
                     continue
                 frame = np.frombuffer(raw, dtype=np.uint8).reshape(
                     (self.height, self.width, 3)
