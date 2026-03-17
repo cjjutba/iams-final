@@ -246,9 +246,10 @@ async def startup_event():
                 app_instance.state.frame_grabbers[room_id] = grabber
                 logger.info(f"Auto-created FrameGrabber for room {room_id} ({mediamtx_url})")
 
-            # Start pipeline (reads from camera/mediamtx, publishes annotated H.264)
+            # Start pipeline only for rooms that have a stream_key configured
+            # (prevents duplicate pipelines for rooms sharing the same camera)
             mgr = getattr(app_instance.state, "pipeline_manager", None)
-            if mgr and settings.PIPELINE_ENABLED:
+            if mgr and settings.PIPELINE_ENABLED and room and room.stream_key:
                 status_list = mgr.get_status()
                 already_running = any(p.get("room_id") == room_id and p.get("alive") for p in status_list)
                 if not already_running:
