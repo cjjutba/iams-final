@@ -225,6 +225,50 @@ async def startup_event():
 
         logger.info("Initializing APScheduler...")
 
+        def _ensure_room_infrastructure(app_instance, db_session, schedule, schedule_id):
+            """Create FrameGrabber + pipeline for an active session that lacks them."""
+            from app.models.room import Room
+            from app.services.camera_config import get_camera_url
+            from app.services.frame_grabber import FrameGrabber
+
+            room_id = str(schedule.room_id)
+            room = db_session.query(Room).filter(Room.id == schedule.room_id).first()
+            stream_key = room.stream_key if room and room.stream_key else room_id
+
+            # Use mediamtx local RTSP as frame source (handles H.265 → decoded frames)
+            mediamtx_url = f"{settings.MEDIAMTX_RTSP_URL}/{stream_key}/raw"
+            # Also get direct camera URL as fallback
+            camera_url = get_camera_url(room_id, db_session) or mediamtx_url
+
+            # Create FrameGrabber (reads from mediamtx, not direct camera)
+            if room_id not in app_instance.state.frame_grabbers:
+                grabber = FrameGrabber(mediamtx_url)
+                app_instance.state.frame_grabbers[room_id] = grabber
+                logger.info(f"Auto-created FrameGrabber for room {room_id} ({mediamtx_url})")
+
+            # Start pipeline (reads from camera/mediamtx, publishes annotated H.264)
+            mgr = getattr(app_instance.state, "pipeline_manager", None)
+            if mgr and settings.PIPELINE_ENABLED:
+                status_list = mgr.get_status()
+                already_running = any(p.get("room_id") == room_id and p.get("alive") for p in status_list)
+                if not already_running:
+                    pipeline_config = {
+                        "room_id": room_id,
+                        "rtsp_source": camera_url,
+                        "rtsp_target": f"{settings.MEDIAMTX_RTSP_URL}/{stream_key}/annotated",
+                        "width": settings.PIPELINE_WIDTH,
+                        "height": settings.PIPELINE_HEIGHT,
+                        "fps": settings.PIPELINE_FPS,
+                        "room_name": room.name if room else "",
+                        "subject": schedule.subject_code or "",
+                        "professor": "",
+                        "total_enrolled": 0,
+                        "session_id": schedule_id,
+                        "det_model": settings.PIPELINE_DET_MODEL,
+                    }
+                    mgr.start_pipeline(pipeline_config)
+                    logger.info(f"Auto-started pipeline for room {room_id}")
+
         # Attendance scan cycle (every SCAN_INTERVAL_SECONDS, default 15s)
         # Uses AttendanceScanEngine when a FrameGrabber is available for a room,
         # otherwise falls back to pipeline Redis state.
@@ -238,6 +282,16 @@ async def startup_event():
                 for schedule_id, session in list(presence_svc._active_sessions.items()):
                     room_id = str(session.schedule.room_id)
                     grabber = app.state.frame_grabbers.get(room_id)
+
+                    # Self-healing: create FrameGrabber + pipeline for active sessions
+                    # that were started before the current code was deployed
+                    if grabber is None:
+                        try:
+                            _ensure_room_infrastructure(app, db, session.schedule, schedule_id)
+                            grabber = app.state.frame_grabbers.get(room_id)
+                        except Exception:
+                            logger.exception(f"Failed to auto-create infrastructure for room {room_id}")
+
                     if grabber is None:
                         continue
 
