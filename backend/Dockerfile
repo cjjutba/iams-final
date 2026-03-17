@@ -23,12 +23,13 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Runtime dependencies only (OpenCV, image libs)
+# Runtime dependencies (OpenCV, image libs, FFmpeg for video pipeline)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
     libgomp1 \
     curl \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed Python packages from builder
