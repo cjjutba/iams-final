@@ -57,10 +57,11 @@ class RTSPReader:
             "-flags", "low_delay",
             "-rtsp_transport", "tcp",
             "-i", self.url,
+            "-vf", f"select=gte(n\\,30)",
+            "-vsync", "vfr",
             "-f", "rawvideo",
             "-pix_fmt", "bgr24",
             "-s", f"{self.width}x{self.height}",
-            "-r", str(self.target_fps),
             "-an",
             "-",
         ]
