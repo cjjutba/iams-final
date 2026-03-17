@@ -36,11 +36,11 @@ class FrameAnnotator:
     def __init__(self, width: int, height: int) -> None:
         self.width = width
         self.height = height
-        self.corner_length = 15
+        self.corner_length = 20
         self.box_thickness = 2
-        self.font_scale = 0.45
+        self.font_scale = 0.55
         self.font_thickness = 1
-        self.bar_height = 30
+        self.bar_height = 36
 
     def annotate(
         self,
