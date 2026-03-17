@@ -92,12 +92,14 @@ class FFmpegPublisher:
             process has exited.
         """
         if self._process is None or self._process.poll() is not None:
+            logger.warning("FFmpeg publisher process not running, dropping frame")
             return False
         try:
             self._process.stdin.write(frame.tobytes())
+            self._process.stdin.flush()
             return True
-        except BrokenPipeError:
-            logger.warning("FFmpeg publisher pipe broken")
+        except (BrokenPipeError, OSError) as exc:
+            logger.warning("FFmpeg publisher pipe error: %s", exc)
             return False
 
     def stop(self) -> None:
