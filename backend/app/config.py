@@ -93,11 +93,11 @@ class Settings(BaseSettings):
 
     # Video Pipeline
     PIPELINE_ENABLED: bool = True
-    PIPELINE_FPS: int = 20
+    PIPELINE_FPS: int = 10
     PIPELINE_WIDTH: int = 1280
     PIPELINE_HEIGHT: int = 720
-    PIPELINE_DET_MODEL: str = "buffalo_sc"
-    PIPELINE_DET_INTERVAL: int = 5  # Run detection every Nth frame
+    PIPELINE_DET_MODEL: str = "buffalo_l"
+    PIPELINE_DET_INTERVAL: int = 3  # Run detection every Nth frame
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"

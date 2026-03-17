@@ -30,10 +30,20 @@ async def start_pipeline(req: PipelineStartRequest, request: Request):
     if mgr is None:
         raise HTTPException(503, "Pipeline manager not initialized")
 
+    # Resolve stream_key for mediamtx path (matches WebRTC router lookup)
+    from app.database import get_db
+    from app.models.room import Room
+    db = next(get_db())
+    try:
+        room = db.query(Room).filter(Room.id == req.room_id).first()
+        stream_key = room.stream_key if room and room.stream_key else req.room_id
+    finally:
+        db.close()
+
     config = {
         "room_id": req.room_id,
-        "rtsp_source": req.rtsp_source or f"{settings.MEDIAMTX_RTSP_URL}/{req.room_id}/raw",
-        "rtsp_target": f"{settings.MEDIAMTX_RTSP_URL}/{req.room_id}/annotated",
+        "rtsp_source": req.rtsp_source or f"{settings.MEDIAMTX_RTSP_URL}/{stream_key}/raw",
+        "rtsp_target": f"{settings.MEDIAMTX_RTSP_URL}/{stream_key}/annotated",
         "width": settings.PIPELINE_WIDTH,
         "height": settings.PIPELINE_HEIGHT,
         "fps": settings.PIPELINE_FPS,

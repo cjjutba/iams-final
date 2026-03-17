@@ -226,6 +226,11 @@ export function useWebRTC(scheduleId: string, enabled: boolean): UseWebRTCReturn
         );
       }
 
+      // Guard: if a reconnect happened while we were awaiting the fetch,
+      // pcRef.current will have been replaced. Bail to avoid calling
+      // setRemoteDescription on a closed/null peer connection (crash).
+      if (pcRef.current !== pc) return;
+
       const offerData = await offerResp.json();
       const { sdp, type } = offerData.data;
 

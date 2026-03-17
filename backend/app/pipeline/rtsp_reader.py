@@ -29,7 +29,7 @@ class RTSPReader:
         height: Output frame height (FFmpeg ``-s`` flag).
     """
 
-    WARMUP_FRAMES = 50
+    WARMUP_FRAMES = 10
 
     def __init__(
         self,

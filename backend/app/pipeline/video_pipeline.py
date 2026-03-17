@@ -141,10 +141,10 @@ class VideoAnalyticsPipeline:
         # ByteTrack
         self._tracker = sv.ByteTrack(
             track_activation_threshold=0.20,
-            lost_track_buffer=90,
+            lost_track_buffer=fps * 6,  # survive 6 seconds of missed detections
             minimum_matching_threshold=0.7,
             frame_rate=fps,
-            minimum_consecutive_frames=3,
+            minimum_consecutive_frames=1,  # confirm immediately (detect-every-N spaces things out)
         )
 
         # ML models (deferred import to avoid loading at module level)
@@ -174,8 +174,13 @@ class VideoAnalyticsPipeline:
         frame_interval = 1.0 / fps
         det_interval = cfg.get("det_interval", settings.PIPELINE_DET_INTERVAL)
         comp_h, comp_w = cfg["height"], cfg["width"]
-        det_w, det_h = comp_w // 2, comp_h // 2
-        scale = comp_h / det_h
+        # Only downscale for detection if input is 720p+ (otherwise faces are too small)
+        if comp_h >= 720:
+            det_w, det_h = comp_w // 2, comp_h // 2
+            scale = comp_h / det_h
+        else:
+            det_w, det_h = comp_w, comp_h
+            scale = 1.0
 
         last_state_push = 0.0
         last_recognition_check = 0.0
@@ -192,8 +197,14 @@ class VideoAnalyticsPipeline:
 
             if frame_count % det_interval == 0:
                 # --- Detection frame ---
-                small = cv2.resize(frame, (det_w, det_h))
-                detections = self._detect_faces(small, scale=scale)
+                det_frame = cv2.resize(frame, (det_w, det_h)) if scale != 1.0 else frame
+                detections = self._detect_faces(det_frame, scale=scale)
+                if frame_count % (det_interval * 20) == 0:
+                    logger.debug(
+                        f"[Pipeline:{self.room_id}] det frame {frame_count}: "
+                        f"input={frame.shape}, det={det_frame.shape}, "
+                        f"faces={len(detections)}, scale={scale}"
+                    )
                 tracked = self._tracker.update_with_detections(detections)
 
                 # Recognize new/unidentified tracks (throttled)

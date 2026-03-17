@@ -1,0 +1,44 @@
+#!/bin/bash
+# Start IAMS local development stack on Docker Desktop
+# Auto-detects Mac's LAN IP and patches mediamtx config
+#
+# Usage: ./scripts/dev-up.sh
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# Auto-detect Mac's WiFi LAN IP
+HOST_IP=$(ipconfig getifaddr en0 2>/dev/null || echo "")
+if [ -z "$HOST_IP" ]; then
+  HOST_IP=$(ipconfig getifaddr en1 2>/dev/null || echo "192.168.88.254")
+fi
+
+echo "========================================"
+echo "  IAMS Local Dev Stack"
+echo "  Host IP: ${HOST_IP}"
+echo "========================================"
+
+# Update .env with current IP
+sed -i '' "s/^HOST_IP=.*/HOST_IP=${HOST_IP}/" .env
+
+# Patch mediamtx.dev.yml webrtcAdditionalHosts with current IP
+# Only replace the line after "webrtcAdditionalHosts:"
+sed -i '' "/^webrtcAdditionalHosts:/,/^[^ ]/{s/^  - .*/  - ${HOST_IP}/;}" deploy/mediamtx.dev.yml
+
+# Build and start
+docker compose up --build -d
+
+echo ""
+echo "  API:        http://localhost:8000/api/v1"
+echo "  Docs:       http://localhost:8000/api/v1/docs"
+echo "  Health:     http://localhost:8000/api/v1/health"
+echo "  Redis:      redis://localhost:6379"
+echo "  RTSP:       rtsp://localhost:8554"
+echo "  WebRTC:     http://localhost:8889"
+echo "  mediamtx:   http://localhost:9997"
+echo ""
+echo "  Edge .env:  VPS_HOST=${HOST_IP}  VPS_PORT=8000"
+echo "  Mobile:     USE_LOCAL_BACKEND=true (auto-detects ${HOST_IP})"
+echo ""
+echo "  Logs: docker compose logs -f api-gateway"
+echo "========================================"

@@ -24,7 +24,30 @@ RPi (Camera + MediaPipe) → HTTP POST → FastAPI Backend (FaceNet + FAISS + De
 
 ## Development Commands
 
-### Backend
+### Local Docker Development (Recommended)
+```bash
+# Start full stack (auto-detects Mac LAN IP, builds containers)
+./scripts/dev-up.sh
+
+# View logs
+./scripts/dev-logs.sh                    # all services
+./scripts/dev-logs.sh api-gateway        # single service
+
+# Stop
+./scripts/dev-down.sh
+
+# Rebuild after requirements.txt change
+docker compose build --no-cache
+```
+
+**Hot reload:** Backend code is volume-mounted — edit Python files and uvicorn/watchfiles auto-restart.
+
+**Switching to VPS production:**
+1. RPi: set `VPS_HOST=167.71.217.44`, remove `VPS_PORT` in `~/iams-edge/.env`
+2. Mobile: set `USE_LOCAL_BACKEND=false` in `mobile/src/constants/config.ts`, uncomment VPS URLs in `mobile/.env`
+3. Run `bash deploy/deploy.sh`
+
+### Backend (without Docker)
 ```bash
 cd backend
 venv\Scripts\activate          # Windows

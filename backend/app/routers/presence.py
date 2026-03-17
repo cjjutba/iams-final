@@ -12,12 +12,13 @@ Key Features:
 
 from datetime import date, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.config import logger
+from app.config import logger, settings
 from app.database import get_db
+from app.services.camera_config import get_camera_url
 from app.models.user import User, UserRole
 from app.repositories.attendance_repository import AttendanceRepository
 from app.repositories.schedule_repository import ScheduleRepository
@@ -74,13 +75,17 @@ class RoomStatusResponse(BaseModel):
     description="Start a new attendance tracking session for a schedule",
 )
 async def start_session(
-    request: SessionStartRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+    body: SessionStartRequest,
+    http_request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Start attendance session
 
     Creates attendance records for all enrolled students and initializes
     tracking session for continuous presence monitoring.
+    Also auto-starts the video analytics pipeline for the room.
 
     Requires: Faculty or Admin role
     """
@@ -90,7 +95,33 @@ async def start_session(
 
     try:
         presence_service = PresenceService(db)
-        session_state = await presence_service.start_session(request.schedule_id)
+        session_state = await presence_service.start_session(body.schedule_id)
+
+        # Auto-start video pipeline for this room
+        mgr = getattr(http_request.app.state, "pipeline_manager", None)
+        schedule = ScheduleRepository(db).get_by_id(body.schedule_id)
+        if mgr and schedule and settings.PIPELINE_ENABLED:
+            room_id = str(schedule.room_id)
+            camera_url = get_camera_url(room_id, db)
+            if camera_url:
+                from app.models.room import Room
+                room = db.query(Room).filter(Room.id == schedule.room_id).first()
+                stream_key = room.stream_key if room and room.stream_key else room_id
+                pipeline_config = {
+                    "room_id": room_id,
+                    "rtsp_source": camera_url,
+                    "rtsp_target": f"{settings.MEDIAMTX_RTSP_URL}/{stream_key}/annotated",
+                    "width": settings.PIPELINE_WIDTH,
+                    "height": settings.PIPELINE_HEIGHT,
+                    "fps": settings.PIPELINE_FPS,
+                    "room_name": room.name if room else "",
+                    "subject": schedule.subject_code or "",
+                    "professor": "",
+                    "total_enrolled": len(session_state.student_states),
+                    "det_model": settings.PIPELINE_DET_MODEL,
+                }
+                mgr.start_pipeline(pipeline_config)
+                logger.info(f"Auto-started pipeline for room {room_id}")
 
         return SessionStartResponse(
             schedule_id=session_state.schedule_id,
@@ -114,6 +145,7 @@ async def start_session(
     description="End an active attendance tracking session",
 )
 async def end_session(
+    http_request: Request,
     schedule_id: str = Query(..., description="Schedule UUID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -121,7 +153,7 @@ async def end_session(
     """
     End attendance session
 
-    Finalizes presence scores and stops tracking for the session.
+    Finalizes presence scores, stops tracking, and stops the video pipeline.
 
     Requires: Faculty or Admin role
     """
@@ -144,6 +176,14 @@ async def end_session(
 
         # Mark as manually ended so auto-scheduler won't restart
         mark_manually_ended(schedule_id)
+
+        # Auto-stop pipeline for this room
+        mgr = getattr(http_request.app.state, "pipeline_manager", None)
+        schedule = ScheduleRepository(db).get_by_id(schedule_id)
+        if mgr and schedule:
+            room_id = str(schedule.room_id)
+            mgr.stop_pipeline(room_id)
+            logger.info(f"Auto-stopped pipeline for room {room_id}")
 
         # Build summary
         return SessionEndResponse(

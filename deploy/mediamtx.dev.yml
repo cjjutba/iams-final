@@ -1,0 +1,58 @@
+# mediamtx LOCAL DEVELOPMENT configuration for IAMS
+#
+# Identical to mediamtx.yml (production) except:
+# - webrtcAdditionalHosts uses Mac's LAN IP (auto-patched by dev-up.sh)
+# - No TURN server (not needed on LAN)
+# - logLevel: info for easier debugging
+
+logLevel: info
+
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+        path:
+      - action: read
+        path:
+      - action: playback
+        path:
+  - user: any
+    pass:
+    ips: ['127.0.0.1', '::1', '172.16.0.0/12', '192.168.0.0/16', '10.0.0.0/8']
+    permissions:
+      - action: api
+      - action: metrics
+      - action: pprof
+
+api: yes
+apiAddress: :9997
+
+rtsp: yes
+rtspAddress: :8554
+
+webrtc: yes
+webrtcAddress: :8889
+
+# ICE: Mac's LAN IP so mobile phones on IAMS-Net can reach WebRTC media
+# Auto-updated by scripts/dev-up.sh — or edit manually if IP changes
+webrtcAdditionalHosts:
+  - 192.168.88.254
+
+webrtcLocalUDPAddress: :8887
+
+# LAN only — just STUN, no TURN needed
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+
+hls: no
+srt: no
+rtmp: no
+
+writeQueueSize: 8
+
+paths:
+  all_others:
+    overridePublisher: yes

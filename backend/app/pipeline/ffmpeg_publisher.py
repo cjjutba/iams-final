@@ -59,10 +59,10 @@ class FFmpegPublisher:
         cmd += [
             "-pix_fmt", "yuv420p",
             "-bf", "0",
-            "-g", str(self.fps),
-            "-b:v", "2500k",
-            "-maxrate", "3000k",
-            "-bufsize", "1000k",
+            "-g", str(max(self.fps // 2, 5)),  # keyframe every 0.5s for fast stream start
+            "-b:v", "1500k",
+            "-maxrate", "2000k",
+            "-bufsize", "500k",
             "-f", "rtsp",
             "-rtsp_transport", "tcp",
             self.rtsp_url,
