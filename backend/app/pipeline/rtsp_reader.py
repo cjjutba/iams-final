@@ -28,6 +28,10 @@ class RTSPReader:
             reader thread itself runs as fast as the source provides frames.
     """
 
+    # Number of frames to discard on connect to let the H.264 decoder
+    # receive a keyframe and stabilise (avoids green/smeared artifacts).
+    WARMUP_FRAMES = 60
+
     def __init__(self, url: str, target_fps: int = 25) -> None:
         self.url = url
         self.target_fps = target_fps
@@ -45,8 +49,11 @@ class RTSPReader:
         """
         os.environ.setdefault(
             "OPENCV_FFMPEG_CAPTURE_OPTIONS",
-            "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay"
-            "|probesize;500000|analyzeduration;500000",
+            "rtsp_transport;tcp"
+            "|fflags;nobuffer+discardcorrupt"
+            "|flags;low_delay"
+            "|probesize;500000"
+            "|analyzeduration;500000",
         )
         self._cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
         self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -56,13 +63,23 @@ class RTSPReader:
         return self
 
     def _reader_loop(self) -> None:
-        """Continuously read frames, keeping only the latest."""
+        """Continuously read frames, keeping only the latest.
+
+        On first connect, discards ``WARMUP_FRAMES`` frames to let the
+        H.264 decoder synchronise to a keyframe before exposing frames
+        to the consumer.
+        """
+        warmup_remaining = self.WARMUP_FRAMES
         while not self._stopped:
             if self._cap is None or not self._cap.isOpened():
                 time.sleep(0.1)
                 continue
             ret, frame = self._cap.read()
             if ret and frame is not None:
+                # Discard initial frames until decoder has a clean keyframe
+                if warmup_remaining > 0:
+                    warmup_remaining -= 1
+                    continue
                 with self._lock:
                     self._frame = frame
             else:
