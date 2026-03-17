@@ -31,6 +31,7 @@ from app.routers import (
     edge_ws,
     face,
     health,
+    live_stream,
     notifications,
     pipeline,
     presence,
@@ -497,6 +498,9 @@ app.include_router(notifications.router, prefix=f"{settings.API_PREFIX}/notifica
 
 # Presence tracking routes
 app.include_router(presence.router, prefix=f"{settings.API_PREFIX}/presence", tags=["Presence Tracking"])
+
+# Live Stream WebSocket (signaling + detection metadata for mobile)
+app.include_router(live_stream.router, prefix=f"{settings.API_PREFIX}/ws/stream", tags=["Live Stream"])
 
 # WebRTC routes (WHEP signaling proxy + ICE config)
 app.include_router(webrtc.router, prefix=f"{settings.API_PREFIX}/webrtc", tags=["WebRTC Streaming"])
