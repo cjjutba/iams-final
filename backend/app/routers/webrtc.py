@@ -72,17 +72,29 @@ async def create_webrtc_offer(
             detail=f"Schedule not found: {schedule_id}",
         )
 
-    # 2. Resolve room and its stream_key (mediamtx path name)
+    # 2. Resolve room → annotated stream path on mediamtx
+    #    The video pipeline publishes to {room_id}/annotated with bounding boxes
+    #    burned in. Fall back to {room_id}/raw if annotated isn't available.
     room_id = str(schedule.room_id)
     room = db.query(Room).filter(Room.id == schedule.room_id).first()
-    stream_key = room.stream_key if room and room.stream_key else room_id
-    rtsp_url = get_camera_url(room_id, db)
+    base_key = room.stream_key if room and room.stream_key else room_id
 
-    # 3. Ensure mediamtx path exists
-    if rtsp_url:
-        path_ok = await webrtc_service.ensure_path(stream_key, rtsp_url)
+    # Prefer the annotated stream (has bounding boxes), fall back to raw
+    annotated_key = f"{base_key}/annotated"
+    raw_key = f"{base_key}/raw"
+
+    # 3. Check which stream is available on mediamtx
+    path_ok = await webrtc_service.check_path_exists(annotated_key)
+    if path_ok:
+        stream_key = annotated_key
     else:
-        path_ok = await webrtc_service.check_path_exists(stream_key)
+        # Fall back to raw stream (no pipeline running)
+        rtsp_url = get_camera_url(room_id, db)
+        if rtsp_url:
+            path_ok = await webrtc_service.ensure_path(raw_key, rtsp_url)
+        else:
+            path_ok = await webrtc_service.check_path_exists(raw_key)
+        stream_key = raw_key
 
     if not path_ok:
         raise HTTPException(
