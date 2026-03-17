@@ -3,9 +3,6 @@
 Uses a dedicated FFmpeg process to decode the RTSP stream, outputting raw
 BGR24 frames on stdout. A background thread reads these frames and keeps
 only the latest one for the consumer.
-
-This avoids OpenCV's internal FFmpeg wrapper which has poor keyframe
-synchronisation when joining mid-stream, causing green/smeared artifacts.
 """
 
 import subprocess
@@ -26,16 +23,18 @@ class RTSPReader:
     most recent image.
 
     Args:
-        url: RTSP stream URL (e.g. ``rtsp://mediamtx:8554/room-1/raw``).
+        url: RTSP stream URL.
         target_fps: Output frame rate (FFmpeg ``-r`` flag).
         width: Output frame width (FFmpeg ``-s`` flag).
         height: Output frame height (FFmpeg ``-s`` flag).
     """
 
+    WARMUP_FRAMES = 50
+
     def __init__(
         self,
         url: str,
-        target_fps: int = 25,
+        target_fps: int = 10,
         width: int = 640,
         height: int = 480,
     ) -> None:
@@ -61,13 +60,13 @@ class RTSPReader:
             "-s", f"{self.width}x{self.height}",
             "-r", str(self.target_fps),
             "-an",
-            "-",
+            "pipe:1",
         ]
         self._process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            bufsize=self.width * self.height * 3 * 2,
+            bufsize=0,
         )
         self._stopped = False
         self._thread = threading.Thread(target=self._reader_loop, daemon=True)
@@ -75,15 +74,19 @@ class RTSPReader:
         logger.info(f"RTSPReader started: {self.url} → {self.width}x{self.height}@{self.target_fps}fps")
         return self
 
-    # Discard this many initial frames to let H.264 decoder get a keyframe
-    WARMUP_FRAMES = 50
+    def _read_exactly(self, n: int) -> bytes:
+        """Read exactly n bytes from stdout, looping until complete."""
+        data = b""
+        while len(data) < n:
+            remaining = n - len(data)
+            chunk = self._process.stdout.read(remaining)
+            if not chunk:
+                return data  # EOF
+            data += chunk
+        return data
 
     def _reader_loop(self) -> None:
-        """Continuously read raw frames from FFmpeg stdout.
-
-        Discards the first ``WARMUP_FRAMES`` frames so the H.264 decoder
-        has time to sync to a keyframe and produce clean output.
-        """
+        """Continuously read raw frames from FFmpeg stdout."""
         frame_bytes = self.width * self.height * 3
         warmup = self.WARMUP_FRAMES
         while not self._stopped:
@@ -91,7 +94,7 @@ class RTSPReader:
                 time.sleep(0.1)
                 continue
             try:
-                raw = self._process.stdout.read(frame_bytes)
+                raw = self._read_exactly(frame_bytes)
                 if len(raw) != frame_bytes:
                     time.sleep(0.1)
                     continue
