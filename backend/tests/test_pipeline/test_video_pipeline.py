@@ -188,6 +188,44 @@ class TestVideoPipeline:
             result.xyxy[0], [100, 50, 180, 150]
         )
 
+    def test_run_loop_detect_every_n(self):
+        """Detection should only run every N frames, tracking runs every frame."""
+        import supervision as sv
+        from app.pipeline.video_pipeline import VideoAnalyticsPipeline
+
+        config = self._make_config(width=1280, height=720, fps=15, det_interval=3)
+        pipeline = VideoAnalyticsPipeline(config)
+
+        # Mock all components
+        frame_720p = np.zeros((720, 1280, 3), dtype=np.uint8)
+        pipeline._reader = MagicMock()
+        pipeline._publisher = MagicMock()
+        pipeline._publisher.write_frame.return_value = True
+        pipeline._annotator = MagicMock()
+        pipeline._annotator.annotate.return_value = frame_720p
+        pipeline._tracker = MagicMock()
+        pipeline._tracker.update_with_detections.return_value = sv.Detections.empty()
+        pipeline._detector = MagicMock()
+        pipeline._detector.get_faces.return_value = []
+
+        # Run exactly 6 frames then stop
+        call_count = 0
+        def stop_after_6(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 6:
+                pipeline._running = False
+            return frame_720p
+
+        pipeline._reader.read.side_effect = stop_after_6
+        pipeline._running = True
+        pipeline._run_loop()
+
+        # With det_interval=3, detection runs on frames 0, 3 → 2 times in 6 frames
+        assert pipeline._detector.get_faces.call_count == 2
+        # Tracker is called every frame
+        assert pipeline._tracker.update_with_detections.call_count == 6
+
     def test_stop_sets_running_false(self):
         from app.pipeline.video_pipeline import VideoAnalyticsPipeline
 

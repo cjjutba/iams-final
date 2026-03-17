@@ -163,32 +163,48 @@ class VideoAnalyticsPipeline:
         self._run_loop()
 
     def _run_loop(self) -> None:
-        """Main processing loop -- read, detect, track, recognize, annotate, publish."""
+        """Main processing loop -- read, detect/track, recognize, annotate, publish.
+
+        Detection runs every ``det_interval`` frames (configured via
+        ``PIPELINE_DET_INTERVAL``).  On intermediate frames, ByteTrack predicts
+        track positions using its internal Kalman filter.
+        """
         cfg = self.config
-        frame_interval = 1.0 / cfg["fps"]
+        fps = cfg["fps"]
+        frame_interval = 1.0 / fps
+        det_interval = cfg.get("det_interval", settings.PIPELINE_DET_INTERVAL)
+        comp_h, comp_w = cfg["height"], cfg["width"]
+        det_w, det_h = comp_w // 2, comp_h // 2
+        scale = comp_h / det_h
+
         last_state_push = 0.0
         last_recognition_check = 0.0
+        frame_count = 0
 
         while self._running:
             loop_start = time.time()
 
-            # Read latest frame
+            # Read latest frame (full resolution)
             frame = self._reader.read() if self._reader else None
             if frame is None:
-                time.sleep(0.1)
+                time.sleep(0.01)
                 continue
 
-            # Detect faces (frame is already resized by FFmpeg in RTSPReader)
-            detections = self._detect_faces(frame)
+            if frame_count % det_interval == 0:
+                # --- Detection frame ---
+                small = cv2.resize(frame, (det_w, det_h))
+                detections = self._detect_faces(small, scale=scale)
+                tracked = self._tracker.update_with_detections(detections)
 
-            # Track
-            tracked = self._tracker.update_with_detections(detections)
-
-            # Recognize new/unidentified tracks (throttled to max 5/sec)
-            now = time.time()
-            if now - last_recognition_check > 0.2:
-                self._recognize_new_tracks(frame, tracked)
-                last_recognition_check = now
+                # Recognize new/unidentified tracks (throttled)
+                now = time.time()
+                if now - last_recognition_check > 0.2:
+                    self._recognize_new_tracks(frame, tracked)
+                    last_recognition_check = now
+            else:
+                # --- Tracking-only frame (Kalman prediction) ---
+                tracked = self._tracker.update_with_detections(sv.Detections.empty())
+                now = time.time()
 
             # Clean up stale identities
             self._cleanup_stale_tracks(tracked)
@@ -220,6 +236,8 @@ class VideoAnalyticsPipeline:
             sleep_time = frame_interval - elapsed
             if sleep_time > 0:
                 time.sleep(sleep_time)
+
+            frame_count += 1
 
     # ------------------------------------------------------------------
     # Detection
