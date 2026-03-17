@@ -128,7 +128,7 @@ class VideoAnalyticsPipeline:
         logger.info(f"[Pipeline:{self.room_id}] Starting -- {w}x{h}@{fps}fps")
 
         # RTSP reader
-        self._reader = RTSPReader(cfg["rtsp_source"], target_fps=fps)
+        self._reader = RTSPReader(cfg["rtsp_source"], target_fps=fps, width=w, height=h)
         self._reader.start()
 
         # FFmpeg publisher
@@ -178,13 +178,7 @@ class VideoAnalyticsPipeline:
                 time.sleep(0.1)
                 continue
 
-            # Resize if needed
-            fh, fw = frame.shape[:2]
-            target_w, target_h = cfg["width"], cfg["height"]
-            if fw != target_w or fh != target_h:
-                frame = cv2.resize(frame, (target_w, target_h))
-
-            # Detect faces
+            # Detect faces (frame is already resized by FFmpeg in RTSPReader)
             detections = self._detect_faces(frame)
 
             # Track
