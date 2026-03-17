@@ -75,9 +75,24 @@ class FrameAnnotator:
         state = det.get("track_state", "unknown")
         color = COLORS.get(state, COLORS["unknown"])
 
-        # Corner bracket length -- cap at one-third of the shorter side
-        cl = min(self.corner_length, (x2 - x1) // 3, (y2 - y1) // 3)
+        bw, bh = x2 - x1, y2 - y1
         t = self.box_thickness
+
+        # For small faces (< 40px), expand the box and add padding for visibility
+        MIN_BOX = 40
+        if bw < MIN_BOX or bh < MIN_BOX:
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            half = max(bw, bh, MIN_BOX) // 2 + 10  # add 10px padding
+            h_frame, w_frame = frame.shape[:2]
+            x1 = max(0, cx - half)
+            y1 = max(0, cy - half)
+            x2 = min(w_frame, cx + half)
+            y2 = min(h_frame, cy + half)
+            bw, bh = x2 - x1, y2 - y1
+
+        # Corner bracket length -- cap at one-third of the shorter side
+        cl = min(self.corner_length, bw // 3, bh // 3)
+        cl = max(cl, 8)  # minimum 8px bracket
 
         # Top-left
         cv2.line(frame, (x1, y1), (x1 + cl, y1), color, t)

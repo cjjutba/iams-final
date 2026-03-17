@@ -206,7 +206,18 @@ class VideoAnalyticsPipeline:
                         f"input={frame.shape}, det={det_frame.shape}, "
                         f"faces={len(detections)}, scale={scale}"
                     )
+                if frame_count % (det_interval * 20) == 0 and len(detections) > 0:
+                    logger.info(
+                        f"[Pipeline:{self.room_id}] BEFORE tracker: {len(detections)} detections, "
+                        f"bboxes={detections.xyxy[:3].tolist()}, "
+                        f"scores={detections.confidence[:3].tolist()}"
+                    )
                 tracked = self._tracker.update_with_detections(detections)
+                if frame_count % (det_interval * 20) == 0 and tracked.tracker_id is not None:
+                    logger.info(
+                        f"[Pipeline:{self.room_id}] AFTER tracker: {len(tracked.tracker_id)} tracks, "
+                        f"bboxes={tracked.xyxy[:3].tolist()}"
+                    )
 
                 # Recognize new/unidentified tracks (throttled)
                 now = time.time()
