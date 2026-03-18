@@ -84,22 +84,19 @@ async def create_webrtc_offer(
     raw_key = f"{base_key}/raw"
 
     # 3. Check which stream is available on mediamtx
+    #    Always prefer annotated (H.264, has bounding boxes).
+    #    Raw stream is H.265 which WebRTC doesn't support — never use it.
     path_ok = await webrtc_service.check_path_exists(annotated_key)
     if path_ok:
         stream_key = annotated_key
     else:
-        # Fall back to raw stream (no pipeline running)
-        rtsp_url = get_camera_url(room_id, db)
-        if rtsp_url:
-            path_ok = await webrtc_service.ensure_path(raw_key, rtsp_url)
-        else:
-            path_ok = await webrtc_service.check_path_exists(raw_key)
-        stream_key = raw_key
-
-    if not path_ok:
+        logger.warning(
+            f"WebRTC: annotated stream '{annotated_key}' not ready. "
+            f"Pipeline may be starting up. Client should retry."
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="WebRTC stream unavailable — is the edge device streaming?",
+            detail="Video pipeline is starting up — please retry in a few seconds",
         )
 
     # 4. Forward SDP offer to mediamtx WHEP

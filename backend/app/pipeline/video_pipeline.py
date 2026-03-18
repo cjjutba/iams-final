@@ -144,13 +144,13 @@ class VideoAnalyticsPipeline:
         # Annotator
         self._annotator = FrameAnnotator(w, h)
 
-        # ByteTrack
+        # ByteTrack — tuned for small faces at distance
         self._tracker = sv.ByteTrack(
             track_activation_threshold=0.20,
-            lost_track_buffer=fps * 6,  # survive 6 seconds of missed detections
-            minimum_matching_threshold=0.7,
+            lost_track_buffer=fps * 6,
+            minimum_matching_threshold=0.3,  # low IoU threshold for small (15-20px) faces
             frame_rate=fps,
-            minimum_consecutive_frames=1,  # confirm immediately (detect-every-N spaces things out)
+            minimum_consecutive_frames=1,
         )
 
         # ML models (deferred import to avoid loading at module level)
@@ -205,6 +205,7 @@ class VideoAnalyticsPipeline:
 
         last_state_push = 0.0
         last_recognition_check = 0.0
+        last_publisher_check = time.time()
         frame_count = 0
 
         while self._running:
@@ -226,18 +227,7 @@ class VideoAnalyticsPipeline:
                         f"input={frame.shape}, det={det_frame.shape}, "
                         f"faces={len(detections)}, scale={scale}"
                     )
-                if frame_count % (det_interval * 20) == 0 and len(detections) > 0:
-                    logger.info(
-                        f"[Pipeline:{self.room_id}] BEFORE tracker: {len(detections)} detections, "
-                        f"bboxes={detections.xyxy[:3].tolist()}, "
-                        f"scores={detections.confidence[:3].tolist()}"
-                    )
                 tracked = self._tracker.update_with_detections(detections)
-                if frame_count % (det_interval * 20) == 0 and tracked.tracker_id is not None:
-                    logger.info(
-                        f"[Pipeline:{self.room_id}] AFTER tracker: {len(tracked.tracker_id)} tracks, "
-                        f"bboxes={tracked.xyxy[:3].tolist()}"
-                    )
 
                 # Recognize new/unidentified tracks (throttled)
                 now = time.time()
@@ -255,11 +245,10 @@ class VideoAnalyticsPipeline:
             # Build detection list for annotator
             det_list = self._build_detection_list(tracked)
 
-            if det_list and frame_count % 50 == 0:
+            if frame_count % (det_interval * 60) == 0:
                 logger.info(
                     f"[Pipeline:{self.room_id}] frame {frame_count}: "
-                    f"{len(det_list)} tracks, states={[d['track_state'] for d in det_list]}, "
-                    f"bboxes={[d['bbox'] for d in det_list[:3]]}"
+                    f"{len(det_list)} tracks, publisher={'alive' if self._publisher and self._publisher.is_alive else 'dead'}"
                 )
 
             # Update HUD
@@ -271,10 +260,16 @@ class VideoAnalyticsPipeline:
             # Annotate
             annotated = self._annotator.annotate(frame, det_list, self._hud_info)
 
-            # Publish
-            if self._publisher and not self._publisher.write_frame(annotated):
-                logger.warning(f"[Pipeline:{self.room_id}] Publisher write failed, restarting")
-                self._restart_publisher()
+            # Publish — check health every 10s even if writes appear to succeed
+            if self._publisher:
+                if not self._publisher.write_frame(annotated):
+                    logger.warning(f"[Pipeline:{self.room_id}] Publisher write failed, restarting")
+                    self._restart_publisher()
+                elif now - last_publisher_check > 10.0:
+                    if not self._publisher.is_alive:
+                        logger.warning(f"[Pipeline:{self.room_id}] Publisher process died, restarting")
+                        self._restart_publisher()
+                    last_publisher_check = now
 
             # Publish state to Redis (throttled to 1 Hz)
             if self._redis and now - last_state_push > 1.0:
@@ -542,11 +537,19 @@ class VideoAnalyticsPipeline:
             logger.debug(f"[Pipeline:{self.room_id}] Redis publish error: {e}")
 
     def _restart_publisher(self) -> None:
-        """Restart FFmpeg publisher on failure."""
-        if self._publisher:
-            self._publisher.stop()
-            time.sleep(1)
-            self._publisher.start()
+        """Restart FFmpeg publisher on failure with retry."""
+        if not self._publisher:
+            return
+        for attempt in range(3):
+            try:
+                self._publisher.stop()
+                time.sleep(1 + attempt)  # increasing backoff
+                self._publisher.start()
+                logger.info(f"[Pipeline:{self.room_id}] Publisher restarted (attempt {attempt + 1})")
+                return
+            except Exception as e:
+                logger.error(f"[Pipeline:{self.room_id}] Publisher restart attempt {attempt + 1} failed: {e}")
+        logger.error(f"[Pipeline:{self.room_id}] Publisher restart failed after 3 attempts")
 
     def stop(self) -> None:
         """Stop all pipeline components."""
