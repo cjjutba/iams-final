@@ -135,10 +135,11 @@ class AttendanceScanEngine:
             confidence = result.get("confidence", 0.0)
             is_ambiguous = result.get("is_ambiguous", False)
 
-            print(
-                f"[FAISS] det_score={face.det_score:.2f}, sim={confidence:.4f}, "
-                f"user={user_id}, ambiguous={is_ambiguous}, thresh={self._rec_thresh}"
-            )
+            if confidence > 0.0:
+                logger.info(
+                    "Recognition: det=%.2f sim=%.3f user=%s",
+                    face.det_score, confidence, user_id,
+                )
 
             if user_id is not None and not is_ambiguous:
                 recognized.append(
