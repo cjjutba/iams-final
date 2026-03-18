@@ -7,7 +7,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material.icons.filled.Videocam
+
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -64,7 +64,6 @@ fun IAMSNavHost() {
 
     val facultyTabs = listOf(
         BottomNavTab("Home", Icons.Default.Home, Routes.FACULTY_HOME),
-        BottomNavTab("Live Feed", Icons.Default.Videocam, Routes.FACULTY_REPORTS),
         BottomNavTab("Reports", Icons.Default.Assessment, Routes.FACULTY_REPORTS),
         BottomNavTab("Profile", Icons.Default.Person, Routes.FACULTY_PROFILE),
     )
