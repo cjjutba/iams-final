@@ -91,20 +91,6 @@ class Settings(BaseSettings):
     GRACE_PERIOD_MINUTES: int = 15  # Late grace period after class starts
     SESSION_BUFFER_MINUTES: int = 5  # Buffer before/after class for session
 
-    # Video Pipeline
-    PIPELINE_ENABLED: bool = True
-    PIPELINE_FPS: int = 10
-    PIPELINE_WIDTH: int = 1280
-    PIPELINE_HEIGHT: int = 720
-    PIPELINE_DET_MODEL: str = "buffalo_l"
-    PIPELINE_DET_INTERVAL: int = 3  # Run detection every Nth frame
-    PIPELINE_DETECTOR: str = "yunet"  # "yunet" (fast, CPU) or "insightface" (legacy)
-
-    # YuNet Face Detector (used by pipeline when PIPELINE_DETECTOR=yunet)
-    YUNET_MODEL_PATH: str = "models/yunet/face_detection_yunet_2023mar.onnx"
-    YUNET_SCORE_THRESHOLD: float = 0.5
-    YUNET_NMS_THRESHOLD: float = 0.3
-
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_PRESENCE_PREFIX: str = "presence"
