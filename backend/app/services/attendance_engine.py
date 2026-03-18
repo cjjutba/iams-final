@@ -135,9 +135,9 @@ class AttendanceScanEngine:
             confidence = result.get("confidence", 0.0)
             is_ambiguous = result.get("is_ambiguous", False)
 
-            logger.info(
-                "FAISS match: det_score=%.2f, best_sim=%.4f, user=%s, ambiguous=%s, thresh=%.2f",
-                face.det_score, confidence, user_id, is_ambiguous, self._rec_thresh,
+            print(
+                f"[FAISS] det_score={face.det_score:.2f}, sim={confidence:.4f}, "
+                f"user={user_id}, ambiguous={is_ambiguous}, thresh={self._rec_thresh}"
             )
 
             if user_id is not None and not is_ambiguous:
