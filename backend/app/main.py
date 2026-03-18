@@ -266,6 +266,62 @@ async def startup_event():
                                 "faces_detected": result.detected_faces,
                                 "faces_recognized": len(result.recognized),
                             })
+
+                            # ── Broadcast normalized bbox via WebSocket ──
+                            try:
+                                from app.routers.websocket import ws_manager
+
+                                frame_w = grabber._width
+                                frame_h = grabber._height
+
+                                detections = []
+                                for face_identity in identities:
+                                    raw_bbox = face_identity.get("bbox", [0, 0, 0, 0])
+                                    # bbox is [x1, y1, x2, y2] in pixel coords
+                                    x1, y1, x2, y2 = raw_bbox
+                                    detections.append({
+                                        "bbox": [
+                                            x1 / frame_w,
+                                            y1 / frame_h,
+                                            x2 / frame_w,
+                                            y2 / frame_h,
+                                        ],
+                                        "name": face_identity.get("name", "Unknown"),
+                                        "confidence": float(face_identity.get("confidence", 0.0)),
+                                        "user_id": face_identity.get("user_id", ""),
+                                    })
+
+                                # Gather attendance summary from session state
+                                enrolled_ids = set(session.student_states.keys())
+                                recognized_ids = {r.user_id for r in result.recognized}
+                                present_count = len(recognized_ids & enrolled_ids)
+                                total_enrolled = len(enrolled_ids)
+
+                                absent_names = []
+                                early_leave_names = []
+                                for sid, sstate in session.student_states.items():
+                                    if sstate.get("early_leave_flagged"):
+                                        u = db.query(User).filter(User.id == sid).first()
+                                        early_leave_names.append(
+                                            f"{u.first_name} {u.last_name}" if u else "Unknown"
+                                        )
+                                    elif sid not in recognized_ids:
+                                        u = db.query(User).filter(User.id == sid).first()
+                                        absent_names.append(
+                                            f"{u.first_name} {u.last_name}" if u else "Unknown"
+                                        )
+
+                                await ws_manager.broadcast_scan_result(
+                                    schedule_id=schedule_id,
+                                    detections=detections,
+                                    present_count=present_count,
+                                    total_enrolled=total_enrolled,
+                                    absent=absent_names,
+                                    early_leave=early_leave_names,
+                                )
+                            except Exception:
+                                logger.exception(f"WebSocket broadcast failed for room {room_id}")
+
                     except Exception:
                         logger.exception(f"Attendance scan failed for room {room_id}")
 
