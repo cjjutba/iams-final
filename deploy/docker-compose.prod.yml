@@ -1,18 +1,10 @@
-# IAMS Production Docker Compose — Multi-Container Architecture
+# IAMS Production Docker Compose
 # Usage: docker compose -f docker-compose.prod.yml up -d
 #
-# Architecture:
-#   api-gateway          — FastAPI REST + WebSocket + attendance engine + pipeline manager
-#   redis                — Pub/sub + cache
-#   mediamtx             — RTSP ingest + WebRTC bridge
-#   coturn               — TURN relay for NAT traversal
-#   admin                — Builds static admin dashboard files
-#   nginx                — Reverse proxy + SSL termination
-#   dozzle               — Container log viewer
-#   certbot              — HTTPS certificate renewal
+# 4 services: api-gateway, redis, mediamtx, nginx
 
 services:
-  # ── Core Application Services ──────────────────────────────────────
+  # ── Core Application ─────────────────────────────────────────────────
 
   api-gateway:
     build:
@@ -30,6 +22,7 @@ services:
       - MEDIAMTX_API_URL=http://mediamtx:9997
       - MEDIAMTX_WEBRTC_URL=http://mediamtx:8889
       - MEDIAMTX_RTSP_URL=rtsp://mediamtx:8554
+      - ADMIN_URL=https://iams.vercel.app
     volumes:
       - faiss_data:/app/data/faiss
       - face_uploads:/app/data/uploads/faces
@@ -50,16 +43,16 @@ services:
     deploy:
       resources:
         limits:
-          memory: 3G
-          cpus: "2.0"
+          memory: 1.5G
+          cpus: "1.0"
 
-  # ── Infrastructure Services ────────────────────────────────────────
+  # ── Infrastructure ───────────────────────────────────────────────────
 
   redis:
     image: redis:7-alpine
     container_name: iams-redis
     restart: unless-stopped
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save ""
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru --save ""
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -68,7 +61,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 300M
+          memory: 128M
 
   mediamtx:
     image: bluenviron/mediamtx:latest
@@ -77,56 +70,15 @@ services:
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
     ports:
-      # RTSP ingest from RPi edge devices (over internet)
-      - "8554:8554"
-      # WebRTC media UDP (ICE candidates point here)
-      - "8887:8887/udp"
-    # API (9997) and WHEP (8889) are internal only — accessed
-    # by api-gateway and nginx via Docker network, not exposed to host.
-    # No healthcheck: mediamtx image is scratch-based (no shell/wget/curl).
+      - "8554:8554"      # RTSP ingest from RPi
+      - "8887:8887/udp"  # WebRTC media UDP
+      - "8889:8889"      # WHEP endpoint
     deploy:
       resources:
         limits:
           memory: 256M
 
-  # TURN relay server — ensures WebRTC connectivity when mobile phones
-  # are behind symmetric NATs (where STUN alone fails).
-  coturn:
-    image: coturn/coturn:latest
-    container_name: iams-coturn
-    restart: unless-stopped
-    network_mode: host
-    command:
-      - "--listening-port=3478"
-      - "--external-ip=167.71.217.44"
-      - "--relay-ip=167.71.217.44"
-      - "--min-port=49152"
-      - "--max-port=49252"
-      - "--user=iams:iams-turn-secret-2026"
-      - "--realm=iams.local"
-      - "--lt-cred-mech"
-      - "--fingerprint"
-      - "--no-cli"
-      - "--no-tls"
-      - "--no-dtls"
-      - "--log-file=stdout"
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-
-  # ── Frontend & Proxy ───────────────────────────────────────────────
-
-  admin:
-    build:
-      context: ../admin
-      dockerfile: Dockerfile
-    container_name: iams-admin-builder
-    # This service only exists to build and copy static files into the shared volume.
-    # It exits immediately after copying.
-    entrypoint: ["/bin/sh", "-c", "cp -r /usr/share/nginx/html/admin /srv/admin && echo 'Admin files copied.'"]
-    volumes:
-      - admin_static:/srv
+  # ── Reverse Proxy ────────────────────────────────────────────────────
 
   nginx:
     image: nginx:alpine
@@ -139,51 +91,19 @@ services:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - certbot_certs:/etc/letsencrypt:ro
       - certbot_www:/var/www/certbot:ro
-      - admin_static:/usr/share/nginx/html:ro
     depends_on:
       api-gateway:
         condition: service_healthy
       mediamtx:
         condition: service_started
-      admin:
-        condition: service_completed_successfully
     deploy:
       resources:
         limits:
           memory: 128M
-
-  # ── Observability & Certs ──────────────────────────────────────────
-
-  # Log viewer (web UI for Docker container logs)
-  dozzle:
-    image: amir20/dozzle:latest
-    container_name: iams-dozzle
-    restart: unless-stopped
-    ports:
-      - "9999:8080"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./dozzle-users.yml:/data/users.yml:ro
-    environment:
-      - DOZZLE_AUTH_PROVIDER=simple
-    deploy:
-      resources:
-        limits:
-          memory: 128M
-
-  # Certbot for free HTTPS certificates (run once, then renew via cron)
-  certbot:
-    image: certbot/certbot
-    container_name: iams-certbot
-    volumes:
-      - certbot_certs:/etc/letsencrypt
-      - certbot_www:/var/www/certbot
-    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do sleep 12h & wait $${!}; certbot renew; done'"
 
 volumes:
   faiss_data:
   face_uploads:
   app_logs:
-  admin_static:
   certbot_certs:
   certbot_www:

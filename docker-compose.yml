@@ -1,7 +1,6 @@
 # IAMS Local Development — Docker Compose
 #
-# Runs the full backend stack on Docker Desktop (Mac).
-# Same services as production, minus nginx/coturn/certbot/dozzle/admin.
+# 3 services: api-gateway, redis, mediamtx
 #
 # Usage:
 #   ./scripts/dev-up.sh          # auto-detect IP, build, start
@@ -10,7 +9,7 @@
 #   docker compose down          # stop
 
 services:
-  # ── Core Application Services ──────────────────────────────────────
+  # ── Core Application ─────────────────────────────────────────────────
 
   api-gateway:
     build:
@@ -27,13 +26,10 @@ services:
       - MEDIAMTX_WEBRTC_URL=http://mediamtx:8889
       - MEDIAMTX_RTSP_URL=rtsp://mediamtx:8554
       - EDGE_API_KEY=iams-edge-key-2026-prod
-      - PIPELINE_ENABLED=true
     volumes:
       - ./backend:/app
       - faiss_data:/app/data/faiss
       - face_uploads:/app/data/uploads/faces
-      - insightface_models:/root/.insightface/models
-      - app_logs:/app/logs
     ports:
       - "8000:8000"
     command: >
@@ -47,12 +43,12 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # ── Infrastructure ──────────────────────────────────────────────────
+  # ── Infrastructure ───────────────────────────────────────────────────
 
   redis:
     image: redis:7-alpine
     container_name: iams-redis
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save ""
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru --save ""
     ports:
       - "6379:6379"
     healthcheck:
@@ -70,12 +66,9 @@ services:
     ports:
       - "8554:8554"      # RTSP ingest from RPi
       - "8887:8887/udp"  # WebRTC media UDP
-      - "8889:8889"      # WHEP endpoint (for debugging)
-      - "9997:9997"      # REST API (for debugging)
+      - "8889:8889"      # WHEP endpoint
     restart: unless-stopped
 
 volumes:
   faiss_data:
   face_uploads:
-  insightface_models:
-  app_logs:
