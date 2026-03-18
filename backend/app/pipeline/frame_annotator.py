@@ -1,46 +1,44 @@
-"""Server-side frame annotator -- draws bounding boxes, labels, and HUD bars.
+"""Server-side frame annotator — clean corner-bracket bounding boxes with labels.
 
-Uses OpenCV drawing functions for enterprise-style corner bracket boxes,
-color-coded by track state, with semi-transparent HUD bars.
-
-Performance: ~3-5 ms for 50 faces at 640x480.
+Single unified box style: corner brackets with consistent thickness and sizing.
+Color-coded by track state. Optimized for H.264 compression at 720p.
 """
 
 import cv2
 import numpy as np
 
-# Color palette (BGR) — bright, high-contrast colors that survive H.264 compression
+# Color palette (BGR) — high-contrast, compression-friendly
 COLORS: dict[str, tuple[int, int, int]] = {
-    "confirmed": (0, 255, 0),        # Bright green  -- recognized student
-    "unknown":   (0, 255, 255),      # Bright yellow -- detected, not matched
-    "new":       (255, 255, 0),      # Bright cyan   -- just appeared
-    "lost":      (180, 180, 180),    # Light gray    -- temporarily lost
-    "alert":     (0, 0, 255),        # Bright red    -- early leave
+    "confirmed": (0, 220, 0),        # Green  — recognized student
+    "unknown":   (0, 220, 220),      # Yellow — detected, not matched
+    "new":       (0, 220, 220),      # Yellow — same as unknown (unified look)
+    "lost":      (150, 150, 150),    # Gray   — temporarily lost
+    "alert":     (0, 0, 255),        # Red    — early leave
 }
 
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
 class FrameAnnotator:
-    """High-performance frame annotator with corner bracket boxes and HUD.
+    """Production-grade frame annotator with corner-bracket bounding boxes.
 
-    Draws enterprise-style bounding boxes (corner brackets, not full
-    rectangles), color-coded labels with track metadata, and a semi-transparent
-    HUD showing room/session information.
-
-    Args:
-        width: Frame width in pixels.
-        height: Frame height in pixels.
+    All faces use the same box style: corner brackets with a compact label.
+    Small faces are expanded to a minimum visible size.
     """
+
+    # Minimum box size after expansion (pixels)
+    MIN_BOX = 50
 
     def __init__(self, width: int, height: int) -> None:
         self.width = width
         self.height = height
-        self.corner_length = 25
-        self.box_thickness = 3       # thick enough to survive H.264 compression
-        self.font_scale = 0.55
+
+        # Scale drawing parameters based on resolution
+        scale = width / 1280.0  # normalize to 720p
+        self.corner_length = max(int(18 * scale), 8)
+        self.box_thickness = 2
+        self.font_scale = max(0.4 * scale, 0.3)
         self.font_thickness = 1
-        self.bar_height = 36
 
     def annotate(
         self,
@@ -48,159 +46,70 @@ class FrameAnnotator:
         detections: list[dict],
         hud_info: dict,
     ) -> np.ndarray:
-        """Draw all annotations onto *frame* in-place and return it.
-
-        Args:
-            frame: BGR numpy array to annotate.
-            detections: List of detection dicts, each containing:
-                ``bbox`` (x1, y1, x2, y2), ``name``, ``student_id``,
-                ``confidence``, ``track_state``, ``track_id``, ``duration_sec``.
-            hud_info: Dict with ``room_name``, ``timestamp``, ``subject``,
-                ``professor``, ``present_count``, ``total_count``.
-
-        Returns:
-            The annotated frame (same object as *frame*).
-        """
+        """Draw all bounding boxes onto frame and return it."""
         for det in detections:
             self._draw_detection(frame, det)
         return frame
 
-    # ------------------------------------------------------------------
-    # Detection drawing
-    # ------------------------------------------------------------------
-
     def _draw_detection(self, frame: np.ndarray, det: dict) -> None:
-        """Draw corner brackets, label background, and text for one detection."""
+        """Draw one detection: corner brackets + compact label."""
         x1, y1, x2, y2 = (int(v) for v in det["bbox"])
         state = det.get("track_state", "unknown")
         color = COLORS.get(state, COLORS["unknown"])
+        h_frame, w_frame = frame.shape[:2]
 
         bw, bh = x2 - x1, y2 - y1
-        t = self.box_thickness
 
-        # For small faces (< 40px), expand the box and add padding for visibility
-        MIN_BOX = 40
-        if bw < MIN_BOX or bh < MIN_BOX:
+        # Expand small boxes to minimum visible size
+        if bw < self.MIN_BOX or bh < self.MIN_BOX:
             cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-            half = max(bw, bh, MIN_BOX) // 2 + 10  # add 10px padding
-            h_frame, w_frame = frame.shape[:2]
+            half = self.MIN_BOX // 2
             x1 = max(0, cx - half)
             y1 = max(0, cy - half)
-            x2 = min(w_frame, cx + half)
-            y2 = min(h_frame, cy + half)
+            x2 = min(w_frame - 1, cx + half)
+            y2 = min(h_frame - 1, cy + half)
             bw, bh = x2 - x1, y2 - y1
 
-        # For expanded/small boxes: use full rectangle (corners get lost in compression)
-        # For large boxes: use corner brackets (cleaner look)
-        if bw <= 60 or bh <= 60:
-            # Full rectangle for small/expanded faces
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, t)
-        else:
-            # Corner brackets for large faces
-            cl = min(self.corner_length, bw // 3, bh // 3)
-            cl = max(cl, 10)
-            # Top-left
-            cv2.line(frame, (x1, y1), (x1 + cl, y1), color, t)
-            cv2.line(frame, (x1, y1), (x1, y1 + cl), color, t)
-            # Top-right
-            cv2.line(frame, (x2, y1), (x2 - cl, y1), color, t)
-            cv2.line(frame, (x2, y1), (x2, y1 + cl), color, t)
-            # Bottom-left
-            cv2.line(frame, (x1, y2), (x1 + cl, y2), color, t)
-            cv2.line(frame, (x1, y2), (x1, y2 - cl), color, t)
-            # Bottom-right
-            cv2.line(frame, (x2, y2), (x2 - cl, y2), color, t)
-            cv2.line(frame, (x2, y2), (x2, y2 - cl), color, t)
+        t = self.box_thickness
+        cl = min(self.corner_length, bw // 3, bh // 3)
+        cl = max(cl, 6)
 
-        # -- Label text --
-        if det.get("name"):
-            line1 = f"{det['name']}"
-            if det.get("student_id"):
-                line1 += f" ({det['student_id']})"
-        else:
-            line1 = "Unknown Face"
+        # Corner brackets (unified style for all sizes)
+        # Top-left
+        cv2.line(frame, (x1, y1), (x1 + cl, y1), color, t, cv2.LINE_AA)
+        cv2.line(frame, (x1, y1), (x1, y1 + cl), color, t, cv2.LINE_AA)
+        # Top-right
+        cv2.line(frame, (x2, y1), (x2 - cl, y1), color, t, cv2.LINE_AA)
+        cv2.line(frame, (x2, y1), (x2, y1 + cl), color, t, cv2.LINE_AA)
+        # Bottom-left
+        cv2.line(frame, (x1, y2), (x1 + cl, y2), color, t, cv2.LINE_AA)
+        cv2.line(frame, (x1, y2), (x1, y2 - cl), color, t, cv2.LINE_AA)
+        # Bottom-right
+        cv2.line(frame, (x2, y2), (x2 - cl, y2), color, t, cv2.LINE_AA)
+        cv2.line(frame, (x2, y2), (x2, y2 - cl), color, t, cv2.LINE_AA)
 
-        conf = det.get("confidence", 0)
-        tid = det.get("track_id", 0)
-        dur = det.get("duration_sec", 0)
-        mins, secs = int(dur // 60), int(dur % 60)
-        line2 = f"{conf:.0%} | T#{tid} | {mins}m{secs:02d}s"
+        # Compact label: "Name" or "Unknown"
+        name = det.get("name") or "Unknown"
+        label = name
 
-        (tw1, th1), _ = cv2.getTextSize(line1, _FONT, self.font_scale, self.font_thickness)
-        (tw2, th2), _ = cv2.getTextSize(line2, _FONT, self.font_scale * 0.85, self.font_thickness)
+        (tw, th), baseline = cv2.getTextSize(label, _FONT, self.font_scale, self.font_thickness)
+        pad = 2
 
-        tw = max(tw1, tw2)
-        pad = 3
-        label_h = th1 + th2 + pad * 3
+        # Position label above the box
+        label_y = y1 - pad - 2
+        if label_y - th < 0:
+            label_y = y2 + th + pad + 2  # below box if too close to top
 
-        # Position above box, or inside if near top
-        if y1 > label_h + 5:
-            lx, ly = x1, y1 - label_h - 2
-        else:
-            lx, ly = x1, y1 + 2
-
-        # Label background (ROI-only blend for performance)
-        bg_y1 = max(ly, 0)
-        bg_y2 = min(ly + label_h, frame.shape[0])
-        bg_x1 = max(lx, 0)
-        bg_x2 = min(lx + tw + pad * 2, frame.shape[1])
+        # Background pill
+        bg_x1 = max(x1, 0)
+        bg_x2 = min(x1 + tw + pad * 2, w_frame)
+        bg_y1 = max(label_y - th - pad, 0)
+        bg_y2 = min(label_y + pad + baseline, h_frame)
 
         if bg_y2 > bg_y1 and bg_x2 > bg_x1:
-            roi = frame[bg_y1:bg_y2, bg_x1:bg_x2]
-            bg_color = np.array(color, dtype=np.uint16)
-            blended = (roi.astype(np.uint16) * 102 // 255 + bg_color * 153 // 255).astype(np.uint8)
-            frame[bg_y1:bg_y2, bg_x1:bg_x2] = blended
-
-        # Text lines
-        text_y = ly + pad + th1
-        if 0 <= text_y < frame.shape[0] and 0 <= lx + pad < frame.shape[1]:
+            cv2.rectangle(frame, (bg_x1, bg_y1), (bg_x2, bg_y2), color, cv2.FILLED)
             cv2.putText(
-                frame, line1, (lx + pad, text_y),
-                _FONT, self.font_scale, (255, 255, 255),
+                frame, label, (bg_x1 + pad, label_y),
+                _FONT, self.font_scale, (0, 0, 0),
                 self.font_thickness, cv2.LINE_AA,
             )
-            cv2.putText(
-                frame, line2, (lx + pad, text_y + th2 + pad),
-                _FONT, self.font_scale * 0.85, (200, 200, 200),
-                self.font_thickness, cv2.LINE_AA,
-            )
-
-    # ------------------------------------------------------------------
-    # HUD bars
-    # ------------------------------------------------------------------
-
-    def _draw_hud(self, frame: np.ndarray, info: dict) -> None:
-        """Draw semi-transparent top and bottom HUD bars."""
-        h, w = frame.shape[:2]
-        bh = self.bar_height
-
-        # -- Top bar --
-        roi_top = frame[0:bh, :]
-        roi_top[:] = (roi_top.astype(np.uint16) * 102 // 255).astype(np.uint8)
-
-        top_left = f"IAMS | {info.get('room_name', '')}"
-        top_right = info.get("timestamp", "")
-        cv2.putText(
-            frame, top_left, (8, bh - 8),
-            _FONT, self.font_scale, (255, 255, 255), 1, cv2.LINE_AA,
-        )
-        (trw, _), _ = cv2.getTextSize(top_right, _FONT, self.font_scale, 1)
-        cv2.putText(
-            frame, top_right, (w - trw - 8, bh - 8),
-            _FONT, self.font_scale, (255, 255, 255), 1, cv2.LINE_AA,
-        )
-
-        # -- Bottom bar --
-        roi_bot = frame[h - bh : h, :]
-        roi_bot[:] = (roi_bot.astype(np.uint16) * 102 // 255).astype(np.uint8)
-
-        present = info.get("present_count", 0)
-        total = info.get("total_count", 0)
-        bot_text = (
-            f"{info.get('subject', '')} | {info.get('professor', '')} | "
-            f"{present}/{total} Present"
-        )
-        cv2.putText(
-            frame, bot_text, (8, h - 8),
-            _FONT, self.font_scale, (255, 255, 255), 1, cv2.LINE_AA,
-        )
