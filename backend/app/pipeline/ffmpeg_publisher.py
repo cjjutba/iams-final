@@ -10,8 +10,10 @@ Platform-aware:
 Critical: ``-bf 0`` (no B-frames) is always set for WebRTC compatibility.
 """
 
+import os
 import platform
 import subprocess
+import threading
 
 import numpy as np
 
@@ -28,6 +30,9 @@ class FFmpegPublisher:
         fps: Target frame rate for the output stream.
     """
 
+    # Maximum seconds to wait for a single write before declaring pipe dead
+    WRITE_TIMEOUT = 2.0
+
     def __init__(self, rtsp_url: str, width: int, height: int, fps: int) -> None:
         self.rtsp_url = rtsp_url
         self.width = width
@@ -36,11 +41,6 @@ class FFmpegPublisher:
         self._process: subprocess.Popen | None = None
 
     def _build_ffmpeg_cmd(self) -> list[str]:
-        """Build the FFmpeg command line based on platform.
-
-        Returns:
-            List of command-line tokens suitable for ``subprocess.Popen``.
-        """
         cmd = [
             "ffmpeg", "-y",
             "-f", "rawvideo",
@@ -59,10 +59,10 @@ class FFmpegPublisher:
         cmd += [
             "-pix_fmt", "yuv420p",
             "-bf", "0",
-            "-g", str(self.fps),  # keyframe every 1s — WebRTC needs frequent keyframes
+            "-g", str(self.fps),
             "-b:v", "1200k",
             "-maxrate", "1500k",
-            "-bufsize", "300k",   # small buffer for low latency
+            "-bufsize", "300k",
             "-f", "rtsp",
             "-rtsp_transport", "tcp",
             self.rtsp_url,
@@ -77,30 +77,49 @@ class FFmpegPublisher:
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             bufsize=self.width * self.height * 3 * 2,
         )
+        # Make stdin non-blocking on Unix to prevent write() from hanging
+        if hasattr(os, "set_blocking") and self._process.stdin:
+            try:
+                os.set_blocking(self._process.stdin.fileno(), False)
+            except Exception:
+                pass  # fall back to blocking mode
 
     def write_frame(self, frame: np.ndarray) -> bool:
-        """Write a single BGR frame to FFmpeg stdin.
+        """Write a single BGR frame to FFmpeg stdin with timeout protection.
 
-        Args:
-            frame: BGR numpy array of shape ``(height, width, 3)``.
-
-        Returns:
-            ``True`` on success, ``False`` if the pipe is broken or the
-            process has exited.
+        Returns ``True`` on success, ``False`` if the pipe is broken,
+        process exited, or write timed out.
         """
         if self._process is None or self._process.poll() is not None:
-            logger.warning("FFmpeg publisher process not running, dropping frame")
             return False
-        try:
-            self._process.stdin.write(frame.tobytes())
-            self._process.stdin.flush()
-            return True
-        except (BrokenPipeError, OSError) as exc:
-            logger.warning("FFmpeg publisher pipe error: %s", exc)
+
+        data = frame.tobytes()
+        result = [False]
+
+        def _do_write():
+            try:
+                self._process.stdin.write(data)
+                self._process.stdin.flush()
+                result[0] = True
+            except (BrokenPipeError, OSError):
+                result[0] = False
+            except Exception:
+                result[0] = False
+
+        # Use a thread with timeout to prevent blocking forever
+        t = threading.Thread(target=_do_write, daemon=True)
+        t.start()
+        t.join(timeout=self.WRITE_TIMEOUT)
+
+        if t.is_alive():
+            # Write timed out — pipe is blocked (FFmpeg output buffer full)
+            logger.warning("FFmpeg publisher write timed out (pipe blocked)")
             return False
+
+        return result[0]
 
     def stop(self) -> None:
         """Stop the FFmpeg subprocess gracefully."""
@@ -113,7 +132,10 @@ class FFmpegPublisher:
                 self._process.terminate()
                 self._process.wait(timeout=5)
             except Exception:
-                self._process.kill()
+                try:
+                    self._process.kill()
+                except Exception:
+                    pass
             self._process = None
 
     @property

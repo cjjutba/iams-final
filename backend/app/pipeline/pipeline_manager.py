@@ -124,16 +124,42 @@ class PipelineManager:
             })
         return result
 
-    def check_health(self) -> None:
-        """Restart any dead pipeline processes.
+    def check_health(self, redis_client=None, stale_seconds: float = 60.0) -> None:
+        """Restart dead or stuck pipeline processes.
 
-        Iterates over all managed pipelines and restarts any whose process
-        has exited.  Intended to be called periodically (e.g. every 30 s)
-        from a background scheduler.
+        Checks two conditions:
+        1. Process exited (is_alive() returns False)
+        2. Pipeline hasn't published to Redis for > stale_seconds (stuck)
+
+        Args:
+            redis_client: Optional sync Redis client to check heartbeat.
+            stale_seconds: Maximum age of Redis heartbeat before declaring stuck.
         """
+        import time
+
         for room_id, entry in list(self._pipelines.items()):
             proc = entry["process"]
+            needs_restart = False
+            reason = ""
+
             if not proc.is_alive():
-                logger.warning(f"Pipeline for {room_id} died, restarting...")
-                self._pipelines.pop(room_id)
-                self.start_pipeline(entry["config"])
+                needs_restart = True
+                reason = "process died"
+            elif redis_client:
+                try:
+                    key = f"pipeline:{room_id}:status"
+                    state_raw = redis_client.hget(key, "ts")
+                    if state_raw:
+                        age = time.time() - float(state_raw)
+                        if age > stale_seconds:
+                            needs_restart = True
+                            reason = f"stale heartbeat ({age:.0f}s > {stale_seconds}s)"
+                    # If no heartbeat key yet, pipeline may still be starting — don't kill
+                except Exception:
+                    pass
+
+            if needs_restart:
+                logger.warning(f"Pipeline for {room_id} unhealthy ({reason}), restarting...")
+                config = entry["config"]
+                self.stop_pipeline(room_id)
+                self.start_pipeline(config)

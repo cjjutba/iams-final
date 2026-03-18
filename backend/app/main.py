@@ -400,6 +400,28 @@ async def startup_event():
             max_instances=1,
         )
 
+        # Pipeline health check (every 30s — detect stuck/dead pipelines)
+        def run_pipeline_health_check():
+            """Check if pipeline subprocesses are alive and publishing."""
+            mgr = getattr(app.state, "pipeline_manager", None)
+            if mgr:
+                try:
+                    import redis as redis_lib
+                    r = redis_lib.Redis.from_url(settings.REDIS_URL)
+                    mgr.check_health(redis_client=r, stale_seconds=60.0)
+                    r.close()
+                except Exception:
+                    mgr.check_health()
+
+        scheduler.add_job(
+            run_pipeline_health_check,
+            "interval",
+            seconds=30,
+            id="pipeline_health_check",
+            replace_existing=True,
+            max_instances=1,
+        )
+
         # Daily digest for faculty (8 PM Manila time, Mon-Sat)
         async def run_daily_digests():
             """Generate daily attendance digests for faculty."""
