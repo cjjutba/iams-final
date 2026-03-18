@@ -314,11 +314,16 @@ async def startup_event():
                         from app.services.ml.faiss_manager import faiss_manager
                         from app.services.ml.insightface_model import insightface_model
 
-                        # Self-heal FAISS if user_map got wiped by hot reload
-                        if faiss_manager.index is not None and not faiss_manager.user_map:
+                        # Self-heal FAISS: ensure index is loaded and user_map populated
+                        if faiss_manager.index is None or faiss_manager.index.ntotal == 0:
+                            faiss_manager.load_or_create_index()
+                        if not faiss_manager.user_map:
                             from app.services.face_service import FaceService
                             FaceService.reconcile_faiss_index(db)
-                            logger.info("FAISS user_map was empty, reconciled from DB")
+                            logger.info(
+                                f"FAISS self-healed: vectors={faiss_manager.index.ntotal}, "
+                                f"mappings={len(faiss_manager.user_map)}"
+                            )
 
                         engine = AttendanceScanEngine(
                             frame_grabber=grabber,
