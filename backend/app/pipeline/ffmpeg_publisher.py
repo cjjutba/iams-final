@@ -59,10 +59,10 @@ class FFmpegPublisher:
         cmd += [
             "-pix_fmt", "yuv420p",
             "-bf", "0",
-            "-g", str(max(self.fps // 2, 5)),  # keyframe every 0.5s for fast stream start
-            "-b:v", "1500k",
-            "-maxrate", "2000k",
-            "-bufsize", "500k",
+            "-g", str(self.fps),  # keyframe every 1s — WebRTC needs frequent keyframes
+            "-b:v", "800k",
+            "-maxrate", "1000k",
+            "-bufsize", "200k",   # small buffer for low latency
             "-f", "rtsp",
             "-rtsp_transport", "tcp",
             self.rtsp_url,

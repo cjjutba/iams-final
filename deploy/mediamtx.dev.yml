@@ -51,7 +51,7 @@ hls: no
 srt: no
 rtmp: no
 
-writeQueueSize: 8
+writeQueueSize: 512
 
 paths:
   all_others:
