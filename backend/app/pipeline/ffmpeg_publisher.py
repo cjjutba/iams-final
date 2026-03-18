@@ -10,7 +10,6 @@ Platform-aware:
 Critical: ``-bf 0`` (no B-frames) is always set for WebRTC compatibility.
 """
 
-import os
 import platform
 import subprocess
 import threading
@@ -80,12 +79,6 @@ class FFmpegPublisher:
             stderr=subprocess.DEVNULL,
             bufsize=self.width * self.height * 3 * 2,
         )
-        # Make stdin non-blocking on Unix to prevent write() from hanging
-        if hasattr(os, "set_blocking") and self._process.stdin:
-            try:
-                os.set_blocking(self._process.stdin.fileno(), False)
-            except Exception:
-                pass  # fall back to blocking mode
 
     def write_frame(self, frame: np.ndarray) -> bool:
         """Write a single BGR frame to FFmpeg stdin with timeout protection.
