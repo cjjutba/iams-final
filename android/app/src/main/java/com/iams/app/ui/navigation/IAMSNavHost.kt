@@ -17,6 +17,7 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.navigation
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.iams.app.ui.auth.EmailVerificationScreen
@@ -25,6 +26,7 @@ import com.iams.app.ui.auth.RegisterReviewScreen
 import com.iams.app.ui.auth.RegisterStep1Screen
 import com.iams.app.ui.auth.RegisterStep2Screen
 import com.iams.app.ui.auth.RegisterStep3Screen
+import com.iams.app.ui.auth.RegistrationViewModel
 import com.iams.app.ui.components.BottomNavTab
 import com.iams.app.ui.components.IAMSBottomBar
 import com.iams.app.ui.faculty.FacultyHomeScreen
@@ -110,14 +112,6 @@ fun IAMSNavHost() {
                 )
             }
 
-            composable(Routes.REGISTER_STEP3) {
-                RegisterStep3Screen(navController = navController)
-            }
-
-            composable(Routes.REGISTER_REVIEW) {
-                RegisterReviewScreen(navController = navController)
-            }
-
             composable(
                 route = Routes.EMAIL_VERIFICATION,
                 arguments = listOf(
@@ -128,6 +122,30 @@ fun IAMSNavHost() {
                     navController = navController,
                     email = backStackEntry.arguments?.getString("email") ?: "",
                 )
+            }
+
+            // Nested nav graph for face registration flow (Step3 + Review share ViewModel)
+            navigation(
+                startDestination = Routes.REGISTER_STEP3_INNER,
+                route = Routes.REGISTER_FACE_FLOW
+            ) {
+                composable(Routes.REGISTER_STEP3_INNER) { backStackEntry ->
+                    val parentEntry = navController.getBackStackEntry(Routes.REGISTER_FACE_FLOW)
+                    val sharedViewModel: RegistrationViewModel = hiltViewModel(parentEntry)
+                    RegisterStep3Screen(
+                        navController = navController,
+                        viewModel = sharedViewModel
+                    )
+                }
+
+                composable(Routes.REGISTER_REVIEW_INNER) { backStackEntry ->
+                    val parentEntry = navController.getBackStackEntry(Routes.REGISTER_FACE_FLOW)
+                    val sharedViewModel: RegistrationViewModel = hiltViewModel(parentEntry)
+                    RegisterReviewScreen(
+                        navController = navController,
+                        viewModel = sharedViewModel
+                    )
+                }
             }
 
             // Student screens

@@ -4,9 +4,16 @@ object Routes {
     const val LOGIN = "login"
     const val REGISTER_STEP1 = "register/step1"
     const val REGISTER_STEP2 = "register/step2/{studentId}/{firstName}/{lastName}"
-    const val REGISTER_STEP3 = "register/step3"
-    const val REGISTER_REVIEW = "register/review"
     const val EMAIL_VERIFICATION = "email-verification/{email}"
+
+    // Face registration flow (nested nav graph for shared ViewModel)
+    const val REGISTER_FACE_FLOW = "register/face-flow"
+    const val REGISTER_STEP3_INNER = "register/step3"
+    const val REGISTER_REVIEW_INNER = "register/review"
+
+    // Public aliases that other screens use to navigate into the flow
+    const val REGISTER_STEP3 = REGISTER_FACE_FLOW
+    const val REGISTER_REVIEW = REGISTER_REVIEW_INNER
 
     const val STUDENT_HOME = "student/home"
     const val STUDENT_SCHEDULE = "student/schedule"

@@ -1,5 +1,6 @@
 package com.iams.app.ui.auth
 
+import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiService
@@ -12,6 +13,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.ByteArrayOutputStream
 import javax.inject.Inject
 
 data class RegistrationUiState(
@@ -28,6 +33,12 @@ data class RegistrationUiState(
     // Email verification
     val emailVerified: Boolean = false,
     val isPolling: Boolean = false,
+    // Step 3 face capture
+    val capturedFaces: List<Bitmap> = emptyList(),
+    // Review / upload
+    val isUploading: Boolean = false,
+    val uploadSuccess: Boolean = false,
+    val uploadError: String? = null,
 )
 
 @HiltViewModel
@@ -204,8 +215,78 @@ class RegistrationViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(isPolling = false)
     }
 
+    // Face capture methods
+
+    fun addCapturedFace(bitmap: Bitmap) {
+        val current = _uiState.value.capturedFaces.toMutableList()
+        current.add(bitmap)
+        _uiState.value = _uiState.value.copy(capturedFaces = current)
+    }
+
+    fun removeCapturedFace(index: Int) {
+        val current = _uiState.value.capturedFaces.toMutableList()
+        if (index in current.indices) {
+            current.removeAt(index)
+            _uiState.value = _uiState.value.copy(capturedFaces = current)
+        }
+    }
+
+    fun clearCapturedFaces() {
+        _uiState.value = _uiState.value.copy(capturedFaces = emptyList())
+    }
+
+    fun uploadFaceImages() {
+        val faces = _uiState.value.capturedFaces
+        if (faces.isEmpty()) return
+
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(
+                isUploading = true,
+                uploadError = null
+            )
+
+            try {
+                val parts = faces.mapIndexed { index, bitmap ->
+                    val stream = ByteArrayOutputStream()
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 90, stream)
+                    val bytes = stream.toByteArray()
+                    val requestBody = bytes.toRequestBody("image/jpeg".toMediaTypeOrNull())
+                    MultipartBody.Part.createFormData(
+                        "images",
+                        "face_$index.jpg",
+                        requestBody
+                    )
+                }
+
+                val response = apiService.registerFace(parts)
+
+                if (response.isSuccessful) {
+                    _uiState.value = _uiState.value.copy(
+                        isUploading = false,
+                        uploadSuccess = true
+                    )
+                } else {
+                    val message = response.errorBody()?.string() ?: "Face registration failed"
+                    _uiState.value = _uiState.value.copy(
+                        isUploading = false,
+                        uploadError = message
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isUploading = false,
+                    uploadError = "Network error. Please check your connection."
+                )
+            }
+        }
+    }
+
     fun clearError() {
         _uiState.value = _uiState.value.copy(error = null)
+    }
+
+    fun clearUploadError() {
+        _uiState.value = _uiState.value.copy(uploadError = null)
     }
 
     fun resetVerification() {
