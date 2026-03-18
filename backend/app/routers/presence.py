@@ -139,7 +139,7 @@ async def start_session(
                         frame_grabbers[room_id] = grabber
                         logger.info(f"FrameGrabber started for room {room_id}")
                     except Exception as fg_err:
-                    logger.error(f"Failed to start FrameGrabber for room {room_id}: {fg_err}")
+                        logger.error(f"Failed to start FrameGrabber for room {room_id}: {fg_err}")
 
         return SessionStartResponse(
             schedule_id=session_state.schedule_id,
