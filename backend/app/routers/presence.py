@@ -119,6 +119,7 @@ async def start_session(
                     "professor": "",
                     "total_enrolled": len(session_state.student_states),
                     "det_model": settings.PIPELINE_DET_MODEL,
+                    "detector": settings.PIPELINE_DETECTOR,
                 }
                 mgr.start_pipeline(pipeline_config)
                 logger.info(f"Auto-started pipeline for room {room_id}")

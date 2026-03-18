@@ -266,6 +266,7 @@ async def startup_event():
                         "total_enrolled": 0,
                         "session_id": schedule_id,
                         "det_model": settings.PIPELINE_DET_MODEL,
+                        "detector": settings.PIPELINE_DETECTOR,
                     }
                     mgr.start_pipeline(pipeline_config)
                     logger.info(f"Auto-started pipeline for room {room_id}")

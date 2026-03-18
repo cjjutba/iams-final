@@ -1,7 +1,10 @@
 """Unified video analytics pipeline -- RTSP in, annotated RTSP out.
 
-Reads RTSP from mediamtx, runs face detection (SCRFD) + tracking (ByteTrack) +
-recognition (ArcFace + FAISS), draws annotations, and publishes annotated stream.
+Reads RTSP from mediamtx, runs face detection + tracking (ByteTrack),
+draws annotations, and publishes annotated stream.
+
+Detection: YuNet (default, ~2-5ms CPU) or InsightFace SCRFD (legacy).
+Identity labels read from Redis cache written by AttendanceScanEngine.
 
 Designed to run as a separate process per room.
 """
@@ -151,14 +154,31 @@ class VideoAnalyticsPipeline:
         )
 
         # ML models (deferred import to avoid loading at module level)
+        det_type = cfg.get("detector", settings.PIPELINE_DETECTOR)
         try:
-            from app.services.ml.faiss_manager import faiss_manager
-            from app.services.ml.insightface_model import insightface_model
+            if det_type == "yunet":
+                from pathlib import Path
 
-            if insightface_model.app is None:
-                insightface_model.load_model()
-            self._detector = insightface_model
-            self._faiss = faiss_manager
+                from app.services.ml.yunet_detector import YuNetDetector
+
+                model_path = Path(__file__).parent.parent.parent / settings.YUNET_MODEL_PATH
+                self._detector = YuNetDetector(
+                    model_path=str(model_path),
+                    score_threshold=settings.YUNET_SCORE_THRESHOLD,
+                    nms_threshold=settings.YUNET_NMS_THRESHOLD,
+                )
+                self._detector.load(w, h)
+                self._faiss = None
+                logger.info(f"[Pipeline:{self.room_id}] Using YuNet detector (CPU-optimized)")
+            else:
+                from app.services.ml.faiss_manager import faiss_manager
+                from app.services.ml.insightface_model import insightface_model
+
+                if insightface_model.app is None:
+                    insightface_model.load_model()
+                self._detector = insightface_model
+                self._faiss = faiss_manager
+                logger.info(f"[Pipeline:{self.room_id}] Using InsightFace detector (legacy)")
         except Exception as e:
             logger.error(f"[Pipeline:{self.room_id}] ML model load failed: {e}")
 
@@ -274,17 +294,21 @@ class VideoAnalyticsPipeline:
     # ------------------------------------------------------------------
 
     def _detect_faces(self, frame: np.ndarray, scale: float = 1.0) -> sv.Detections:
-        """Run SCRFD face detection and return supervision Detections.
+        """Run face detection and return supervision Detections.
 
-        Args:
-            frame: BGR frame (possibly downscaled for detection).
-            scale: Multiply bounding boxes by this factor to map back to
-                the original (compositing) resolution.
+        Supports two detector backends:
+        - YuNetDetector: has detect() method, returns sv.Detections directly
+        - InsightFaceModel: has get_faces() method, returns list[DetectedFace]
         """
         if self._detector is None:
             return sv.Detections.empty()
 
         try:
+            # YuNet path: returns sv.Detections directly
+            if hasattr(self._detector, "detect"):
+                return self._detector.detect(frame, scale=scale)
+
+            # Legacy InsightFace path: convert DetectedFace → sv.Detections
             faces = self._detector.get_faces(frame)
             if not faces:
                 return sv.Detections.empty()

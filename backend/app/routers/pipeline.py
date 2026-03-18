@@ -52,6 +52,7 @@ async def start_pipeline(req: PipelineStartRequest, request: Request):
         "professor": req.professor,
         "total_enrolled": req.total_enrolled,
         "det_model": settings.PIPELINE_DET_MODEL,
+        "detector": settings.PIPELINE_DETECTOR,
     }
     mgr.start_pipeline(config)
     return {"status": "started", "room_id": req.room_id}
