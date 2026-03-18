@@ -144,11 +144,11 @@ class VideoAnalyticsPipeline:
         # Annotator
         self._annotator = FrameAnnotator(w, h)
 
-        # ByteTrack — tuned for small faces at distance
+        # ByteTrack — tuned for small/distant faces with movement
         self._tracker = sv.ByteTrack(
-            track_activation_threshold=0.20,
-            lost_track_buffer=fps * 6,
-            minimum_matching_threshold=0.3,  # low IoU threshold for small (15-20px) faces
+            track_activation_threshold=0.15,   # accept weak detections (small faces)
+            lost_track_buffer=fps * 3,         # survive 3 seconds of missed detections
+            minimum_matching_threshold=0.2,    # very low IoU for small faces that shift
             frame_rate=fps,
             minimum_consecutive_frames=1,
         )
