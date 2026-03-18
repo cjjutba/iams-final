@@ -207,7 +207,6 @@ class VideoAnalyticsPipeline:
         last_recognition_check = 0.0
         last_publisher_check = time.time()
         frame_count = 0
-        last_tracked: sv.Detections | None = None  # reuse on non-detection frames
 
         while self._running:
             loop_start = time.time()
@@ -218,34 +217,26 @@ class VideoAnalyticsPipeline:
                 time.sleep(0.01)
                 continue
 
-            if frame_count % det_interval == 0:
-                # --- Detection frame: run detector + update tracker ---
-                det_frame = cv2.resize(frame, (det_w, det_h)) if scale != 1.0 else frame
-                detections = self._detect_faces(det_frame, scale=scale)
-                if frame_count % (det_interval * 20) == 0:
-                    logger.debug(
-                        f"[Pipeline:{self.room_id}] det frame {frame_count}: "
-                        f"faces={len(detections)}"
-                    )
-                tracked = self._tracker.update_with_detections(detections)
-                last_tracked = tracked
+            # Run detection EVERY frame — YuNet is fast enough (~2-5ms)
+            # This ensures bounding boxes follow moving faces in real-time
+            detections = self._detect_faces(frame, scale=scale)
+            tracked = self._tracker.update_with_detections(detections)
 
-                # Recognize new/unidentified tracks (throttled)
-                now = time.time()
-                if now - last_recognition_check > 0.2:
-                    self._recognize_new_tracks(frame, tracked)
-                    last_recognition_check = now
-            else:
-                # --- Non-detection frame: reuse last tracked result ---
-                # Do NOT call update_with_detections(empty) — that tells
-                # ByteTrack "no faces found" and starts killing tracks.
-                # Instead, keep drawing the same boxes from the last detection.
-                tracked = last_tracked if last_tracked is not None else sv.Detections.empty()
-                now = time.time()
+            if frame_count % 200 == 0:
+                logger.debug(
+                    f"[Pipeline:{self.room_id}] frame {frame_count}: "
+                    f"faces={len(detections)}, tracks="
+                    f"{len(tracked.tracker_id) if tracked.tracker_id is not None else 0}"
+                )
 
-            # Clean up stale identities (only meaningful on detection frames)
-            if frame_count % det_interval == 0:
-                self._cleanup_stale_tracks(tracked)
+            # Recognize new/unidentified tracks (throttled to every 0.5s)
+            now = time.time()
+            if now - last_recognition_check > 0.5:
+                self._recognize_new_tracks(frame, tracked)
+                last_recognition_check = now
+
+            # Clean up stale identities
+            self._cleanup_stale_tracks(tracked)
 
             # Build detection list for annotator
             det_list = self._build_detection_list(tracked)

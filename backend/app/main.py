@@ -235,16 +235,17 @@ async def startup_event():
             room = db_session.query(Room).filter(Room.id == schedule.room_id).first()
             stream_key = room.stream_key if room and room.stream_key else room_id
 
-            # Use mediamtx local RTSP as frame source (handles H.265 → decoded frames)
-            mediamtx_url = f"{settings.MEDIAMTX_RTSP_URL}/{stream_key}/raw"
-            # Also get direct camera URL as fallback
-            camera_url = get_camera_url(room_id, db_session) or mediamtx_url
+            # Use direct camera URL for FrameGrabber (most reliable, FFmpeg handles H.265)
+            camera_url = get_camera_url(room_id, db_session)
+            if not camera_url:
+                logger.warning(f"No camera URL for room {room_id}, skipping FrameGrabber")
+                return
 
-            # Create FrameGrabber (reads from mediamtx, not direct camera)
+            # Create FrameGrabber (reads directly from camera, not mediamtx)
             if room_id not in app_instance.state.frame_grabbers:
-                grabber = FrameGrabber(mediamtx_url)
+                grabber = FrameGrabber(camera_url)
                 app_instance.state.frame_grabbers[room_id] = grabber
-                logger.info(f"Auto-created FrameGrabber for room {room_id} ({mediamtx_url})")
+                logger.info(f"Auto-created FrameGrabber for room {room_id}")
 
             # Start pipeline only for rooms that have a stream_key configured
             # (prevents duplicate pipelines for rooms sharing the same camera)
@@ -320,21 +321,33 @@ async def startup_event():
                         )
                         result = engine.scan_frame()
                         if result:
+                            logger.info(
+                                f"Attendance scan: room={room_id}, "
+                                f"detected={result.detected_faces}, "
+                                f"recognized={len(result.recognized)}, "
+                                f"duration={result.scan_duration_ms:.0f}ms"
+                            )
                             scan_results[room_id] = result
                             # Write to Redis identity cache for live feed pipeline
                             from app.redis_client import get_redis
 
-                            redis_client = await get_redis()
-                            cache = IdentityCache(redis_client)
-                            await cache.write_identities(room_id, schedule_id, [
-                                {
+                            # Look up student names for the identity cache
+                            from app.models.user import User
+                            identities = []
+                            for r in result.recognized:
+                                user = db.query(User).filter(User.id == r.user_id).first()
+                                name = f"{user.first_name} {user.last_name}" if user else "Unknown"
+                                identities.append({
                                     "user_id": r.user_id,
-                                    "name": "",
+                                    "name": name,
+                                    "student_id": user.student_id if user else "",
                                     "confidence": r.confidence,
                                     "bbox": list(r.bbox),
-                                }
-                                for r in result.recognized
-                            ])
+                                })
+
+                            redis_client = await get_redis()
+                            cache = IdentityCache(redis_client)
+                            await cache.write_identities(room_id, schedule_id, identities)
                             await cache.write_scan_meta(room_id, schedule_id, {
                                 "last_scan_ts": int(_time.time()),
                                 "faces_detected": result.detected_faces,

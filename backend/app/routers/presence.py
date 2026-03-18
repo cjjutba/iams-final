@@ -125,22 +125,20 @@ async def start_session(
                 logger.info(f"Auto-started pipeline for room {room_id}")
 
         # Start FrameGrabber for attendance engine scans
-        # Uses mediamtx local RTSP (handles any codec from camera)
+        # Uses direct camera URL (FFmpeg handles H.265 natively)
         schedule = schedule or ScheduleRepository(db).get_by_id(body.schedule_id)
         if schedule:
             room_id = str(schedule.room_id)
             frame_grabbers = getattr(http_request.app.state, "frame_grabbers", None)
             if frame_grabbers is not None and room_id not in frame_grabbers:
-                from app.models.room import Room as RoomModel
-                rm = db.query(RoomModel).filter(RoomModel.id == schedule.room_id).first()
-                sk = rm.stream_key if rm and rm.stream_key else room_id
-                mediamtx_url = f"{settings.MEDIAMTX_RTSP_URL}/{sk}/raw"
-                try:
-                    from app.services.frame_grabber import FrameGrabber
-                    grabber = FrameGrabber(mediamtx_url)
-                    frame_grabbers[room_id] = grabber
-                    logger.info(f"FrameGrabber started for room {room_id} ({mediamtx_url})")
-                except Exception as fg_err:
+                camera_url = get_camera_url(room_id, db)
+                if camera_url:
+                    try:
+                        from app.services.frame_grabber import FrameGrabber
+                        grabber = FrameGrabber(camera_url)
+                        frame_grabbers[room_id] = grabber
+                        logger.info(f"FrameGrabber started for room {room_id}")
+                    except Exception as fg_err:
                     logger.error(f"Failed to start FrameGrabber for room {room_id}: {fg_err}")
 
         return SessionStartResponse(
