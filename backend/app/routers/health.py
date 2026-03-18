@@ -18,11 +18,9 @@ Overall status logic:
   - "unhealthy" : any critical component is down
 """
 
-import json
 import logging
 import time
 
-import httpx
 from fastapi import APIRouter
 
 from app.config import settings
@@ -104,129 +102,18 @@ def _check_faiss() -> dict:
 
 
 async def _check_mediamtx() -> dict:
-    """Check mediamtx process status and API availability."""
-    if not settings.USE_WEBRTC_STREAMING:
-        return {"status": "disabled"}
-
-    try:
-        from app.services.mediamtx_service import mediamtx_service
-
-        process_alive = mediamtx_service.is_healthy() or settings.MEDIAMTX_EXTERNAL
-
-        # Try to hit the mediamtx REST API for path info
-        url = f"{settings.MEDIAMTX_API_URL}/v3/paths/list"
-        active_paths = 0
-        api_reachable = False
-
-        try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    api_reachable = True
-                    data = resp.json()
-                    # mediamtx v3 returns {"items": [...]}
-                    items = data.get("items") or []
-                    active_paths = len([
-                        p for p in items
-                        if p.get("ready", False) or p.get("readers", 0) > 0
-                    ])
-        except Exception:
-            pass
-
-        if not process_alive and not api_reachable:
-            return {"status": "unhealthy", "error": "Process not running and API unreachable"}
-
-        return {
-            "status": "healthy" if api_reachable else "degraded",
-            "process_alive": process_alive,
-            "api_reachable": api_reachable,
-            "active_paths": active_paths,
-        }
-    except Exception as e:
-        logger.error(f"Health check — mediamtx error: {e}")
-        return {"status": "unhealthy", "error": str(e)}
+    """Check mediamtx status (disabled — pipeline removed in architecture redesign)."""
+    return {"status": "disabled"}
 
 
 def _check_edge_devices() -> dict:
-    """Check connected edge devices."""
-    try:
-        from app.routers.edge_ws import get_edge_devices
-
-        devices = get_edge_devices()
-        now = time.time()
-
-        device_info = {}
-        for room_id, info in devices.items():
-            last_hb = info.get("last_heartbeat", 0)
-            device_info[room_id] = {
-                "connected_at": info.get("connected_at"),
-                "last_heartbeat_seconds_ago": round(now - last_hb, 1) if last_hb else None,
-                "frames_received": info.get("frames_received", 0),
-                "camera_status": info.get("camera_status", "unknown"),
-            }
-
-        connected = len(devices)
-        return {
-            "status": "healthy" if connected > 0 else "no_devices",
-            "connected": connected,
-            "devices": device_info,
-        }
-    except Exception as e:
-        logger.error(f"Health check — edge devices error: {e}")
-        return {"status": "unhealthy", "error": str(e)}
+    """Check connected edge devices (edge_ws removed in architecture redesign)."""
+    return {"status": "no_devices", "connected": 0}
 
 
 async def _check_workers() -> dict:
-    """Check worker status from stream:metrics in Redis (last 30s)."""
-    try:
-        from app.redis_client import get_redis
-        from app.services.stream_bus import STREAM_METRICS
-
-        r = await get_redis()
-
-        # Read the most recent metrics messages (last 50 entries)
-        entries = await r.xrevrange(STREAM_METRICS, count=50)
-
-        now = time.time()
-        cutoff = now - 30  # Only consider metrics from the last 30 seconds
-        workers: dict[str, dict] = {}
-
-        for msg_id, fields in entries:
-            data_raw = fields.get(b"data") or fields.get("data")
-            ts_raw = fields.get(b"ts") or fields.get("ts")
-
-            if not data_raw:
-                continue
-
-            if isinstance(data_raw, bytes):
-                data_raw = data_raw.decode()
-            if isinstance(ts_raw, bytes):
-                ts_raw = ts_raw.decode()
-
-            ts = float(ts_raw) if ts_raw else 0
-            if ts < cutoff:
-                continue
-
-            data = json.loads(data_raw)
-            worker_name = data.get("worker", "unknown")
-
-            # Keep only the latest metrics per worker
-            if worker_name not in workers:
-                workers[worker_name] = {
-                    "status": "healthy",
-                    "frames_processed": data.get("frames_processed", 0),
-                    "errors": data.get("errors", 0),
-                    "uptime_seconds": data.get("uptime_seconds", 0),
-                    "last_report_seconds_ago": round(now - ts, 1),
-                }
-
-        if not workers:
-            return {"status": "no_workers"}
-
-        return workers
-    except Exception as e:
-        logger.error(f"Health check — workers error: {e}")
-        return {"status": "unhealthy", "error": str(e)}
+    """Check worker status (workers removed in architecture redesign)."""
+    return {"status": "no_workers"}
 
 
 @router.get("", tags=["System"])

@@ -18,13 +18,11 @@ from sqlalchemy.orm import Session
 
 from app.config import logger, settings
 from app.database import get_db
-from app.services.camera_config import get_camera_url
 from app.models.user import User, UserRole
 from app.repositories.attendance_repository import AttendanceRepository
 from app.repositories.schedule_repository import ScheduleRepository
 from app.schemas.attendance import EarlyLeaveEventResponse, PresenceLogResponse
 from app.services.presence_service import PresenceService
-from app.services.session_scheduler import mark_manually_ended
 
 from app.utils.dependencies import get_current_user
 from app.utils.exceptions import NotFoundError
@@ -97,41 +95,16 @@ async def start_session(
         presence_service = PresenceService(db)
         session_state = await presence_service.start_session(body.schedule_id)
 
-        # Auto-start video pipeline for this room
-        mgr = getattr(http_request.app.state, "pipeline_manager", None)
-        schedule = ScheduleRepository(db).get_by_id(body.schedule_id)
-        if mgr and schedule and settings.PIPELINE_ENABLED:
-            room_id = str(schedule.room_id)
-            camera_url = get_camera_url(room_id, db)
-            if camera_url:
-                from app.models.room import Room
-                room = db.query(Room).filter(Room.id == schedule.room_id).first()
-                stream_key = room.stream_key if room and room.stream_key else room_id
-                pipeline_config = {
-                    "room_id": room_id,
-                    "rtsp_source": camera_url,
-                    "rtsp_target": f"{settings.MEDIAMTX_RTSP_URL}/{stream_key}/annotated",
-                    "width": settings.PIPELINE_WIDTH,
-                    "height": settings.PIPELINE_HEIGHT,
-                    "fps": settings.PIPELINE_FPS,
-                    "room_name": room.name if room else "",
-                    "subject": schedule.subject_code or "",
-                    "professor": "",
-                    "total_enrolled": len(session_state.student_states),
-                    "det_model": settings.PIPELINE_DET_MODEL,
-                    "detector": settings.PIPELINE_DETECTOR,
-                }
-                mgr.start_pipeline(pipeline_config)
-                logger.info(f"Auto-started pipeline for room {room_id}")
-
         # Start FrameGrabber for attendance engine scans
-        # Uses direct camera URL (FFmpeg handles H.265 natively)
-        schedule = schedule or ScheduleRepository(db).get_by_id(body.schedule_id)
+        # (FrameGrabber is also auto-created by the scan cycle if missing)
+        schedule = ScheduleRepository(db).get_by_id(body.schedule_id)
         if schedule:
             room_id = str(schedule.room_id)
             frame_grabbers = getattr(http_request.app.state, "frame_grabbers", None)
             if frame_grabbers is not None and room_id not in frame_grabbers:
-                camera_url = get_camera_url(room_id, db)
+                from app.models.room import Room
+                room = db.query(Room).filter(Room.id == schedule.room_id).first()
+                camera_url = room.camera_endpoint if room else None
                 if camera_url:
                     try:
                         from app.services.frame_grabber import FrameGrabber
@@ -192,18 +165,8 @@ async def end_session(
         # End session
         await presence_service.end_session(schedule_id)
 
-        # Mark as manually ended so auto-scheduler won't restart
-        mark_manually_ended(schedule_id)
-
-        # Auto-stop pipeline for this room
-        mgr = getattr(http_request.app.state, "pipeline_manager", None)
-        schedule = ScheduleRepository(db).get_by_id(schedule_id)
-        if mgr and schedule:
-            room_id = str(schedule.room_id)
-            mgr.stop_pipeline(room_id)
-            logger.info(f"Auto-stopped pipeline for room {room_id}")
-
         # Stop FrameGrabber and clear identity cache for this room
+        schedule = ScheduleRepository(db).get_by_id(schedule_id)
         if schedule:
             room_id = str(schedule.room_id)
             frame_grabbers = getattr(http_request.app.state, "frame_grabbers", None)
