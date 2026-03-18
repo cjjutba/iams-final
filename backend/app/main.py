@@ -100,7 +100,6 @@ async def startup_event():
     - Check database connection
     - Initialize Redis
     - Load InsightFace model + FAISS index
-    - Start BroadcastManager (WebSocket broadcaster)
     - Start APScheduler (presence scans, FAISS health check)
     """
     logger.info(f"Starting {settings.APP_NAME}...")
@@ -158,16 +157,6 @@ async def startup_event():
 
     # ── Frame Grabbers (attendance engine RTSP sources) ─────────────
     app.state.frame_grabbers = {}  # room_id -> FrameGrabber
-
-    # ── WebSocket Broadcaster ─────────────────────────────────────
-    try:
-        from app.routers.websocket import get_broadcast_manager
-
-        broadcaster = get_broadcast_manager()
-        await broadcaster.start()
-        logger.info("BroadcastManager started")
-    except Exception as e:
-        logger.error(f"Failed to start BroadcastManager: {e}")
 
     # ── APScheduler ───────────────────────────────────────────────
     try:
@@ -367,16 +356,6 @@ async def shutdown_event():
             except Exception as e:
                 logger.error(f"Failed to stop FrameGrabber for room {room_id}: {e}")
         app.state.frame_grabbers.clear()
-
-    # Stop BroadcastManager
-    try:
-        from app.routers.websocket import get_broadcast_manager
-
-        broadcaster = get_broadcast_manager()
-        await broadcaster.stop()
-        logger.info("BroadcastManager stopped")
-    except Exception as e:
-        logger.error(f"Failed to stop BroadcastManager: {e}")
 
     # Close Redis connection pool
     try:

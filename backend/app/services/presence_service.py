@@ -9,7 +9,7 @@ continuous attendance tracking throughout the class session.
 I/O contract (two data sources, used in priority order):
   1. AttendanceScanEngine ScanResult (passed via run_scan_cycle(scan_results=...))
   2. pipeline:{room_id}:state Redis key (legacy fallback, written by VideoPipeline)
-  - OUTPUT: StreamBus.publish_attendance() / StreamBus.publish_alert()
+  - OUTPUT: ws_manager.broadcast_attendance() / ws_manager.broadcast_alert() (direct WebSocket)
   - DB:     attendance_records, presence_logs, early_leave_events (unchanged)
 """
 
@@ -29,7 +29,6 @@ from app.repositories.attendance_repository import AttendanceRepository
 from app.repositories.schedule_repository import ScheduleRepository
 from app.repositories.user_repository import UserRepository
 from app.services import session_manager
-from app.services.stream_bus import get_stream_bus
 from app.utils.exceptions import NotFoundError
 
 
@@ -106,7 +105,7 @@ class PresenceService:
     - Early leave detection (3 consecutive misses)
     - Session lifecycle management (start/end)
     - Presence score calculation
-    - Real-time event publishing via Redis Streams
+    - Real-time event broadcasting via WebSocket
     """
 
     # Class-level shared state: sessions persist across all instances/requests
@@ -125,20 +124,25 @@ class PresenceService:
     # ── helpers ──────────────────────────────────────────────────
 
     async def _publish_attendance(self, schedule_id: str, payload: dict):
-        """Publish an attendance event to Redis Streams."""
+        """Broadcast an attendance event to connected WebSocket clients."""
         try:
-            bus = await get_stream_bus()
-            await bus.publish_attendance(schedule_id, payload)
+            from app.routers.websocket import ws_manager
+
+            await ws_manager.broadcast_attendance(schedule_id, payload)
         except Exception as e:
-            logger.error(f"Failed to publish attendance event: {e}")
+            logger.error(f"Failed to broadcast attendance event: {e}")
 
     async def _publish_alert(self, alert: dict):
-        """Publish an alert event to Redis Streams."""
+        """Broadcast an alert to connected WebSocket clients."""
         try:
-            bus = await get_stream_bus()
-            await bus.publish_alert(alert)
+            from app.routers.websocket import ws_manager
+
+            # Send to each user in the notify list
+            notify_user_ids = alert.get("notify_user_ids", [])
+            for user_id in notify_user_ids:
+                await ws_manager.broadcast_alert(user_id, alert)
         except Exception as e:
-            logger.error(f"Failed to publish alert: {e}")
+            logger.error(f"Failed to broadcast alert: {e}")
 
     def _get_room_id(self, schedule: Schedule) -> str:
         """Extract the room_id string from a schedule (used as fusion engine key)."""
