@@ -60,9 +60,9 @@ class FFmpegPublisher:
             "-pix_fmt", "yuv420p",
             "-bf", "0",
             "-g", str(self.fps),  # keyframe every 1s — WebRTC needs frequent keyframes
-            "-b:v", "800k",
-            "-maxrate", "1000k",
-            "-bufsize", "200k",   # small buffer for low latency
+            "-b:v", "1200k",
+            "-maxrate", "1500k",
+            "-bufsize", "300k",   # small buffer for low latency
             "-f", "rtsp",
             "-rtsp_transport", "tcp",
             self.rtsp_url,

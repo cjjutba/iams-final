@@ -9,13 +9,13 @@ Performance: ~3-5 ms for 50 faces at 640x480.
 import cv2
 import numpy as np
 
-# Color palette (BGR)
+# Color palette (BGR) — bright, high-contrast colors that survive H.264 compression
 COLORS: dict[str, tuple[int, int, int]] = {
-    "confirmed": (0, 200, 0),       # Green  -- recognized student
-    "unknown":   (0, 200, 255),      # Yellow/amber -- detected, not matched
-    "new":       (255, 200, 0),      # Cyan   -- just appeared
-    "lost":      (128, 128, 128),    # Gray   -- temporarily lost
-    "alert":     (0, 0, 255),        # Red    -- early leave
+    "confirmed": (0, 255, 0),        # Bright green  -- recognized student
+    "unknown":   (0, 255, 255),      # Bright yellow -- detected, not matched
+    "new":       (255, 255, 0),      # Bright cyan   -- just appeared
+    "lost":      (180, 180, 180),    # Light gray    -- temporarily lost
+    "alert":     (0, 0, 255),        # Bright red    -- early leave
 }
 
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
@@ -36,8 +36,8 @@ class FrameAnnotator:
     def __init__(self, width: int, height: int) -> None:
         self.width = width
         self.height = height
-        self.corner_length = 20
-        self.box_thickness = 2
+        self.corner_length = 25
+        self.box_thickness = 3       # thick enough to survive H.264 compression
         self.font_scale = 0.55
         self.font_thickness = 1
         self.bar_height = 36
@@ -90,22 +90,27 @@ class FrameAnnotator:
             y2 = min(h_frame, cy + half)
             bw, bh = x2 - x1, y2 - y1
 
-        # Corner bracket length -- cap at one-third of the shorter side
-        cl = min(self.corner_length, bw // 3, bh // 3)
-        cl = max(cl, 8)  # minimum 8px bracket
-
-        # Top-left
-        cv2.line(frame, (x1, y1), (x1 + cl, y1), color, t)
-        cv2.line(frame, (x1, y1), (x1, y1 + cl), color, t)
-        # Top-right
-        cv2.line(frame, (x2, y1), (x2 - cl, y1), color, t)
-        cv2.line(frame, (x2, y1), (x2, y1 + cl), color, t)
-        # Bottom-left
-        cv2.line(frame, (x1, y2), (x1 + cl, y2), color, t)
-        cv2.line(frame, (x1, y2), (x1, y2 - cl), color, t)
-        # Bottom-right
-        cv2.line(frame, (x2, y2), (x2 - cl, y2), color, t)
-        cv2.line(frame, (x2, y2), (x2, y2 - cl), color, t)
+        # For expanded/small boxes: use full rectangle (corners get lost in compression)
+        # For large boxes: use corner brackets (cleaner look)
+        if bw <= 60 or bh <= 60:
+            # Full rectangle for small/expanded faces
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, t)
+        else:
+            # Corner brackets for large faces
+            cl = min(self.corner_length, bw // 3, bh // 3)
+            cl = max(cl, 10)
+            # Top-left
+            cv2.line(frame, (x1, y1), (x1 + cl, y1), color, t)
+            cv2.line(frame, (x1, y1), (x1, y1 + cl), color, t)
+            # Top-right
+            cv2.line(frame, (x2, y1), (x2 - cl, y1), color, t)
+            cv2.line(frame, (x2, y1), (x2, y1 + cl), color, t)
+            # Bottom-left
+            cv2.line(frame, (x1, y2), (x1 + cl, y2), color, t)
+            cv2.line(frame, (x1, y2), (x1, y2 - cl), color, t)
+            # Bottom-right
+            cv2.line(frame, (x2, y2), (x2 - cl, y2), color, t)
+            cv2.line(frame, (x2, y2), (x2, y2 - cl), color, t)
 
         # -- Label text --
         if det.get("name"):
