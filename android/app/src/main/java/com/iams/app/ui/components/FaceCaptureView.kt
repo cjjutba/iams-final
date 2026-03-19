@@ -45,7 +45,7 @@ import androidx.core.content.ContextCompat
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
-import com.iams.app.ui.theme.Green500
+import com.iams.app.ui.theme.PresentFg
 import java.util.concurrent.Executors
 
 @Composable
@@ -145,7 +145,7 @@ fun FaceCaptureView(
                 .clip(RoundedCornerShape(16.dp))
                 .border(
                     width = 3.dp,
-                    color = if (faceDetected) Green500 else Color.Gray,
+                    color = if (faceDetected) PresentFg else Color.Gray,
                     shape = RoundedCornerShape(16.dp)
                 ),
             contentAlignment = Alignment.Center
@@ -170,7 +170,7 @@ fun FaceCaptureView(
             ) {
                 Text(
                     text = if (faceDetected) "Face Detected" else "No Face Detected",
-                    color = if (faceDetected) Green500 else Color.White,
+                    color = if (faceDetected) PresentFg else Color.White,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.align(Alignment.Center)
