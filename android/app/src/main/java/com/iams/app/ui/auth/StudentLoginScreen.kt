@@ -2,17 +2,23 @@ package com.iams.app.ui.auth
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,25 +32,32 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.iams.app.ui.components.IAMSButton
+import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSTextField
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.Background
+import com.iams.app.ui.theme.Primary
 import com.iams.app.ui.theme.TextSecondary
 
 @Composable
-fun LoginScreen(
+fun StudentLoginScreen(
     navController: NavController,
     viewModel: LoginViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    var identifier by remember { mutableStateOf("") }
+    var studentId by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
 
@@ -56,7 +69,7 @@ fun LoginScreen(
                 else -> Routes.STUDENT_HOME
             }
             navController.navigate(destination) {
-                popUpTo(Routes.LOGIN) { inclusive = true }
+                popUpTo(Routes.WELCOME) { inclusive = true }
             }
         }
     }
@@ -65,43 +78,60 @@ fun LoginScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Background)
-            .imePadding()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
-            .padding(top = 16.dp, bottom = 32.dp),
     ) {
-        Spacer(modifier = Modifier.weight(1f))
+        // Back button
+        Spacer(modifier = Modifier.height(16.dp))
+
+        IconButton(
+            onClick = { navController.navigate(Routes.WELCOME) {
+                popUpTo(Routes.WELCOME) { inclusive = true }
+            }},
+            modifier = Modifier.padding(start = 0.dp)
+        ) {
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Back",
+                modifier = Modifier.size(24.dp),
+                tint = Primary
+            )
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
 
         // Title
         Text(
-            text = "Welcome back",
+            text = "Student Login",
             style = MaterialTheme.typography.headlineLarge,
-            color = MaterialTheme.colorScheme.onBackground
+            fontWeight = FontWeight.Bold,
+            color = Primary
         )
 
         Spacer(modifier = Modifier.height(12.dp))
 
         // Subtitle
         Text(
-            text = "Sign in to your account to continue",
+            text = "Sign in to continue",
             style = MaterialTheme.typography.bodyLarge,
             color = TextSecondary
         )
 
         Spacer(modifier = Modifier.height(32.dp))
 
-        // Identifier field
+        // Student ID field
         IAMSTextField(
-            value = identifier,
+            value = studentId,
             onValueChange = {
-                identifier = it
+                studentId = it
                 viewModel.clearError()
             },
-            label = "Email or Student ID",
-            placeholder = "Enter your email or student ID",
+            label = "Student ID",
+            placeholder = "21-A-012345",
             enabled = !uiState.isLoading,
             keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Email,
+                capitalization = KeyboardCapitalization.Characters,
+                keyboardType = KeyboardType.Text,
                 imeAction = ImeAction.Next
             ),
             keyboardActions = KeyboardActions(
@@ -130,17 +160,34 @@ fun LoginScreen(
             keyboardActions = KeyboardActions(
                 onDone = {
                     focusManager.clearFocus()
-                    viewModel.login(identifier, password)
+                    viewModel.login(studentId.trim().uppercase(), password.trim())
                 }
             )
         )
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Forgot Password link
+        Text(
+            text = "Forgot password?",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = Primary,
+            textAlign = TextAlign.End,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(enabled = !uiState.isLoading) {
+                    navController.navigate(Routes.FORGOT_PASSWORD)
+                }
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
 
         // Login button
         IAMSButton(
             text = "Sign In",
-            onClick = { viewModel.login(identifier, password) },
+            onClick = { viewModel.login(studentId.trim().uppercase(), password.trim()) },
+            size = IAMSButtonSize.LG,
             enabled = !uiState.isLoading,
             isLoading = uiState.isLoading
         )
@@ -148,18 +195,26 @@ fun LoginScreen(
         Spacer(modifier = Modifier.height(24.dp))
 
         // Register link
-        Text(
-            text = "Don't have an account? Register",
-            style = MaterialTheme.typography.bodyMedium,
-            color = TextSecondary,
-            textAlign = TextAlign.Center,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(enabled = !uiState.isLoading) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = buildAnnotatedString {
+                    withStyle(SpanStyle(color = TextSecondary)) {
+                        append("Don't have an account? ")
+                    }
+                    withStyle(SpanStyle(color = Primary, fontWeight = FontWeight.SemiBold)) {
+                        append("Register")
+                    }
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.clickable(enabled = !uiState.isLoading) {
                     navController.navigate(Routes.REGISTER_STEP1)
                 }
-        )
+            )
+        }
 
-        Spacer(modifier = Modifier.weight(1f))
+        Spacer(modifier = Modifier.height(32.dp))
     }
 }

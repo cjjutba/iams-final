@@ -84,6 +84,9 @@ dependencies {
     // Image loading
     implementation(libs.coil.compose)
 
+    // Lottie animations
+    implementation(libs.lottie.compose)
+
     // Coroutines
     implementation(libs.coroutines.android)
 }

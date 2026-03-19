@@ -21,12 +21,17 @@ import androidx.navigation.compose.navigation
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.iams.app.ui.auth.EmailVerificationScreen
-import com.iams.app.ui.auth.LoginScreen
+import com.iams.app.ui.auth.FacultyLoginScreen
+import com.iams.app.ui.auth.ForgotPasswordScreen
 import com.iams.app.ui.auth.RegisterReviewScreen
 import com.iams.app.ui.auth.RegisterStep1Screen
 import com.iams.app.ui.auth.RegisterStep2Screen
 import com.iams.app.ui.auth.RegisterStep3Screen
 import com.iams.app.ui.auth.RegistrationViewModel
+import com.iams.app.ui.auth.StudentLoginScreen
+import com.iams.app.ui.onboarding.OnboardingScreen
+import com.iams.app.ui.onboarding.SplashScreen
+import com.iams.app.ui.onboarding.WelcomeScreen
 import com.iams.app.ui.components.BottomNavTab
 import com.iams.app.ui.components.IAMSBottomBar
 import com.iams.app.ui.faculty.FacultyHomeScreen
@@ -46,16 +51,8 @@ fun IAMSNavHost() {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
 
-    // Determine start destination based on auth state
-    val startDestination = when {
-        navViewModel.tokenManager.accessToken != null -> {
-            when (navViewModel.tokenManager.userRole) {
-                "faculty" -> Routes.FACULTY_HOME
-                else -> Routes.STUDENT_HOME
-            }
-        }
-        else -> Routes.LOGIN
-    }
+    // Always start at splash — it checks auth state and routes accordingly
+    val startDestination = Routes.SPLASH
 
     val studentTabs = listOf(
         BottomNavTab("Home", Icons.Default.Home, Routes.STUDENT_HOME),
@@ -87,9 +84,31 @@ fun IAMSNavHost() {
             startDestination = startDestination,
             modifier = Modifier.padding(innerPadding)
         ) {
+            // Onboarding flow
+            composable(Routes.SPLASH) {
+                SplashScreen(navController = navController)
+            }
+
+            composable(Routes.ONBOARDING) {
+                OnboardingScreen(navController = navController)
+            }
+
+            // Welcome / role-selection screen
+            composable(Routes.WELCOME) {
+                WelcomeScreen(navController = navController)
+            }
+
             // Auth screens
-            composable(Routes.LOGIN) {
-                LoginScreen(navController = navController)
+            composable(Routes.STUDENT_LOGIN) {
+                StudentLoginScreen(navController = navController)
+            }
+
+            composable(Routes.FACULTY_LOGIN) {
+                FacultyLoginScreen(navController = navController)
+            }
+
+            composable(Routes.FORGOT_PASSWORD) {
+                ForgotPasswordScreen(navController = navController)
             }
 
             composable(Routes.REGISTER_STEP1) {

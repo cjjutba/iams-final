@@ -36,6 +36,8 @@ data class ChangePasswordRequest(
     @SerializedName("new_password") val newPassword: String
 )
 data class MessageResponse(val message: String)
+data class ForgotPasswordRequest(val email: String)
+data class ResendVerificationRequest(val email: String)
 
 // === User ===
 data class UserResponse(
