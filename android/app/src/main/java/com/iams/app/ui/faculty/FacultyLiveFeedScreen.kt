@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,23 +17,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -54,12 +45,19 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.iams.app.data.model.StudentAttendanceStatus
 import com.iams.app.ui.components.FaceOverlay
+import com.iams.app.ui.components.IAMSCard
+import com.iams.app.ui.components.IAMSHeader
 import com.iams.app.ui.components.RtspVideoPlayer
-import com.iams.app.ui.theme.Amber500
-import com.iams.app.ui.theme.Green500
-import com.iams.app.ui.theme.Red500
+import com.iams.app.ui.theme.AbsentFg
+import com.iams.app.ui.theme.Background
+import com.iams.app.ui.theme.Border
+import com.iams.app.ui.theme.EarlyLeaveFg
+import com.iams.app.ui.theme.LateFg
+import com.iams.app.ui.theme.Primary
+import com.iams.app.ui.theme.PresentFg
+import com.iams.app.ui.theme.TextSecondary
+import com.iams.app.ui.theme.TextTertiary
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FacultyLiveFeedScreen(
     navController: NavController,
@@ -76,46 +74,24 @@ fun FacultyLiveFeedScreen(
         viewModel.initialize(scheduleId, roomId)
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        // Top app bar with schedule info
-        TopAppBar(
-            title = {
-                Column {
-                    Text(
-                        text = uiState.schedule?.subjectName ?: "Live Feed",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    if (uiState.room != null) {
-                        Text(
-                            text = uiState.room!!.name,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            },
-            navigationIcon = {
-                IconButton(onClick = { navController.popBackStack() }) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back"
-                    )
-                }
-            },
-            actions = {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Background)
+    ) {
+        // Header with subject name and connection indicator
+        IAMSHeader(
+            title = uiState.schedule?.subjectName ?: "Live Feed",
+            onBack = { navController.popBackStack() },
+            trailing = {
                 // Connection status indicator
                 Box(
                     modifier = Modifier
-                        .padding(end = 16.dp)
                         .size(10.dp)
                         .clip(CircleShape)
-                        .background(if (wsConnected) Green500 else Red500)
+                        .background(if (wsConnected) PresentFg else AbsentFg)
                 )
-            },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = MaterialTheme.colorScheme.surface
-            )
+            }
         )
 
         if (uiState.isLoading) {
@@ -123,7 +99,7 @@ fun FacultyLiveFeedScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator()
+                CircularProgressIndicator(color = Primary)
             }
         } else if (uiState.error != null) {
             Box(
@@ -138,7 +114,7 @@ fun FacultyLiveFeedScreen(
                 )
             }
         } else {
-            // Video feed area (~60% of remaining space)
+            // Video feed area (~55% of remaining space)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -210,15 +186,15 @@ fun FacultyLiveFeedScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(0.45f)
-                    .background(MaterialTheme.colorScheme.surface)
+                    .background(Background)
             ) {
-                // Attendance header
+                // Attendance header card
                 AttendanceHeader(
                     presentCount = uiState.presentCount,
                     totalEnrolled = uiState.totalEnrolled
                 )
 
-                HorizontalDivider()
+                HorizontalDivider(color = Border, thickness = 1.dp)
 
                 // Attendance list
                 LazyColumn(
@@ -231,12 +207,12 @@ fun FacultyLiveFeedScreen(
                     if (uiState.presentStudents.isNotEmpty()) {
                         item {
                             Spacer(modifier = Modifier.height(8.dp))
-                            AttendanceSectionLabel("Present", Green500)
+                            AttendanceSectionLabel("Present", PresentFg)
                         }
                         items(uiState.presentStudents) { student ->
                             StudentAttendanceRow(
                                 student = student,
-                                icon = { StatusIcon(Icons.Default.Check, Green500) }
+                                icon = { StatusIcon(Icons.Default.Check, PresentFg) }
                             )
                         }
                     }
@@ -245,12 +221,12 @@ fun FacultyLiveFeedScreen(
                     if (uiState.lateStudents.isNotEmpty()) {
                         item {
                             Spacer(modifier = Modifier.height(8.dp))
-                            AttendanceSectionLabel("Late", Amber500)
+                            AttendanceSectionLabel("Late", LateFg)
                         }
                         items(uiState.lateStudents) { student ->
                             StudentAttendanceRow(
                                 student = student,
-                                icon = { StatusIcon(Icons.Default.Warning, Amber500) }
+                                icon = { StatusIcon(Icons.Default.Warning, LateFg) }
                             )
                         }
                     }
@@ -259,12 +235,12 @@ fun FacultyLiveFeedScreen(
                     if (uiState.earlyLeaveStudents.isNotEmpty()) {
                         item {
                             Spacer(modifier = Modifier.height(8.dp))
-                            AttendanceSectionLabel("Early Leave", Amber500)
+                            AttendanceSectionLabel("Early Leave", EarlyLeaveFg)
                         }
                         items(uiState.earlyLeaveStudents) { student ->
                             StudentAttendanceRow(
                                 student = student,
-                                icon = { StatusIcon(Icons.Default.Warning, Amber500) }
+                                icon = { StatusIcon(Icons.Default.Warning, EarlyLeaveFg) }
                             )
                         }
                     }
@@ -273,12 +249,12 @@ fun FacultyLiveFeedScreen(
                     if (uiState.absentStudents.isNotEmpty()) {
                         item {
                             Spacer(modifier = Modifier.height(8.dp))
-                            AttendanceSectionLabel("Absent", Red500)
+                            AttendanceSectionLabel("Absent", AbsentFg)
                         }
                         items(uiState.absentStudents) { student ->
                             StudentAttendanceRow(
                                 student = student,
-                                icon = { StatusIcon(Icons.Default.Close, Red500) }
+                                icon = { StatusIcon(Icons.Default.Close, AbsentFg) }
                             )
                         }
                     }
@@ -293,7 +269,7 @@ fun FacultyLiveFeedScreen(
                             Text(
                                 text = "No attendance data yet.\nWaiting for scan results...",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = TextSecondary,
                                 textAlign = TextAlign.Center,
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -313,34 +289,30 @@ fun FacultyLiveFeedScreen(
 
 @Composable
 private fun AttendanceHeader(presentCount: Int, totalEnrolled: Int) {
-    Card(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer
-        ),
-        shape = RoundedCornerShape(12.dp)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Attendance",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
-            )
-            Text(
-                text = "Present: $presentCount / $totalEnrolled",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
-            )
+        IAMSCard {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Attendance",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Primary
+                )
+                Text(
+                    text = "Present: $presentCount / $totalEnrolled",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = PresentFg
+                )
+            }
         }
     }
 }
@@ -386,14 +358,15 @@ private fun StudentAttendanceRow(
             Text(
                 text = student.studentName,
                 style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium
+                fontWeight = FontWeight.Medium,
+                color = Primary
             )
         }
         if (student.checkInTime != null) {
             Text(
                 text = student.checkInTime,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = TextTertiary,
                 fontSize = 11.sp
             )
         }

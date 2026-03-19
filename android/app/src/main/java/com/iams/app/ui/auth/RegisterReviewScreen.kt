@@ -2,6 +2,7 @@ package com.iams.app.ui.auth
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,15 +23,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Face
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -47,9 +41,17 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
+import com.iams.app.ui.components.IAMSButton
+import com.iams.app.ui.components.IAMSCard
+import com.iams.app.ui.components.IAMSHeader
 import com.iams.app.ui.navigation.Routes
-import com.iams.app.ui.theme.Green500
-import com.iams.app.ui.theme.Red500
+import com.iams.app.ui.theme.AbsentFg
+import com.iams.app.ui.theme.Background
+import com.iams.app.ui.theme.Border
+import com.iams.app.ui.theme.PresentFg
+import com.iams.app.ui.theme.Secondary
+import com.iams.app.ui.theme.TextSecondary
+import com.iams.app.ui.theme.TextTertiary
 
 @Composable
 fun RegisterReviewScreen(
@@ -71,51 +73,51 @@ fun RegisterReviewScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 24.dp)
-            .verticalScroll(rememberScrollState()),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .background(Background)
     ) {
-        Spacer(modifier = Modifier.height(48.dp))
-
-        // Header icon
-        Icon(
-            imageVector = if (hasFaces) Icons.Default.CheckCircle else Icons.Default.Person,
-            contentDescription = "Review",
-            modifier = Modifier.size(72.dp),
-            tint = Green500
+        // Header
+        IAMSHeader(
+            title = "Review",
+            onBack = { navController.popBackStack() }
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "Review Registration",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Student info summary
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
-            )
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp)
+                .padding(top = 24.dp, bottom = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-            ) {
+            // Title
+            Text(
+                text = "Review Registration",
+                style = MaterialTheme.typography.headlineLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "Please review your information before submitting.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = TextSecondary,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Student info card
+            IAMSCard {
                 Text(
                     text = "Student Information",
-                    style = MaterialTheme.typography.titleSmall,
+                    style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary
+                    color = MaterialTheme.colorScheme.onBackground
                 )
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
                 ReviewInfoRow(
                     label = "Name",
@@ -123,49 +125,38 @@ fun RegisterReviewScreen(
                         .ifEmpty { "Completed in Step 1" }
                 )
 
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 ReviewInfoRow(
                     label = "Student ID",
                     value = uiState.studentId.ifEmpty { "Completed in Step 1" }
                 )
 
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 ReviewInfoRow(
                     label = "Email",
                     value = uiState.registeredEmail.ifEmpty { "Completed in Step 2" }
                 )
             }
-        }
 
-        Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-        // Face registration section
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
-            )
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-            ) {
+            // Face registration card
+            IAMSCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Default.Face,
                         contentDescription = "Face",
                         modifier = Modifier.size(20.dp),
-                        tint = if (hasFaces) Green500 else Red500
+                        tint = if (hasFaces) PresentFg else AbsentFg
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = "Face Registration",
-                        style = MaterialTheme.typography.titleSmall,
+                        style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary
+                        color = MaterialTheme.colorScheme.onBackground
                     )
                 }
 
@@ -175,7 +166,7 @@ fun RegisterReviewScreen(
                     Text(
                         text = "${uiState.capturedFaces.size} face photo(s) captured",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = Green500
+                        color = PresentFg
                     )
 
                     Spacer(modifier = Modifier.height(12.dp))
@@ -198,86 +189,83 @@ fun RegisterReviewScreen(
                         }
                     }
                 } else {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Warning badge
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Secondary, RoundedCornerShape(10.dp))
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Icon(
                             Icons.Default.Warning,
                             contentDescription = "Warning",
                             modifier = Modifier.size(16.dp),
-                            tint = Red500
+                            tint = AbsentFg
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "Face registration was skipped. You can register your face later from your profile.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = TextSecondary
                         )
                     }
                 }
             }
-        }
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Error message
-        if (uiState.uploadError != null) {
-            Text(
-                text = uiState.uploadError!!,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
             Spacer(modifier = Modifier.height(8.dp))
-        }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Submit button
-        Button(
-            onClick = {
-                if (hasFaces) {
-                    viewModel.uploadFaceImages()
-                } else {
-                    // No faces captured — go directly to login
-                    navController.navigate(Routes.LOGIN) {
-                        popUpTo(Routes.LOGIN) { inclusive = true }
-                    }
-                }
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(50.dp),
-            enabled = !uiState.isUploading
-        ) {
-            if (uiState.isUploading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(24.dp),
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    strokeWidth = 2.dp
-                )
-            } else {
+            // Error message
+            if (uiState.uploadError != null) {
                 Text(
-                    text = if (hasFaces) "Submit Registration" else "Complete Registration",
-                    style = MaterialTheme.typography.titleMedium
+                    text = uiState.uploadError!!,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(modifier = Modifier.height(8.dp))
             }
-        }
 
-        Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Submit button
+            IAMSButton(
+                text = if (hasFaces) "Submit Registration" else "Complete Registration",
+                onClick = {
+                    if (hasFaces) {
+                        viewModel.uploadFaceImages()
+                    } else {
+                        // No faces captured -- go directly to login
+                        navController.navigate(Routes.LOGIN) {
+                            popUpTo(Routes.LOGIN) { inclusive = true }
+                        }
+                    }
+                },
+                enabled = !uiState.isUploading,
+                isLoading = uiState.isUploading
+            )
+        }
     }
 }
 
 @Composable
 private fun ReviewInfoRow(label: String, value: String) {
-    Column {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            style = MaterialTheme.typography.bodyMedium,
+            color = TextTertiary
         )
         Text(
             text = value,
-            style = MaterialTheme.typography.bodyLarge
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onBackground
         )
     }
 }
@@ -289,11 +277,11 @@ private fun FaceGridItem(bitmap: Bitmap, index: Int) {
         contentDescription = "Face photo ${index + 1}",
         modifier = Modifier
             .size(100.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(10.dp))
             .border(
                 1.dp,
-                MaterialTheme.colorScheme.outline,
-                RoundedCornerShape(8.dp)
+                Border,
+                RoundedCornerShape(10.dp)
             )
     )
 }

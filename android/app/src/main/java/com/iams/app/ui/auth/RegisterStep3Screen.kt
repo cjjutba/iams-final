@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,19 +23,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -55,8 +51,15 @@ import androidx.core.content.PermissionChecker
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.iams.app.ui.components.FaceCaptureView
+import com.iams.app.ui.components.IAMSButton
+import com.iams.app.ui.components.IAMSButtonVariant
+import com.iams.app.ui.components.IAMSHeader
 import com.iams.app.ui.navigation.Routes
-import com.iams.app.ui.theme.Green500
+import com.iams.app.ui.theme.Background
+import com.iams.app.ui.theme.Border
+import com.iams.app.ui.theme.PresentFg
+import com.iams.app.ui.theme.Primary
+import com.iams.app.ui.theme.TextSecondary
 
 private const val MIN_CAPTURES = 3
 private const val MAX_CAPTURES = 5
@@ -69,7 +72,6 @@ private val GUIDANCE_PROMPTS = listOf(
     "Tilt your head slightly down"
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RegisterStep3Screen(
     navController: NavController,
@@ -102,55 +104,67 @@ fun RegisterStep3Screen(
         "Capture another angle"
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Face Registration") },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back"
-                        )
-                    }
-                }
-            )
-        }
-    ) { innerPadding ->
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Background)
+    ) {
+        // Header
+        IAMSHeader(
+            title = "Register",
+            onBack = { navController.popBackStack() }
+        )
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .padding(horizontal = 20.dp)
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp)
+                .padding(top = 24.dp, bottom = 32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Text(
-                text = "Step 3 of 3",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "Face Registration",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "$capturedCount / $MAX_CAPTURES captured (min $MIN_CAPTURES)",
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (capturedCount >= MIN_CAPTURES) Green500
-                else MaterialTheme.colorScheme.onSurfaceVariant
+            // Progress bar
+            LinearProgressIndicator(
+                progress = { 1f },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(50)),
+                color = Primary,
+                trackColor = Border,
             )
 
             Spacer(modifier = Modifier.height(12.dp))
+
+            // Step indicator
+            Text(
+                text = "Step 3 of 3",
+                style = MaterialTheme.typography.bodySmall,
+                color = Primary,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Title
+            Text(
+                text = "Face Registration",
+                style = MaterialTheme.typography.headlineLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Capture count
+            Text(
+                text = "$capturedCount / $MAX_CAPTURES captured (min $MIN_CAPTURES)",
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (capturedCount >= MIN_CAPTURES) PresentFg else TextSecondary,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
 
             when {
                 // Camera permission granted and still capturing
@@ -178,14 +192,14 @@ fun RegisterStep3Screen(
                                 Icons.Default.CheckCircle,
                                 contentDescription = "Complete",
                                 modifier = Modifier.size(64.dp),
-                                tint = Green500
+                                tint = PresentFg
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
                                 text = "All $MAX_CAPTURES photos captured!",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
-                                color = Green500
+                                color = PresentFg
                             )
                         }
                     }
@@ -208,16 +222,17 @@ fun RegisterStep3Screen(
 
             // Captured faces preview
             if (capturedCount > 0) {
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(24.dp))
 
                 Text(
                     text = "Captured Photos",
-                    style = MaterialTheme.typography.titleSmall,
+                    style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
+                    color = TextSecondary,
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 4.dp),
@@ -236,41 +251,29 @@ fun RegisterStep3Screen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(32.dp))
 
             // Done button (visible when min captures reached)
             if (capturedCount >= MIN_CAPTURES) {
-                Button(
+                IAMSButton(
+                    text = "Continue to Review",
                     onClick = {
                         navController.navigate(Routes.REGISTER_REVIEW_INNER)
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp)
-                ) {
-                    Text(
-                        "Continue to Review",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
+                    }
+                )
 
                 Spacer(modifier = Modifier.height(12.dp))
             }
 
             // Skip button
-            OutlinedButton(
+            IAMSButton(
+                text = "Skip for Now",
                 onClick = {
                     viewModel.clearCapturedFaces()
                     navController.navigate(Routes.REGISTER_REVIEW_INNER)
                 },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp)
-            ) {
-                Text("Skip for Now", style = MaterialTheme.typography.titleMedium)
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
+                variant = IAMSButtonVariant.OUTLINE
+            )
         }
     }
 }
@@ -287,8 +290,8 @@ private fun CapturedFaceThumbnail(
             contentDescription = "Captured face ${index + 1}",
             modifier = Modifier
                 .fillMaxSize()
-                .clip(RoundedCornerShape(8.dp))
-                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(10.dp))
+                .border(1.dp, Border, RoundedCornerShape(10.dp))
         )
         IconButton(
             onClick = onRemove,
@@ -318,31 +321,32 @@ private fun PermissionRequestContent(onRequestPermission: () -> Unit) {
             imageVector = Icons.Default.CameraAlt,
             contentDescription = "Camera",
             modifier = Modifier.size(80.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
+            tint = TextSecondary
         )
 
         Spacer(modifier = Modifier.height(24.dp))
 
         Text(
             text = "Camera Permission Required",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.onBackground
         )
 
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
             text = "We need access to your camera to capture face photos for attendance recognition.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyLarge,
+            color = TextSecondary,
             textAlign = TextAlign.Center
         )
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        Button(onClick = onRequestPermission) {
-            Text("Grant Camera Permission")
-        }
+        IAMSButton(
+            text = "Grant Camera Permission",
+            onClick = onRequestPermission
+        )
     }
 }
 
@@ -365,8 +369,7 @@ private fun PermissionDeniedContent() {
 
         Text(
             text = "Camera Permission Denied",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
+            style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.error
         )
 
@@ -374,8 +377,8 @@ private fun PermissionDeniedContent() {
 
         Text(
             text = "Camera access was denied. You can skip face registration for now and register your face later from your profile settings.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyLarge,
+            color = TextSecondary,
             textAlign = TextAlign.Center
         )
     }

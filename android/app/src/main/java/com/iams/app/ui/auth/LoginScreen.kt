@@ -1,25 +1,19 @@
 package com.iams.app.ui.auth
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,16 +26,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
+import com.iams.app.ui.components.IAMSButton
+import com.iams.app.ui.components.IAMSTextField
 import com.iams.app.ui.navigation.Routes
+import com.iams.app.ui.theme.Background
+import com.iams.app.ui.theme.TextSecondary
 
 @Composable
 fun LoginScreen(
@@ -51,7 +46,6 @@ fun LoginScreen(
     val uiState by viewModel.uiState.collectAsState()
     var identifier by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var passwordVisible by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
 
     // Navigate on successful login
@@ -70,83 +64,65 @@ fun LoginScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+            .background(Background)
+            .imePadding()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .padding(top = 16.dp, bottom = 32.dp),
     ) {
-        // App title
+        Spacer(modifier = Modifier.weight(1f))
+
+        // Title
         Text(
-            text = "IAMS",
-            style = MaterialTheme.typography.displayLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary
+            text = "Welcome back",
+            style = MaterialTheme.typography.headlineLarge,
+            color = MaterialTheme.colorScheme.onBackground
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         // Subtitle
         Text(
-            text = "Intelligent Attendance\nMonitoring System",
+            text = "Sign in to your account to continue",
             style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
+            color = TextSecondary
         )
 
-        Spacer(modifier = Modifier.height(48.dp))
+        Spacer(modifier = Modifier.height(32.dp))
 
         // Identifier field
-        OutlinedTextField(
+        IAMSTextField(
             value = identifier,
             onValueChange = {
                 identifier = it
                 viewModel.clearError()
             },
-            label = { Text("Email or Student ID") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            label = "Email or Student ID",
+            placeholder = "Enter your email or student ID",
+            enabled = !uiState.isLoading,
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Email,
                 imeAction = ImeAction.Next
             ),
             keyboardActions = KeyboardActions(
                 onNext = { focusManager.moveFocus(FocusDirection.Down) }
-            ),
-            enabled = !uiState.isLoading
+            )
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
         // Password field
-        OutlinedTextField(
+        IAMSTextField(
             value = password,
             onValueChange = {
                 password = it
                 viewModel.clearError()
             },
-            label = { Text("Password") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            visualTransformation = if (passwordVisible) {
-                VisualTransformation.None
-            } else {
-                PasswordVisualTransformation()
-            },
-            trailingIcon = {
-                IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                    Icon(
-                        imageVector = if (passwordVisible) {
-                            Icons.Default.VisibilityOff
-                        } else {
-                            Icons.Default.Visibility
-                        },
-                        contentDescription = if (passwordVisible) {
-                            "Hide password"
-                        } else {
-                            "Show password"
-                        }
-                    )
-                }
-            },
+            label = "Password",
+            placeholder = "Enter your password",
+            isPassword = true,
+            enabled = !uiState.isLoading,
+            error = uiState.error,
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Password,
                 imeAction = ImeAction.Done
@@ -156,43 +132,18 @@ fun LoginScreen(
                     focusManager.clearFocus()
                     viewModel.login(identifier, password)
                 }
-            ),
-            enabled = !uiState.isLoading
+            )
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Error message
-        if (uiState.error != null) {
-            Text(
-                text = uiState.error!!,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.fillMaxWidth(),
-                textAlign = TextAlign.Start
-            )
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(32.dp))
 
         // Login button
-        Button(
+        IAMSButton(
+            text = "Sign In",
             onClick = { viewModel.login(identifier, password) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(50.dp),
-            enabled = !uiState.isLoading
-        ) {
-            if (uiState.isLoading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(24.dp),
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    strokeWidth = 2.dp
-                )
-            } else {
-                Text("Login", style = MaterialTheme.typography.titleMedium)
-            }
-        }
+            enabled = !uiState.isLoading,
+            isLoading = uiState.isLoading
+        )
 
         Spacer(modifier = Modifier.height(24.dp))
 
@@ -200,10 +151,15 @@ fun LoginScreen(
         Text(
             text = "Don't have an account? Register",
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.clickable(enabled = !uiState.isLoading) {
-                navController.navigate(Routes.REGISTER_STEP1)
-            }
+            color = TextSecondary,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(enabled = !uiState.isLoading) {
+                    navController.navigate(Routes.REGISTER_STEP1)
+                }
         )
+
+        Spacer(modifier = Modifier.weight(1f))
     }
 }

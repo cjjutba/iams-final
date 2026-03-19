@@ -1,5 +1,6 @@
 package com.iams.app.ui.faculty
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,39 +12,45 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Badge
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
+import com.iams.app.ui.components.IAMSButton
+import com.iams.app.ui.components.IAMSButtonVariant
+import com.iams.app.ui.components.IAMSCard
+import com.iams.app.ui.components.IAMSHeader
 import com.iams.app.ui.navigation.Routes
+import com.iams.app.ui.theme.AbsentFg
+import com.iams.app.ui.theme.Background
+import com.iams.app.ui.theme.Border
+import com.iams.app.ui.theme.Primary
+import com.iams.app.ui.theme.Secondary
+import com.iams.app.ui.theme.TextSecondary
+import com.iams.app.ui.theme.TextTertiary
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FacultyProfileScreen(
     navController: NavController,
@@ -60,30 +67,26 @@ fun FacultyProfileScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Profile") }
-            )
-        }
-    ) { innerPadding ->
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Background)
+    ) {
+        IAMSHeader(title = "Profile")
+
         when {
             uiState.isLoading && uiState.user == null -> {
                 Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding),
+                    modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    CircularProgressIndicator()
+                    CircularProgressIndicator(color = Primary)
                 }
             }
 
             uiState.error != null && uiState.user == null -> {
                 Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding),
+                    modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -94,9 +97,12 @@ fun FacultyProfileScreen(
                             textAlign = TextAlign.Center
                         )
                         Spacer(modifier = Modifier.height(16.dp))
-                        TextButton(onClick = { viewModel.loadProfile() }) {
-                            Text("Retry")
-                        }
+                        IAMSButton(
+                            text = "Retry",
+                            onClick = { viewModel.loadProfile() },
+                            variant = IAMSButtonVariant.OUTLINE,
+                            fullWidth = false
+                        )
                     }
                 }
             }
@@ -105,20 +111,27 @@ fun FacultyProfileScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(innerPadding)
-                        .padding(horizontal = 20.dp)
+                        .padding(horizontal = 16.dp)
                         .verticalScroll(rememberScrollState()),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(24.dp))
 
                     // User avatar placeholder
-                    Icon(
-                        Icons.Default.Person,
-                        contentDescription = "Profile",
-                        modifier = Modifier.size(80.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(80.dp)
+                            .clip(CircleShape)
+                            .background(Secondary),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.Person,
+                            contentDescription = "Profile",
+                            modifier = Modifier.size(40.dp),
+                            tint = TextTertiary
+                        )
+                    }
 
                     Spacer(modifier = Modifier.height(12.dp))
 
@@ -126,73 +139,60 @@ fun FacultyProfileScreen(
                     Text(
                         text = "${uiState.user?.firstName ?: ""} ${uiState.user?.lastName ?: ""}".trim(),
                         style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        color = Primary
                     )
 
+                    Spacer(modifier = Modifier.height(4.dp))
+
                     Text(
-                        text = uiState.user?.role?.replaceFirstChar { it.uppercase() } ?: "",
+                        text = uiState.user?.email ?: "",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = TextSecondary
                     )
 
                     Spacer(modifier = Modifier.height(24.dp))
 
                     // Info card
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surface
+                    IAMSCard {
+                        FacultyProfileInfoRow(
+                            icon = Icons.Default.Email,
+                            label = "Email",
+                            value = uiState.user?.email ?: "--"
                         )
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp)
-                        ) {
-                            FacultyProfileInfoRow(
-                                icon = Icons.Default.Email,
-                                label = "Email",
-                                value = uiState.user?.email ?: "--"
-                            )
 
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+                        HorizontalDivider(
+                            modifier = Modifier.padding(vertical = 12.dp),
+                            color = Border,
+                            thickness = 1.dp
+                        )
 
-                            FacultyProfileInfoRow(
-                                icon = Icons.Default.Badge,
-                                label = "Role",
-                                value = uiState.user?.role?.replaceFirstChar { it.uppercase() }
-                                    ?: "--"
-                            )
-                        }
+                        FacultyProfileInfoRow(
+                            icon = Icons.Default.Badge,
+                            label = "Role",
+                            value = uiState.user?.role?.replaceFirstChar { it.uppercase() }
+                                ?: "--"
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(32.dp))
 
                     // Logout button
-                    Button(
+                    IAMSButton(
+                        text = "Sign Out",
                         onClick = { viewModel.logout() },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(50.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.error
-                        ),
-                        enabled = !uiState.isLoading
-                    ) {
-                        if (uiState.isLoading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(24.dp),
-                                color = MaterialTheme.colorScheme.onError,
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Text(
-                                "Logout",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onError
+                        variant = IAMSButtonVariant.OUTLINE,
+                        enabled = !uiState.isLoading,
+                        isLoading = uiState.isLoading,
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Logout,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = AbsentFg
                             )
                         }
-                    }
+                    )
 
                     Spacer(modifier = Modifier.height(24.dp))
                 }
@@ -215,19 +215,26 @@ private fun FacultyProfileInfoRow(
             icon,
             contentDescription = label,
             modifier = Modifier.size(20.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
+            tint = TextSecondary
         )
         Spacer(modifier = Modifier.width(12.dp))
-        Column {
+        Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = label,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = TextTertiary
             )
             Text(
                 text = value,
-                style = MaterialTheme.typography.bodyLarge
+                style = MaterialTheme.typography.bodyLarge,
+                color = Primary
             )
         }
+        Icon(
+            Icons.Default.ChevronRight,
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
+            tint = TextTertiary
+        )
     }
 }

@@ -2,21 +2,52 @@ package com.iams.app.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val Black = Color(0xFF000000)
-val White = Color(0xFFFFFFFF)
-val Gray50 = Color(0xFFFAFAFA)
-val Gray100 = Color(0xFFF5F5F5)
-val Gray200 = Color(0xFFEEEEEE)
-val Gray300 = Color(0xFFE0E0E0)
-val Gray400 = Color(0xFFBDBDBD)
-val Gray500 = Color(0xFF9E9E9E)
-val Gray600 = Color(0xFF757575)
-val Gray700 = Color(0xFF616161)
-val Gray800 = Color(0xFF424242)
-val Gray900 = Color(0xFF212121)
-val Green500 = Color(0xFF4CAF50)
-val Green700 = Color(0xFF388E3C)
-val Red500 = Color(0xFFF44336)
-val Red700 = Color(0xFFD32F2F)
-val Amber500 = Color(0xFFFFC107)
-val Blue500 = Color(0xFF2196F3)
+// ── Primary Colors (Monochrome) ─────────────────────────────────────────
+val Primary = Color(0xFF171717)
+val PrimaryForeground = Color(0xFFFAFAFA)
+val Background = Color(0xFFFFFFFF)
+val Foreground = Color(0xFF171717)
+
+// ── Secondary & Neutral ─────────────────────────────────────────────────
+val Secondary = Color(0xFFF5F5F5)
+val SecondaryForeground = Color(0xFF171717)
+val Muted = Color(0xFFF5F5F5)
+val MutedForeground = Color(0xFF737373)
+val Accent = Color(0xFFF5F5F5)
+
+// ── Borders & Inputs ────────────────────────────────────────────────────
+val Border = Color(0xFFE5E5E5)
+val BorderDark = Color(0xFFD4D4D4)
+val InputBackground = Color(0xFFF7F7F5)
+val Ring = Color(0xFF171717)
+
+// ── Text Colors ─────────────────────────────────────────────────────────
+val TextPrimary = Color(0xFF171717)
+val TextSecondary = Color(0xFF737373)
+val TextTertiary = Color(0xFFA3A3A3)
+val TextDisabled = Color(0xFFD4D4D4)
+val TextInverse = Color(0xFFFAFAFA)
+
+// ── Status: Present ─────────────────────────────────────────────────────
+val PresentBg = Color(0xFFDCFCE7)
+val PresentFg = Color(0xFF166534)
+val PresentBorder = Color(0xFF86EFAC)
+
+// ── Status: Late ────────────────────────────────────────────────────────
+val LateBg = Color(0xFFFEF3C7)
+val LateFg = Color(0xFF92400E)
+val LateBorder = Color(0xFFFDE047)
+
+// ── Status: Absent ──────────────────────────────────────────────────────
+val AbsentBg = Color(0xFFFEE2E2)
+val AbsentFg = Color(0xFF991B1B)
+val AbsentBorder = Color(0xFFFCA5A5)
+
+// ── Status: Early Leave ─────────────────────────────────────────────────
+val EarlyLeaveBg = Color(0xFFFED7AA)
+val EarlyLeaveFg = Color(0xFF9A3412)
+val EarlyLeaveBorder = Color(0xFFFDBA74)
+
+// ── Status: Info ────────────────────────────────────────────────────────
+val InfoBg = Color(0xFFDBEAFE)
+val InfoFg = Color(0xFF1E40AF)

@@ -1,6 +1,6 @@
 package com.iams.app.ui.auth
 
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -8,13 +8,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MarkEmailRead
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -23,11 +24,19 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
+import com.iams.app.ui.components.IAMSButton
+import com.iams.app.ui.components.IAMSButtonVariant
+import com.iams.app.ui.components.IAMSHeader
 import com.iams.app.ui.navigation.Routes
+import com.iams.app.ui.theme.Background
+import com.iams.app.ui.theme.Primary
+import com.iams.app.ui.theme.Secondary
+import com.iams.app.ui.theme.TextSecondary
 
 @Composable
 fun EmailVerificationScreen(
@@ -59,116 +68,131 @@ fun EmailVerificationScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+            .background(Background)
     ) {
-        Icon(
-            imageVector = Icons.Default.MarkEmailRead,
-            contentDescription = "Email sent",
-            modifier = Modifier.size(80.dp),
-            tint = MaterialTheme.colorScheme.primary
+        // Header
+        IAMSHeader(
+            title = "Verify Email",
+            onBack = {
+                navController.navigate(Routes.LOGIN) {
+                    popUpTo(Routes.REGISTER_STEP1) { inclusive = true }
+                }
+            }
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp)
+                .padding(top = 48.dp, bottom = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Email icon
+            Icon(
+                imageVector = Icons.Default.MarkEmailRead,
+                contentDescription = "Email sent",
+                modifier = Modifier.size(80.dp),
+                tint = Primary
+            )
 
-        Text(
-            text = "Verify Your Email",
-            style = MaterialTheme.typography.headlineLarge
-        )
+            Spacer(modifier = Modifier.height(24.dp))
 
-        Spacer(modifier = Modifier.height(16.dp))
+            // Title
+            Text(
+                text = "Verify Your Email",
+                style = MaterialTheme.typography.headlineLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+                textAlign = TextAlign.Center
+            )
 
-        Text(
-            text = "We've sent a verification link to:",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text(
-            text = email,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.primary,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Text(
-            text = "Please check your inbox and click the verification link to continue.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-        if (uiState.isPolling) {
             Spacer(modifier = Modifier.height(16.dp))
 
-            CircularProgressIndicator(
-                modifier = Modifier.size(24.dp),
-                strokeWidth = 2.dp
+            // Subtitle
+            Text(
+                text = "We've sent a verification link to:",
+                style = MaterialTheme.typography.bodyLarge,
+                color = TextSecondary,
+                textAlign = TextAlign.Center
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            // Email address badge
             Text(
-                text = "Checking automatically...",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                text = email,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = Primary,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .background(Secondary, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
             )
-        }
 
-        Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
-        // Error message
-        if (uiState.error != null) {
+            // Instructions
             Text(
-                text = uiState.error!!,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
+                text = "Please check your inbox and click the verification link to continue.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = TextSecondary,
                 textAlign = TextAlign.Center
             )
-        }
 
-        Spacer(modifier = Modifier.height(32.dp))
+            // Polling indicator
+            if (uiState.isPolling) {
+                Spacer(modifier = Modifier.height(24.dp))
 
-        Button(
-            onClick = { viewModel.checkEmailVerified(email) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(50.dp),
-            enabled = !uiState.isLoading
-        ) {
-            if (uiState.isLoading) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(24.dp),
-                    color = MaterialTheme.colorScheme.onPrimary,
+                    color = Primary,
                     strokeWidth = 2.dp
                 )
-            } else {
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 Text(
-                    "I've Verified My Email",
-                    style = MaterialTheme.typography.titleMedium
+                    text = "Checking automatically...",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
                 )
             }
-        }
 
-        Spacer(modifier = Modifier.height(16.dp))
+            // Error message
+            if (uiState.error != null) {
+                Spacer(modifier = Modifier.height(12.dp))
 
-        OutlinedButton(
-            onClick = {
-                navController.navigate(Routes.LOGIN) {
-                    popUpTo(Routes.REGISTER_STEP1) { inclusive = true }
-                }
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(50.dp)
-        ) {
-            Text("Back to Login", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = uiState.error!!,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center
+                )
+            }
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // Verify button
+            IAMSButton(
+                text = "I've Verified My Email",
+                onClick = { viewModel.checkEmailVerified(email) },
+                enabled = !uiState.isLoading,
+                isLoading = uiState.isLoading
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Back to login
+            IAMSButton(
+                text = "Back to Login",
+                onClick = {
+                    navController.navigate(Routes.LOGIN) {
+                        popUpTo(Routes.REGISTER_STEP1) { inclusive = true }
+                    }
+                },
+                variant = IAMSButtonVariant.OUTLINE
+            )
         }
     }
 }

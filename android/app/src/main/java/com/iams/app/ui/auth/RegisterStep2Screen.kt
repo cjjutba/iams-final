@@ -1,29 +1,25 @@
 package com.iams.app.ui.auth
 
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -33,19 +29,25 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
+import com.iams.app.ui.components.IAMSButton
+import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.components.IAMSTextField
 import com.iams.app.ui.navigation.Routes
+import com.iams.app.ui.theme.Background
+import com.iams.app.ui.theme.Border
+import com.iams.app.ui.theme.Primary
+import com.iams.app.ui.theme.Secondary
+import com.iams.app.ui.theme.TextSecondary
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RegisterStep2Screen(
     navController: NavController,
@@ -58,12 +60,10 @@ fun RegisterStep2Screen(
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
-    var passwordVisible by remember { mutableStateOf(false) }
-    var confirmPasswordVisible by remember { mutableStateOf(false) }
     var localError by remember { mutableStateOf<String?>(null) }
     val focusManager = LocalFocusManager.current
 
-    // Store birthdate from step 1 — passed via the viewModel or route
+    // Store birthdate from step 1 -- passed via the viewModel or route
     // We need it for the register call; since we only pass studentId/firstName/lastName
     // in the route, we'll pass a placeholder birthdate that the backend already validated
     var birthdate by remember { mutableStateOf("") }
@@ -100,153 +100,145 @@ fun RegisterStep2Screen(
         )
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Create Account") },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back"
-                        )
-                    }
-                }
-            )
-        }
-    ) { innerPadding ->
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Background)
+    ) {
+        // Header
+        IAMSHeader(
+            title = "Register",
+            onBack = { navController.popBackStack() }
+        )
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .padding(horizontal = 32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp)
+                .padding(top = 24.dp, bottom = 32.dp)
         ) {
+            // Progress bar
+            LinearProgressIndicator(
+                progress = { 0.66f },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(50)),
+                color = Primary,
+                trackColor = Border,
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Step indicator
             Text(
                 text = "Step 2 of 3",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                style = MaterialTheme.typography.bodySmall,
+                color = Primary
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
+            // Title
             Text(
                 text = "Account Setup",
-                style = MaterialTheme.typography.headlineLarge
+                style = MaterialTheme.typography.headlineLarge,
+                color = MaterialTheme.colorScheme.onBackground
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            Text(
-                text = "Welcome, $firstName $lastName ($studentId)",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
+            // Info badge showing verified student
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Secondary, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Person,
+                    contentDescription = null,
+                    tint = TextSecondary
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                Text(
+                    text = "$firstName $lastName",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                Text(
+                    text = studentId,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+            }
 
             Spacer(modifier = Modifier.height(32.dp))
 
             // Email field
-            OutlinedTextField(
+            IAMSTextField(
                 value = email,
                 onValueChange = {
                     email = it
                     localError = null
                     viewModel.clearError()
                 },
-                label = { Text("Email") },
-                placeholder = { Text("your.email@example.com") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+                label = "Email",
+                placeholder = "your.email@example.com",
+                enabled = !uiState.isLoading,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Email,
                     imeAction = ImeAction.Next
                 ),
                 keyboardActions = KeyboardActions(
                     onNext = { focusManager.moveFocus(FocusDirection.Down) }
-                ),
-                enabled = !uiState.isLoading
+                )
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             // Password field
-            OutlinedTextField(
+            IAMSTextField(
                 value = password,
                 onValueChange = {
                     password = it
                     localError = null
                     viewModel.clearError()
                 },
-                label = { Text("Password") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                visualTransformation = if (passwordVisible) {
-                    VisualTransformation.None
-                } else {
-                    PasswordVisualTransformation()
-                },
-                trailingIcon = {
-                    IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                        Icon(
-                            imageVector = if (passwordVisible) {
-                                Icons.Default.VisibilityOff
-                            } else {
-                                Icons.Default.Visibility
-                            },
-                            contentDescription = if (passwordVisible) {
-                                "Hide password"
-                            } else {
-                                "Show password"
-                            }
-                        )
-                    }
-                },
+                label = "Password",
+                placeholder = "At least 6 characters",
+                isPassword = true,
+                enabled = !uiState.isLoading,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Password,
                     imeAction = ImeAction.Next
                 ),
                 keyboardActions = KeyboardActions(
                     onNext = { focusManager.moveFocus(FocusDirection.Down) }
-                ),
-                enabled = !uiState.isLoading
+                )
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             // Confirm password field
-            OutlinedTextField(
+            val displayError = localError ?: uiState.error
+            IAMSTextField(
                 value = confirmPassword,
                 onValueChange = {
                     confirmPassword = it
                     localError = null
                     viewModel.clearError()
                 },
-                label = { Text("Confirm Password") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                visualTransformation = if (confirmPasswordVisible) {
-                    VisualTransformation.None
-                } else {
-                    PasswordVisualTransformation()
-                },
-                trailingIcon = {
-                    IconButton(onClick = { confirmPasswordVisible = !confirmPasswordVisible }) {
-                        Icon(
-                            imageVector = if (confirmPasswordVisible) {
-                                Icons.Default.VisibilityOff
-                            } else {
-                                Icons.Default.Visibility
-                            },
-                            contentDescription = if (confirmPasswordVisible) {
-                                "Hide password"
-                            } else {
-                                "Show password"
-                            }
-                        )
-                    }
-                },
+                label = "Confirm Password",
+                placeholder = "Re-enter your password",
+                isPassword = true,
+                enabled = !uiState.isLoading,
+                error = displayError,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Password,
                     imeAction = ImeAction.Done
@@ -256,43 +248,18 @@ fun RegisterStep2Screen(
                         focusManager.clearFocus()
                         attemptRegister()
                     }
-                ),
-                enabled = !uiState.isLoading
+                )
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(32.dp))
 
-            // Error message
-            val displayError = localError ?: uiState.error
-            if (displayError != null) {
-                Text(
-                    text = displayError,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.Start
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            Button(
+            // Create Account button
+            IAMSButton(
+                text = "Create Account",
                 onClick = { attemptRegister() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp),
-                enabled = !uiState.isLoading
-            ) {
-                if (uiState.isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        strokeWidth = 2.dp
-                    )
-                } else {
-                    Text("Create Account", style = MaterialTheme.typography.titleMedium)
-                }
-            }
+                enabled = !uiState.isLoading,
+                isLoading = uiState.isLoading
+            )
         }
     }
 }
