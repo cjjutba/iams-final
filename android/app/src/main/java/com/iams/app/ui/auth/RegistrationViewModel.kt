@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiService
 import com.iams.app.data.model.CheckEmailRequest
 import com.iams.app.data.model.RegisterRequest
+import com.iams.app.data.model.ResendVerificationRequest
 import com.iams.app.data.model.VerifyStudentIdRequest
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
@@ -33,6 +34,7 @@ data class RegistrationUiState(
     // Email verification
     val emailVerified: Boolean = false,
     val isPolling: Boolean = false,
+    val resendSuccess: Boolean = false,
     // Step 3 face capture
     val capturedFaces: List<Bitmap> = emptyList(),
     // Review / upload
@@ -189,6 +191,40 @@ class RegistrationViewModel @Inject constructor(
         }
     }
 
+    fun resendVerificationEmail(email: String) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+
+            try {
+                val response = apiService.resendVerification(
+                    ResendVerificationRequest(email)
+                )
+
+                if (response.isSuccessful) {
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        error = null,
+                        resendSuccess = true
+                    )
+                } else {
+                    val message = when (response.code()) {
+                        429 -> "Please wait before requesting another email"
+                        else -> response.errorBody()?.string() ?: "Failed to resend verification email"
+                    }
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        error = message
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    error = "Network error. Please check your connection."
+                )
+            }
+        }
+    }
+
     fun startEmailPolling(email: String) {
         if (_uiState.value.isPolling) return
         _uiState.value = _uiState.value.copy(isPolling = true)
@@ -279,6 +315,10 @@ class RegistrationViewModel @Inject constructor(
                 )
             }
         }
+    }
+
+    fun clearResendSuccess() {
+        _uiState.value = _uiState.value.copy(resendSuccess = false)
     }
 
     fun clearError() {
