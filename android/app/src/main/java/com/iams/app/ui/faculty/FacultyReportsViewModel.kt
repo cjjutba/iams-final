@@ -23,6 +23,10 @@ data class FacultyReportsUiState(
     val isRefreshing: Boolean = false,
     val error: String? = null,
     val schedules: List<ScheduleWithSummary> = emptyList(),
+    val selectedScheduleIndex: Int = -1,
+    val reportType: String = "summary",
+    val generatedReport: ScheduleWithSummary? = null,
+    val isGenerating: Boolean = false,
 )
 
 @HiltViewModel
@@ -42,24 +46,16 @@ class FacultyReportsViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
 
             try {
-                val response = apiService.getSchedules()
+                val response = apiService.getMySchedules()
                 if (response.isSuccessful) {
                     val schedules = response.body() ?: emptyList()
                     val schedulesWithSummary = schedules.map { schedule ->
-                        ScheduleWithSummary(
-                            schedule = schedule,
-                            isLoadingSummary = true
-                        )
+                        ScheduleWithSummary(schedule = schedule)
                     }
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
                         schedules = schedulesWithSummary
                     )
-
-                    // Load attendance summary for each schedule
-                    schedulesWithSummary.forEachIndexed { index, item ->
-                        loadSummaryForSchedule(index, item.schedule.id)
-                    }
                 } else {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
@@ -75,34 +71,53 @@ class FacultyReportsViewModel @Inject constructor(
         }
     }
 
-    private fun loadSummaryForSchedule(index: Int, scheduleId: String) {
+    fun selectSchedule(index: Int) {
+        _uiState.value = _uiState.value.copy(
+            selectedScheduleIndex = index,
+            generatedReport = null
+        )
+    }
+
+    fun setReportType(type: String) {
+        _uiState.value = _uiState.value.copy(reportType = type)
+    }
+
+    fun generateReport() {
+        val state = _uiState.value
+        val index = state.selectedScheduleIndex
+        if (index < 0 || index >= state.schedules.size) return
+
+        val selected = state.schedules[index]
         viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isGenerating = true, generatedReport = null)
+
             try {
-                val response = apiService.getScheduleAttendanceSummary(scheduleId)
+                val response = apiService.getScheduleAttendanceSummary(selected.schedule.id)
                 if (response.isSuccessful) {
-                    val current = _uiState.value.schedules.toMutableList()
-                    if (index < current.size) {
-                        current[index] = current[index].copy(
+                    _uiState.value = _uiState.value.copy(
+                        isGenerating = false,
+                        generatedReport = selected.copy(
                             summary = response.body(),
                             isLoadingSummary = false
                         )
-                        _uiState.value = _uiState.value.copy(schedules = current)
-                    }
+                    )
                 } else {
-                    val current = _uiState.value.schedules.toMutableList()
-                    if (index < current.size) {
-                        current[index] = current[index].copy(isLoadingSummary = false)
-                        _uiState.value = _uiState.value.copy(schedules = current)
-                    }
+                    _uiState.value = _uiState.value.copy(
+                        isGenerating = false,
+                        error = "Failed to generate report"
+                    )
                 }
             } catch (_: Exception) {
-                val current = _uiState.value.schedules.toMutableList()
-                if (index < current.size) {
-                    current[index] = current[index].copy(isLoadingSummary = false)
-                    _uiState.value = _uiState.value.copy(schedules = current)
-                }
+                _uiState.value = _uiState.value.copy(
+                    isGenerating = false,
+                    error = "Network error generating report"
+                )
             }
         }
+    }
+
+    fun clearError() {
+        _uiState.value = _uiState.value.copy(error = null)
     }
 
     fun refresh() {

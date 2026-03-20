@@ -14,6 +14,7 @@ import javax.inject.Inject
 
 data class StudentProfileUiState(
     val isLoading: Boolean = false,
+    val isRefreshing: Boolean = false,
     val error: String? = null,
     val user: UserResponse? = null,
     val faceRegistered: Boolean = false,
@@ -62,15 +63,26 @@ class StudentProfileViewModel @Inject constructor(
         }
     }
 
+    fun refresh() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isRefreshing = true, error = null)
+            loadProfile()
+            _uiState.value = _uiState.value.copy(isRefreshing = false)
+        }
+    }
+
+    fun clearError() {
+        _uiState.value = _uiState.value.copy(error = null)
+    }
+
     fun logout() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true)
-            try {
-                apiService.logout()
-            } catch (_: Exception) {
-                // Proceed with local logout even if API call fails
-            }
+            // Set flag FIRST so TokenAuthenticator stops refreshing
+            tokenManager.isLoggingOut = true
             tokenManager.clearTokens()
+            // Fire-and-forget API logout (will fail since token is cleared, that's fine)
+            try { apiService.logout() } catch (_: Exception) {}
             _uiState.value = _uiState.value.copy(
                 isLoading = false,
                 loggedOut = true

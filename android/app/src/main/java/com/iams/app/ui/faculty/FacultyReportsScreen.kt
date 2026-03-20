@@ -1,5 +1,7 @@
 package com.iams.app.ui.faculty
 
+import com.iams.app.ui.components.LocalToastState
+import com.iams.app.ui.components.ToastType
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,26 +14,36 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccessTime
-import androidx.compose.material.icons.filled.CalendarToday
-import androidx.compose.material.icons.filled.MeetingRoom
+import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -39,16 +51,20 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.iams.app.data.model.AttendanceSummaryResponse
 import com.iams.app.ui.components.IAMSButton
+import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
+import com.iams.app.ui.components.IAMSHeader
 import com.iams.app.ui.theme.AbsentFg
 import com.iams.app.ui.theme.Background
 import com.iams.app.ui.theme.Border
 import com.iams.app.ui.theme.EarlyLeaveFg
+import com.iams.app.ui.theme.IAMSThemeTokens
 import com.iams.app.ui.theme.LateFg
 import com.iams.app.ui.theme.Primary
 import com.iams.app.ui.theme.PresentFg
 import com.iams.app.ui.theme.Secondary
+import com.iams.app.ui.theme.TextPrimary
 import com.iams.app.ui.theme.TextSecondary
 import com.iams.app.ui.theme.TextTertiary
 
@@ -59,243 +75,385 @@ fun FacultyReportsScreen(
     viewModel: FacultyReportsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val spacing = IAMSThemeTokens.spacing
+    val toastState = LocalToastState.current
 
-    PullToRefreshBox(
-        isRefreshing = uiState.isRefreshing,
-        onRefresh = { viewModel.refresh() },
+    LaunchedEffect(uiState.error) {
+        uiState.error?.let {
+            toastState.showToast(it, ToastType.ERROR)
+            viewModel.clearError()
+        }
+    }
+
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Background)
     ) {
-        when {
-            uiState.isLoading && uiState.schedules.isEmpty() -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(color = Primary)
-                }
-            }
-
-            uiState.error != null && uiState.schedules.isEmpty() -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = uiState.error!!,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.error,
-                            textAlign = TextAlign.Center
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        IAMSButton(
-                            text = "Retry",
-                            onClick = { viewModel.loadData() },
-                            variant = IAMSButtonVariant.OUTLINE,
-                            fullWidth = false
-                        )
-                    }
-                }
-            }
-
-            else -> {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    item {
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = "Attendance Reports",
-                            style = MaterialTheme.typography.headlineLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = Primary
-                        )
-                    }
-
-                    if (uiState.schedules.isEmpty()) {
-                        item {
-                            IAMSCard {
-                                Text(
-                                    text = "No classes assigned",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = TextSecondary,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(12.dp),
-                                    textAlign = TextAlign.Center
-                                )
-                            }
-                        }
-                    } else {
-                        items(uiState.schedules) { item ->
-                            ScheduleReportCard(item)
-                        }
-                    }
-
-                    // Bottom spacing for nav bar
-                    item {
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ScheduleReportCard(item: ScheduleWithSummary) {
-    val schedule = item.schedule
-    val summary = item.summary
-
-    IAMSCard {
-        // Subject name
-        Text(
-            text = schedule.subjectName,
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = Primary
+        IAMSHeader(
+            title = "Reports",
+            onBack = { navController.popBackStack() }
         )
 
-        if (schedule.subjectCode != null) {
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = schedule.subjectCode,
-                style = MaterialTheme.typography.bodySmall,
-                color = TextSecondary
-            )
-        }
+        PullToRefreshBox(
+            isRefreshing = uiState.isRefreshing,
+            onRefresh = { viewModel.refresh() },
+            modifier = Modifier.fillMaxSize()
+        ) {
+            when {
+                uiState.isLoading && uiState.schedules.isEmpty() -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(color = Primary)
+                    }
+                }
 
-        Spacer(modifier = Modifier.height(8.dp))
+                uiState.error != null && uiState.schedules.isEmpty() -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = uiState.error!!,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.error,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(spacing.lg))
+                            IAMSButton(
+                                text = "Retry",
+                                onClick = { viewModel.loadData() },
+                                variant = IAMSButtonVariant.OUTLINE,
+                                fullWidth = false
+                            )
+                        }
+                    }
+                }
 
-        // Schedule details
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                Icons.Default.CalendarToday,
-                contentDescription = "Day",
-                modifier = Modifier.size(14.dp),
-                tint = TextSecondary
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = schedule.dayOfWeek,
-                style = MaterialTheme.typography.bodySmall,
-                color = TextSecondary
-            )
-            Spacer(modifier = Modifier.width(16.dp))
-            Icon(
-                Icons.Default.AccessTime,
-                contentDescription = "Time",
-                modifier = Modifier.size(14.dp),
-                tint = TextSecondary
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = "${schedule.startTime} - ${schedule.endTime}",
-                style = MaterialTheme.typography.bodySmall,
-                color = TextSecondary
-            )
-        }
+                else -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = spacing.screenPadding)
+                            .padding(top = spacing.lg, bottom = spacing.xxxl),
+                        verticalArrangement = Arrangement.spacedBy(spacing.lg)
+                    ) {
+                        // -- Generate Report card --
+                        IAMSCard {
+                            Text(
+                                text = "Generate Report",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = TextPrimary
+                            )
 
-        if (schedule.roomName != null) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Default.MeetingRoom,
-                    contentDescription = "Room",
-                    modifier = Modifier.size(14.dp),
-                    tint = TextSecondary
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = schedule.roomName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary
-                )
+                            Spacer(modifier = Modifier.height(spacing.lg))
+
+                            // Class selector dropdown
+                            ClassSelectorDropdown(
+                                schedules = uiState.schedules,
+                                selectedIndex = uiState.selectedScheduleIndex,
+                                onSelect = { viewModel.selectSchedule(it) }
+                            )
+
+                            Spacer(modifier = Modifier.height(spacing.md))
+
+                            // Report type toggle
+                            ReportTypeSelector(
+                                selected = uiState.reportType,
+                                onSelect = { viewModel.setReportType(it) }
+                            )
+
+                            Spacer(modifier = Modifier.height(spacing.lg))
+
+                            // Generate button
+                            IAMSButton(
+                                text = "Generate Report",
+                                onClick = { viewModel.generateReport() },
+                                enabled = uiState.selectedScheduleIndex >= 0 && !uiState.isGenerating,
+                                isLoading = uiState.isGenerating,
+                                size = IAMSButtonSize.LG
+                            )
+                        }
+
+                        // -- Report Results card --
+                        val report = uiState.generatedReport
+                        if (report?.summary != null) {
+                            IAMSCard {
+                                // Header row with icon
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.BarChart,
+                                        contentDescription = "Report",
+                                        modifier = Modifier.size(24.dp),
+                                        tint = Primary
+                                    )
+                                    Spacer(modifier = Modifier.width(spacing.md))
+                                    Text(
+                                        text = "Report Results",
+                                        style = MaterialTheme.typography.titleLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = TextPrimary
+                                    )
+                                }
+
+                                // Selected class name
+                                val schedule = report.schedule
+                                val className = if (schedule.subjectCode != null) {
+                                    "${schedule.subjectCode} - ${schedule.subjectName}"
+                                } else {
+                                    schedule.subjectName
+                                }
+                                Spacer(modifier = Modifier.height(spacing.xs))
+                                Text(
+                                    text = className,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextSecondary
+                                )
+
+                                Spacer(modifier = Modifier.height(spacing.lg))
+
+                                // Stats row
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceEvenly
+                                ) {
+                                    ReportStatItem(
+                                        label = "Total",
+                                        value = "${report.summary.totalClasses}",
+                                        color = TextPrimary
+                                    )
+                                    ReportStatItem(
+                                        label = "Present",
+                                        value = "${report.summary.presentCount}",
+                                        color = PresentFg
+                                    )
+                                    ReportStatItem(
+                                        label = "Late",
+                                        value = "${report.summary.lateCount}",
+                                        color = LateFg
+                                    )
+                                    ReportStatItem(
+                                        label = "Absent",
+                                        value = "${report.summary.absentCount}",
+                                        color = AbsentFg
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(spacing.lg))
+                                HorizontalDivider(color = Border, thickness = 1.dp)
+                                Spacer(modifier = Modifier.height(spacing.lg))
+
+                                // Attendance rate
+                                val ratePercent = (report.summary.attendanceRate * 100).toInt()
+                                val rateColor = when {
+                                    ratePercent >= 80 -> PresentFg
+                                    ratePercent >= 60 -> LateFg
+                                    else -> AbsentFg
+                                }
+
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = "Overall Attendance Rate",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextTertiary
+                                    )
+                                    Spacer(modifier = Modifier.height(spacing.xs))
+                                    Text(
+                                        text = "$ratePercent%",
+                                        style = MaterialTheme.typography.headlineLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = rateColor
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(spacing.md))
+
+                                // Attendance bar
+                                AttendanceBar(report.summary)
+                            }
+                        }
+
+                        // -- Export Options card --
+                        IAMSCard {
+                            Text(
+                                text = "Export Options",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = TextPrimary
+                            )
+
+                            Spacer(modifier = Modifier.height(spacing.lg))
+
+                            IAMSButton(
+                                text = "Export CSV",
+                                onClick = {
+                                    toastState.showToast("Coming soon", ToastType.INFO)
+                                },
+                                variant = IAMSButtonVariant.OUTLINE,
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Download,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp),
+                                        tint = Primary
+                                    )
+                                }
+                            )
+
+                            Spacer(modifier = Modifier.height(spacing.md))
+
+                            IAMSButton(
+                                text = "Export PDF",
+                                onClick = {
+                                    toastState.showToast("Coming soon", ToastType.INFO)
+                                },
+                                variant = IAMSButtonVariant.OUTLINE,
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Download,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp),
+                                        tint = Primary
+                                    )
+                                }
+                            )
+                        }
+                    }
+                }
             }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-        HorizontalDivider(color = Border, thickness = 1.dp)
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Attendance summary
-        if (item.isLoadingSummary) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp),
-                    strokeWidth = 2.dp,
-                    color = Primary
-                )
-            }
-        } else if (summary != null) {
-            AttendanceSummaryContent(summary)
-        } else {
-            Text(
-                text = "No attendance data available",
-                style = MaterialTheme.typography.bodySmall,
-                color = TextTertiary,
-                modifier = Modifier.fillMaxWidth(),
-                textAlign = TextAlign.Center
-            )
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AttendanceSummaryContent(summary: AttendanceSummaryResponse) {
-    val ratePercent = (summary.attendanceRate * 100).toInt()
-    val rateColor = when {
-        ratePercent >= 80 -> PresentFg
-        ratePercent >= 60 -> LateFg
-        else -> AbsentFg
+private fun ClassSelectorDropdown(
+    schedules: List<ScheduleWithSummary>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    val selectedText = if (selectedIndex >= 0 && selectedIndex < schedules.size) {
+        val s = schedules[selectedIndex].schedule
+        if (s.subjectCode != null) "${s.subjectCode} - ${s.subjectName}" else s.subjectName
+    } else {
+        ""
     }
 
     Column {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        Text(
+            text = "Select Class",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = TextPrimary
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = it }
         ) {
-            Text(
-                text = "Attendance Rate",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                color = Primary
+            OutlinedTextField(
+                value = selectedText,
+                onValueChange = {},
+                readOnly = true,
+                placeholder = {
+                    Text(
+                        text = if (schedules.isEmpty()) "No classes available" else "Choose a class",
+                        color = TextTertiary
+                    )
+                },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                modifier = Modifier
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                    .fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Primary,
+                    unfocusedBorderColor = Border,
+                    focusedTextColor = TextPrimary,
+                    unfocusedTextColor = TextPrimary,
+                ),
+                shape = IAMSThemeTokens.radius.mdShape,
+                singleLine = true,
             )
-            Text(
-                text = "$ratePercent%",
-                style = MaterialTheme.typography.headlineLarge,
-                fontWeight = FontWeight.Bold,
-                color = rateColor
-            )
+
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                schedules.forEachIndexed { index, item ->
+                    val label = if (item.schedule.subjectCode != null) {
+                        "${item.schedule.subjectCode} - ${item.schedule.subjectName}"
+                    } else {
+                        item.schedule.subjectName
+                    }
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextPrimary
+                            )
+                        },
+                        onClick = {
+                            onSelect(index)
+                            expanded = false
+                        },
+                        contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding,
+                    )
+                }
+            }
         }
+    }
+}
 
-        Spacer(modifier = Modifier.height(8.dp))
+@Composable
+private fun ReportTypeSelector(
+    selected: String,
+    onSelect: (String) -> Unit
+) {
+    val spacing = IAMSThemeTokens.spacing
 
-        // Attendance bar with colored segments
-        AttendanceBar(summary)
+    Column {
+        Text(
+            text = "Report Type",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = TextPrimary
+        )
+        Spacer(modifier = Modifier.height(6.dp))
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Stats row
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm)
         ) {
-            StatItem(label = "Total", value = "${summary.totalClasses}", color = Primary)
-            StatItem(label = "Present", value = "${summary.presentCount}", color = PresentFg)
-            StatItem(label = "Late", value = "${summary.lateCount}", color = LateFg)
-            StatItem(label = "Absent", value = "${summary.absentCount}", color = AbsentFg)
+            IAMSButton(
+                text = "Summary",
+                onClick = { onSelect("summary") },
+                variant = if (selected == "summary") IAMSButtonVariant.PRIMARY else IAMSButtonVariant.OUTLINE,
+                modifier = Modifier.weight(1f),
+                fullWidth = false,
+                size = IAMSButtonSize.MD
+            )
+            IAMSButton(
+                text = "Detailed",
+                onClick = { onSelect("detailed") },
+                variant = if (selected == "detailed") IAMSButtonVariant.PRIMARY else IAMSButtonVariant.OUTLINE,
+                modifier = Modifier.weight(1f),
+                fullWidth = false,
+                size = IAMSButtonSize.MD
+            )
         }
     }
 }
@@ -306,7 +464,6 @@ private fun AttendanceBar(summary: AttendanceSummaryResponse) {
     val presentFraction = summary.presentCount / total
     val lateFraction = summary.lateCount / total
     val absentFraction = summary.absentCount / total
-    // Early leave gets the remainder
     val earlyLeaveFraction = (1f - presentFraction - lateFraction - absentFraction).coerceAtLeast(0f)
 
     Row(
@@ -352,10 +509,10 @@ private fun AttendanceBar(summary: AttendanceSummaryResponse) {
 }
 
 @Composable
-private fun StatItem(
+private fun ReportStatItem(
     label: String,
     value: String,
-    color: androidx.compose.ui.graphics.Color
+    color: Color
 ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
@@ -370,4 +527,15 @@ private fun StatItem(
             color = TextSecondary
         )
     }
+}
+
+private fun dayOfWeekName(day: Int): String = when (day) {
+    0 -> "Monday"
+    1 -> "Tuesday"
+    2 -> "Wednesday"
+    3 -> "Thursday"
+    4 -> "Friday"
+    5 -> "Saturday"
+    6 -> "Sunday"
+    else -> ""
 }
