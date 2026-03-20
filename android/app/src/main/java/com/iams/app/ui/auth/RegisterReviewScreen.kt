@@ -68,13 +68,6 @@ fun RegisterReviewScreen(
     val hasFaces = uiState.capturedFaces.isNotEmpty()
     var isAgreed by remember { mutableStateOf(false) }
 
-    // Toast on upload success
-    LaunchedEffect(uiState.uploadSuccess) {
-        if (uiState.uploadSuccess) {
-            toastState.showToast("Face registration complete!", ToastType.SUCCESS)
-        }
-    }
-
     // Toast on upload error
     LaunchedEffect(uiState.uploadError) {
         uiState.uploadError?.let {
@@ -83,9 +76,10 @@ fun RegisterReviewScreen(
         }
     }
 
-    // Navigate to login on successful upload or if skipping faces
+    // Toast + navigate on successful upload
     LaunchedEffect(uiState.uploadSuccess) {
         if (uiState.uploadSuccess) {
+            toastState.showToast("Face registration complete!", ToastType.SUCCESS)
             navController.navigate(Routes.LOGIN) {
                 popUpTo(Routes.LOGIN) { inclusive = true }
             }

@@ -64,13 +64,6 @@ fun RegisterStep2Screen(
     // in the route, we'll pass a placeholder birthdate that the backend already validated
     var birthdate by remember { mutableStateOf("") }
 
-    // Toast on successful registration
-    LaunchedEffect(uiState.registrationComplete) {
-        if (uiState.registrationComplete) {
-            toastState.showToast("Account created! Check your email.", ToastType.SUCCESS)
-        }
-    }
-
     // Toast on ViewModel error
     LaunchedEffect(uiState.error) {
         uiState.error?.let {
@@ -79,9 +72,10 @@ fun RegisterStep2Screen(
         }
     }
 
-    // Navigate on successful registration
+    // Toast + navigate on successful registration
     LaunchedEffect(uiState.registrationComplete) {
         if (uiState.registrationComplete) {
+            toastState.showToast("Account created! Check your email.", ToastType.SUCCESS)
             navController.navigate(Routes.emailVerification(uiState.registeredEmail))
             viewModel.resetRegistration()
         }

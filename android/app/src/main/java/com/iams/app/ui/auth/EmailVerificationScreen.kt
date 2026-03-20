@@ -51,13 +51,6 @@ fun EmailVerificationScreen(
     val uiState by viewModel.uiState.collectAsState()
     val toastState = LocalToastState.current
 
-    // Toast on email verified
-    LaunchedEffect(uiState.emailVerified) {
-        if (uiState.emailVerified) {
-            toastState.showToast("Email verified!", ToastType.SUCCESS)
-        }
-    }
-
     // Toast on resend success
     LaunchedEffect(uiState.resendSuccess) {
         if (uiState.resendSuccess) {
@@ -84,9 +77,10 @@ fun EmailVerificationScreen(
         onDispose { viewModel.stopEmailPolling() }
     }
 
-    // Navigate on verified
+    // Toast + navigate on verified
     LaunchedEffect(uiState.emailVerified) {
         if (uiState.emailVerified) {
+            toastState.showToast("Email verified!", ToastType.SUCCESS)
             navController.navigate(Routes.REGISTER_STEP3) {
                 popUpTo(Routes.REGISTER_STEP1) { inclusive = true }
             }

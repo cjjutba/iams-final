@@ -46,13 +46,6 @@ fun RegisterStep1Screen(
     val focusManager = LocalFocusManager.current
     val toastState = LocalToastState.current
 
-    // Toast on successful verification
-    LaunchedEffect(uiState.studentVerified) {
-        if (uiState.studentVerified) {
-            toastState.showToast("Student ID verified", ToastType.SUCCESS)
-        }
-    }
-
     // Toast on error
     LaunchedEffect(uiState.error) {
         uiState.error?.let {
@@ -61,9 +54,10 @@ fun RegisterStep1Screen(
         }
     }
 
-    // Navigate on successful verification
+    // Toast + navigate on successful verification
     LaunchedEffect(uiState.studentVerified) {
         if (uiState.studentVerified) {
+            toastState.showToast("Student ID verified", ToastType.SUCCESS)
             navController.navigate(
                 Routes.registerStep2(
                     studentId = uiState.studentId,
