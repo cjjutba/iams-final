@@ -1,22 +1,10 @@
 package com.iams.app.ui.auth
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,19 +17,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
+import com.iams.app.ui.components.AuthLayout
 import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSTextField
+import com.iams.app.ui.components.LocalToastState
+import com.iams.app.ui.components.ToastType
 import com.iams.app.ui.navigation.Routes
-import com.iams.app.ui.theme.Background
-import com.iams.app.ui.theme.Primary
 import com.iams.app.ui.theme.TextSecondary
 
 @Composable
@@ -54,6 +42,22 @@ fun FacultyLoginScreen(
     var password by remember { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
 
+    val toastState = LocalToastState.current
+
+    LaunchedEffect(uiState.successMessage) {
+        uiState.successMessage?.let {
+            toastState.showToast(it, ToastType.SUCCESS)
+            viewModel.clearSuccessMessage()
+        }
+    }
+
+    LaunchedEffect(uiState.error) {
+        uiState.error?.let {
+            toastState.showToast(it, ToastType.ERROR)
+            viewModel.clearError()
+        }
+    }
+
     // Navigate on successful login
     LaunchedEffect(uiState.loginSuccess) {
         if (uiState.loginSuccess) {
@@ -63,49 +67,13 @@ fun FacultyLoginScreen(
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Background)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp)
+    AuthLayout(
+        showBack = true,
+        title = "Welcome, Faculty!",
+        subtitle = "Sign in to continue",
+        onBack = { navController.popBackStack() }
     ) {
-        // Back button
-        Spacer(modifier = Modifier.height(16.dp))
-
-        IconButton(
-            onClick = { navController.navigate(Routes.WELCOME) {
-                popUpTo(Routes.WELCOME) { inclusive = true }
-            }},
-            modifier = Modifier.padding(start = 0.dp)
-        ) {
-            Icon(
-                Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Back",
-                modifier = Modifier.size(24.dp),
-                tint = Primary
-            )
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Title
-        Text(
-            text = "Welcome, Faculty!",
-            style = MaterialTheme.typography.headlineLarge,
-            fontWeight = FontWeight.Bold,
-            color = Primary
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Subtitle
-        Text(
-            text = "Sign in to continue",
-            style = MaterialTheme.typography.bodyLarge,
-            color = TextSecondary
-        )
-
+        // Form section top margin
         Spacer(modifier = Modifier.height(32.dp))
 
         // Email field
@@ -140,7 +108,7 @@ fun FacultyLoginScreen(
             placeholder = "Enter your password",
             isPassword = true,
             enabled = !uiState.isLoading,
-            error = uiState.error,
+            error = null,
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Password,
                 imeAction = ImeAction.Done
@@ -155,22 +123,6 @@ fun FacultyLoginScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Forgot Password link
-        Text(
-            text = "Forgot password?",
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = Primary,
-            textAlign = TextAlign.End,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(enabled = !uiState.isLoading) {
-                    navController.navigate(Routes.FORGOT_PASSWORD)
-                }
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
         // Login button
         IAMSButton(
             text = "Sign In",
@@ -180,9 +132,9 @@ fun FacultyLoginScreen(
             isLoading = uiState.isLoading
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(32.dp))
 
-        // Faculty notice (no register link)
+        // Faculty notice
         Text(
             text = "Faculty accounts are created by administrator",
             style = MaterialTheme.typography.bodySmall,
@@ -190,7 +142,5 @@ fun FacultyLoginScreen(
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth()
         )
-
-        Spacer(modifier = Modifier.height(32.dp))
     }
 }

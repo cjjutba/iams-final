@@ -16,7 +16,8 @@ data class LoginUiState(
     val isLoading: Boolean = false,
     val error: String? = null,
     val loginSuccess: Boolean = false,
-    val userRole: String? = null
+    val userRole: String? = null,
+    val successMessage: String? = null
 )
 
 @HiltViewModel
@@ -51,7 +52,8 @@ class LoginViewModel @Inject constructor(
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
                         loginSuccess = true,
-                        userRole = body.user.role
+                        userRole = body.user.role,
+                        successMessage = "Welcome back!"
                     )
                 } else {
                     val errorBody = response.errorBody()?.string()
@@ -77,5 +79,9 @@ class LoginViewModel @Inject constructor(
 
     fun clearError() {
         _uiState.value = _uiState.value.copy(error = null)
+    }
+
+    fun clearSuccessMessage() {
+        _uiState.value = _uiState.value.copy(successMessage = null)
     }
 }
