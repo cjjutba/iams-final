@@ -1,16 +1,16 @@
 package com.iams.app.ui.auth
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MarkEmailRead
 import androidx.compose.material3.CircularProgressIndicator
@@ -29,14 +29,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
+import com.iams.app.ui.components.AuthLayout
 import com.iams.app.ui.components.IAMSButton
+import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
-import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.components.LocalToastState
+import com.iams.app.ui.components.ToastType
 import com.iams.app.ui.navigation.Routes
-import com.iams.app.ui.theme.Background
+import com.iams.app.ui.theme.Border
 import com.iams.app.ui.theme.Primary
 import com.iams.app.ui.theme.Secondary
 import com.iams.app.ui.theme.TextSecondary
+import com.iams.app.ui.theme.TextTertiary
 
 @Composable
 fun EmailVerificationScreen(
@@ -45,6 +49,30 @@ fun EmailVerificationScreen(
     viewModel: RegistrationViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val toastState = LocalToastState.current
+
+    // Toast on email verified
+    LaunchedEffect(uiState.emailVerified) {
+        if (uiState.emailVerified) {
+            toastState.showToast("Email verified!", ToastType.SUCCESS)
+        }
+    }
+
+    // Toast on resend success
+    LaunchedEffect(uiState.resendSuccess) {
+        if (uiState.resendSuccess) {
+            toastState.showToast("Verification email sent!", ToastType.SUCCESS)
+            viewModel.clearResendSuccess()
+        }
+    }
+
+    // Toast on error
+    LaunchedEffect(uiState.error) {
+        uiState.error?.let {
+            toastState.showToast(it, ToastType.ERROR)
+            viewModel.clearError()
+        }
+    }
 
     // Start auto-polling for email verification
     LaunchedEffect(email) {
@@ -65,52 +93,42 @@ fun EmailVerificationScreen(
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Background)
-    ) {
-        // Header
-        IAMSHeader(
-            title = "Verify Email",
-            onBack = {
-                navController.navigate(Routes.LOGIN) {
-                    popUpTo(Routes.REGISTER_STEP1) { inclusive = true }
-                }
+    AuthLayout(
+        showBack = true,
+        title = "Verify Your Email",
+        subtitle = "We sent a verification link to your email",
+        onBack = {
+            navController.navigate(Routes.LOGIN) {
+                popUpTo(Routes.REGISTER_STEP1) { inclusive = true }
             }
-        )
+        }
+    ) {
+        Spacer(modifier = Modifier.height(24.dp))
 
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp)
-                .padding(top = 48.dp, bottom = 32.dp),
+            modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Email icon
-            Icon(
-                imageVector = Icons.Default.MarkEmailRead,
-                contentDescription = "Email sent",
-                modifier = Modifier.size(80.dp),
-                tint = Primary
-            )
+            // Mail icon in circle
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .border(2.dp, Border, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.MarkEmailRead,
+                    contentDescription = "Email sent",
+                    modifier = Modifier.size(40.dp),
+                    tint = Primary
+                )
+            }
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // Title
+            // Description text
             Text(
-                text = "Verify Your Email",
-                style = MaterialTheme.typography.headlineLarge,
-                color = MaterialTheme.colorScheme.onBackground,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Subtitle
-            Text(
-                text = "We've sent a verification link to:",
+                text = "We sent a verification email to:",
                 style = MaterialTheme.typography.bodyLarge,
                 color = TextSecondary,
                 textAlign = TextAlign.Center
@@ -130,13 +148,23 @@ fun EmailVerificationScreen(
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             // Instructions
             Text(
-                text = "Please check your inbox and click the verification link to continue.",
+                text = "Click the link in the email to verify your account. Once verified, you can sign in to IAMS.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = TextSecondary,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Hint
+            Text(
+                text = "If you do not see the email, check your spam or junk folder.",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextTertiary,
                 textAlign = TextAlign.Center
             )
 
@@ -159,31 +187,30 @@ fun EmailVerificationScreen(
                 )
             }
 
-            // Error message
-            if (uiState.error != null) {
-                Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
-                Text(
-                    text = uiState.error!!,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                    textAlign = TextAlign.Center
-                )
-            }
-
-            Spacer(modifier = Modifier.height(32.dp))
-
-            // Verify button
+            // Check Verification Status button (primary)
             IAMSButton(
-                text = "I've Verified My Email",
+                text = "Check Verification Status",
                 onClick = { viewModel.checkEmailVerified(email) },
                 enabled = !uiState.isLoading,
-                isLoading = uiState.isLoading
+                isLoading = uiState.isLoading,
+                size = IAMSButtonSize.LG
             )
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Back to login
+            // Resend Verification Email button (outline)
+            IAMSButton(
+                text = "Resend Verification Email",
+                onClick = { viewModel.resendVerificationEmail(email) },
+                variant = IAMSButtonVariant.OUTLINE,
+                size = IAMSButtonSize.LG
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Back to Login button (ghost)
             IAMSButton(
                 text = "Back to Login",
                 onClick = {
@@ -191,7 +218,8 @@ fun EmailVerificationScreen(
                         popUpTo(Routes.REGISTER_STEP1) { inclusive = true }
                     }
                 },
-                variant = IAMSButtonVariant.OUTLINE
+                variant = IAMSButtonVariant.GHOST,
+                size = IAMSButtonSize.MD
             )
         }
     }
