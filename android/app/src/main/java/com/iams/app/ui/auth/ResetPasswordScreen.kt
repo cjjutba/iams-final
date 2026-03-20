@@ -36,27 +36,25 @@ import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSTextField
 import com.iams.app.ui.components.LocalToastState
 import com.iams.app.ui.components.ToastType
+import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.PresentFg
 import com.iams.app.ui.theme.Primary
 import com.iams.app.ui.theme.TextSecondary
-import com.iams.app.ui.theme.TextTertiary
 
 @Composable
-fun ForgotPasswordScreen(
+fun ResetPasswordScreen(
     navController: NavController,
-    viewModel: ForgotPasswordViewModel = hiltViewModel()
+    viewModel: ResetPasswordViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val toastState = LocalToastState.current
 
-    // Toast on success
     LaunchedEffect(uiState.success) {
         if (uiState.success) {
-            toastState.showToast("Reset link sent to your email", ToastType.SUCCESS)
+            toastState.showToast("Password reset successfully", ToastType.SUCCESS)
         }
     }
 
-    // Toast on error
     LaunchedEffect(uiState.error) {
         uiState.error?.let {
             toastState.showToast(it, ToastType.ERROR)
@@ -66,17 +64,25 @@ fun ForgotPasswordScreen(
 
     AuthLayout(
         showBack = true,
-        title = if (uiState.success) null else "Reset Password",
-        subtitle = if (uiState.success) null else "Enter your email to receive reset instructions",
+        title = if (uiState.success) "Password Updated" else "Set New Password",
+        subtitle = if (uiState.success) "Your password has been changed successfully" else "Choose a strong password for your account",
         onBack = { navController.popBackStack() }
     ) {
         if (uiState.success) {
-            SuccessContent()
+            SuccessContent(
+                onGoToLogin = {
+                    navController.navigate(Routes.WELCOME) {
+                        popUpTo(Routes.WELCOME) { inclusive = true }
+                    }
+                }
+            )
         } else {
             FormContent(
                 uiState = uiState,
                 viewModel = viewModel,
-                onSubmit = { email -> viewModel.forgotPassword(email) }
+                onSubmit = { password, confirmPassword ->
+                    viewModel.resetPassword(password, confirmPassword)
+                }
             )
         }
     }
@@ -84,48 +90,68 @@ fun ForgotPasswordScreen(
 
 @Composable
 private fun FormContent(
-    uiState: ForgotPasswordUiState,
-    viewModel: ForgotPasswordViewModel,
-    onSubmit: (String) -> Unit
+    uiState: ResetPasswordUiState,
+    viewModel: ResetPasswordViewModel,
+    onSubmit: (String, String) -> Unit
 ) {
-    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
 
     Spacer(modifier = Modifier.height(32.dp))
 
-    // Email field
+    // New Password field
     IAMSTextField(
-        value = email,
+        value = password,
         onValueChange = {
-            email = it
+            password = it
             viewModel.clearError()
         },
-        label = "Email",
-        placeholder = "your.email@example.com",
+        label = "New Password",
+        placeholder = "Enter new password",
+        isPassword = true,
         enabled = !uiState.isLoading,
         error = null,
         keyboardOptions = KeyboardOptions(
-            keyboardType = KeyboardType.Email,
-            imeAction = ImeAction.Done
-        ),
-        keyboardActions = KeyboardActions(
-            onDone = {
-                focusManager.clearFocus()
-                onSubmit(email.trim())
-            }
+            keyboardType = KeyboardType.Password,
+            imeAction = ImeAction.Next
         )
     )
 
     Spacer(modifier = Modifier.height(20.dp))
 
+    // Confirm Password field
+    IAMSTextField(
+        value = confirmPassword,
+        onValueChange = {
+            confirmPassword = it
+            viewModel.clearError()
+        },
+        label = "Confirm Password",
+        placeholder = "Confirm new password",
+        isPassword = true,
+        enabled = !uiState.isLoading,
+        error = null,
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Password,
+            imeAction = ImeAction.Done
+        ),
+        keyboardActions = KeyboardActions(
+            onDone = {
+                focusManager.clearFocus()
+                onSubmit(password, confirmPassword)
+            }
+        )
+    )
+
     Spacer(modifier = Modifier.height(8.dp))
 
     // Submit button
     IAMSButton(
-        text = "Send Reset Link",
+        text = "Reset Password",
         onClick = {
             focusManager.clearFocus()
-            onSubmit(email.trim())
+            onSubmit(password, confirmPassword)
         },
         size = IAMSButtonSize.LG,
         enabled = !uiState.isLoading,
@@ -134,7 +160,7 @@ private fun FormContent(
 }
 
 @Composable
-private fun SuccessContent() {
+private fun SuccessContent(onGoToLogin: () -> Unit) {
     Spacer(modifier = Modifier.height(32.dp))
 
     Column(
@@ -155,7 +181,7 @@ private fun SuccessContent() {
 
         // Title
         Text(
-            text = "Reset link sent!",
+            text = "Password Reset Complete",
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.Center,
@@ -166,22 +192,20 @@ private fun SuccessContent() {
 
         // Message
         Text(
-            text = "We sent password reset instructions to your email. Follow the link in your inbox to continue.",
+            text = "Your password has been updated. You can now sign in with your new password.",
             style = MaterialTheme.typography.bodyLarge,
             color = TextSecondary,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth()
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
-        // Hint
-        Text(
-            text = "If you do not see the email, check spam or try again after a few minutes.",
-            style = MaterialTheme.typography.bodySmall,
-            color = TextTertiary,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth()
+        // Go to Login button
+        IAMSButton(
+            text = "Go to Login",
+            onClick = onGoToLogin,
+            size = IAMSButtonSize.LG
         )
     }
 }
