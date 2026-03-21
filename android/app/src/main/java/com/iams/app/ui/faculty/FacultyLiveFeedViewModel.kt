@@ -73,7 +73,7 @@ class FacultyLiveFeedViewModel @Inject constructor(
                         // Use mediamtx WHEP player for WebRTC playback (sub-second latency).
                         val url = when {
                             room.streamKey != null ->
-                                "http://${BuildConfig.BACKEND_HOST}:${BuildConfig.MEDIAMTX_WEBRTC_PORT}/${room.streamKey}/"
+                                "http://${BuildConfig.BACKEND_HOST}:${BuildConfig.MEDIAMTX_WEBRTC_PORT}/${room.streamKey}/whep"
                             else -> ""
                         }
                         Log.i("LiveFeed", "WebRTC URL: $url (streamKey=${room.streamKey})")

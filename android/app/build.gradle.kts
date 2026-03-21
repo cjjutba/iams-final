@@ -101,4 +101,7 @@ dependencies {
 
     // Coroutines
     implementation(libs.coroutines.android)
+
+    // WebRTC (native libwebrtc for WHEP playback)
+    implementation(libs.stream.webrtc.android)
 }

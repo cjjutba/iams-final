@@ -57,7 +57,7 @@ import com.iams.app.data.model.StudentAttendanceStatus
 import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
-import com.iams.app.ui.components.WebRtcVideoPlayer
+import com.iams.app.ui.components.NativeWebRtcVideoPlayer
 import com.iams.app.ui.components.IAMSHeader
 import com.iams.app.ui.components.TrackOverlay
 import com.iams.app.ui.theme.AbsentBg
@@ -192,7 +192,7 @@ fun FacultyLiveFeedScreen(
                     .background(Color.Black)
             ) {
                 if (uiState.videoUrl.isNotEmpty()) {
-                    WebRtcVideoPlayer(
+                    NativeWebRtcVideoPlayer(
                         whepUrl = uiState.videoUrl,
                         modifier = Modifier.fillMaxSize(),
                         onError = { error -> viewModel.onVideoError(error) }
