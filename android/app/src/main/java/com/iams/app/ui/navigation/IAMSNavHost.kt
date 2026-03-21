@@ -1,16 +1,20 @@
 package com.iams.app.ui.navigation
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Schedule
 
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavType
@@ -23,6 +27,7 @@ import androidx.navigation.navArgument
 import com.iams.app.ui.auth.EmailVerificationScreen
 import com.iams.app.ui.auth.FacultyLoginScreen
 import com.iams.app.ui.auth.ForgotPasswordScreen
+import com.iams.app.ui.auth.ResetPasswordScreen
 import com.iams.app.ui.auth.RegisterReviewScreen
 import com.iams.app.ui.auth.RegisterStep1Screen
 import com.iams.app.ui.auth.RegisterStep2Screen
@@ -34,12 +39,29 @@ import com.iams.app.ui.onboarding.SplashScreen
 import com.iams.app.ui.onboarding.WelcomeScreen
 import com.iams.app.ui.components.BottomNavTab
 import com.iams.app.ui.components.IAMSBottomBar
+import com.iams.app.ui.components.IAMSToastHost
+import com.iams.app.ui.components.LocalToastState
+import com.iams.app.ui.components.ToastState
+import com.iams.app.ui.common.SettingsScreen
+import com.iams.app.ui.faculty.FacultyAlertsScreen
+import com.iams.app.ui.faculty.FacultyAnalyticsDashboardScreen
+import com.iams.app.ui.faculty.FacultyClassDetailScreen
+import com.iams.app.ui.faculty.FacultyEditProfileScreen
 import com.iams.app.ui.faculty.FacultyHomeScreen
+import com.iams.app.ui.faculty.FacultyLiveAttendanceScreen
 import com.iams.app.ui.faculty.FacultyLiveFeedScreen
+import com.iams.app.ui.faculty.FacultyManualEntryScreen
+import com.iams.app.ui.faculty.FacultyNotificationsScreen
 import com.iams.app.ui.faculty.FacultyProfileScreen
 import com.iams.app.ui.faculty.FacultyReportsScreen
+import com.iams.app.ui.faculty.FacultyScheduleScreen
+import com.iams.app.ui.faculty.FacultyStudentDetailScreen
+import com.iams.app.ui.student.StudentAnalyticsScreen
+import com.iams.app.ui.student.StudentAttendanceDetailScreen
+import com.iams.app.ui.student.StudentEditProfileScreen
 import com.iams.app.ui.student.StudentHistoryScreen
 import com.iams.app.ui.student.StudentHomeScreen
+import com.iams.app.ui.student.StudentNotificationsScreen
 import com.iams.app.ui.student.StudentProfileScreen
 import com.iams.app.ui.student.StudentScheduleScreen
 
@@ -47,6 +69,7 @@ import com.iams.app.ui.student.StudentScheduleScreen
 fun IAMSNavHost() {
     val navController = rememberNavController()
     val navViewModel: NavViewModel = hiltViewModel()
+    val toastState = remember { ToastState() }
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
@@ -63,7 +86,9 @@ fun IAMSNavHost() {
 
     val facultyTabs = listOf(
         BottomNavTab("Home", Icons.Default.Home, Routes.FACULTY_HOME),
-        BottomNavTab("Reports", Icons.Default.Assessment, Routes.FACULTY_REPORTS),
+        BottomNavTab("Schedule", Icons.Default.Schedule, Routes.FACULTY_SCHEDULE),
+        BottomNavTab("Analytics", Icons.Default.Assessment, Routes.FACULTY_ANALYTICS_DASHBOARD),
+        BottomNavTab("Alerts", Icons.Default.Notifications, Routes.FACULTY_ALERTS),
         BottomNavTab("Profile", Icons.Default.Person, Routes.FACULTY_PROFILE),
     )
 
@@ -71,20 +96,22 @@ fun IAMSNavHost() {
     val isFacultySection = currentRoute in facultyTabs.map { it.route }
     val showBottomBar = isStudentSection || isFacultySection
 
-    Scaffold(
-        bottomBar = {
-            when {
-                isStudentSection -> IAMSBottomBar(navController, studentTabs)
-                isFacultySection -> IAMSBottomBar(navController, facultyTabs)
-            }
-        }
-    ) { innerPadding ->
-        NavHost(
-            navController = navController,
-            startDestination = startDestination,
-            modifier = Modifier.padding(innerPadding)
-        ) {
-            // Onboarding flow
+    CompositionLocalProvider(LocalToastState provides toastState) {
+        Box {
+            Scaffold(
+                bottomBar = {
+                    when {
+                        isStudentSection -> IAMSBottomBar(navController, studentTabs)
+                        isFacultySection -> IAMSBottomBar(navController, facultyTabs)
+                    }
+                }
+            ) { innerPadding ->
+                NavHost(
+                    navController = navController,
+                    startDestination = startDestination,
+                    modifier = Modifier.padding(innerPadding)
+                ) {
+            // ── Onboarding flow ─────────────────────────────────────────────
             composable(Routes.SPLASH) {
                 SplashScreen(navController = navController)
             }
@@ -98,7 +125,7 @@ fun IAMSNavHost() {
                 WelcomeScreen(navController = navController)
             }
 
-            // Auth screens
+            // ── Auth screens ────────────────────────────────────────────────
             composable(Routes.STUDENT_LOGIN) {
                 StudentLoginScreen(navController = navController)
             }
@@ -109,6 +136,10 @@ fun IAMSNavHost() {
 
             composable(Routes.FORGOT_PASSWORD) {
                 ForgotPasswordScreen(navController = navController)
+            }
+
+            composable(Routes.RESET_PASSWORD) {
+                ResetPasswordScreen(navController = navController)
             }
 
             composable(Routes.REGISTER_STEP1) {
@@ -167,7 +198,7 @@ fun IAMSNavHost() {
                 }
             }
 
-            // Student screens
+            // ── Student screens (primary tabs) ─────────────────────────────
             composable(Routes.STUDENT_HOME) {
                 StudentHomeScreen(navController = navController)
             }
@@ -184,11 +215,66 @@ fun IAMSNavHost() {
                 StudentProfileScreen(navController = navController)
             }
 
-            // Faculty screens
+            // ── Student screens (secondary) ─────────────────────────────────
+            composable(
+                route = Routes.STUDENT_ATTENDANCE_DETAIL,
+                arguments = listOf(
+                    navArgument("attendanceId") { type = NavType.StringType },
+                    navArgument("scheduleId") { type = NavType.StringType },
+                    navArgument("date") { type = NavType.StringType },
+                )
+            ) {
+                StudentAttendanceDetailScreen(navController = navController)
+            }
+
+            composable(Routes.STUDENT_ANALYTICS) {
+                StudentAnalyticsScreen(navController = navController)
+            }
+
+            composable(Routes.STUDENT_EDIT_PROFILE) {
+                StudentEditProfileScreen(navController = navController)
+            }
+
+            composable(Routes.STUDENT_NOTIFICATIONS) {
+                StudentNotificationsScreen(navController = navController)
+            }
+
+            composable(
+                route = Routes.STUDENT_FACE_REGISTER,
+                arguments = listOf(
+                    navArgument("mode") { type = NavType.StringType },
+                )
+            ) { backStackEntry ->
+                val parentEntry = navController.getBackStackEntry(Routes.REGISTER_FACE_FLOW)
+                val sharedViewModel: RegistrationViewModel = hiltViewModel(parentEntry)
+                RegisterStep3Screen(
+                    navController = navController,
+                    viewModel = sharedViewModel
+                )
+            }
+
+            // ── Faculty screens (primary tabs) ──────────────────────────────
             composable(Routes.FACULTY_HOME) {
                 FacultyHomeScreen(navController = navController)
             }
 
+            composable(Routes.FACULTY_SCHEDULE) {
+                FacultyScheduleScreen(navController = navController)
+            }
+
+            composable(Routes.FACULTY_ANALYTICS_DASHBOARD) {
+                FacultyAnalyticsDashboardScreen(navController = navController)
+            }
+
+            composable(Routes.FACULTY_ALERTS) {
+                FacultyAlertsScreen(navController = navController)
+            }
+
+            composable(Routes.FACULTY_PROFILE) {
+                FacultyProfileScreen(navController = navController)
+            }
+
+            // ── Faculty screens (secondary / stack) ─────────────────────────
             composable(
                 route = Routes.FACULTY_LIVE_FEED,
                 arguments = listOf(
@@ -207,9 +293,65 @@ fun IAMSNavHost() {
                 FacultyReportsScreen(navController = navController)
             }
 
-            composable(Routes.FACULTY_PROFILE) {
-                FacultyProfileScreen(navController = navController)
+            composable(
+                route = Routes.FACULTY_CLASS_DETAIL,
+                arguments = listOf(
+                    navArgument("scheduleId") { type = NavType.StringType },
+                )
+            ) {
+                FacultyClassDetailScreen(navController = navController)
             }
+
+            composable(
+                route = Routes.FACULTY_STUDENT_DETAIL,
+                arguments = listOf(
+                    navArgument("studentId") { type = NavType.StringType },
+                    navArgument("scheduleId") { type = NavType.StringType },
+                )
+            ) {
+                FacultyStudentDetailScreen(navController = navController)
+            }
+
+            composable(Routes.FACULTY_EDIT_PROFILE) {
+                FacultyEditProfileScreen(navController = navController)
+            }
+
+            composable(Routes.FACULTY_NOTIFICATIONS) {
+                FacultyNotificationsScreen(navController = navController)
+            }
+
+            composable(
+                route = Routes.FACULTY_LIVE_ATTENDANCE,
+                arguments = listOf(
+                    navArgument("scheduleId") { type = NavType.StringType },
+                )
+            ) { backStackEntry ->
+                FacultyLiveAttendanceScreen(
+                    navController = navController,
+                    scheduleId = backStackEntry.arguments?.getString("scheduleId") ?: "",
+                )
+            }
+
+            composable(
+                route = Routes.FACULTY_MANUAL_ENTRY,
+                arguments = listOf(
+                    navArgument("scheduleId") { type = NavType.StringType },
+                )
+            ) { backStackEntry ->
+                FacultyManualEntryScreen(
+                    navController = navController,
+                    scheduleId = backStackEntry.arguments?.getString("scheduleId") ?: "",
+                )
+            }
+
+            // ── Common screens ──────────────────────────────────────────────
+            composable(Routes.SETTINGS) {
+                SettingsScreen(navController = navController)
+            }
+        }
+    }
+
+            IAMSToastHost(toastState)
         }
     }
 }

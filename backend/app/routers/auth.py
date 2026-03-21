@@ -14,6 +14,8 @@ from app.database import get_db
 from app.models.user import User
 from app.rate_limiter import limiter
 from app.schemas.auth import (
+    CheckStudentIDRequest,
+    CheckStudentIDResponse,
     ForgotPasswordRequest,
     LoginRequest,
     ProfileUpdateRequest,
@@ -31,6 +33,34 @@ from app.services.auth_service import AuthService
 from app.utils.dependencies import get_current_user
 
 router = APIRouter()
+
+
+# ===================================================================
+# FUN-01-01a: Check Student ID Availability
+# ===================================================================
+
+
+@router.post(
+    "/check-student-id",
+    response_model=CheckStudentIDResponse,
+    status_code=status.HTTP_200_OK,
+)
+@limiter.limit(settings.RATE_LIMIT_AUTH)
+def check_student_id(
+    request: Request,
+    body: CheckStudentIDRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    **Step 1a of Student Registration: Check Student ID**
+
+    Checks if a student ID exists in university records and is available
+    for registration. Does not require birthdate.
+    Rate limited to 10 requests/minute.
+    """
+    auth_service = AuthService(db)
+    result = auth_service.check_student_id(body.student_id)
+    return CheckStudentIDResponse(**result)
 
 
 # ===================================================================

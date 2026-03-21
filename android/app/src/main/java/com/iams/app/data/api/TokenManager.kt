@@ -20,6 +20,10 @@ class TokenManager @Inject constructor(@ApplicationContext private val context: 
     private val USER_ROLE = stringPreferencesKey("user_role")
     private val USER_ID = stringPreferencesKey("user_id")
 
+    /** Set to true during logout to prevent TokenAuthenticator from refreshing. */
+    @Volatile
+    var isLoggingOut: Boolean = false
+
     val accessToken get() = runBlocking {
         context.dataStore.data.map { it[ACCESS_TOKEN] }.first()
     }
@@ -34,6 +38,7 @@ class TokenManager @Inject constructor(@ApplicationContext private val context: 
     }
 
     suspend fun saveTokens(access: String, refresh: String, role: String, userId: String) {
+        isLoggingOut = false
         context.dataStore.edit {
             it[ACCESS_TOKEN] = access
             it[REFRESH_TOKEN] = refresh

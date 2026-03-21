@@ -1,19 +1,25 @@
 """
 Seed Data Script for IAMS Backend
 
-Creates test data for development and thesis demonstration.
-Populates the database with ONLY faculty user, rooms, and schedules.
+Creates operational data for development and thesis demonstration.
+Populates the database with faculty users, 2 rooms (EB226, EB227),
+and all class schedules from the JRMSU CpE department.
+
+Data is based on: docs/data/ListofStudents_All-thesis-purposes.md
+
+Faculty accounts (all use password123):
+  - faculty@gmail.com          (default test account)
+  - ryan.elumba@jrmsu.edu.ph   (Elumba, Ryan Z.)
+  - maricon.gahisan@jrmsu.edu.ph (Gahisan, Maricon Denber)
+  - troy.lasco@jrmsu.edu.ph    (Lasco, Troy C.)
 
 NOTE: Student accounts are NOT pre-created. Students must self-register
 through the mobile app using their Student ID from student_records table.
-When they register, auto-enrollment matches them to schedules based on
-their course and year level.
 
 Run from backend directory:
     python -m scripts.seed_data
 
-This script is idempotent -- it checks for existing seed data before inserting
-and will skip gracefully if the data already exists.
+This script is idempotent -- it checks for existing seed data before inserting.
 """
 
 import sys
@@ -90,50 +96,108 @@ def _sync_supabase_auth_user(email: str, password: str, metadata: dict) -> str |
 
 
 # ---------------------------------------------------------------------------
-# Schedule definitions: (subject_code, subject_name, year_level, days, start, end)
+# Faculty definitions: default test account + 3 real JRMSU instructors
+# (email, first_name, last_name)
+# ---------------------------------------------------------------------------
+FACULTY_DEFS = [
+    ("faculty@gmail.com",              "Faculty",        "User"),
+    ("ryan.elumba@jrmsu.edu.ph",       "Ryan",           "Elumba"),
+    ("maricon.gahisan@jrmsu.edu.ph",   "Maricon Denber", "Gahisan"),
+    ("troy.lasco@jrmsu.edu.ph",        "Troy",           "Lasco"),
+]
+
+# ---------------------------------------------------------------------------
+# Room definitions: 2 rooms from JRMSU Engineering Building
+# (name, building, capacity, camera_endpoint, stream_key)
+#   camera_endpoint = raw RTSP URL for backend face recognition
+#   stream_key      = MediaMTX path name for mobile app streaming
+# ---------------------------------------------------------------------------
+ROOM_DEFS = [
+    ("EB226", "Engineering Building", 50,
+     "rtsp://admin:%40Iams2026THESIS%21@192.168.88.10:554/h264Preview_01_main",
+     "capstone-lab"),
+    ("EB227", "Engineering Building", 50, "", ""),
+]
+
+# ---------------------------------------------------------------------------
+# Schedule definitions from ListofStudents_All-thesis-purposes.md
+# (subject_code, subject_name, year_level, target_course, days, start, end, room_name, faculty_email)
+#
+# day_of_week: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
 # ---------------------------------------------------------------------------
 SCHEDULE_DEFS = [
-    # Year 4: CPE 401 — 24/7 lab for testing (always an active class)
-    ("CPE 401", "Capstone Project Laboratory", 4, [0, 1, 2, 3, 4, 5, 6], time(0, 0), time(23, 59)),
-    # Year 4: CPE 301 — every day 07:00-22:00 (main demo subject)
-    ("CPE 301", "Microprocessors and Microcontrollers", 4, [0, 1, 2, 3, 4, 5, 6], time(7, 0), time(22, 0)),
-    # Year 3: CPE 201 Mon-Fri + Sat
-    ("CPE 201", "Digital Logic Design", 3, [0, 1, 2, 3, 4, 5], time(8, 0), time(10, 0)),
-    # Year 2: CPE 101 Mon-Fri + Sat
-    ("CPE 101", "Introduction to Computing", 2, [0, 1, 2, 3, 4, 5], time(9, 0), time(11, 0)),
-    # Year 1: GE 101 Mon-Fri + Sat
-    ("GE 101", "Mathematics in the Modern World", 1, [0, 1, 2, 3, 4, 5], time(13, 0), time(15, 0)),
+    # ── Test (faculty@gmail.com) ──────────────────────────────────────
+    # TEST 000 — 24/7 test schedule in EB226 (has camera) for live feed testing
+    ("TEST 000", "IAMS Test Class (24/7)",             0, "BSCPE", [0, 1, 2, 3, 4, 5, 6], time(0, 0), time(23, 59), "EB226", "faculty@gmail.com"),
+
+    # ── Elumba ─────────────────────────────────────────────────────────
+    # CpE 121 / CpE 121L — WEB Technologies (EB227, TTH)
+    ("CpE 121",  "WEB Technologies (LEC)",              2, "BSCPE", [1, 3], time(7, 0),   time(8, 30),  "EB227", "ryan.elumba@jrmsu.edu.ph"),
+    ("CpE 121L", "WEB Technologies (LAB)",              2, "BSCPE", [1, 3], time(14, 30), time(16, 0),  "EB227", "ryan.elumba@jrmsu.edu.ph"),
+    # CpE 115 — Computer Hardware Fundamentals (EB226, MW)
+    ("CpE 115",  "Computer Hardware Fundamentals",      1, "BSCPE", [0, 2], time(13, 0),  time(14, 30), "EB226", "ryan.elumba@jrmsu.edu.ph"),
+    # CpE 326 — CpE Laws & Professional Practice (EB227, MW)
+    ("CpE 326",  "CpE Laws & Professional Practice",   3, "BSCPE", [0, 2], time(17, 30), time(18, 30), "EB227", "ryan.elumba@jrmsu.edu.ph"),
+
+    # ── Gahisan ────────────────────────────────────────────────────────
+    # CpE 115 — Computer Hardware Fundamentals (EB226, MW) — section 2
+    ("CpE 115",  "Computer Hardware Fundamentals",      1, "BSCPE", [0, 2], time(9, 0),   time(10, 30), "EB226", "maricon.gahisan@jrmsu.edu.ph"),
+    # CpE 120 — Fundamentals of Electronic Circuits (EB226, TTH)
+    ("CpE 120",  "Fundamentals of Electronic Circuits", 2, "BSCPE", [1, 3], time(10, 30), time(12, 0),  "EB226", "maricon.gahisan@jrmsu.edu.ph"),
+    # CpE 324 — Methods of Research & Writing (EB226, MW)
+    ("CpE 324",  "Methods of Research & Writing",       3, "BSCPE", [0, 2], time(10, 30), time(12, 0),  "EB226", "maricon.gahisan@jrmsu.edu.ph"),
+    # CpE 322 / CpE 322L — Computer Networks & Security (EB226, MW)
+    ("CpE 322",  "Computer Networks & Security (LEC)",  3, "BSCPE", [0, 2], time(14, 30), time(16, 0),  "EB226", "maricon.gahisan@jrmsu.edu.ph"),
+    ("CpE 322L", "Computer Networks & Security (LAB)",  3, "BSCPE", [0, 2], time(16, 0),  time(17, 30), "EB226", "maricon.gahisan@jrmsu.edu.ph"),
+    # CpE 421 — CpE Practice & Design 2 (EB226, TTH)
+    ("CpE 421",  "CpE Practice & Design 2",            4, "BSCPE", [1, 3], time(14, 30), time(17, 30), "EB226", "maricon.gahisan@jrmsu.edu.ph"),
+
+    # ── Lasco ──────────────────────────────────────────────────────────
+    # ES 112 — Computer Programming (EB227, MW + TTH sections)
+    ("ES 112",   "Computer Programming",                1, "BSECE", [0, 2], time(13, 0),  time(14, 30), "EB227", "troy.lasco@jrmsu.edu.ph"),
+    ("ES 112",   "Computer Programming",                1, "BSECE", [1, 3], time(17, 30), time(19, 0),  "EB227", "troy.lasco@jrmsu.edu.ph"),
+    # CpE 113 — Object-Oriented Programming (EB227, TTH + MW sections)
+    ("CpE 113",  "Object-Oriented Programming",         1, "BSCPE", [1, 3], time(9, 0),   time(12, 0),  "EB227", "troy.lasco@jrmsu.edu.ph"),
+    ("CpE 113",  "Object-Oriented Programming",         1, "BSCPE", [0, 2], time(9, 0),   time(12, 0),  "EB227", "troy.lasco@jrmsu.edu.ph"),
 ]
 
-# Room definitions: (name, building, capacity, camera_endpoint)
-# camera_endpoint must be an RTSP URL for live streaming to work
-ROOM_DEFS = [
-    ("Room 301", "Engineering Building", 40, "rtsp://admin:Iams2026THESIS@192.168.1.100:554/h264Preview_01_main"),
-    ("Room 202", "Engineering Building", 35, ""),
-    ("Room 103", "Engineering Building", 45, ""),
-]
 
-# Map subject to room by index: CPE 301 → Room 301, CPE 201 → Room 202, CPE 101 → Room 103, GE 101 → Room 103
-SUBJECT_ROOM_MAP = {
-    "CPE 401": 0,  # Room 301
-    "CPE 301": 0,  # Room 301
-    "CPE 201": 1,  # Room 202
-    "CPE 101": 2,  # Room 103
-    "GE 101": 2,   # Room 103
-}
+def _create_faculty_user(db, email, first_name, last_name, common_hash):
+    """Create a single faculty user and sync to Supabase Auth."""
+    user = User(
+        email=email,
+        password_hash=common_hash,
+        role=UserRole.FACULTY,
+        first_name=first_name,
+        last_name=last_name,
+        is_active=True,
+        email_verified=True,
+    )
+    db.add(user)
+    db.flush()
+    print(f"  Created: {first_name} {last_name} ({email}, ID: {user.id})")
+
+    sb_user_id = _sync_supabase_auth_user(
+        email=email,
+        password="password123",
+        metadata={"first_name": first_name, "last_name": last_name, "role": "faculty"},
+    )
+    if sb_user_id:
+        user.supabase_user_id = sb_user_id
+        db.flush()
+
+    return user
 
 
 def seed():
     """
     Main seed function.
 
-    Creates the following test data in a single transaction:
-      1. Faculty user (faculty@gmail.com / password123)
-      2. Rooms (Room 301, Room 202, Room 103)
-      3. Schedules (5 subjects across all year levels, including weekends)
-
-    All schedules are tagged with target_course="BSCPE" and appropriate
-    target_year_level for auto-enrollment.
+    Creates the following data in a single transaction:
+      1. Faculty users (default + 3 real JRMSU instructors, all password123)
+      2. Admin user (admin@admin.com / admin123)
+      3. 2 Rooms (EB226, EB227)
+      4. All schedules assigned to the correct instructor
 
     Students must self-register via mobile app (no pre-created student users).
     """
@@ -155,7 +219,7 @@ def seed():
             print("\nSeed data already exists. Skipping...")
             print(f"  Faculty: {existing_faculty.email} (ID: {existing_faculty.id})")
 
-            # Ensure admin account exists even if seed was run before admin was added
+            # Ensure admin account exists
             existing_admin = db.query(User).filter(User.email == "admin@admin.com").first()
             if not existing_admin:
                 print("\n  Admin account missing — creating now...")
@@ -176,41 +240,23 @@ def seed():
 
             room_count = db.query(Room).count()
             schedule_count = db.query(Schedule).count()
+            faculty_count = db.query(User).filter(User.role == UserRole.FACULTY).count()
+            print(f"  Faculty: {faculty_count}")
             print(f"  Rooms: {room_count}")
             print(f"  Schedules: {schedule_count}")
             print("\nNo changes made.")
             return
 
         # ------------------------------------------------------------------
-        # 1. Create Faculty User + Admin User
+        # 1. Create Faculty Users + Admin User
         # ------------------------------------------------------------------
         print("\n[1/3] Creating faculty and admin users...")
-        faculty = User(
-            email="faculty@gmail.com",
-            password_hash=hash_password("password123"),
-            role=UserRole.FACULTY,
-            first_name="Faculty",
-            last_name="User",
-            phone="09000000000",
-            is_active=True,
-            email_verified=True,
-        )
-        db.add(faculty)
-        db.flush()
-        print(f"  Created: {faculty.first_name} {faculty.last_name}")
-        print(f"  Email:   {faculty.email}")
-        print(f"  DB ID:   {faculty.id}")
+        common_hash = hash_password("password123")  # Compute once (bcrypt is slow)
 
-        # Also create in Supabase Auth for mobile app login and link IDs
-        sb_user_id = _sync_supabase_auth_user(
-            email="faculty@gmail.com",
-            password="password123",
-            metadata={"first_name": "Faculty", "last_name": "User", "role": "faculty"},
-        )
-        if sb_user_id:
-            faculty.supabase_user_id = sb_user_id
-            db.flush()
-            print(f"  Linked supabase_user_id: {sb_user_id}")
+        faculty_map: dict[str, User] = {}  # email → User
+        for email, first_name, last_name in FACULTY_DEFS:
+            user = _create_faculty_user(db, email, first_name, last_name, common_hash)
+            faculty_map[email] = user
 
         # Create Admin User
         admin = User(
@@ -224,38 +270,38 @@ def seed():
         )
         db.add(admin)
         db.flush()
-        print(f"  Created: {admin.first_name} {admin.last_name}")
-        print(f"  Email:   {admin.email}")
-        print(f"  DB ID:   {admin.id}")
+        print(f"  Created: {admin.first_name} {admin.last_name} ({admin.email}, ID: {admin.id})")
 
         # ------------------------------------------------------------------
         # 2. Create Rooms
         # ------------------------------------------------------------------
         print("\n[2/3] Creating rooms...")
-        rooms = []
-        for name, building, capacity, camera_endpoint in ROOM_DEFS:
+        room_map: dict[str, Room] = {}
+        for name, building, capacity, camera_endpoint, stream_key in ROOM_DEFS:
             room = Room(
                 name=name,
                 building=building,
                 capacity=capacity,
-                camera_endpoint=camera_endpoint,
+                camera_endpoint=camera_endpoint or None,
+                stream_key=stream_key or None,
                 is_active=True,
             )
             db.add(room)
             db.flush()
-            rooms.append(room)
+            room_map[name] = room
             print(f"  Created: {name} in {building} (capacity: {capacity}, ID: {room.id})")
 
         # ------------------------------------------------------------------
-        # 3. Create Schedules (all year levels)
+        # 3. Create Schedules (assigned to correct instructor)
         # ------------------------------------------------------------------
         print("\n[3/3] Creating schedules...")
         day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
         total_schedules = 0
 
-        for subject_code, subject_name, year_level, days, start, end in SCHEDULE_DEFS:
-            room_idx = SUBJECT_ROOM_MAP[subject_code]
-            room = rooms[room_idx]
+        for (subject_code, subject_name, year_level, target_course,
+             days, start, end, room_name, faculty_email) in SCHEDULE_DEFS:
+            room = room_map[room_name]
+            faculty = faculty_map[faculty_email]
 
             for day_idx in days:
                 schedule = Schedule(
@@ -268,15 +314,16 @@ def seed():
                     end_time=end,
                     semester="2nd",
                     academic_year="2025-2026",
-                    target_course="BSCPE",
+                    target_course=target_course,
                     target_year_level=year_level,
                     is_active=True,
                 )
                 db.add(schedule)
                 db.flush()
                 total_schedules += 1
+                fac_short = faculty_email.split("@")[0]
                 print(f"  {subject_code} (Year {year_level}) — {day_names[day_idx]} "
-                      f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')} in {room.name}")
+                      f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')} in {room_name} [{fac_short}]")
 
         # ------------------------------------------------------------------
         # Commit the entire transaction
@@ -293,18 +340,19 @@ def seed():
         print(f"\nAdmin Login (web dashboard):")
         print(f"  Email:      admin@admin.com")
         print(f"  Password:   admin123")
-        print(f"\nFaculty Login:")
-        print(f"  Email:      faculty@gmail.com")
-        print(f"  Password:   password123")
-        print(f"\nRooms: {len(rooms)}")
-        for r in rooms:
-            print(f"  {r.name} ({r.building}) — ID: {r.id}")
+        print(f"\nFaculty Logins (all use password123):")
+        for email, first_name, last_name in FACULTY_DEFS:
+            print(f"  {email:<35} ({first_name} {last_name})")
+        print(f"\nRooms: {len(ROOM_DEFS)}")
+        for name, building, *_ in ROOM_DEFS:
+            print(f"  {name} ({building})")
         print(f"\nSchedules: {total_schedules} total")
-        print(f"  CPE 401 (Year 4): Every day 00:00-23:59 in Room 301 (24/7 test)")
-        print(f"  CPE 301 (Year 4): Every day 07:00-22:00 in Room 301")
-        print(f"  CPE 201 (Year 3): Mon-Sat 08:00-10:00 in Room 202")
-        print(f"  CPE 101 (Year 2): Mon-Sat 09:00-11:00 in Room 103")
-        print(f"  GE 101  (Year 1): Mon-Sat 13:00-15:00 in Room 103")
+        for entry in SCHEDULE_DEFS:
+            subj_code, subj_name, year, course, days, start, end, room, fac_email = entry
+            day_str = "/".join(day_names[d][:3] for d in days)
+            fac_short = fac_email.split("@")[0]
+            print(f"  {subj_code:<10} (Year {year}) {day_str} "
+                  f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')} in {room} [{fac_short}]")
         print(f"\nStudents: Use mobile app to self-register with Student ID from student_records")
         print(f"  Upon registration, students are auto-enrolled in matching schedules")
 

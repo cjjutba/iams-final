@@ -16,6 +16,17 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
+
+        // Configured via gradle.properties; override per-machine in local.properties
+        val host = project.findProperty("IAMS_BACKEND_HOST") as? String ?: "192.168.88.254"
+        val port = project.findProperty("IAMS_BACKEND_PORT") as? String ?: "8000"
+        val mtxPort = project.findProperty("IAMS_MEDIAMTX_PORT") as? String ?: "8554"
+        val mtxWebrtcPort = project.findProperty("IAMS_MEDIAMTX_WEBRTC_PORT") as? String ?: "8889"
+
+        buildConfigField("String", "BACKEND_HOST", "\"$host\"")
+        buildConfigField("String", "BACKEND_PORT", "\"$port\"")
+        buildConfigField("String", "MEDIAMTX_PORT", "\"$mtxPort\"")
+        buildConfigField("String", "MEDIAMTX_WEBRTC_PORT", "\"$mtxWebrtcPort\"")
     }
 
     buildTypes {
@@ -35,6 +46,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -69,7 +81,7 @@ dependencies {
     implementation(libs.media3.exoplayer.rtsp)
     implementation(libs.media3.ui)
 
-    // ML Kit Face Detection
+    // ML Kit Face Detection (used by FaceCaptureView for on-device face detection during registration)
     implementation(libs.mlkit.face.detection)
 
     // CameraX (face registration)

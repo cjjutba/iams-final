@@ -111,7 +111,18 @@ def seed_simulation():
         common_hash = hash_password("password123")  # Compute once (bcrypt is slow)
         student_users = {}  # student_id -> User object
 
+        skipped_no_email = 0
+        skipped_dup_email = 0
+        seen_emails = set()
         for sr in student_records:
+            if not sr.email:
+                skipped_no_email += 1
+                continue
+            email_lower = sr.email.lower()
+            if email_lower in seen_emails:
+                skipped_dup_email += 1
+                continue
+            seen_emails.add(email_lower)
             user = User(
                 email=sr.email,
                 password_hash=common_hash,
@@ -125,11 +136,17 @@ def seed_simulation():
             )
             db.add(user)
             student_users[sr.student_id] = (user, sr.year_level)
+        if skipped_no_email:
+            print(f"  Skipped {skipped_no_email} students without email")
+        if skipped_dup_email:
+            print(f"  Skipped {skipped_dup_email} students with duplicate email")
 
         db.flush()  # Get UUIDs
 
         # Link Supabase Auth
         for sr in student_records:
+            if sr.student_id not in student_users:
+                continue
             user, _ = student_users[sr.student_id]
             print(f"  Created: {sr.student_id} — {sr.first_name} {sr.last_name} (ID: {user.id})")
             try:

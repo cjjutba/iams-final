@@ -1,6 +1,7 @@
 package com.iams.app.ui.onboarding
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -49,16 +50,18 @@ fun WelcomeScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Background)
-            .padding(horizontal = 24.dp),
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // Top section: Lottie animation (flex 1, centered)
+        // Logo section: animation + title + subtitle (flex 1, centered)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f),
+                .weight(1f)
+                .padding(top = 40.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+            verticalArrangement = Arrangement.Center,
         ) {
             LottieAnimation(
                 composition = composition,
@@ -67,13 +70,7 @@ fun WelcomeScreen(
             )
 
             Spacer(modifier = Modifier.height(24.dp))
-        }
 
-        // Middle section: title, subtitle, question, buttons
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
             // Title
             Text(
                 text = "Welcome to IAMS",
@@ -84,7 +81,7 @@ fun WelcomeScreen(
                 textAlign = TextAlign.Center,
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             // Subtitle
             Text(
@@ -92,10 +89,17 @@ fun WelcomeScreen(
                 style = MaterialTheme.typography.bodyLarge,
                 color = TextSecondary,
                 textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 24.dp),
             )
+        }
 
-            Spacer(modifier = Modifier.height(32.dp))
-
+        // Role section: question + buttons
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
             // Question
             Text(
                 text = "I am a...",
@@ -106,7 +110,7 @@ fun WelcomeScreen(
                 textAlign = TextAlign.Center,
             )
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             // Student button
             IAMSButton(
@@ -134,16 +138,14 @@ fun WelcomeScreen(
         }
 
         // Footer
-        Spacer(modifier = Modifier.weight(1f))
+        Spacer(modifier = Modifier.height(20.dp))
 
         Text(
-            text = "By continuing, you agree to our Terms of Service",
+            text = "By continuing, you agree to our Terms of Service and Privacy Policy",
             style = MaterialTheme.typography.bodySmall,
             color = TextTertiary,
             textAlign = TextAlign.Center,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 32.dp),
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }

@@ -7,7 +7,7 @@ Request and response models for class schedules.
 from datetime import time
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator
 
 from app.schemas.user import UserResponse
 
@@ -26,7 +26,7 @@ class ScheduleBase(BaseModel):
         None, max_length=100, description="Target course for auto-enrollment, e.g., 'BSCPE'"
     )
     target_year_level: int | None = Field(
-        None, ge=1, le=6, description="Target year level for auto-enrollment, e.g., 4"
+        None, ge=0, le=6, description="Target year level for auto-enrollment (0=any), e.g., 4"
     )
 
 
@@ -50,7 +50,7 @@ class ScheduleUpdate(BaseModel):
     semester: str | None = Field(None, max_length=20)
     academic_year: str | None = Field(None, max_length=20)
     target_course: str | None = Field(None, max_length=100)
-    target_year_level: int | None = Field(None, ge=1, le=6)
+    target_year_level: int | None = Field(None, ge=0, le=6)
     is_active: bool | None = None
 
 
@@ -83,6 +83,20 @@ class ScheduleResponse(ScheduleBase):
     is_active: bool
     faculty: UserResponse | None = None
     room: RoomInfo | None = None
+
+    @computed_field
+    @property
+    def room_name(self) -> str | None:
+        """Flat room name for mobile clients."""
+        return self.room.name if self.room else None
+
+    @computed_field
+    @property
+    def faculty_name(self) -> str | None:
+        """Flat faculty display name for mobile clients."""
+        if self.faculty:
+            return f"{self.faculty.first_name} {self.faculty.last_name}"
+        return None
 
     @field_validator("id", "faculty_id", "room_id", mode="before")
     @classmethod

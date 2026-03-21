@@ -155,190 +155,24 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to initialize face recognition: {e}")
 
-    # ── Frame Grabbers (attendance engine RTSP sources) ─────────────
+    # ── Frame Grabbers & Session Pipelines ────────────────────────
     app.state.frame_grabbers = {}  # room_id -> FrameGrabber
+    app.state.session_pipelines = {}  # schedule_id -> SessionPipeline
+
+    # ── WebSocket Redis subscriber ─────────────────────────────
+    try:
+        from app.routers.websocket import ws_manager
+
+        await ws_manager.start_redis_subscriber()
+    except Exception as e:
+        logger.warning(f"Redis WS subscriber not started: {e}")
 
     # ── APScheduler ───────────────────────────────────────────────
     try:
-        import time as _time
-
         from app.database import SessionLocal
         from app.services.presence_service import PresenceService
 
         logger.info("Initializing APScheduler...")
-
-        def _ensure_frame_grabber(app_instance, db_session, schedule):
-            """Create FrameGrabber for an active session that lacks one."""
-            from app.models.room import Room
-            from app.services.frame_grabber import FrameGrabber
-
-            room_id = str(schedule.room_id)
-            room = db_session.query(Room).filter(Room.id == schedule.room_id).first()
-
-            camera_url = room.camera_endpoint if room else None
-            if not camera_url:
-                logger.warning(f"No camera URL for room {room_id}, skipping FrameGrabber")
-                return
-
-            if room_id not in app_instance.state.frame_grabbers:
-                grabber = FrameGrabber(camera_url)
-                app_instance.state.frame_grabbers[room_id] = grabber
-                logger.info(f"Auto-created FrameGrabber for room {room_id}")
-
-        # Attendance scan cycle (every SCAN_INTERVAL_SECONDS, default 15s)
-        # Uses AttendanceScanEngine when a FrameGrabber is available for a room,
-        # otherwise falls back to pipeline Redis state.
-        async def run_attendance_scan_cycle():
-            """Background task: grab frames, run face recognition, feed presence service."""
-            db = SessionLocal()
-            try:
-                presence_svc = PresenceService(db)
-                scan_results: dict = {}
-
-                for schedule_id, session in list(presence_svc._active_sessions.items()):
-                    room_id = str(session.schedule.room_id)
-                    grabber = app.state.frame_grabbers.get(room_id)
-
-                    # Self-healing: create FrameGrabber if missing
-                    if grabber is None:
-                        try:
-                            _ensure_frame_grabber(app, db, session.schedule)
-                            grabber = app.state.frame_grabbers.get(room_id)
-                        except Exception:
-                            logger.exception(f"Failed to auto-create FrameGrabber for room {room_id}")
-
-                    if grabber is None:
-                        continue
-
-                    try:
-                        from app.services.attendance_engine import AttendanceScanEngine
-                        from app.services.identity_cache import IdentityCache
-                        from app.services.ml.faiss_manager import faiss_manager
-                        from app.services.ml.insightface_model import insightface_model
-
-                        # Self-heal FAISS: ensure index is loaded and user_map populated
-                        if faiss_manager.index is None or faiss_manager.index.ntotal == 0:
-                            faiss_manager.load_or_create_index()
-                        if not faiss_manager.user_map:
-                            from app.services.face_service import FaceService
-                            FaceService.reconcile_faiss_index(db)
-                            logger.info(
-                                f"FAISS self-healed: vectors={faiss_manager.index.ntotal}, "
-                                f"mappings={len(faiss_manager.user_map)}"
-                            )
-
-                        engine = AttendanceScanEngine(
-                            frame_grabber=grabber,
-                            insightface_model=insightface_model,
-                            faiss_manager=faiss_manager,
-                        )
-                        result = engine.scan_frame()
-                        if result:
-                            logger.info(
-                                f"Attendance scan: room={room_id}, "
-                                f"detected={result.detected_faces}, "
-                                f"recognized={len(result.recognized)}, "
-                                f"duration={result.scan_duration_ms:.0f}ms"
-                            )
-                            scan_results[room_id] = result
-                            # Write to Redis identity cache for live feed
-                            from app.redis_client import get_redis
-
-                            # Look up student names for the identity cache
-                            from app.models.user import User
-                            identities = []
-                            for r in result.recognized:
-                                user = db.query(User).filter(User.id == r.user_id).first()
-                                name = f"{user.first_name} {user.last_name}" if user else "Unknown"
-                                identities.append({
-                                    "user_id": r.user_id,
-                                    "name": name,
-                                    "student_id": user.student_id if user else "",
-                                    "confidence": r.confidence,
-                                    "bbox": list(r.bbox),
-                                })
-
-                            redis_client = await get_redis()
-                            cache = IdentityCache(redis_client)
-                            await cache.write_identities(room_id, schedule_id, identities)
-                            await cache.write_scan_meta(room_id, schedule_id, {
-                                "last_scan_ts": int(_time.time()),
-                                "faces_detected": result.detected_faces,
-                                "faces_recognized": len(result.recognized),
-                            })
-
-                            # ── Broadcast normalized bbox via WebSocket ──
-                            try:
-                                from app.routers.websocket import ws_manager
-
-                                frame_w = grabber._width
-                                frame_h = grabber._height
-
-                                detections = []
-                                for face_identity in identities:
-                                    raw_bbox = face_identity.get("bbox", [0, 0, 0, 0])
-                                    # bbox is [x1, y1, x2, y2] in pixel coords
-                                    x1, y1, x2, y2 = raw_bbox
-                                    detections.append({
-                                        "bbox": [
-                                            x1 / frame_w,
-                                            y1 / frame_h,
-                                            x2 / frame_w,
-                                            y2 / frame_h,
-                                        ],
-                                        "name": face_identity.get("name", "Unknown"),
-                                        "confidence": float(face_identity.get("confidence", 0.0)),
-                                        "user_id": face_identity.get("user_id", ""),
-                                    })
-
-                                # Gather attendance summary from session state
-                                enrolled_ids = set(session.student_states.keys())
-                                recognized_ids = {r.user_id for r in result.recognized}
-                                present_count = len(recognized_ids & enrolled_ids)
-                                total_enrolled = len(enrolled_ids)
-
-                                absent_names = []
-                                early_leave_names = []
-                                for sid, sstate in session.student_states.items():
-                                    if sstate.get("early_leave_flagged"):
-                                        u = db.query(User).filter(User.id == sid).first()
-                                        early_leave_names.append(
-                                            f"{u.first_name} {u.last_name}" if u else "Unknown"
-                                        )
-                                    elif sid not in recognized_ids:
-                                        u = db.query(User).filter(User.id == sid).first()
-                                        absent_names.append(
-                                            f"{u.first_name} {u.last_name}" if u else "Unknown"
-                                        )
-
-                                await ws_manager.broadcast_scan_result(
-                                    schedule_id=schedule_id,
-                                    detections=detections,
-                                    present_count=present_count,
-                                    total_enrolled=total_enrolled,
-                                    absent=absent_names,
-                                    early_leave=early_leave_names,
-                                )
-                            except Exception:
-                                logger.exception(f"WebSocket broadcast failed for room {room_id}")
-
-                    except Exception:
-                        logger.exception(f"Attendance scan failed for room {room_id}")
-
-                await presence_svc.run_scan_cycle(scan_results=scan_results)
-            except Exception:
-                logger.exception("Attendance scan cycle failed")
-            finally:
-                db.close()
-
-        scheduler.add_job(
-            run_attendance_scan_cycle,
-            "interval",
-            seconds=settings.SCAN_INTERVAL_SECONDS,
-            id="presence_scan_cycle",
-            replace_existing=True,
-            max_instances=1,
-        )
 
         # FAISS health check (every 30 minutes)
         async def run_faiss_health_check():
@@ -372,11 +206,144 @@ async def startup_event():
             max_instances=1,
         )
 
+        # Session lifecycle management — creates/stops SessionPipelines
+        async def run_session_lifecycle_check():
+            """Auto-start/end sessions and their real-time pipelines."""
+            from datetime import datetime
+
+            from app.models.room import Room
+            from app.repositories.schedule_repository import ScheduleRepository
+            from app.services.frame_grabber import FrameGrabber
+            from app.services.realtime_pipeline import SessionPipeline
+
+            db = SessionLocal()
+            try:
+                now = datetime.now()
+                current_day = now.weekday()
+                current_time = now.time()
+
+                schedule_repo = ScheduleRepository(db)
+
+                # Track which sessions the OLD PresenceService knows about
+                # (kept for backward compat during migration)
+                presence_svc = PresenceService(db)
+                PresenceService.cleanup_old_ended_sessions()
+                active_session_ids = set(presence_svc.get_active_sessions())
+                pipeline_ids = set(app.state.session_pipelines.keys())
+
+                # Merge both sets — a session is "active" if either system has it
+                all_active = active_session_ids | pipeline_ids
+
+                # === Auto-start ===
+                should_be_active = schedule_repo.get_active_at_time(current_day, current_time)
+                for schedule in should_be_active:
+                    sid = str(schedule.id)
+                    if sid in all_active or PresenceService.was_session_ended_today(sid):
+                        continue
+
+                    room_id = str(schedule.room_id)
+                    room = db.query(Room).filter(Room.id == schedule.room_id).first()
+                    camera_url = room.camera_endpoint if room else None
+
+                    try:
+                        # Start legacy session (keeps old code path working)
+                        await presence_svc.start_session(sid)
+
+                        # Create FrameGrabber if we have a camera
+                        if camera_url and room_id not in app.state.frame_grabbers:
+                            grabber = FrameGrabber(camera_url)
+                            app.state.frame_grabbers[room_id] = grabber
+                            logger.info(f"[lifecycle] Created FrameGrabber for room {room_id}")
+
+                        # Start real-time pipeline
+                        grabber = app.state.frame_grabbers.get(room_id)
+                        if grabber:
+                            # Self-heal FAISS before starting pipeline
+                            from app.services.ml.faiss_manager import faiss_manager
+
+                            if faiss_manager.index is None or faiss_manager.index.ntotal == 0:
+                                faiss_manager.load_or_create_index()
+                            if not faiss_manager.user_map:
+                                from app.services.face_service import FaceService
+                                FaceService.reconcile_faiss_index(db)
+
+                            pipeline = SessionPipeline(
+                                schedule_id=sid,
+                                grabber=grabber,
+                                db_factory=SessionLocal,
+                            )
+                            await pipeline.start()
+                            app.state.session_pipelines[sid] = pipeline
+                            logger.info(
+                                f"[lifecycle] Started pipeline for "
+                                f"{schedule.subject_code} ({sid})"
+                            )
+                        else:
+                            logger.warning(
+                                f"[lifecycle] No camera for {schedule.subject_code}, "
+                                f"session started without pipeline"
+                            )
+
+                    except Exception:
+                        logger.exception(f"[lifecycle] Failed to start session {sid}")
+
+                # === Auto-end ===
+                for sid in list(all_active):
+                    # Check legacy session state first
+                    session_state = presence_svc.get_session_state(sid)
+                    if not session_state:
+                        # Pipeline might be running without legacy session
+                        if sid in pipeline_ids:
+                            # Let it keep running — it manages its own state
+                            pass
+                        continue
+
+                    schedule = session_state.schedule
+                    if current_time <= schedule.end_time:
+                        continue
+
+                    room_id = str(schedule.room_id)
+                    subject_code = schedule.subject_code
+
+                    try:
+                        # Stop pipeline first
+                        pipeline = app.state.session_pipelines.pop(sid, None)
+                        if pipeline:
+                            await pipeline.stop()
+                            logger.info(f"[lifecycle] Stopped pipeline for {subject_code}")
+
+                        # End legacy session
+                        await presence_svc.end_session(sid)
+                        logger.info(f"[lifecycle] Ended session for {subject_code} ({sid})")
+
+                        # Stop FrameGrabber
+                        frame_grabbers = app.state.frame_grabbers
+                        if room_id in frame_grabbers:
+                            frame_grabbers[room_id].stop()
+                            del frame_grabbers[room_id]
+                            logger.info(f"[lifecycle] Stopped FrameGrabber for room {room_id}")
+
+                    except Exception:
+                        logger.exception(f"[lifecycle] Failed to end session {sid}")
+
+            except Exception:
+                logger.exception("[lifecycle] Session lifecycle check failed")
+            finally:
+                db.close()
+
+        scheduler.add_job(
+            run_session_lifecycle_check,
+            "interval",
+            seconds=30,
+            id="session_lifecycle_check",
+            replace_existing=True,
+            max_instances=1,
+        )
+
         # Start the scheduler
         scheduler.start()
         logger.info(
-            f"APScheduler started — presence scan every {settings.SCAN_INTERVAL_SECONDS}s, "
-            f"FAISS health every 30m"
+            "APScheduler started — session lifecycle every 30s, FAISS health every 30m"
         )
 
     except Exception as e:
@@ -402,6 +369,16 @@ async def shutdown_event():
             logger.info("APScheduler stopped")
     except Exception as e:
         logger.error(f"Failed to stop scheduler: {e}")
+
+    # Stop all SessionPipelines
+    if hasattr(app.state, "session_pipelines"):
+        for sid, pipeline in list(app.state.session_pipelines.items()):
+            try:
+                await pipeline.stop()
+                logger.info(f"SessionPipeline stopped for schedule {sid}")
+            except Exception as e:
+                logger.error(f"Failed to stop pipeline for schedule {sid}: {e}")
+        app.state.session_pipelines.clear()
 
     # Stop all FrameGrabbers
     if hasattr(app.state, "frame_grabbers"):

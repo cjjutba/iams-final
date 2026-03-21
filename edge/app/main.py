@@ -6,13 +6,13 @@ import signal
 import sys
 import time
 
-from app.config import ROOM_ID, RTSP_SUB, VPS_RTSP_URL
+from app.config import ROOM_ID, RTSP_MAIN, VPS_RTSP_URL
 from app.stream_relay import StreamRelay
 
 
 def main():
     target = f"{VPS_RTSP_URL}/{ROOM_ID}/raw"
-    relay = StreamRelay(RTSP_SUB, target)
+    relay = StreamRelay(RTSP_MAIN, target)
 
     def shutdown(signum, frame):
         print(f"Received signal {signum}, stopping...")
@@ -22,7 +22,7 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    print(f"Starting RTSP relay: {RTSP_SUB} -> {target}")
+    print(f"Starting RTSP relay: {RTSP_MAIN} -> {target}")
     relay.start()
 
     try:

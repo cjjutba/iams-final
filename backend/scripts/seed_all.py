@@ -2,10 +2,12 @@
 Full Development Seed Script
 
 Runs the complete seed sequence for local development and thesis demonstration:
-  1. seed_reference_data  — populates student_records + faculty_records
-  2. seed_data            — creates faculty user, rooms, schedules (with auto-enrollment targeting)
+  1. seed_reference_data  — populates student_records (~160 from JRMSU data + CJ Jutba) + faculty_records
+  2. seed_data            — creates faculty user, 2 rooms (EB226, EB227), all real schedules
   3. seed_content         — creates faculty notifications
   4. seed_simulation      — creates student users, enrollments, attendance history, etc.
+
+Data source: docs/data/ListofStudents_All-thesis-purposes.md
 
 Usage:
     python -m scripts.seed_all                # Full seed (includes simulation)
@@ -29,13 +31,13 @@ def main():
     skip_sim = "--no-sim" in sys.argv
 
     print("\n" + "=" * 60)
-    print("IAMS - Full Development Seed")
+    print("IAMS - Full Development Seed (JRMSU School Data)")
     print("=" * 60)
 
-    print("\n>>> Step 1: Reference Data (student_records + faculty_records)")
+    print("\n>>> Step 1: Reference Data (student_records from JRMSU + faculty_records)")
     seed_reference_data()
 
-    print("\n>>> Step 2: Operational Data (faculty user, rooms, schedules)")
+    print("\n>>> Step 2: Operational Data (4 faculty users, EB226/EB227 rooms, all schedules)")
     seed()
 
     print("\n>>> Step 3: Content Data (faculty notifications)")
@@ -51,14 +53,20 @@ def main():
     print("ALL SEED DATA COMPLETE")
     print("=" * 60)
     print("\nReady for development/testing.")
-    print("\nFaculty login: faculty@gmail.com / password123")
+    print("\nFaculty logins (all use password123):")
+    print("  faculty@gmail.com              (default test account)")
+    print("  ryan.elumba@jrmsu.edu.ph       (Elumba, Ryan Z.)")
+    print("  maricon.gahisan@jrmsu.edu.ph   (Gahisan, Maricon Denber)")
+    print("  troy.lasco@jrmsu.edu.ph        (Lasco, Troy C.)")
+    print("Rooms: EB226, EB227 (Engineering Building)")
 
     if skip_sim:
-        print("\nStudent registration: use mobile app with a Student ID from seed_reference_data")
+        print("\nStudent registration: use mobile app with a Student ID from the school roster")
+        print("  Test student: 21-A-02177 — Christian Jerald Jutba (DOB: 2003-01-13)")
     else:
-        print("\nStudent login (password123):")
+        print("\nStudent login (all use password123):")
         print("  21-A-02177 — Christian Jerald Jutba (cjjutbaofficial@gmail.com)")
-        print("  21-A-01234 — Juhazelle Espela (hazelleespela@gmail.com)")
+        print("  + all students from JRMSU CpE roster")
 
 
 if __name__ == "__main__":

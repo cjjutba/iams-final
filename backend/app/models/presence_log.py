@@ -43,6 +43,7 @@ class PresenceLog(Base):
     scan_time = Column(DateTime, default=datetime.utcnow, nullable=False)
     detected = Column(Boolean, nullable=False)
     confidence = Column(Float, nullable=True)  # 0-1 if detected, null if not detected
+    track_id = Column(Integer, nullable=True)  # ByteTrack track ID (realtime pipeline)
 
     # Relationships
     attendance_record = relationship("AttendanceRecord", backref="presence_logs")

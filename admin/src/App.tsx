@@ -19,6 +19,7 @@ const queryClient = new QueryClient({
 
 const LandingPage = lazy(() => import('@/routes/landing'))
 const LoginPage = lazy(() => import('@/routes/login'))
+const EmailConfirmedPage = lazy(() => import('@/routes/auth/email-confirmed'))
 const DashboardPage = lazy(() => import('@/routes/dashboard'))
 const StudentsPage = lazy(() => import('@/routes/users/students'))
 const StudentRecordDetailPage = lazy(() => import('@/routes/users/student-record-detail'))
@@ -63,6 +64,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<LandingPage />} />
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/auth/email-confirmed" element={<EmailConfirmedPage />} />
             <Route
               element={
                 <ProtectedRoute>

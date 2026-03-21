@@ -70,6 +70,7 @@ class AttendanceRecord(Base):
     presence_score = Column(Float, default=0.0, nullable=False)  # 0-100
     total_scans = Column(Integer, default=0, nullable=False)
     scans_present = Column(Integer, default=0, nullable=False)
+    total_present_seconds = Column(Float, default=0.0, nullable=False)  # Time-based presence
 
     # Notes
     remarks = Column(Text, nullable=True)

@@ -1,7 +1,9 @@
 package com.iams.app.di
 
+import com.iams.app.BuildConfig
 import com.iams.app.data.api.ApiService
 import com.iams.app.data.api.AuthInterceptor
+import com.iams.app.data.api.TokenAuthenticator
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -16,18 +18,21 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
-    // For emulator: 10.0.2.2 maps to host machine
-    // For physical device on same WiFi: use your Mac's IP
-    private const val BASE_URL = "http://10.0.2.2:8000/api/v1/"
+    // Configured via gradle.properties or local.properties (IAMS_BACKEND_HOST, IAMS_BACKEND_PORT)
+    private val BASE_URL = "http://${BuildConfig.BACKEND_HOST}:${BuildConfig.BACKEND_PORT}/api/v1/"
 
     @Provides
     @Singleton
-    fun provideOkHttpClient(authInterceptor: AuthInterceptor): OkHttpClient {
+    fun provideOkHttpClient(
+        authInterceptor: AuthInterceptor,
+        tokenAuthenticator: TokenAuthenticator
+    ): OkHttpClient {
         return OkHttpClient.Builder()
             .addInterceptor(authInterceptor)
             .addInterceptor(HttpLoggingInterceptor().apply {
                 level = HttpLoggingInterceptor.Level.BODY
             })
+            .authenticator(tokenAuthenticator)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .build()

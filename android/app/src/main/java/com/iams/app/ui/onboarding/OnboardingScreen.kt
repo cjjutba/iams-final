@@ -97,22 +97,6 @@ fun OnboardingScreen(
             .fillMaxSize()
             .background(Background)
     ) {
-        // Skip button — top-right
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            contentAlignment = Alignment.TopEnd
-        ) {
-            IAMSButton(
-                text = "Skip",
-                onClick = onComplete,
-                variant = IAMSButtonVariant.GHOST,
-                size = IAMSButtonSize.SM,
-                fullWidth = false,
-            )
-        }
-
         // Main content
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -161,6 +145,22 @@ fun OnboardingScreen(
                     fullWidth = true,
                 )
             }
+        }
+
+        // Skip button — top-right (rendered after Column so it's on top in z-order)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            contentAlignment = Alignment.TopEnd
+        ) {
+            IAMSButton(
+                text = "Skip",
+                onClick = onComplete,
+                variant = IAMSButtonVariant.GHOST,
+                size = IAMSButtonSize.SM,
+                fullWidth = false,
+            )
         }
     }
 }

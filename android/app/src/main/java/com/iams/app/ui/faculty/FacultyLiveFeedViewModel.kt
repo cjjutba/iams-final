@@ -2,16 +2,16 @@ package com.iams.app.ui.faculty
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.iams.app.BuildConfig
 import com.iams.app.data.api.ApiService
 import com.iams.app.data.api.AttendanceWebSocketClient
-import com.iams.app.data.model.Detection
-import com.iams.app.data.model.LiveAttendanceResponse
+import com.iams.app.data.model.AttendanceSummaryMessage
+import com.iams.app.data.model.FrameUpdateMessage
 import com.iams.app.data.model.RoomResponse
 import com.iams.app.data.model.ScheduleResponse
-import com.iams.app.data.model.ScanResultMessage
 import com.iams.app.data.model.StudentAttendanceStatus
-import com.iams.app.ui.components.DetectedFaceLocal
-import com.iams.app.ui.components.FaceDetectionProcessor
+import com.iams.app.data.model.TrackInfo
+import android.util.Log
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,15 +22,18 @@ import javax.inject.Inject
 data class LiveFeedUiState(
     val isLoading: Boolean = false,
     val error: String? = null,
+    val videoError: String? = null,
     val schedule: ScheduleResponse? = null,
     val room: RoomResponse? = null,
-    val rtspUrl: String = "",
+    val videoUrl: String = "",
     val presentStudents: List<StudentAttendanceStatus> = emptyList(),
     val absentStudents: List<StudentAttendanceStatus> = emptyList(),
     val lateStudents: List<StudentAttendanceStatus> = emptyList(),
     val earlyLeaveStudents: List<StudentAttendanceStatus> = emptyList(),
     val presentCount: Int = 0,
     val totalEnrolled: Int = 0,
+    val fps: Float = 0f,
+    val processingMs: Float = 0f,
 )
 
 @HiltViewModel
@@ -41,11 +44,11 @@ class FacultyLiveFeedViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(LiveFeedUiState())
     val uiState: StateFlow<LiveFeedUiState> = _uiState.asStateFlow()
 
-    val faceProcessor = FaceDetectionProcessor()
-    val localFaces: StateFlow<List<DetectedFaceLocal>> = faceProcessor.detectedFaces
-
-    private val wsClient = AttendanceWebSocketClient("ws://167.71.217.44:8000/api/v1/ws")
-    val recognitions: StateFlow<List<Detection>> = wsClient.detections
+    // Real-time tracks from WebSocket (replaces localFaces + recognitions)
+    private val wsClient = AttendanceWebSocketClient(
+        "ws://${BuildConfig.BACKEND_HOST}:${BuildConfig.BACKEND_PORT}/api/v1/ws"
+    )
+    val tracks: StateFlow<List<TrackInfo>> = wsClient.tracks
     val wsConnected: StateFlow<Boolean> = wsClient.isConnected
 
     private var initialized = false
@@ -54,61 +57,40 @@ class FacultyLiveFeedViewModel @Inject constructor(
         if (initialized) return
         initialized = true
 
+        // Start WebSocket immediately
+        wsClient.connect(scheduleId)
+        observeWebSocket()
+
+        // Fetch room info (needed for RTSP URL)
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
-
             try {
-                // Fetch schedule info
-                val scheduleJob = viewModelScope.launch {
-                    try {
-                        val response = apiService.getSchedule(scheduleId)
-                        if (response.isSuccessful) {
-                            _uiState.value = _uiState.value.copy(schedule = response.body())
+                val response = apiService.getRooms()
+                if (response.isSuccessful) {
+                    val rooms = response.body() ?: emptyList()
+                    val room = rooms.find { it.id == roomId }
+                    if (room != null) {
+                        // Use mediamtx WHEP player for WebRTC playback (sub-second latency).
+                        val url = when {
+                            room.streamKey != null ->
+                                "http://${BuildConfig.BACKEND_HOST}:${BuildConfig.MEDIAMTX_WEBRTC_PORT}/${room.streamKey}/"
+                            else -> ""
                         }
-                    } catch (_: Exception) {}
+                        Log.i("LiveFeed", "WebRTC URL: $url (streamKey=${room.streamKey})")
+                        _uiState.value = _uiState.value.copy(
+                            room = room,
+                            videoUrl = url,
+                            isLoading = false
+                        )
+                    } else {
+                        _uiState.value = _uiState.value.copy(isLoading = false)
+                    }
+                } else {
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        error = "Failed to load room info"
+                    )
                 }
-
-                // Fetch room info to get stream_key for RTSP URL
-                val roomJob = viewModelScope.launch {
-                    try {
-                        val response = apiService.getRooms()
-                        if (response.isSuccessful) {
-                            val rooms = response.body() ?: emptyList()
-                            val room = rooms.find { it.id == roomId }
-                            if (room != null) {
-                                _uiState.value = _uiState.value.copy(
-                                    room = room,
-                                    rtspUrl = if (room.streamKey != null) {
-                                        "rtsp://167.71.217.44:8554/${room.streamKey}/raw"
-                                    } else ""
-                                )
-                            }
-                        }
-                    } catch (_: Exception) {}
-                }
-
-                // Fetch initial live attendance
-                val attendanceJob = viewModelScope.launch {
-                    try {
-                        val response = apiService.getLiveAttendance(scheduleId)
-                        if (response.isSuccessful) {
-                            val live = response.body()
-                            if (live != null) {
-                                updateAttendanceFromLive(live)
-                            }
-                        }
-                    } catch (_: Exception) {}
-                }
-
-                scheduleJob.join()
-                roomJob.join()
-                attendanceJob.join()
-
-                _uiState.value = _uiState.value.copy(isLoading = false)
-
-                // Connect WebSocket and observe scan results
-                wsClient.connect(scheduleId)
-                observeScanResults()
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
@@ -116,50 +98,93 @@ class FacultyLiveFeedViewModel @Inject constructor(
                 )
             }
         }
+
+        // Fetch schedule info in parallel
+        viewModelScope.launch {
+            try {
+                val response = apiService.getSchedule(scheduleId)
+                if (response.isSuccessful) {
+                    _uiState.value = _uiState.value.copy(schedule = response.body())
+                }
+            } catch (_: Exception) {}
+        }
+
+        // Fetch initial live attendance in parallel
+        viewModelScope.launch {
+            try {
+                val response = apiService.getLiveAttendance(scheduleId)
+                if (response.isSuccessful) {
+                    response.body()?.let { live ->
+                        val present = live.present ?: emptyList()
+                        val absent = live.absent ?: emptyList()
+                        val late = live.late ?: emptyList()
+                        val earlyLeave = live.earlyLeave ?: emptyList()
+                        _uiState.value = _uiState.value.copy(
+                            presentStudents = present,
+                            absentStudents = absent,
+                            lateStudents = late,
+                            earlyLeaveStudents = earlyLeave,
+                            presentCount = present.size + late.size,
+                            totalEnrolled = present.size + absent.size + late.size + earlyLeave.size
+                        )
+                    }
+                }
+            } catch (_: Exception) {}
+        }
     }
 
-    private fun observeScanResults() {
+    private fun observeWebSocket() {
+        // Observe frame updates for real-time stats
         viewModelScope.launch {
-            wsClient.scanResults.collect { msg ->
+            wsClient.frameUpdate.collect { msg ->
                 if (msg != null) {
                     _uiState.value = _uiState.value.copy(
-                        presentCount = msg.presentCount,
-                        totalEnrolled = msg.totalEnrolled
+                        fps = msg.fps,
+                        processingMs = msg.processingMs,
                     )
-                    // Refresh full attendance list periodically
-                    refreshAttendance(msg.scheduleId)
+                }
+            }
+        }
+
+        // Observe attendance summaries
+        viewModelScope.launch {
+            wsClient.attendanceSummary.collect { msg ->
+                if (msg != null) {
+                    updateFromAttendanceSummary(msg)
                 }
             }
         }
     }
 
-    private suspend fun refreshAttendance(scheduleId: String) {
-        try {
-            val response = apiService.getLiveAttendance(scheduleId)
-            if (response.isSuccessful) {
-                val live = response.body()
-                if (live != null) {
-                    updateAttendanceFromLive(live)
-                }
-            }
-        } catch (_: Exception) {}
+    private fun updateFromAttendanceSummary(summary: AttendanceSummaryMessage) {
+        val present = summary.present?.map { toStudentStatus(it.userId, it.name, "present") } ?: emptyList()
+        val absent = summary.absent?.map { toStudentStatus(it.userId, it.name, "absent") } ?: emptyList()
+        val late = summary.late?.map { toStudentStatus(it.userId, it.name, "late") } ?: emptyList()
+        val earlyLeave = summary.earlyLeave?.map { toStudentStatus(it.userId, it.name, "early_leave") } ?: emptyList()
+
+        _uiState.value = _uiState.value.copy(
+            presentStudents = present,
+            absentStudents = absent,
+            lateStudents = late,
+            earlyLeaveStudents = earlyLeave,
+            presentCount = summary.presentCount,
+            totalEnrolled = summary.totalEnrolled,
+        )
     }
 
-    private fun updateAttendanceFromLive(live: LiveAttendanceResponse) {
-        _uiState.value = _uiState.value.copy(
-            presentStudents = live.present,
-            absentStudents = live.absent,
-            lateStudents = live.late,
-            earlyLeaveStudents = live.earlyLeave,
-            presentCount = live.present.size + live.late.size,
-            totalEnrolled = live.present.size + live.absent.size +
-                    live.late.size + live.earlyLeave.size
+    private fun toStudentStatus(userId: String, name: String, status: String) =
+        StudentAttendanceStatus(
+            studentId = userId,
+            studentName = name,
+            status = status,
         )
+
+    fun onVideoError(error: String) {
+        _uiState.value = _uiState.value.copy(videoError = error)
     }
 
     override fun onCleared() {
         super.onCleared()
-        wsClient.disconnect()
-        faceProcessor.close()
+        wsClient.destroy()
     }
 }

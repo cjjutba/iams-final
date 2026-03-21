@@ -9,13 +9,24 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.time.LocalDate
 import javax.inject.Inject
 
 data class StudentScheduleUiState(
     val isLoading: Boolean = false,
+    val isRefreshing: Boolean = false,
     val error: String? = null,
-    val schedulesByDay: Map<String, List<ScheduleResponse>> = emptyMap(),
+    val allSchedules: List<ScheduleResponse> = emptyList(),
+    val selectedDay: Int = todayBackendDay(), // 0=Monday, 6=Sunday
 )
+
+/**
+ * Convert current system day to backend format (0=Monday, 6=Sunday).
+ */
+private fun todayBackendDay(): Int {
+    // Java DayOfWeek: MONDAY=1 ... SUNDAY=7
+    return LocalDate.now().dayOfWeek.value - 1
+}
 
 @HiltViewModel
 class StudentScheduleViewModel @Inject constructor(
@@ -24,10 +35,6 @@ class StudentScheduleViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(StudentScheduleUiState())
     val uiState: StateFlow<StudentScheduleUiState> = _uiState.asStateFlow()
-
-    private val dayOrder = listOf(
-        "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"
-    )
 
     init {
         loadSchedules()
@@ -38,22 +45,13 @@ class StudentScheduleViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
 
             try {
-                val response = apiService.getSchedules()
+                val response = apiService.getMySchedules()
 
                 if (response.isSuccessful) {
                     val schedules = response.body() ?: emptyList()
-                    val grouped = schedules.groupBy { it.dayOfWeek }
-                    // Sort by day order
-                    val sorted = linkedMapOf<String, List<ScheduleResponse>>()
-                    for (day in dayOrder) {
-                        val daySchedules = grouped[day]
-                        if (daySchedules != null) {
-                            sorted[day] = daySchedules.sortedBy { it.startTime }
-                        }
-                    }
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
-                        schedulesByDay = sorted
+                        allSchedules = schedules
                     )
                 } else {
                     _uiState.value = _uiState.value.copy(
@@ -68,5 +66,31 @@ class StudentScheduleViewModel @Inject constructor(
                 )
             }
         }
+    }
+
+    fun refresh() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isRefreshing = true, error = null)
+            loadSchedules()
+            _uiState.value = _uiState.value.copy(isRefreshing = false)
+        }
+    }
+
+    fun selectDay(day: Int) {
+        _uiState.value = _uiState.value.copy(selectedDay = day)
+    }
+
+    fun clearError() {
+        _uiState.value = _uiState.value.copy(error = null)
+    }
+
+    /**
+     * Get schedules for the currently selected day, sorted by start time.
+     */
+    fun getSelectedDaySchedules(): List<ScheduleResponse> {
+        val state = _uiState.value
+        return state.allSchedules
+            .filter { it.dayOfWeekInt == state.selectedDay }
+            .sortedBy { it.startTime }
     }
 }

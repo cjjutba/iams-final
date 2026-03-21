@@ -33,6 +33,20 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class CheckStudentIDRequest(BaseModel):
+    """Check student ID availability (Step 1a of registration)"""
+
+    student_id: str = Field(..., min_length=1, max_length=50)
+
+
+class CheckStudentIDResponse(BaseModel):
+    """Check student ID response"""
+
+    exists: bool
+    available: bool
+    message: str
+
+
 class VerifyStudentIDRequest(BaseModel):
     """Student ID verification request (Step 1 of registration)"""
 

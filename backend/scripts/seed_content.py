@@ -81,7 +81,7 @@ def seed_content():
             {
                 "user_id": faculty.id,
                 "title": "Classes Configured",
-                "message": "Your class schedules have been configured: CPE 301 (Year 4), CPE 201 (Year 3), CPE 101 (Year 2), GE 101 (Year 1). All classes are in the Engineering Building.",
+                "message": "Your class schedules have been configured for rooms EB226 and EB227 in the Engineering Building. Subjects include CpE 121, CpE 115, CpE 120, CpE 113, CpE 322, CpE 324, CpE 326, CpE 421, and ES 112.",
                 "type": "system",
                 "read": True,
                 "read_at": datetime(2026, 2, 10, 9, 0),
@@ -91,7 +91,7 @@ def seed_content():
             {
                 "user_id": faculty.id,
                 "title": "System Ready",
-                "message": "The IAMS attendance monitoring system is ready. The Raspberry Pi camera in Room 301 will automatically detect and track student attendance during class hours.",
+                "message": "The IAMS attendance monitoring system is ready. The Raspberry Pi camera in EB227 will automatically detect and track student attendance during class hours.",
                 "type": "system",
                 "read": False,
                 "reference_type": None,
@@ -109,7 +109,7 @@ def seed_content():
             {
                 "user_id": faculty.id,
                 "title": "Camera Setup Reminder",
-                "message": "Please ensure the Raspberry Pi camera is positioned correctly in Room 301 and connected to the local network. Contact the admin if you need assistance.",
+                "message": "Please ensure the Raspberry Pi camera is positioned correctly in EB227 and connected to the local network. Contact the admin if you need assistance.",
                 "type": "alert",
                 "read": False,
                 "reference_type": None,

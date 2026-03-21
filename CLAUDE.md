@@ -257,6 +257,18 @@ bash deploy/deploy.sh
 ### What triggers a deploy prompt
 Any change to files under `backend/` should prompt: "Do you want to deploy this to the VPS?"
 
+## Plan Mode: Lesson Capture
+
+Every plan must end with a `## Lessons` section containing insights discovered during planning — things like "never do X", "Y breaks because Z", or "always check W first". These are written in the plan file during planning (read-only is fine — it's part of the plan).
+
+**After exiting plan mode**, the first execution step is always: write any lessons from the plan's `## Lessons` section to `memory/lessons.md`. This ensures planning insights survive into execution and future sessions.
+
+Format in `memory/lessons.md`:
+```
+## YYYY-MM-DD: Short title
+What happened, why it matters, what to do differently.
+```
+
 ## Documentation
 
 - Design doc: `docs/plans/2026-03-19-client-side-detection-redesign-design.md`

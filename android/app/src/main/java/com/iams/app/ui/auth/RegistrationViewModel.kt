@@ -7,6 +7,7 @@ import com.iams.app.data.api.ApiService
 import com.iams.app.data.model.CheckEmailRequest
 import com.iams.app.data.model.RegisterRequest
 import com.iams.app.data.model.ResendVerificationRequest
+import com.iams.app.data.model.CheckStudentIdRequest
 import com.iams.app.data.model.VerifyStudentIdRequest
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
@@ -24,6 +25,7 @@ data class RegistrationUiState(
     val isLoading: Boolean = false,
     val error: String? = null,
     // Step 1 results
+    val studentIdChecked: Boolean = false,
     val studentVerified: Boolean = false,
     val studentId: String = "",
     val firstName: String = "",
@@ -50,6 +52,56 @@ class RegistrationViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(RegistrationUiState())
     val uiState: StateFlow<RegistrationUiState> = _uiState.asStateFlow()
+
+    fun checkStudentId(studentId: String) {
+        if (studentId.isBlank()) {
+            _uiState.value = _uiState.value.copy(error = "Please enter your Student ID")
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+
+            try {
+                val response = apiService.checkStudentId(
+                    CheckStudentIdRequest(studentId.trim().uppercase())
+                )
+
+                if (response.isSuccessful) {
+                    val body = response.body()!!
+                    if (body.exists && body.available) {
+                        _uiState.value = _uiState.value.copy(
+                            isLoading = false,
+                            studentIdChecked = true,
+                            studentId = studentId.trim().uppercase()
+                        )
+                    } else {
+                        _uiState.value = _uiState.value.copy(
+                            isLoading = false,
+                            error = body.message
+                        )
+                    }
+                } else {
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        error = response.errorBody()?.string() ?: "Failed to check Student ID"
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    error = "Network error. Please check your connection."
+                )
+            }
+        }
+    }
+
+    fun resetStudentIdCheck() {
+        _uiState.value = _uiState.value.copy(
+            studentIdChecked = false,
+            error = null
+        )
+    }
 
     fun verifyStudentId(studentId: String, birthdate: String) {
         if (studentId.isBlank() || birthdate.isBlank()) {

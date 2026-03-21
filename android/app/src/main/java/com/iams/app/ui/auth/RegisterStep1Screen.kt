@@ -18,9 +18,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -73,7 +73,14 @@ fun RegisterStep1Screen(
         showBack = true,
         title = "Create Account",
         subtitle = "Step 1 of 4 - Verify your identity",
-        onBack = { navController.popBackStack() }
+        onBack = {
+            if (uiState.studentIdChecked) {
+                viewModel.resetStudentIdCheck()
+                birthdate = ""
+            } else {
+                navController.popBackStack()
+            }
+        }
     ) {
         // Progress section
         Spacer(modifier = Modifier.height(8.dp))
@@ -101,16 +108,19 @@ fun RegisterStep1Screen(
         // Section start
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Helper text
+        // Helper text changes based on phase
         Text(
-            text = "Enter your student ID and birthdate to verify your enrollment.",
+            text = if (uiState.studentIdChecked)
+                "Enter your birthdate to verify your identity."
+            else
+                "Enter your student ID to verify your enrollment.",
             style = MaterialTheme.typography.bodySmall,
             color = TextSecondary
         )
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Student ID field
+        // Student ID field (always visible, disabled in phase 2)
         IAMSTextField(
             value = studentId,
             onValueChange = {
@@ -118,50 +128,90 @@ fun RegisterStep1Screen(
                 viewModel.clearError()
             },
             label = "Student ID",
-            placeholder = "e.g., 2021-00123",
-            enabled = !uiState.isLoading,
+            placeholder = "e.g., 21-A-01234",
+            enabled = !uiState.isLoading && !uiState.studentIdChecked,
             keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.Characters,
                 keyboardType = KeyboardType.Text,
-                imeAction = ImeAction.Next
-            ),
-            keyboardActions = KeyboardActions(
-                onNext = { focusManager.moveFocus(FocusDirection.Down) }
-            )
-        )
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // Birthdate field
-        IAMSTextField(
-            value = birthdate,
-            onValueChange = {
-                birthdate = it
-                viewModel.clearError()
-            },
-            label = "Birthdate",
-            placeholder = "YYYY-MM-DD",
-            enabled = !uiState.isLoading,
-            error = null,
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Number,
-                imeAction = ImeAction.Done
+                imeAction = if (uiState.studentIdChecked) ImeAction.Next else ImeAction.Done
             ),
             keyboardActions = KeyboardActions(
                 onDone = {
-                    focusManager.clearFocus()
-                    viewModel.verifyStudentId(studentId, birthdate)
+                    if (!uiState.studentIdChecked) {
+                        focusManager.clearFocus()
+                        viewModel.checkStudentId(studentId)
+                    }
                 }
             )
         )
 
+        // Phase 2: Birthdate field (shown after student ID is checked)
+        if (uiState.studentIdChecked) {
+            Spacer(modifier = Modifier.height(20.dp))
+
+            IAMSTextField(
+                value = birthdate,
+                onValueChange = { newValue ->
+                    // Only allow digits, max 8 characters (MMDDYYYY)
+                    val filtered = newValue.filter { it.isDigit() }.take(8)
+                    birthdate = filtered
+                    viewModel.clearError()
+                },
+                label = "Birthdate",
+                placeholder = "e.g., 01132003",
+                enabled = !uiState.isLoading,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Number,
+                    imeAction = ImeAction.Done
+                ),
+                keyboardActions = KeyboardActions(
+                    onDone = {
+                        focusManager.clearFocus()
+                        if (birthdate.length == 8) {
+                            val formatted = formatBirthdateForApi(birthdate)
+                            viewModel.verifyStudentId(studentId, formatted)
+                        }
+                    }
+                )
+            )
+        }
+
         Spacer(modifier = Modifier.height(32.dp))
 
-        // Verify button
-        IAMSButton(
-            text = "Verify",
-            onClick = { viewModel.verifyStudentId(studentId, birthdate) },
-            enabled = !uiState.isLoading,
-            isLoading = uiState.isLoading
-        )
+        if (uiState.studentIdChecked) {
+            // Phase 2: Verify button
+            IAMSButton(
+                text = "Verify",
+                onClick = {
+                    if (birthdate.length == 8) {
+                        val formatted = formatBirthdateForApi(birthdate)
+                        viewModel.verifyStudentId(studentId, formatted)
+                    } else {
+                        viewModel.clearError()
+                        toastState.showToast("Please enter a valid birthdate (MMDDYYYY)", ToastType.ERROR)
+                    }
+                },
+                enabled = !uiState.isLoading && birthdate.length == 8,
+                isLoading = uiState.isLoading
+            )
+        } else {
+            // Phase 1: Continue button
+            IAMSButton(
+                text = "Continue",
+                onClick = { viewModel.checkStudentId(studentId) },
+                enabled = !uiState.isLoading && studentId.isNotBlank(),
+                isLoading = uiState.isLoading
+            )
+        }
     }
+}
+
+/**
+ * Convert MMDDYYYY to YYYY-MM-DD for the backend API.
+ */
+private fun formatBirthdateForApi(mmddyyyy: String): String {
+    val mm = mmddyyyy.substring(0, 2)
+    val dd = mmddyyyy.substring(2, 4)
+    val yyyy = mmddyyyy.substring(4, 8)
+    return "$yyyy-$mm-$dd"
 }

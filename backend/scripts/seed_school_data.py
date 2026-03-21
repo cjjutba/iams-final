@@ -5,8 +5,8 @@ Parses docs/data/ListofStudents_All-thesis-purposes.md and seeds the database
 with real school data for the IAMS pilot deployment at JRMSU.
 
 Creates:
-- 3 Faculty user accounts (password: password123) in users table
-- 3 Faculty records in faculty_records table
+- 4 Faculty user accounts (password: password123) in users table
+- 4 Faculty records in faculty_records table
 - 2 Rooms (EB226, EB227) in rooms table
 - Schedules for all class sections in schedules table
 - Deduplicated student records (~160) in student_records table
@@ -49,21 +49,28 @@ ACADEMIC_YEAR = "2025-2026"
 
 FACULTY_DEFS = [
     {
-        "faculty_id": "FAC-ELUMBA",
+        "faculty_id": "FAC-001",
+        "first_name": "Faculty",
+        "last_name": "User",
+        "email": "faculty@gmail.com",
+        "department": "Computer Engineering",
+    },
+    {
+        "faculty_id": "FAC-002",
         "first_name": "Ryan",
         "last_name": "Elumba",
         "email": "ryan.elumba@jrmsu.edu.ph",
         "department": "Computer Engineering",
     },
     {
-        "faculty_id": "FAC-GAHISAN",
+        "faculty_id": "FAC-003",
         "first_name": "Maricon Denber",
         "last_name": "Gahisan",
         "email": "maricon.gahisan@jrmsu.edu.ph",
         "department": "Computer Engineering",
     },
     {
-        "faculty_id": "FAC-LASCO",
+        "faculty_id": "FAC-004",
         "first_name": "Troy",
         "last_name": "Lasco",
         "email": "troy.lasco@jrmsu.edu.ph",
@@ -84,33 +91,45 @@ ROOM_DEFS = [
 # day_of_week: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
 
 SCHEDULE_DEFS = [
-    # ── Elumba ──
+    # ── Elumba ────────────────────────────────────────────────────────
+    # CpE 121 / CpE 121L — WEB Technologies (EB227, TTH)
     ("CpE 121", "WEB Technologies (LEC)", "ryan.elumba@jrmsu.edu.ph",
      "EB227", "BSCPE", 2, [1, 3], time(7, 0), time(8, 30)),
     ("CpE 121L", "WEB Technologies (LAB)", "ryan.elumba@jrmsu.edu.ph",
      "EB227", "BSCPE", 2, [1, 3], time(14, 30), time(16, 0)),
+    # CpE 115 — Computer Hardware Fundamentals (EB226, MW)
     ("CpE 115", "Computer Hardware Fundamentals", "ryan.elumba@jrmsu.edu.ph",
      "EB226", "BSCPE", 1, [0, 2], time(13, 0), time(14, 30)),
+    # CpE 326 — CpE Laws & Professional Practice (EB227, MW)
     ("CpE 326", "CpE Laws & Professional Practice", "ryan.elumba@jrmsu.edu.ph",
      "EB227", "BSCPE", 3, [0, 2], time(17, 30), time(18, 30)),
-    # ── Gahisan ──
+
+    # ── Gahisan ───────────────────────────────────────────────────────
+    # CpE 115 — Computer Hardware Fundamentals (EB226, MW) — section 2
     ("CpE 115", "Computer Hardware Fundamentals", "maricon.gahisan@jrmsu.edu.ph",
      "EB226", "BSCPE", 1, [0, 2], time(9, 0), time(10, 30)),
+    # CpE 120 — Fundamentals of Electronic Circuits (EB226, TTH)
     ("CpE 120", "Fundamentals of Electronic Circuits", "maricon.gahisan@jrmsu.edu.ph",
      "EB226", "BSCPE", 2, [1, 3], time(10, 30), time(12, 0)),
+    # CpE 324 — Methods of Research & Writing (EB226, MW)
     ("CpE 324", "Methods of Research & Writing", "maricon.gahisan@jrmsu.edu.ph",
      "EB226", "BSCPE", 3, [0, 2], time(10, 30), time(12, 0)),
+    # CpE 322 / CpE 322L — Computer Networks & Security (EB226, MW)
     ("CpE 322", "Computer Networks & Security (LEC)", "maricon.gahisan@jrmsu.edu.ph",
      "EB226", "BSCPE", 3, [0, 2], time(14, 30), time(16, 0)),
     ("CpE 322L", "Computer Networks & Security (LAB)", "maricon.gahisan@jrmsu.edu.ph",
      "EB226", "BSCPE", 3, [0, 2], time(16, 0), time(17, 30)),
+    # CpE 421 — CpE Practice & Design 2 (EB226, TTH)
     ("CpE 421", "CpE Practice & Design 2", "maricon.gahisan@jrmsu.edu.ph",
      "EB226", "BSCPE", 4, [1, 3], time(14, 30), time(17, 30)),
-    # ── Lasco ──
+
+    # ── Lasco ─────────────────────────────────────────────────────────
+    # ES 112 — Computer Programming (EB227, MW + TTH sections)
     ("ES 112", "Computer Programming", "troy.lasco@jrmsu.edu.ph",
      "EB227", "BSECE", 1, [0, 2], time(13, 0), time(14, 30)),
     ("ES 112", "Computer Programming", "troy.lasco@jrmsu.edu.ph",
      "EB227", "BSECE", 1, [1, 3], time(17, 30), time(19, 0)),
+    # CpE 113 — Object-Oriented Programming (EB227, TTH + MW sections)
     ("CpE 113", "Object-Oriented Programming", "troy.lasco@jrmsu.edu.ph",
      "EB227", "BSCPE", 1, [1, 3], time(9, 0), time(12, 0)),
     ("CpE 113", "Object-Oriented Programming", "troy.lasco@jrmsu.edu.ph",

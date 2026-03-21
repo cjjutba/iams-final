@@ -85,11 +85,29 @@ class Settings(BaseSettings):
     ANTISPOOF_LBP_THRESHOLD: float = 0.15  # LBP texture uniformity threshold (lowered for mobile selfie)
     ANTISPOOF_FFT_THRESHOLD: float = 0.20  # FFT high-freq energy threshold (lowered for mobile selfie)
 
-    # Presence Tracking
+    # Presence Tracking (legacy scan-based — kept for backward compatibility)
     SCAN_INTERVAL_SECONDS: int = 15  # How often to run presence scans
     EARLY_LEAVE_THRESHOLD: int = 3  # Consecutive misses to flag early leave
     GRACE_PERIOD_MINUTES: int = 15  # Late grace period after class starts
     SESSION_BUFFER_MINUTES: int = 5  # Buffer before/after class for session
+
+    # Real-Time Pipeline
+    PROCESSING_FPS: float = 10.0  # Frames/sec for realtime tracker loop
+    WS_BROADCAST_FPS: float = 10.0  # WebSocket broadcast rate
+
+    # ByteTrack / Track Lifecycle
+    TRACK_LOST_TIMEOUT: float = 5.0  # Seconds before removing lost track
+    REVERIFY_INTERVAL: float = 30.0  # Re-run ArcFace on existing tracks (seconds)
+    TRACK_CONFIRM_FRAMES: int = 3  # Frames before track is considered confirmed
+
+    # Track-Based Presence
+    EARLY_LEAVE_TIMEOUT: float = 45.0  # Seconds absent before early-leave alert
+    PRESENCE_FLUSH_INTERVAL: float = 10.0  # Seconds between DB presence flushes
+
+    # Frame Grabber
+    FRAME_GRABBER_FPS: float = 10.0  # FFmpeg output frame rate
+    FRAME_GRABBER_WIDTH: int = 640  # Output frame width
+    FRAME_GRABBER_HEIGHT: int = 480  # Output frame height
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"

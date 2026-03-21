@@ -20,7 +20,7 @@ router = APIRouter()
 
 @router.get("/lookup", status_code=status.HTTP_200_OK)
 def lookup_room(
-    name: str = Query(..., description="Room name to look up (e.g., 'Room 103')"),
+    name: str = Query(..., description="Room name to look up (e.g., 'EB226')"),
     db: Session = Depends(get_db),
 ):
     """
@@ -65,6 +65,7 @@ def list_rooms(
             "building": r.building,
             "capacity": r.capacity,
             "camera_endpoint": r.camera_endpoint,
+            "stream_key": r.stream_key,
             "is_active": r.is_active,
         }
         for r in rooms
@@ -93,6 +94,7 @@ def get_room(
         "building": room.building,
         "capacity": room.capacity,
         "camera_endpoint": room.camera_endpoint,
+        "stream_key": room.stream_key,
         "is_active": room.is_active,
     }
 
@@ -125,6 +127,7 @@ def create_room(
         "building": room.building,
         "capacity": room.capacity,
         "camera_endpoint": room.camera_endpoint,
+        "stream_key": room.stream_key,
         "is_active": room.is_active,
     }
 
@@ -159,6 +162,7 @@ def update_room(
         "building": room.building,
         "capacity": room.capacity,
         "camera_endpoint": room.camera_endpoint,
+        "stream_key": room.stream_key,
         "is_active": room.is_active,
     }
 

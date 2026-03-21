@@ -1,4 +1,10 @@
 """
+DEPRECATED — Identity Cache (superseded by RealtimeTracker + TrackPresenceService).
+
+This module is kept for backward compatibility during migration. The new
+real-time pipeline (realtime_tracker.py + realtime_pipeline.py) handles
+identity caching internally via ByteTrack track IDs.
+
 Identity Cache — Redis bridge between Attendance Engine and Live Feed Pipeline.
 
 The Attendance Engine WRITES identified faces after each presence scan.

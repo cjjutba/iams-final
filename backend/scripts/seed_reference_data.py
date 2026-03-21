@@ -1,17 +1,16 @@
 """
 Reference Data Seed Script
 
-Populates student_records and faculty_records tables with mock data
-that simulates the school's Student Information System (SIS).
+Populates student_records and faculty_records tables from real school data
+parsed from docs/data/ListofStudents_All-thesis-purposes.md.
+
+Also includes a test student (Christian Jerald Jutba) for development/demo.
 
 This data is used to validate student IDs during self-registration:
   1. Student enters their Student ID on the registration screen
   2. Backend checks student_records table
   3. If found, official name/course/year/section/email are pre-filled
   4. Student confirms details, sets password, proceeds to face registration
-
-In production: Replace mock data by importing a real CSV/API export from
-the school's SIS. The registration validation logic stays the same.
 
 Run from backend directory:
     python -m scripts.seed_reference_data
@@ -29,27 +28,46 @@ from app.database import SessionLocal
 from app.models.student_record import StudentRecord
 from app.models.faculty_record import FacultyRecord
 from app.config import logger
+from scripts.seed_school_data import (
+    parse_students_from_md,
+    deduplicate_students,
+    parse_name,
+    parse_date_str,
+    normalize_student_id,
+    infer_year_level,
+    infer_section,
+    MARKDOWN_PATH,
+)
 
 
 # ---------------------------------------------------------------------------
-# Student registry for testing (single real user for thesis demo)
-# Format: (student_id, first_name, last_name, email, course, year_level, section, birthdate, contact_number)
+# Test student (always included for development/demo)
 # ---------------------------------------------------------------------------
-MOCK_STUDENTS = [
-    ("21-A-02177", "Christian Jerald", "Jutba", "cjjutbaofficial@gmail.com", "BSCPE", 4, "A", date(2003, 1, 13), "09764556948"),
-    ("21-A-01234", "Juhazelle", "Espela", "hazelleespela@gmail.com", "BSCPE", 4, "A", date(2003, 1, 3), "09389816260"),
-]
+TEST_STUDENT = {
+    "student_id": "21-A-02177",
+    "first_name": "Christian Jerald",
+    "last_name": "Jutba",
+    "email": "cjjutbaofficial@gmail.com",
+    "course": "BSCPE",
+    "year_level": 4,
+    "section": "A",
+    "birthdate": date(2003, 1, 13),
+    "contact_number": "09764556948",
+}
 
 # ---------------------------------------------------------------------------
-# Mock faculty registry (only 1 for testing)
+# Faculty records: default test account + 3 real JRMSU instructors
 # ---------------------------------------------------------------------------
 MOCK_FACULTY = [
-    ("FAC-001", "Faculty",  "User",    "faculty@gmail.com",              "Computer Engineering"),
+    ("FAC-001", "Faculty", "User", "faculty@gmail.com", "Computer Engineering"),
+    ("FAC-002", "Ryan", "Elumba", "ryan.elumba@jrmsu.edu.ph", "Computer Engineering"),
+    ("FAC-003", "Maricon Denber", "Gahisan", "maricon.gahisan@jrmsu.edu.ph", "Computer Engineering"),
+    ("FAC-004", "Troy", "Lasco", "troy.lasco@jrmsu.edu.ph", "Computer Engineering"),
 ]
 
 
 def seed_reference_data():
-    """Seed student_records and faculty_records tables."""
+    """Seed student_records and faculty_records from real school data."""
     db = SessionLocal()
 
     try:
@@ -57,35 +75,114 @@ def seed_reference_data():
         print("IAMS - Seeding Reference Data")
         print("=" * 60)
 
-        # ---- Student Records ----
-        print("\n[1/2] Seeding student records...")
+        # ---- Parse students from markdown ----
+        print("\n[1/2] Seeding student records from school data...")
+
+        if MARKDOWN_PATH.exists():
+            raw = parse_students_from_md(MARKDOWN_PATH)
+            students = deduplicate_students(raw)
+            print(f"  Parsed {len(students)} unique students from markdown")
+        else:
+            students = []
+            print(f"  WARNING: Markdown file not found: {MARKDOWN_PATH}")
+
         added = 0
         skipped = 0
+        used_ids: set[str] = set()
+        pending_counter = 1
 
-        for student_id, first_name, last_name, email, course, year_level, section, birthdate, contact_number in MOCK_STUDENTS:
-            existing = db.query(StudentRecord).filter(
-                StudentRecord.student_id == student_id
-            ).first()
+        # Pre-load existing student IDs for idempotency
+        existing_ids = {
+            r.student_id for r in db.query(StudentRecord.student_id).all()
+        }
 
-            if existing:
-                print(f"  SKIP  {student_id} — already exists")
-                skipped += 1
+        for entry in students:
+            first_name, middle_name, last_name = parse_name(entry["name"])
+            email = entry["email"].lower().strip() if entry["email"] else None
+            birthdate = parse_date_str(entry["birthdate"])
+            raw_sid = normalize_student_id(entry["student_id"])
+            course = "BSECE" if entry["program"] == "ECE" else "BSCPE"
+
+            # Assign student ID
+            if raw_sid and raw_sid not in used_ids:
+                student_id = raw_sid
+            elif raw_sid and raw_sid in used_ids:
+                student_id = f"PENDING-{pending_counter:04d}"
+                pending_counter += 1
             else:
+                student_id = f"PENDING-{pending_counter:04d}"
+                pending_counter += 1
+
+            used_ids.add(student_id)
+            year_level = infer_year_level(student_id)
+            section = infer_section(student_id)
+
+            # Idempotency check
+            if student_id in existing_ids:
+                skipped += 1
+                continue
+
+            # For PENDING IDs, also check by name
+            if student_id.startswith("PENDING"):
+                existing_by_name = (
+                    db.query(StudentRecord)
+                    .filter(
+                        StudentRecord.first_name == first_name,
+                        StudentRecord.last_name == last_name,
+                    )
+                    .first()
+                )
+                if existing_by_name:
+                    skipped += 1
+                    continue
+
+            record = StudentRecord(
+                student_id=student_id,
+                first_name=first_name,
+                middle_name=middle_name,
+                last_name=last_name,
+                email=email,
+                course=course,
+                year_level=year_level,
+                section=section,
+                birthdate=birthdate,
+                is_active=True,
+            )
+            db.add(record)
+            added += 1
+
+        # ---- Test student (CJ Jutba) ----
+        ts = TEST_STUDENT
+        if ts["student_id"] not in existing_ids:
+            existing_by_name = (
+                db.query(StudentRecord)
+                .filter(
+                    StudentRecord.first_name == ts["first_name"],
+                    StudentRecord.last_name == ts["last_name"],
+                )
+                .first()
+            )
+            if not existing_by_name:
                 record = StudentRecord(
-                    student_id=student_id,
-                    first_name=first_name,
-                    last_name=last_name,
-                    email=email,
-                    course=course,
-                    year_level=year_level,
-                    section=section,
-                    birthdate=birthdate,
-                    contact_number=contact_number,
+                    student_id=ts["student_id"],
+                    first_name=ts["first_name"],
+                    last_name=ts["last_name"],
+                    email=ts["email"],
+                    course=ts["course"],
+                    year_level=ts["year_level"],
+                    section=ts["section"],
+                    birthdate=ts["birthdate"],
+                    contact_number=ts["contact_number"],
                     is_active=True,
                 )
                 db.add(record)
-                print(f"  ADD   {student_id} — {first_name} {last_name} (Year {year_level}-{section}) DOB: {birthdate}")
                 added += 1
+                print(f"  ADD   {ts['student_id']} — {ts['first_name']} {ts['last_name']} (test student)")
+            else:
+                skipped += 1
+        else:
+            print(f"  SKIP  {ts['student_id']} — already exists (test student)")
+            skipped += 1
 
         # ---- Faculty Records ----
         print("\n[2/2] Seeding faculty records...")
@@ -121,10 +218,8 @@ def seed_reference_data():
         print("=" * 60)
         print(f"\nStudent Records: {added} added, {skipped} skipped")
         print(f"Faculty Records: {fac_added} added, {fac_skipped} skipped")
-        print(f"\nAvailable student IDs for registration:")
-        for student_id, first_name, last_name, *rest in MOCK_STUDENTS:
-            birthdate = rest[5]
-            print(f"  {student_id}  ({first_name} {last_name})  DOB: {birthdate}")
+        print(f"\nTest student for registration:")
+        print(f"  {ts['student_id']}  ({ts['first_name']} {ts['last_name']})  DOB: {ts['birthdate']}")
 
     except Exception as e:
         db.rollback()

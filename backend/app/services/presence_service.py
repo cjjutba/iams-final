@@ -104,13 +104,26 @@ class PresenceService:
     - Continuous presence monitoring (60-second scans)
     - Early leave detection (3 consecutive misses)
     - Session lifecycle management (start/end)
+    - Automatic session start/end based on schedule times
     - Presence score calculation
     - Real-time event broadcasting via WebSocket
     """
 
     # Class-level shared state: sessions persist across all instances/requests
     _active_sessions: dict[str, SessionState] = {}
+    _ended_sessions: set[tuple[str, date]] = set()  # (schedule_id, date) — prevents auto-restart
     _lock = asyncio.Lock()
+
+    @classmethod
+    def was_session_ended_today(cls, schedule_id: str) -> bool:
+        """Check if a session was already ended today (prevents auto-restart after manual end)."""
+        return (schedule_id, date.today()) in cls._ended_sessions
+
+    @classmethod
+    def cleanup_old_ended_sessions(cls):
+        """Remove ended-session records from previous days."""
+        today = date.today()
+        cls._ended_sessions = {(sid, d) for sid, d in cls._ended_sessions if d == today}
 
     def __init__(self, db: Session):
         self.db = db
@@ -324,6 +337,9 @@ class PresenceService:
             # Remove from active sessions
             del self.active_sessions[schedule_id]
 
+            # Track that this session was ended today (prevents auto-restart)
+            PresenceService._ended_sessions.add((schedule_id, date.today()))
+
             # Unregister from global session manager
             session_manager.unregister_session(schedule_id)
 
@@ -500,6 +516,14 @@ class PresenceService:
                         },
                     )
 
+                    # Notify student of check-in
+                    subject_code = session.schedule.subject_code if session.schedule else ""
+                    await self._notify_check_in(
+                        student_id, student_info["name"], new_status.value,
+                        check_in_time, subject_code,
+                        getattr(session.schedule, "subject_name", ""),
+                    )
+
                     logger.info(f"Student {student_id} checked in via scan cycle: {new_status.value}")
                 continue
 
@@ -668,6 +692,20 @@ class PresenceService:
             "timestamp": datetime.now().isoformat(),
         })
 
+        # Persist in-app + email notifications for early leave
+        subject_code = attendance.schedule.subject_code if attendance.schedule else ""
+        await self._notify_early_leave(
+            student_id, student_info["name"], faculty_user_id,
+            subject_code, consecutive_misses,
+            last_seen.isoformat() if last_seen else None, severity,
+            attendance_id,
+        )
+
+        # Mark event as notified
+        event.notified = True
+        event.notified_at = datetime.now()
+        self.db.commit()
+
     async def _handle_early_leave_return(self, attendance_id: str, student_id: str, schedule_id: str):
         """Handle a student returning after being flagged for early leave.
 
@@ -718,6 +756,99 @@ class PresenceService:
             "returned_at": now.isoformat(),
             "notify_user_ids": notify_user_ids,
         })
+
+        # Notify faculty + student of return (no email)
+        from app.services.notification_service import notify as _notify
+
+        minutes = event.absence_duration_seconds // 60 if event.absence_duration_seconds else 0
+        for uid in notify_user_ids:
+            await _notify(
+                self.db, uid,
+                "Student Returned",
+                f"{student_info['name']} has returned after {minutes}m absence.",
+                "early_leave_return",
+                toast_type="info",
+                reference_id=attendance_id,
+                reference_type="attendance",
+            )
+
+    # ── notification helpers ─────────────────────────────────────
+
+    async def _notify_check_in(
+        self, student_id: str, student_name: str, status: str,
+        check_in_time: datetime, subject_code: str, subject_name: str,
+    ):
+        """Send check-in notification to the student."""
+        from app.services.notification_service import notify as _notify
+
+        await _notify(
+            self.db, student_id,
+            "Attendance Confirmed",
+            f"You are marked {status} for {subject_code}.",
+            "check_in",
+            preference_key="attendance_confirmation",
+            toast_type="success",
+            send_email=True,
+            email_template="check_in",
+            email_context={
+                "student_name": student_name,
+                "status": status,
+                "subject_code": subject_code,
+                "subject_name": subject_name,
+                "check_in_time": check_in_time.strftime("%I:%M %p"),
+            },
+        )
+
+    async def _notify_early_leave(
+        self, student_id: str, student_name: str, faculty_user_id: str | None,
+        subject_code: str, consecutive_misses: int,
+        last_seen_at: str | None, severity: str, attendance_id: str,
+    ):
+        """Send early-leave notifications to both faculty and student."""
+        from app.services.notification_service import notify as _notify
+
+        # Faculty notification
+        if faculty_user_id:
+            await _notify(
+                self.db, faculty_user_id,
+                "Early Leave Alert",
+                f"{student_name} appears to have left {subject_code} early.",
+                "early_leave",
+                preference_key="early_leave_alerts",
+                toast_type="warning",
+                send_email=True,
+                email_template="early_leave",
+                email_context={
+                    "student_name": student_name,
+                    "subject_code": subject_code,
+                    "consecutive_misses": consecutive_misses,
+                    "last_seen_at": last_seen_at,
+                    "severity": severity,
+                },
+                reference_id=attendance_id,
+                reference_type="early_leave",
+            )
+
+        # Student notification
+        await _notify(
+            self.db, student_id,
+            "Early Leave Alert",
+            f"You appear to have left {subject_code} early. Please return to class.",
+            "early_leave",
+            preference_key="early_leave_alerts",
+            toast_type="warning",
+            send_email=True,
+            email_template="early_leave",
+            email_context={
+                "student_name": student_name,
+                "subject_code": subject_code,
+                "consecutive_misses": consecutive_misses,
+                "last_seen_at": last_seen_at,
+                "severity": severity,
+            },
+            reference_id=attendance_id,
+            reference_type="early_leave",
+        )
 
     # ── presence score ───────────────────────────────────────────
 

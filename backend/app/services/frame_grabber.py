@@ -24,11 +24,9 @@ from typing import Optional
 
 import numpy as np
 
-logger = logging.getLogger(__name__)
+from app.config import settings
 
-# Default resolution for frame grabbing (720p)
-_DEFAULT_WIDTH = 1280
-_DEFAULT_HEIGHT = 720
+logger = logging.getLogger(__name__)
 
 
 class FrameGrabber:
@@ -38,22 +36,25 @@ class FrameGrabber:
         rtsp_url:      Full RTSP URL (e.g. ``rtsp://host:8554/cam1``).
         stale_timeout: Seconds after which a frame is considered stale.
                        Triggers automatic reconnect.  Default 30 s.
-        width:         Output frame width (FFmpeg rescales). Default 1280.
-        height:        Output frame height (FFmpeg rescales). Default 720.
+        width:         Output frame width (FFmpeg rescales). Default from settings.
+        height:        Output frame height (FFmpeg rescales). Default from settings.
+        fps:           FFmpeg output frame rate. Default from settings.
     """
 
     def __init__(
         self,
         rtsp_url: str,
         stale_timeout: float = 30.0,
-        width: int = _DEFAULT_WIDTH,
-        height: int = _DEFAULT_HEIGHT,
+        width: int | None = None,
+        height: int | None = None,
+        fps: float | None = None,
     ) -> None:
         self._url = rtsp_url
         self._stale_timeout = stale_timeout
-        self._width = width
-        self._height = height
-        self._frame_bytes = width * height * 3  # BGR24
+        self._width = width or settings.FRAME_GRABBER_WIDTH
+        self._height = height or settings.FRAME_GRABBER_HEIGHT
+        self._fps = fps or settings.FRAME_GRABBER_FPS
+        self._frame_bytes = self._width * self._height * 3  # BGR24
 
         self._lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
@@ -118,7 +119,7 @@ class FrameGrabber:
             "-f", "rawvideo",
             "-pix_fmt", "bgr24",
             "-s", f"{self._width}x{self._height}",
-            "-r", "5",  # 5fps is plenty for 15s attendance scans
+            "-r", str(int(self._fps)),
             "-an",  # no audio
             "-v", "warning",
             "pipe:1",

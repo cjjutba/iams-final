@@ -33,6 +33,39 @@ class AuthService:
         self.student_record_repo = StudentRecordRepository(db)
 
     # ------------------------------------------------------------------
+    # FUN-01-01a: Check Student ID Availability
+    # ------------------------------------------------------------------
+
+    def check_student_id(self, student_id: str) -> dict:
+        """
+        Check if a student ID exists in university records and is available
+        for registration (not already registered).
+
+        Args:
+            student_id: Student ID to check (e.g. "21-A-01234")
+
+        Returns:
+            Dictionary with exists, available, and message fields
+        """
+        if not student_id or len(student_id.strip()) < 3:
+            return {"exists": False, "available": False, "message": "Invalid student ID format"}
+
+        normalized = student_id.strip().upper()
+
+        record = self.student_record_repo.get_by_student_id(normalized)
+        if not record:
+            return {"exists": False, "available": False, "message": "Student ID not found in university records"}
+
+        if not record.is_active:
+            return {"exists": True, "available": False, "message": "Student ID is no longer active"}
+
+        existing_user = self.user_repo.get_by_student_id(normalized)
+        if existing_user:
+            return {"exists": True, "available": False, "message": "This student ID is already registered. Please login instead."}
+
+        return {"exists": True, "available": True, "message": "Student ID found"}
+
+    # ------------------------------------------------------------------
     # FUN-01-01: Verify Student Identity
     # ------------------------------------------------------------------
 
@@ -188,15 +221,12 @@ class AuthService:
             # Build the redirect URL for the confirmation email link.
             # After the user clicks "Confirm Email" in the email, Supabase
             # verifies the token and redirects the browser to this URL.
-            redirect_url = f"{settings.SUPABASE_URL.rstrip('/')}"
-            # Use the backend's email-confirmed landing page if we can
-            # construct it from the BACKEND_URL env var or fall back to
-            # letting Supabase handle it (site_url configured in dashboard).
+            # ADMIN_URL points to the web admin portal which hosts the
+            # email-confirmed page (dev: localhost:5173, prod: iams.vercel.app).
             import os
 
-            backend_url = os.environ.get("BACKEND_URL", "").rstrip("/")
-            if backend_url:
-                redirect_url = f"{backend_url}{settings.API_PREFIX}/auth/email-confirmed"
+            admin_url = os.environ.get("ADMIN_URL", "").rstrip("/")
+            redirect_url = f"{admin_url}/auth/email-confirmed" if admin_url else None
 
             response = httpx.post(
                 f"{settings.SUPABASE_URL}/auth/v1/signup",
@@ -209,9 +239,7 @@ class AuthService:
                         "student_id": normalized_id,
                         "role": "student",
                     },
-                    "options": {
-                        "emailRedirectTo": redirect_url,
-                    },
+                    **({"options": {"emailRedirectTo": redirect_url}} if redirect_url else {}),
                 },
                 headers={
                     "apikey": settings.SUPABASE_ANON_KEY,
@@ -428,9 +456,17 @@ class AuthService:
             try:
                 import httpx
 
+                import os
+
+                admin_url = os.environ.get("ADMIN_URL", "").rstrip("/")
+                recover_redirect = f"{admin_url}/auth/email-confirmed" if admin_url else None
+                recover_body: dict = {"email": email}
+                if recover_redirect:
+                    recover_body["redirectTo"] = recover_redirect
+
                 response = httpx.post(
                     f"{settings.SUPABASE_URL}/auth/v1/recover",
-                    json={"email": email},
+                    json=recover_body,
                     headers={
                         "apikey": settings.SUPABASE_ANON_KEY,
                         "Content-Type": "application/json",
@@ -554,9 +590,16 @@ class AuthService:
         try:
             import httpx
 
+            import os
+
+            admin_url = os.environ.get("ADMIN_URL", "").rstrip("/")
+            resend_body: dict = {"type": "signup", "email": email}
+            if admin_url:
+                resend_body["emailRedirectTo"] = f"{admin_url}/auth/email-confirmed"
+
             response = httpx.post(
                 f"{settings.SUPABASE_URL}/auth/v1/resend",
-                json={"type": "signup", "email": email},
+                json=resend_body,
                 headers={
                     "apikey": settings.SUPABASE_ANON_KEY,
                     "Content-Type": "application/json",

@@ -10,7 +10,7 @@
 # - No TURN server (LAN doesn't need NAT traversal)
 # - No ICE additionalHosts (LAN IP is directly reachable)
 
-logLevel: warn
+logLevel: info
 
 # Authentication: allow anything locally (same as production)
 authMethod: internal
@@ -52,10 +52,27 @@ hls: no
 srt: no
 rtmp: no
 
-# Low-latency (same as production)
-writeQueueSize: 8
+# Write queue size: how many frames mediamtx buffers per reader before dropping.
+# 8 was too aggressive for the main stream (2560x1920@20fps, ~10Mbps) — caused
+# "reader is too slow, discarding N frames" errors and ~0.5fps playback.
+# 512 gives readers enough runway to absorb WiFi jitter bursts.
+writeQueueSize: 512
 
-# Accept any path — dev-stream.sh pushes RTSP dynamically (same as production)
+# Camera proxy paths — MediaMTX pulls RTSP from cameras and re-serves
+# Add your room's stream_key here with the camera's RTSP URL as source
 paths:
+  # Capstone Project Laboratory (Reolink EB 226)
+  # Main stream (2560x1920@20fps) — used by backend FrameGrabber for face recognition
+  capstone-lab:
+    source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.10:554/h264Preview_01_main
+    rtspTransport: tcp
+    sourceOnDemand: yes
+
+  # Sub stream (640x480 or 896x512) — used by phone for smooth playback
+  capstone-lab-view:
+    source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.10:554/h264Preview_01_sub
+    rtspTransport: tcp
+    sourceOnDemand: yes
+
   all_others:
     overridePublisher: yes

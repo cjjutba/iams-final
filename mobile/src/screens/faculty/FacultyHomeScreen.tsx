@@ -9,7 +9,7 @@
  * - Today's teaching schedule
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   StyleSheet,
@@ -21,7 +21,7 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
-import { Users, Play, Square, Camera } from 'lucide-react-native';
+import { Users, Play, Square, Camera, BookOpen, CalendarOff } from 'lucide-react-native';
 import { useAuth, useSchedule, useSession } from '../../hooks';
 import { useToast } from '../../hooks/useToast';
 import { useNotificationStore } from '../../stores/notificationStore';
@@ -29,10 +29,25 @@ import { theme, strings } from '../../constants';
 import { formatDate, formatTime, getDayName } from '../../utils';
 import type { FacultyStackParamList, ScheduleWithAttendance } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
-import { Text, Button } from '../../components/ui';
+import { Text, Button, Skeleton, ScheduleCardSkeleton } from '../../components/ui';
 import { ScheduleCard } from '../../components/cards';
 
 type FacultyHomeNavigationProp = StackNavigationProp<FacultyStackParamList, 'FacultyTabs'>;
+
+const CurrentClassCardSkeleton: React.FC = () => (
+  <View style={styles.currentClassCard}>
+    <View style={styles.sessionStatusRow}>
+      <Skeleton width={8} height={8} borderRadius={4} style={{ marginRight: theme.spacing[2] }} />
+      <Skeleton width={110} height={12} />
+    </View>
+    <View style={{ height: theme.spacing[2] }} />
+    <Skeleton width="65%" height={18} />
+    <View style={{ height: theme.spacing[2] }} />
+    <Skeleton width="50%" height={14} />
+    <View style={{ height: theme.spacing[4] }} />
+    <Skeleton width="100%" height={42} borderRadius={theme.borderRadius.md} />
+  </View>
+);
 
 export const FacultyHomeScreen: React.FC = () => {
   const navigation = useNavigation<FacultyHomeNavigationProp>();
@@ -47,6 +62,18 @@ export const FacultyHomeScreen: React.FC = () => {
   } = useSession();
   const { showError, showSuccess } = useToast();
   const { unreadCount, fetchUnreadCount } = useNotificationStore();
+
+  // Track whether the initial data fetch has completed
+  const [initialLoadDone, setInitialLoadDone] = useState(false);
+  const wasLoading = useRef(false);
+
+  useEffect(() => {
+    if (isLoading) {
+      wasLoading.current = true;
+    } else if (wasLoading.current) {
+      setInitialLoadDone(true);
+    }
+  }, [isLoading]);
 
   useEffect(() => {
     fetchUnreadCount();
@@ -143,8 +170,10 @@ export const FacultyHomeScreen: React.FC = () => {
         {formatDate(new Date(), 'EEEE, MMMM d, yyyy')}
       </Text>
 
-      {/* Current class card */}
-      {currentClass && (
+      {/* Current class card — skeleton while loading, actual card when ready */}
+      {!initialLoadDone ? (
+        <CurrentClassCardSkeleton />
+      ) : currentClass ? (
         <View style={styles.currentClassCard}>
           <View style={styles.currentClassHeader}>
             <View style={styles.currentClassInfo}>
@@ -260,76 +289,101 @@ export const FacultyHomeScreen: React.FC = () => {
             </TouchableOpacity>
           )}
         </View>
-      )}
+      ) : null}
 
       {/* Section title */}
-      <Text variant="h3" weight="600" style={styles.sectionTitle}>
-        {strings.schedule.todayClasses}
-      </Text>
+      {!initialLoadDone ? (
+        <Skeleton width={140} height={20} style={styles.sectionTitle} />
+      ) : (
+        <Text variant="h3" weight="600" style={styles.sectionTitle}>
+          {strings.schedule.todayClasses}
+        </Text>
+      )}
     </View>
   );
 
   const nextDay = getNextDayWithClasses();
 
-  const renderEmpty = () => (
-    <View style={styles.emptyContainer}>
-      <Text variant="body" color={theme.colors.text.secondary} align="center">
-        {strings.schedule.noClassesToday}
-      </Text>
+  const renderEmpty = () => {
+    // Show skeleton cards during initial load
+    if (!initialLoadDone) {
+      return (
+        <View>
+          <ScheduleCardSkeleton />
+          <ScheduleCardSkeleton />
+          <ScheduleCardSkeleton />
+        </View>
+      );
+    }
 
-      {/* Show next day with classes */}
-      {nextDay && (
-        <View style={styles.nextDaySection}>
-          <Text
-            variant="bodySmall"
-            color={theme.colors.text.tertiary}
-            align="center"
-            style={styles.nextDayLabel}
-          >
-            Next classes on {getDayName(nextDay.backendDay)}
-          </Text>
+    // Show empty state after data has loaded
+    return (
+      <View style={styles.emptyContainer}>
+        <View style={styles.emptyIconContainer}>
+          {totalSchedules === 0 ? (
+            <BookOpen size={48} color={theme.colors.text.tertiary} strokeWidth={1.5} />
+          ) : (
+            <CalendarOff size={48} color={theme.colors.text.tertiary} strokeWidth={1.5} />
+          )}
+        </View>
 
-          {nextDay.schedules
-            .sort((a, b) => a.start_time.localeCompare(b.start_time))
-            .slice(0, 3)
-            .map((s) => (
-              <View key={s.id} style={styles.nextDayCard}>
-                <Text variant="bodySmall" weight="600" numberOfLines={1}>
-                  {s.subject_name}
-                </Text>
-                <Text variant="caption" color={theme.colors.text.secondary}>
-                  {formatTime(s.start_time)} - {formatTime(s.end_time)}
-                  {s.room_name ? ` \u2022 ${s.room_name}` : ''}
-                </Text>
-              </View>
-            ))}
+        <Text variant="h3" weight="600" align="center" style={styles.emptyTitle}>
+          {totalSchedules === 0 ? 'No Classes Assigned' : strings.schedule.noClassesToday}
+        </Text>
 
-          {nextDay.schedules.length > 3 && (
+        <Text
+          variant="body"
+          color={theme.colors.text.secondary}
+          align="center"
+          style={styles.emptySubtitle}
+        >
+          {totalSchedules === 0
+            ? 'You don\'t have any classes assigned yet.\nContact your administrator to set up your schedule.'
+            : 'You have no classes scheduled for today. Enjoy your free day!'}
+        </Text>
+
+        {/* Show next day with classes */}
+        {nextDay && (
+          <View style={styles.nextDaySection}>
             <Text
-              variant="caption"
+              variant="bodySmall"
               color={theme.colors.text.tertiary}
               align="center"
               style={styles.nextDayLabel}
             >
-              +{nextDay.schedules.length - 3} more
+              Next classes on {getDayName(nextDay.backendDay)}
             </Text>
-          )}
-        </View>
-      )}
 
-      {/* No schedules at all */}
-      {!nextDay && totalSchedules === 0 && (
-        <Text
-          variant="bodySmall"
-          color={theme.colors.text.tertiary}
-          align="center"
-          style={styles.nextDayLabel}
-        >
-          {strings.empty.noClasses}
-        </Text>
-      )}
-    </View>
-  );
+            {nextDay.schedules
+              .sort((a, b) => a.start_time.localeCompare(b.start_time))
+              .slice(0, 3)
+              .map((s) => (
+                <View key={s.id} style={styles.nextDayCard}>
+                  <Text variant="bodySmall" weight="600" numberOfLines={1}>
+                    {s.subject_name}
+                  </Text>
+                  <Text variant="caption" color={theme.colors.text.secondary}>
+                    {formatTime(s.start_time)} - {formatTime(s.end_time)}
+                    {s.room_name ? ` \u2022 ${s.room_name}` : ''}
+                  </Text>
+                </View>
+              ))}
+
+            {nextDay.schedules.length > 3 && (
+              <Text
+                variant="caption"
+                color={theme.colors.text.tertiary}
+                align="center"
+                style={styles.nextDayLabel}
+              >
+                +{nextDay.schedules.length - 3} more
+              </Text>
+            )}
+          </View>
+        )}
+      </View>
+    );
+  };
 
   return (
     <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
@@ -352,7 +406,7 @@ export const FacultyHomeScreen: React.FC = () => {
         alwaysBounceVertical={true}
         refreshControl={
           <RefreshControl
-            refreshing={isLoading}
+            refreshing={isLoading && initialLoadDone}
             onRefresh={handleRefresh}
             colors={[theme.colors.primary]}
             tintColor={theme.colors.primary}
@@ -458,6 +512,22 @@ const styles = StyleSheet.create({
   },
   emptyContainer: {
     paddingVertical: theme.spacing[8],
+    alignItems: 'center',
+  },
+  emptyIconContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: theme.colors.secondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: theme.spacing[4],
+  },
+  emptyTitle: {
+    marginBottom: theme.spacing[2],
+  },
+  emptySubtitle: {
+    paddingHorizontal: theme.spacing[4],
   },
   nextDaySection: {
     marginTop: theme.spacing[4],

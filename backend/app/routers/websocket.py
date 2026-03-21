@@ -1,22 +1,43 @@
-"""Simple WebSocket manager — direct broadcast, no Redis Streams."""
+"""
+WebSocket manager — direct broadcast with optional Redis pub/sub for multi-worker.
+
+Message types:
+  - frame_update:        Per-frame tracking data at WS_BROADCAST_FPS (~10fps)
+  - attendance_summary:  Periodic attendance state (every 5-10s)
+  - check_in:            Student check-in event
+  - early_leave:         Early leave detection
+  - early_leave_return:  Student return after early leave
+  - scan_result:         Legacy scan result (backward compatibility)
+"""
+
+import asyncio
+import json
 import logging
 from collections import defaultdict
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
 class ConnectionManager:
-    """In-memory WebSocket connection manager."""
+    """WebSocket connection manager with optional Redis pub/sub backing."""
 
     def __init__(self):
         self._attendance_clients: dict[str, set[WebSocket]] = defaultdict(set)
         self._alert_clients: dict[str, set[WebSocket]] = defaultdict(set)
+        self._redis_subscriber_task: asyncio.Task | None = None
+
+    # ── Client management ────────────────────────────────────────
 
     async def add_attendance_client(self, schedule_id: str, ws: WebSocket):
         await ws.accept()
         self._attendance_clients[schedule_id].add(ws)
+        logger.debug("WS client added for schedule %s (total: %d)",
+                      schedule_id, len(self._attendance_clients[schedule_id]))
 
     def remove_attendance_client(self, schedule_id: str, ws: WebSocket):
         self._attendance_clients[schedule_id].discard(ws)
@@ -28,7 +49,10 @@ class ConnectionManager:
     def remove_alert_client(self, user_id: str, ws: WebSocket):
         self._alert_clients[user_id].discard(ws)
 
+    # ── Broadcasting ─────────────────────────────────────────────
+
     async def broadcast_attendance(self, schedule_id: str, data: dict):
+        """Send data to all local clients for a schedule, then publish to Redis."""
         dead = []
         for ws in self._attendance_clients.get(schedule_id, set()):
             try:
@@ -37,6 +61,9 @@ class ConnectionManager:
                 dead.append(ws)
         for ws in dead:
             self._attendance_clients[schedule_id].discard(ws)
+
+        # Publish to Redis for multi-worker fanout
+        await self._redis_publish(schedule_id, data)
 
     async def broadcast_alert(self, user_id: str, data: dict):
         dead = []
@@ -51,6 +78,7 @@ class ConnectionManager:
     async def broadcast_scan_result(self, schedule_id: str, detections: list[dict],
                                      present_count: int, total_enrolled: int,
                                      absent: list[str], early_leave: list[str]):
+        """Legacy scan_result broadcast (backward compatibility)."""
         await self.broadcast_attendance(schedule_id, {
             "type": "scan_result",
             "schedule_id": schedule_id,
@@ -60,6 +88,70 @@ class ConnectionManager:
             "absent": absent,
             "early_leave": early_leave,
         })
+
+    # ── Redis pub/sub (multi-worker support) ─────────────────────
+
+    async def _redis_publish(self, schedule_id: str, data: dict) -> None:
+        """Publish message to Redis channel for other workers."""
+        try:
+            from app.redis_client import get_redis
+
+            r = await get_redis()
+            channel = f"{settings.REDIS_WS_CHANNEL}:{schedule_id}"
+            payload = json.dumps(data, default=str)
+            await r.publish(channel, payload)
+        except Exception:
+            pass  # Redis unavailable — single-worker mode is fine
+
+    async def start_redis_subscriber(self) -> None:
+        """Start background task to forward Redis messages to local WS clients."""
+        if self._redis_subscriber_task is not None:
+            return
+        self._redis_subscriber_task = asyncio.create_task(
+            self._redis_subscribe_loop(),
+            name="ws-redis-subscriber",
+        )
+
+    async def _redis_subscribe_loop(self) -> None:
+        """Subscribe to Redis ws_broadcast channels and forward to local clients."""
+        from app.redis_client import get_redis
+
+        while True:
+            try:
+                r = await get_redis()
+                pubsub = r.pubsub()
+                await pubsub.psubscribe(f"{settings.REDIS_WS_CHANNEL}:*")
+                logger.info("WebSocket Redis subscriber started")
+
+                async for message in pubsub.listen():
+                    if message["type"] != "pmessage":
+                        continue
+                    try:
+                        channel = message["channel"]
+                        if isinstance(channel, bytes):
+                            channel = channel.decode()
+                        # Extract schedule_id from channel name
+                        schedule_id = channel.split(":")[-1]
+                        data = json.loads(message["data"])
+
+                        # Forward to local clients (skip re-publishing)
+                        dead = []
+                        for ws in self._attendance_clients.get(schedule_id, set()):
+                            try:
+                                await ws.send_json(data)
+                            except Exception:
+                                dead.append(ws)
+                        for ws in dead:
+                            self._attendance_clients[schedule_id].discard(ws)
+
+                    except Exception:
+                        logger.debug("Failed to process Redis WS message", exc_info=True)
+
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("Redis WS subscriber disconnected, reconnecting...")
+                await asyncio.sleep(1)
 
 
 ws_manager = ConnectionManager()

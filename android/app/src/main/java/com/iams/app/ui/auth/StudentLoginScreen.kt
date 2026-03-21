@@ -96,7 +96,7 @@ fun StudentLoginScreen(
                 viewModel.clearError()
             },
             label = "Student ID",
-            placeholder = "21-A-012345",
+            placeholder = "e.g., 21-A-01234",
             enabled = !uiState.isLoading,
             keyboardOptions = KeyboardOptions(
                 capitalization = KeyboardCapitalization.Characters,
