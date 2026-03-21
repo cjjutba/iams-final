@@ -12,6 +12,7 @@ import com.iams.app.webrtc.WhepClient
 import com.iams.app.webrtc.WhepConnectionState
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
+import org.webrtc.VideoSink
 import org.webrtc.VideoTrack
 
 private const val TAG = "NativeWebRtcPlayer"
@@ -26,7 +27,8 @@ private const val TAG = "NativeWebRtcPlayer"
 fun NativeWebRtcVideoPlayer(
     whepUrl: String,
     modifier: Modifier = Modifier,
-    onError: ((String) -> Unit)? = null
+    onError: ((String) -> Unit)? = null,
+    additionalSink: VideoSink? = null
 ) {
     val context = LocalContext.current
     val client = remember(whepUrl) {
@@ -62,19 +64,25 @@ fun NativeWebRtcVideoPlayer(
     val currentTrack = remember { mutableStateOf<VideoTrack?>(null) }
     val rendererRef = remember { mutableStateOf<SurfaceViewRenderer?>(null) }
 
-    // Manage sink: add/remove video track from renderer
-    LaunchedEffect(videoTrack) {
+    // Manage sinks: add/remove video track from renderer + optional additional sink
+    LaunchedEffect(videoTrack, additionalSink) {
         val renderer = rendererRef.value
         val oldTrack = currentTrack.value
         val newTrack = videoTrack
 
         if (oldTrack != newTrack) {
-            if (oldTrack != null && renderer != null) {
-                try { oldTrack.removeSink(renderer) } catch (_: Exception) {}
+            if (oldTrack != null) {
+                if (renderer != null) {
+                    try { oldTrack.removeSink(renderer) } catch (_: Exception) {}
+                }
+                additionalSink?.let { try { oldTrack.removeSink(it) } catch (_: Exception) {} }
             }
-            if (newTrack != null && renderer != null) {
-                newTrack.addSink(renderer)
-                Log.i(TAG, "Video sink attached")
+            if (newTrack != null) {
+                if (renderer != null) {
+                    newTrack.addSink(renderer)
+                }
+                additionalSink?.let { newTrack.addSink(it) }
+                Log.i(TAG, "Video sinks attached (additional=${additionalSink != null})")
             }
             currentTrack.value = newTrack
         }
@@ -85,19 +93,25 @@ fun NativeWebRtcVideoPlayer(
             factory = { ctx ->
                 SurfaceViewRenderer(ctx).apply {
                     setZOrderMediaOverlay(true)
-                    setEnableHardwareScaler(true)
-                    setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+                    setEnableHardwareScaler(false)
+                    setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
                     init(client.eglBase.eglBaseContext, null)
                     rendererRef.value = this
 
                     // Attach track if already available
-                    videoTrack?.addSink(this)
+                    videoTrack?.let { track ->
+                        track.addSink(this)
+                        additionalSink?.let { track.addSink(it) }
+                    }
                     currentTrack.value = videoTrack
                 }
             },
             modifier = Modifier.matchParentSize(),
             onRelease = { renderer ->
-                currentTrack.value?.removeSink(renderer)
+                currentTrack.value?.let { track ->
+                    track.removeSink(renderer)
+                    additionalSink?.let { try { track.removeSink(it) } catch (_: Exception) {} }
+                }
                 currentTrack.value = null
                 rendererRef.value = null
                 renderer.release()

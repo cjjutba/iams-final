@@ -36,6 +36,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -57,9 +58,10 @@ import com.iams.app.data.model.StudentAttendanceStatus
 import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
+import com.iams.app.ui.components.HybridFaceOverlay
 import com.iams.app.ui.components.NativeWebRtcVideoPlayer
 import com.iams.app.ui.components.IAMSHeader
-import com.iams.app.ui.components.TrackOverlay
+import com.iams.app.webrtc.MlKitFrameSink
 import com.iams.app.ui.theme.AbsentBg
 import com.iams.app.ui.theme.AbsentFg
 import com.iams.app.ui.theme.Background
@@ -192,16 +194,29 @@ fun FacultyLiveFeedScreen(
                     .background(Color.Black)
             ) {
                 if (uiState.videoUrl.isNotEmpty()) {
+                    // ML Kit frame sink for real-time on-device face detection
+                    val mlKitSink = remember { MlKitFrameSink() }
+                    val mlKitFaces by mlKitSink.faces.collectAsState()
+                    val frameSize by mlKitSink.frameSize.collectAsState()
+
+                    DisposableEffect(Unit) {
+                        onDispose { mlKitSink.close() }
+                    }
+
                     NativeWebRtcVideoPlayer(
                         whepUrl = uiState.videoUrl,
                         modifier = Modifier.fillMaxSize(),
-                        onError = { error -> viewModel.onVideoError(error) }
+                        onError = { error -> viewModel.onVideoError(error) },
+                        additionalSink = mlKitSink
                     )
 
-                    // Track overlay from backend pipeline (replaces ML Kit + FaceOverlay)
-                    TrackOverlay(
-                        tracks = tracks,
-                        modifier = Modifier.fillMaxSize()
+                    // Hybrid overlay: accounts for SCALE_ASPECT_FIT letterboxing
+                    HybridFaceOverlay(
+                        mlKitFaces = mlKitFaces,
+                        backendTracks = tracks,
+                        modifier = Modifier.fillMaxSize(),
+                        videoFrameWidth = frameSize.first,
+                        videoFrameHeight = frameSize.second
                     )
 
                     // Show video error overlay if playback failed
