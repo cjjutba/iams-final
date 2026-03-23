@@ -4,6 +4,7 @@ import android.util.Log
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
+import com.google.mlkit.vision.face.Face
 import com.google.mlkit.vision.face.FaceLandmark
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -41,6 +42,9 @@ class MlKitFrameSink : VideoSink, Closeable {
 
     companion object {
         private const val TAG = "MlKitFrameSink"
+        private const val STATIC_THRESHOLD = 0.02f       // 2% of frame dimension
+        private const val STATIC_DURATION_MS = 5_000L     // 5 seconds without movement = static
+        private const val POSITION_HISTORY_MAX = 60        // max entries per face
     }
 
     private val executor = Executors.newSingleThreadExecutor()
@@ -66,6 +70,10 @@ class MlKitFrameSink : VideoSink, Closeable {
 
     // Reusable NV21 buffer (allocated once per resolution)
     private var nv21Buffer: ByteArray? = null
+
+    // Static face suppression: tracks bbox center per face ID over time
+    private data class FacePositionRecord(val centerX: Float, val centerY: Float, val timeMs: Long)
+    private val positionHistory = mutableMapOf<Int, MutableList<FacePositionRecord>>()
 
     override fun onFrame(frame: VideoFrame) {
         // Drop frame if ML Kit is still processing the previous one
@@ -133,18 +141,35 @@ class MlKitFrameSink : VideoSink, Closeable {
 
             faceDetector.process(inputImage)
                 .addOnSuccessListener { faces ->
-                    _faces.value = faces.filter { isValidFace(it) }.map { face ->
+                    val validFaces = faces.filter { isValidFace(it) }
+
+                    _faces.value = validFaces.mapNotNull { face ->
                         val b = face.boundingBox
+                        val x1 = (b.left / effW).coerceIn(0f, 1f)
+                        val y1 = (b.top / effH).coerceIn(0f, 1f)
+                        val x2 = (b.right / effW).coerceIn(0f, 1f)
+                        val y2 = (b.bottom / effH).coerceIn(0f, 1f)
+
+                        // Static face suppression: skip faces that haven't moved for 5+ seconds
+                        val centerX = (x1 + x2) / 2f
+                        val centerY = (y1 + y2) / 2f
+                        if (isStaticFace(face.trackingId, centerX, centerY)) {
+                            Log.d(TAG, "Suppressed static face id=${face.trackingId}")
+                            return@mapNotNull null
+                        }
+
                         val mlFace = MlKitFace(
-                            x1 = (b.left / effW).coerceIn(0f, 1f),
-                            y1 = (b.top / effH).coerceIn(0f, 1f),
-                            x2 = (b.right / effW).coerceIn(0f, 1f),
-                            y2 = (b.bottom / effH).coerceIn(0f, 1f),
+                            x1 = x1, y1 = y1, x2 = x2, y2 = y2,
                             faceId = face.trackingId
                         )
                         Log.d(TAG, "raw=${width}x${height} rot=$rotation eff=${effW.toInt()}x${effH.toInt()} face=[${b.left},${b.top},${b.right},${b.bottom}] norm=[${mlFace.x1},${mlFace.y1},${mlFace.x2},${mlFace.y2}]")
                         mlFace
                     }
+
+                    // Clean up position history for faces no longer tracked
+                    val activeFaceIds = validFaces.mapNotNull { it.trackingId }.toSet()
+                    positionHistory.keys.removeAll { it !in activeFaceIds }
+
                     isProcessing.set(false)
                 }
                 .addOnFailureListener { e ->
@@ -162,7 +187,7 @@ class MlKitFrameSink : VideoSink, Closeable {
      * 1. Landmark presence — must have at least one eye AND nose
      * 2. Aspect ratio — width/height must be between 0.5 and 1.5
      */
-    private fun isValidFace(face: com.google.mlkit.vision.face.Face): Boolean {
+    private fun isValidFace(face: Face): Boolean {
         // Landmark check: must have at least one eye + nose
         val hasLeftEye = face.getLandmark(FaceLandmark.LEFT_EYE) != null
         val hasRightEye = face.getLandmark(FaceLandmark.RIGHT_EYE) != null
@@ -184,6 +209,42 @@ class MlKitFrameSink : VideoSink, Closeable {
         }
 
         return true
+    }
+
+    /**
+     * Returns true if this face has been stationary for STATIC_DURATION_MS.
+     * A face is stationary if its center hasn't moved more than STATIC_THRESHOLD
+     * (2% of frame) from its initial tracked position.
+     */
+    private fun isStaticFace(faceId: Int?, centerX: Float, centerY: Float): Boolean {
+        val id = faceId ?: return false  // can't track without ID
+        val now = System.currentTimeMillis()
+        val record = FacePositionRecord(centerX, centerY, now)
+
+        val history = positionHistory.getOrPut(id) { mutableListOf() }
+        history.add(record)
+
+        // Trim old entries beyond our window
+        history.removeAll { now - it.timeMs > STATIC_DURATION_MS + 1000L }
+
+        // Keep bounded
+        while (history.size > POSITION_HISTORY_MAX) {
+            history.removeAt(0)
+        }
+
+        // Need at least 2 seconds of history before declaring static
+        val oldest = history.firstOrNull() ?: return false
+        if (now - oldest.timeMs < 2_000L) return false
+
+        // Check if max displacement from first recorded position exceeds threshold
+        val maxDisplacement = history.maxOf { entry ->
+            maxOf(
+                kotlin.math.abs(entry.centerX - oldest.centerX),
+                kotlin.math.abs(entry.centerY - oldest.centerY)
+            )
+        }
+
+        return maxDisplacement < STATIC_THRESHOLD && (now - oldest.timeMs >= STATIC_DURATION_MS)
     }
 
     override fun close() {
