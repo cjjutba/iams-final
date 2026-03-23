@@ -28,17 +28,6 @@ if grep -q '^ADMIN_URL=' backend/.env 2>/dev/null; then
   sed -i '' "s|^ADMIN_URL=.*|ADMIN_URL=${ADMIN_URL}|" backend/.env
 fi
 
-# Update Supabase site_url so email confirmation links work in dev
-SUPABASE_TOKEN=$(grep '^SUPABASE_ACCESS_TOKEN=' backend/.env | cut -d= -f2-)
-if [ -n "$SUPABASE_TOKEN" ]; then
-  echo "  Updating Supabase site_url → ${ADMIN_URL}"
-  curl -s -X PATCH \
-    -H "Authorization: Bearer ${SUPABASE_TOKEN}" \
-    -H "Content-Type: application/json" \
-    "https://api.supabase.com/v1/projects/fspnxqmewtxmuyqqwwni/config/auth" \
-    -d "{\"site_url\": \"${ADMIN_URL}\"}" > /dev/null 2>&1 || echo "  ⚠ Could not update Supabase site_url (check token)"
-fi
-
 # Patch mediamtx.dev.yml webrtcAdditionalHosts with current IP
 # Only replace the line after "webrtcAdditionalHosts:"
 sed -i '' "/^webrtcAdditionalHosts:/,/^[^ ]/{s/^  - .*/  - ${HOST_IP}/;}" deploy/mediamtx.dev.yml

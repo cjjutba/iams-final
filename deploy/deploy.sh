@@ -36,6 +36,11 @@ rsync -avz --delete \
     --exclude '.env.production' \
     "${PROJECT_DIR}/backend/" "${VPS_USER}@${VPS_IP}:${VPS_DIR}/backend/"
 
+# Step 1b: Sync database init scripts
+echo "[1b/5] Syncing database init scripts..."
+rsync -avz \
+    "${PROJECT_DIR}/backend/db/" "${VPS_USER}@${VPS_IP}:${VPS_DIR}/backend/db/"
+
 # Step 2: Sync admin dashboard code to VPS
 echo "[2/5] Syncing admin dashboard code to VPS..."
 rsync -avz --delete \

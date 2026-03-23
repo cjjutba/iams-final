@@ -1,9 +1,33 @@
 # IAMS Production Docker Compose
 # Usage: docker compose -f docker-compose.prod.yml up -d
 #
-# 4 services: api-gateway, redis, mediamtx, nginx
+# 7 services: postgres, redis, mediamtx, coturn, api-gateway, dozzle, nginx
 
 services:
+  # ── Database ────────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: iams-postgres
+    environment:
+      POSTGRES_DB: iams
+      POSTGRES_USER: iams
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-iams_prod_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../backend/db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ../backend/db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iams -d iams"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
   # ── Core Application ─────────────────────────────────────────────────
 
   api-gateway:
@@ -16,6 +40,7 @@ services:
       - ../backend/.env.production
     environment:
       - SERVICE_ROLE=api-gateway
+      - DATABASE_URL=postgresql://iams:${POSTGRES_PASSWORD:-iams_prod_password}@postgres:5432/iams
       - EDGE_API_KEY=iams-edge-key-2026-prod
       - REDIS_URL=redis://redis:6379/0
       - MEDIAMTX_EXTERNAL=true
@@ -30,6 +55,8 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
+      postgres:
+        condition: service_healthy
       mediamtx:
         condition: service_started
       redis:
@@ -78,6 +105,46 @@ services:
         limits:
           memory: 256M
 
+  coturn:
+    image: coturn/coturn:latest
+    container_name: iams-coturn
+    restart: unless-stopped
+    command: >
+      -n
+      --realm=iams
+      --fingerprint
+      --listening-port=3478
+      --min-port=49152
+      --max-port=49252
+      --user=iams:iams-turn-secret
+      --lt-cred-mech
+      --no-tls
+      --no-dtls
+      --log-file=stdout
+    ports:
+      - "3478:3478"
+      - "3478:3478/udp"
+      - "49152-49252:49152-49252/udp"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # ── Monitoring ──────────────────────────────────────────────────────
+
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: iams-dozzle
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "9999:8080"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
   # ── Reverse Proxy ────────────────────────────────────────────────────
 
   nginx:
@@ -102,6 +169,7 @@ services:
           memory: 128M
 
 volumes:
+  postgres_data:
   faiss_data:
   face_uploads:
   app_logs:
