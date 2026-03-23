@@ -1,15 +1,86 @@
 # IAMS Local Development — Docker Compose
 #
-# 3 services: api-gateway, redis, mediamtx
+# 7 services: postgres, redis, mediamtx, coturn, api-gateway, dozzle, adminer
 #
 # Usage:
-#   ./scripts/dev-up.sh          # auto-detect IP, build, start
-#   docker compose up --build -d # manual start
-#   docker compose logs -f       # tail all logs
-#   docker compose down          # stop
+#   docker compose up -d          # start all services
+#   docker compose logs -f        # tail all logs
+#   docker compose down           # stop
+#   docker compose down -v        # stop and remove volumes
 
 services:
-  # ── Core Application ─────────────────────────────────────────────────
+  # ── Database ────────────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: iams-postgres
+    environment:
+      POSTGRES_DB: iams
+      POSTGRES_USER: iams
+      POSTGRES_PASSWORD: iams_dev_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./backend/db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iams -d iams"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Cache ───────────────────────────────────────────────────────────────────
+
+  redis:
+    image: redis:7-alpine
+    container_name: iams-redis
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru --save ""
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # ── Media ───────────────────────────────────────────────────────────────────
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: iams-mediamtx
+    volumes:
+      - ./deploy/mediamtx.dev.yml:/mediamtx.yml:ro
+    ports:
+      - "8554:8554"      # RTSP ingest from RPi
+      - "8887:8887/udp"  # WebRTC media UDP
+      - "8889:8889"      # WHEP endpoint
+    restart: unless-stopped
+
+  coturn:
+    image: coturn/coturn:latest
+    container_name: iams-coturn
+    command: >
+      -n
+      --realm=iams
+      --fingerprint
+      --listening-port=3478
+      --min-port=49152
+      --max-port=49200
+      --user=iams:iams-turn-secret
+      --lt-cred-mech
+      --no-tls
+      --no-dtls
+      --log-file=stdout
+    ports:
+      - "3478:3478"
+      - "3478:3478/udp"
+      - "49152-49200:49152-49200/udp"
+    restart: unless-stopped
+
+  # ── Core Application ───────────────────────────────────────────────────────
 
   api-gateway:
     build:
@@ -20,6 +91,7 @@ services:
       - ./backend/.env
     environment:
       - SERVICE_ROLE=api-gateway
+      - DATABASE_URL=postgresql://iams:iams_dev_password@postgres:5432/iams
       - REDIS_URL=redis://redis:6379/0
       - MEDIAMTX_EXTERNAL=true
       - MEDIAMTX_API_URL=http://mediamtx:9997
@@ -37,38 +109,36 @@ services:
       --host 0.0.0.0 --port 8000
       --reload --reload-dir /app/app
     depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
       mediamtx:
         condition: service_started
-      redis:
+    restart: unless-stopped
+
+  # ── Dev Tools ───────────────────────────────────────────────────────────────
+
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: iams-dozzle
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "9999:8080"
+    restart: unless-stopped
+
+  adminer:
+    image: adminer:latest
+    container_name: iams-adminer
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
         condition: service_healthy
     restart: unless-stopped
 
-  # ── Infrastructure ───────────────────────────────────────────────────
-
-  redis:
-    image: redis:7-alpine
-    container_name: iams-redis
-    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru --save ""
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-    restart: unless-stopped
-
-  mediamtx:
-    image: bluenviron/mediamtx:latest
-    container_name: iams-mediamtx
-    volumes:
-      - ./deploy/mediamtx.dev.yml:/mediamtx.yml:ro
-    ports:
-      - "8554:8554"      # RTSP ingest from RPi
-      - "8887:8887/udp"  # WebRTC media UDP
-      - "8889:8889"      # WHEP endpoint
-    restart: unless-stopped
-
 volumes:
+  postgres_data:
   faiss_data:
   face_uploads:
