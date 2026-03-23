@@ -6,10 +6,9 @@ registers routers, and handles application lifecycle events.
 """
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
@@ -417,32 +416,12 @@ async def shutdown_event():
 
 
 @app.get("/", tags=["System"])
-async def root(request: Request):
+async def root():
     """
     Root endpoint
 
-    When accessed by a browser, serves a small HTML page that detects
-    Supabase auth callback hash fragments (#access_token=...) and
-    redirects to the proper email-confirmed landing page.
-    API clients (no text/html accept) get JSON.
+    Returns a simple JSON response confirming the API is running.
     """
-    accept = request.headers.get("accept", "")
-    if "text/html" in accept:
-        redirect_target = f"{settings.API_PREFIX}/auth/email-confirmed"
-        return HTMLResponse(
-            content=f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>IAMS</title></head>
-<body>
-<p id="msg" style="font-family:sans-serif;padding:40px">Loading&hellip;</p>
-<script>
-var h = window.location.hash;
-if (h && (h.includes('access_token') || h.includes('error='))) {{
-  window.location.replace('{redirect_target}' + h);
-}} else {{
-  document.getElementById('msg').textContent = 'IAMS API is running';
-}}
-</script></body></html>"""
-        )
     return {"message": f"{settings.APP_NAME} API is running", "docs": f"{settings.API_PREFIX}/docs"}
 
 

@@ -11,14 +11,12 @@ from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
-from app.config import logger, settings
+from app.config import logger
 from app.database import get_db
 from app.models.user import User, UserRole
 from app.utils.exceptions import AuthenticationError, AuthorizationError, NotFoundError
 from app.utils.security import (
     extract_bearer_token,
-    is_supabase_token,
-    verify_supabase_token,
     verify_token,
 )
 
@@ -50,13 +48,8 @@ async def get_current_user(
     """
     Get current authenticated user from JWT token.
 
-    Supports dual authentication:
-    - Supabase Auth tokens (detected via issuer / audience claims)
-    - Custom JWT tokens (legacy / fallback)
-
-    Enforces:
-    - is_active must be True
-    - email_verified must be True (when USE_SUPABASE_AUTH is enabled)
+    Extracts the Bearer token, verifies it as a local JWT,
+    looks up the user by ID, and enforces is_active.
 
     Args:
         credentials: HTTP Bearer credentials
@@ -67,33 +60,17 @@ async def get_current_user(
 
     Raises:
         HTTPException 401: If token is invalid or user not found
-        HTTPException 403: If email is not verified or account inactive
+        HTTPException 403: If account is inactive
     """
     token = credentials.credentials
 
     try:
-        user_id = None
-
-        # Route to the correct verifier based on token claims
-        if settings.USE_SUPABASE_AUTH and is_supabase_token(token):
-            payload = verify_supabase_token(token)
-            user_id = payload.get("sub")
-        else:
-            try:
-                payload = verify_token(token)
-                user_id = payload.get("user_id")
-            except AuthenticationError:
-                if settings.USE_SUPABASE_AUTH:
-                    # Custom JWT failed — try Supabase verification as fallback
-                    payload = verify_supabase_token(token)
-                    user_id = payload.get("sub")
-                else:
-                    raise
+        payload = verify_token(token)
+        user_id = payload.get("user_id")
 
         if not user_id:
             raise AuthenticationError("Invalid token: missing user identifier")
 
-        # Fetch user from database (try by id first, then supabase_user_id)
         try:
             user_uuid = uuid.UUID(user_id)
         except ValueError:
@@ -102,17 +79,10 @@ async def get_current_user(
         user = db.query(User).filter(User.id == user_uuid).first()
 
         if not user:
-            user = db.query(User).filter(User.supabase_user_id == user_uuid).first()
-
-        if not user:
             raise NotFoundError(f"User not found: {user_id}")
 
         if not user.is_active:
             raise AuthorizationError("User account is inactive")
-
-        # Enforce email verification when Supabase Auth is active
-        if settings.USE_SUPABASE_AUTH and not user.email_verified:
-            raise AuthorizationError("Email address has not been verified")
 
         return user
 

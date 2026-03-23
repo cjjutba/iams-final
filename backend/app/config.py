@@ -2,7 +2,7 @@
 IAMS Backend Configuration
 
 Central configuration file using Pydantic Settings for all environment variables.
-Includes Supabase, JWT, Face Recognition, and Presence Tracking settings.
+Includes JWT, Face Recognition, and Presence Tracking settings.
 """
 
 import logging
@@ -20,23 +20,13 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     API_PREFIX: str = "/api/v1"
 
-    # Supabase (optional — only needed when USE_SUPABASE_AUTH=true)
-    SUPABASE_URL: str = ""
-    SUPABASE_ANON_KEY: str = ""
-    SUPABASE_SERVICE_KEY: str = ""  # Service role key for admin operations
-    SUPABASE_JWT_SECRET: str = ""  # Supabase JWT secret for token verification
-    SUPABASE_WEBHOOK_SECRET: str = ""  # Webhook signature verification
-    SUPABASE_ACCESS_TOKEN: str = ""  # Personal access token for Management API
     DATABASE_URL: str  # PostgreSQL connection string
 
-    # JWT Settings (Custom JWT — kept for dual-auth migration)
+    # JWT Settings
     SECRET_KEY: str = "dev-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
-
-    # Auth Feature Flags
-    USE_SUPABASE_AUTH: bool = False  # Enable Supabase Auth (set True after migration)
 
     # Rate Limiting
     RATE_LIMIT_AUTH: str = "10/minute"  # Auth endpoint rate limit

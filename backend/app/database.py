@@ -2,7 +2,7 @@
 Database Configuration and Session Management
 
 Provides SQLAlchemy engine, session factory, and base class for models.
-Connects to Supabase PostgreSQL using async SQLAlchemy.
+Connects to PostgreSQL using SQLAlchemy.
 """
 
 from collections.abc import Generator

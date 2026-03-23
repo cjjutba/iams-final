@@ -2,7 +2,7 @@
 Security and Authentication Utilities
 
 Provides password hashing, JWT token creation/verification,
-and Supabase Auth token validation.
+and utility functions for authentication.
 """
 
 from datetime import datetime, timedelta
@@ -114,134 +114,6 @@ def verify_token(token: str) -> dict:
         logger.error(f"JWT verification failed: {e}")
         raise AuthenticationError("Invalid or expired token") from e
 
-
-# ===== Supabase Auth Token Verification =====
-
-# Cached JWKS keys from Supabase (fetched once, refreshed on kid miss)
-_jwks_cache: dict = {}
-_jwks_cache_time: float = 0
-
-
-def _fetch_supabase_jwks() -> dict:
-    """Fetch and cache the Supabase JWKS public keys."""
-    import time
-
-    global _jwks_cache, _jwks_cache_time
-
-    now = time.time()
-    # Return cached keys if fresh (cache for 1 hour)
-    if _jwks_cache and (now - _jwks_cache_time) < 3600:
-        return _jwks_cache
-
-    try:
-        import httpx
-
-        resp = httpx.get(
-            f"{settings.SUPABASE_URL}/auth/v1/.well-known/jwks.json",
-            headers={"apikey": settings.SUPABASE_ANON_KEY},
-            timeout=10.0,
-        )
-        if resp.status_code == 200:
-            jwks = resp.json()
-            # Index by kid for quick lookup
-            _jwks_cache = {k["kid"]: k for k in jwks.get("keys", [])}
-            _jwks_cache_time = now
-            logger.debug(f"Fetched JWKS: {len(_jwks_cache)} key(s)")
-            return _jwks_cache
-    except Exception as e:
-        logger.warning(f"Failed to fetch JWKS: {e}")
-
-    return _jwks_cache  # Return stale cache on failure
-
-
-def verify_supabase_token(token: str) -> dict:
-    """
-    Verify a Supabase Auth JWT token.
-
-    Supports both:
-    - ES256 (asymmetric, JWKS) — current Supabase default
-    - HS256 (symmetric, JWT secret) — legacy Supabase projects
-
-    Args:
-        token: Supabase JWT token from Authorization header
-
-    Returns:
-        Decoded token payload with user info
-
-    Raises:
-        AuthenticationError: If token is invalid
-    """
-    try:
-        # Peek at the token header to determine algorithm
-        header = jwt.get_unverified_header(token)
-        alg = header.get("alg", "HS256")
-        kid = header.get("kid")
-
-        if alg == "ES256" and kid:
-            # Asymmetric (JWKS) — fetch public key from Supabase
-            jwks = _fetch_supabase_jwks()
-            jwk = jwks.get(kid)
-            if not jwk:
-                # Key not in cache — force refresh and retry
-                global _jwks_cache_time
-                _jwks_cache_time = 0
-                jwks = _fetch_supabase_jwks()
-                jwk = jwks.get(kid)
-            if not jwk:
-                raise AuthenticationError(f"Unknown signing key: {kid}")
-
-            payload = jwt.decode(
-                token,
-                jwk,
-                algorithms=["ES256"],
-                audience="authenticated",
-                options={"verify_aud": True},
-            )
-        elif alg in ("HS256", "HS384", "HS512"):
-            # Symmetric (HMAC) — use JWT secret
-            jwt_secret = settings.SUPABASE_JWT_SECRET
-            if not jwt_secret:
-                logger.warning("SUPABASE_JWT_SECRET not set — skipping signature verification")
-                payload = jwt.decode(
-                    token,
-                    settings.SUPABASE_ANON_KEY,
-                    algorithms=[alg],
-                    audience="authenticated",
-                    options={"verify_signature": False, "verify_aud": True},
-                )
-            else:
-                payload = jwt.decode(
-                    token,
-                    jwt_secret,
-                    algorithms=[alg],
-                    audience="authenticated",
-                    options={"verify_aud": True},
-                )
-        else:
-            raise AuthenticationError(f"Unsupported JWT algorithm: {alg}")
-
-        return payload
-
-    except JWTError as e:
-        logger.error(f"Supabase token verification failed: {e}")
-        raise AuthenticationError("Invalid Supabase token") from e
-
-
-def is_supabase_token(token: str) -> bool:
-    """
-    Heuristic to detect whether a token was issued by Supabase Auth.
-
-    Supabase tokens contain an "iss" claim pointing to the project URL
-    and an "aud" claim set to "authenticated".
-    """
-    try:
-        # Peek at claims without verifying (just to route)
-        unverified = jwt.get_unverified_claims(token)
-        iss = unverified.get("iss", "")
-        aud = unverified.get("aud", "")
-        return "supabase" in iss or aud == "authenticated"
-    except Exception:
-        return False
 
 
 # ===== Utility Functions =====

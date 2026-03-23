@@ -14,6 +14,7 @@ from app.models.faculty_record import FacultyRecord
 from app.models.notification import Notification
 from app.models.notification_preference import NotificationPreference
 from app.models.presence_log import PresenceLog
+from app.models.refresh_token import RefreshToken
 from app.models.room import Room
 from app.models.schedule import Schedule
 from app.models.student_record import StudentRecord
@@ -32,6 +33,7 @@ __all__ = [
     "AttendanceRecord",
     "AttendanceStatus",
     "PresenceLog",
+    "RefreshToken",
     "EarlyLeaveEvent",
     "Notification",
     "StudentRecord",

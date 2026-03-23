@@ -8,7 +8,7 @@ from datetime import date
 
 from sqlalchemy.orm import Session
 
-from app.config import logger, settings
+from app.config import logger
 from app.models.user import User, UserRole
 from app.repositories.student_record_repository import StudentRecordRepository
 from app.repositories.user_repository import UserRepository
@@ -195,13 +195,7 @@ class UserService:
             "email_verified": True,  # Admin-created accounts are pre-verified
         }
 
-        # Handle password: Supabase or local
-        if settings.USE_SUPABASE_AUTH:
-            supabase_user = self._create_supabase_user(body.email, body.password, body.first_name, body.last_name, body.role)
-            user_data["supabase_user_id"] = supabase_user["id"]
-            user_data["password_hash"] = None
-        else:
-            user_data["password_hash"] = hash_password(body.password)
+        user_data["password_hash"] = hash_password(body.password)
 
         user = self.user_repo.create(user_data)
         logger.info(f"Admin created {body.role} user: {user.email}")
@@ -289,37 +283,6 @@ class UserService:
         self.db.commit()
         logger.info(f"Admin created student record: {normalized_id}")
         return record
-
-    def _create_supabase_user(self, email: str, password: str, first_name: str, last_name: str, role: UserRole) -> dict:
-        """Create a user in Supabase Auth using the admin API."""
-        import httpx
-
-        response = httpx.post(
-            f"{settings.SUPABASE_URL}/auth/v1/admin/users",
-            json={
-                "email": email,
-                "password": password,
-                "email_confirm": True,
-                "user_metadata": {
-                    "first_name": first_name,
-                    "last_name": last_name,
-                    "role": role.value,
-                },
-            },
-            headers={
-                "apikey": settings.SUPABASE_ANON_KEY,
-                "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
-                "Content-Type": "application/json",
-            },
-            timeout=15.0,
-        )
-
-        if response.status_code >= 400:
-            body = response.json() if "application/json" in response.headers.get("content-type", "") else {}
-            error_msg = body.get("msg") or body.get("message") or response.text
-            raise ValidationError(f"Failed to create Supabase user: {error_msg}")
-
-        return response.json()
 
     def get_statistics(self) -> dict:
         """

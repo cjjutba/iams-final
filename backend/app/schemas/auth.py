@@ -97,17 +97,11 @@ class RegisterResponse(BaseModel):
     success: bool
     message: str
     user: UserResponse
-    tokens: TokenResponse | None = None  # None when Supabase Auth is used (login via SDK)
+    tokens: TokenResponse | None = None
 
 
 class ForgotPasswordRequest(BaseModel):
     """Forgot password request"""
-
-    email: EmailStr
-
-
-class ResendVerificationRequest(BaseModel):
-    """Resend email verification request"""
 
     email: EmailStr
 
@@ -123,11 +117,3 @@ class ProfileUpdateRequest(BaseModel):
     def validate_phone(cls, v):
         return _validate_ph_phone(v)
 
-
-class SupabaseWebhookPayload(BaseModel):
-    """Supabase Auth webhook payload"""
-
-    type: str  # e.g. "user.updated"
-    table: str | None = None
-    record: dict | None = None
-    old_record: dict | None = None

@@ -48,8 +48,7 @@ class User(Base):
 
     # Authentication
     email = Column(String(255), unique=True, nullable=False, index=True)
-    password_hash = Column(String(255), nullable=True)  # Nullable when using Supabase Auth
-    supabase_user_id = Column(UUID(as_uuid=True), unique=True, nullable=True, index=True)
+    password_hash = Column(String(255), nullable=False)
 
     # Profile
     role = Column(SQLEnum(UserRole), nullable=False, index=True)
