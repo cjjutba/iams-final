@@ -45,6 +45,10 @@ interface ApiService {
     @POST("face/register")
     suspend fun registerFace(@Part images: List<MultipartBody.Part>): Response<FaceRegisterResponse>
 
+    @Multipart
+    @POST("face/reregister")
+    suspend fun reregisterFace(@Part images: List<MultipartBody.Part>): Response<FaceRegisterResponse>
+
     @GET("face/status")
     suspend fun getFaceStatus(): Response<FaceStatusResponse>
 

@@ -56,7 +56,8 @@ private enum class Phase { INTRO, SCANNING }
 fun RegisterStep3Screen(
     navController: NavController,
     viewModel: RegistrationViewModel = hiltViewModel(),
-    isStandalone: Boolean = false
+    isStandalone: Boolean = false,
+    isReregister: Boolean = false
 ) {
     val context = LocalContext.current
     var phase by remember { mutableStateOf(Phase.INTRO) }
@@ -132,7 +133,7 @@ fun RegisterStep3Screen(
                     bitmaps.forEach { viewModel.addCapturedFace(it) }
                     if (isStandalone) {
                         // Already authenticated — upload immediately
-                        viewModel.uploadFaceImages()
+                        viewModel.uploadFaceImages(reregister = isReregister)
                     } else {
                         // During signup — go to review screen
                         navController.navigate(Routes.REGISTER_REVIEW_INNER)
@@ -140,7 +141,8 @@ fun RegisterStep3Screen(
                 },
                 onCancel = {
                     phase = Phase.INTRO
-                }
+                },
+                isUploading = uiState.isUploading
             )
         }
     }

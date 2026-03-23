@@ -1,6 +1,7 @@
 package com.iams.app.ui.components
 
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.util.Log
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -14,6 +15,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -110,6 +112,7 @@ private enum class ScanPhase { SCANNING, COMPLETE, REVIEW }
 fun FaceScanScreen(
     onComplete: (List<Bitmap>) -> Unit,
     onCancel: () -> Unit,
+    isUploading: Boolean = false,
 ) {
     val context = LocalContext.current
     val configuration = LocalConfiguration.current
@@ -226,8 +229,12 @@ fun FaceScanScreen(
 
     // Capture handler
     fun handleCapture() {
-        val bitmap = previewView.bitmap ?: return
+        val rawBitmap = previewView.bitmap ?: return
         if (!faceDetected) return
+        // Un-mirror the front camera preview bitmap so the backend gets a
+        // non-flipped image — ArcFace alignment is NOT mirror-invariant.
+        val matrix = Matrix().apply { preScale(-1f, 1f, rawBitmap.width / 2f, rawBitmap.height / 2f) }
+        val bitmap = Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
 
         showFlash = true
 
@@ -304,7 +311,8 @@ fun FaceScanScreen(
                     images = images,
                     onRetakePhoto = ::handleRetakePhoto,
                     onRetakeAll = ::handleRetakeAll,
-                    onConfirm = ::handleConfirm
+                    onConfirm = ::handleConfirm,
+                    isUploading = isUploading
                 )
             }
 
@@ -671,6 +679,7 @@ private fun ReviewOverlay(
     onRetakePhoto: (Int) -> Unit,
     onRetakeAll: () -> Unit,
     onConfirm: () -> Unit,
+    isUploading: Boolean = false,
 ) {
     Column(
         modifier = Modifier
@@ -683,7 +692,7 @@ private fun ReviewOverlay(
         // Header
         Text(
             text = "Review Your Photos",
-            fontSize = 20.sp,
+            fontSize = 22.sp,
             fontWeight = FontWeight.Bold,
             color = Color.White,
             textAlign = TextAlign.Center
@@ -693,17 +702,14 @@ private fun ReviewOverlay(
 
         Text(
             text = "Tap any photo to retake it",
-            fontSize = 12.sp,
-            color = Color.White.copy(alpha = 0.45f),
+            fontSize = 13.sp,
+            color = Color.White.copy(alpha = 0.5f),
             textAlign = TextAlign.Center
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
-        // Thumbnail grid — 2 columns
-        val columns = 2
-        val rows = (images.size + columns - 1) / columns
-
+        // Photo grid: Row of 3 on top, Row of 2 centered on bottom
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -711,109 +717,101 @@ private fun ReviewOverlay(
             verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            for (row in 0 until rows) {
+            // Top row — first 3 photos (Center, Left, Right)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                for (i in 0 until minOf(3, images.size)) {
+                    ReviewThumbnail(
+                        bitmap = images[i],
+                        label = STEP_LABELS.getOrElse(i) { "Photo ${i + 1}" },
+                        onClick = { if (!isUploading) onRetakePhoto(i) },
+                        modifier = Modifier.weight(1f),
+                        enabled = !isUploading
+                    )
+                }
+            }
+
+            // Bottom row — last 2 photos (Up, Down), centered
+            if (images.size > 3) {
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    for (col in 0 until columns) {
-                        val index = row * columns + col
-                        if (index < images.size) {
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .aspectRatio(0.75f)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable { onRetakePhoto(index) }
-                            ) {
-                                Image(
-                                    bitmap = images[index].asImageBitmap(),
-                                    contentDescription = "Face ${index + 1}",
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentScale = ContentScale.Crop
-                                )
-
-                                // Retake icon
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .padding(6.dp)
-                                        .size(24.dp)
-                                        .clip(CircleShape)
-                                        .background(Color.Black.copy(alpha = 0.5f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        Icons.Default.Refresh,
-                                        contentDescription = "Retake",
-                                        modifier = Modifier.size(14.dp),
-                                        tint = Color.White
-                                    )
-                                }
-
-                                // Label at bottom
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomCenter)
-                                        .fillMaxWidth()
-                                        .background(Color.Black.copy(alpha = 0.55f))
-                                        .padding(vertical = 4.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = STEP_LABELS.getOrElse(index) { "Photo ${index + 1}" },
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = Color.White
-                                    )
-                                }
-                            }
-                        } else {
-                            Spacer(modifier = Modifier.weight(1f))
-                        }
+                    // Leading spacer to center 2 items in a 3-column layout
+                    Spacer(modifier = Modifier.weight(0.5f))
+                    for (i in 3 until minOf(5, images.size)) {
+                        ReviewThumbnail(
+                            bitmap = images[i],
+                            label = STEP_LABELS.getOrElse(i) { "Photo ${i + 1}" },
+                            onClick = { if (!isUploading) onRetakePhoto(i) },
+                            modifier = Modifier.weight(1f),
+                            enabled = !isUploading
+                        )
                     }
+                    Spacer(modifier = Modifier.weight(0.5f))
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
         // Confirm button
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(48.dp)
-                .clip(RoundedCornerShape(24.dp))
-                .background(COLOR_GREEN)
-                .clickable(onClick = onConfirm),
+                .height(50.dp)
+                .clip(RoundedCornerShape(25.dp))
+                .background(if (isUploading) COLOR_GREEN.copy(alpha = 0.6f) else COLOR_GREEN)
+                .then(
+                    if (isUploading) Modifier else Modifier.clickable(onClick = onConfirm)
+                ),
             contentAlignment = Alignment.Center
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Default.Check,
-                    contentDescription = "Confirm",
-                    modifier = Modifier.size(20.dp),
-                    tint = Color.White
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Looks good",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
+                if (isUploading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = Color.White,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Registering face...",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.Check,
+                        contentDescription = "Confirm",
+                        modifier = Modifier.size(20.dp),
+                        tint = Color.White
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Looks good",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
             }
         }
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Retake all
+        // Retake all (disabled during upload)
         Row(
             modifier = Modifier
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onRetakeAll
+                .then(
+                    if (isUploading) Modifier else Modifier.clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onRetakeAll
+                    )
                 )
                 .padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -822,13 +820,71 @@ private fun ReviewOverlay(
                 Icons.Default.Refresh,
                 contentDescription = "Retake all",
                 modifier = Modifier.size(14.dp),
-                tint = Color.White.copy(alpha = 0.5f)
+                tint = Color.White.copy(alpha = if (isUploading) 0.2f else 0.5f)
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
                 text = "Retake All",
-                fontSize = 12.sp,
-                color = Color.White.copy(alpha = 0.5f)
+                fontSize = 13.sp,
+                color = Color.White.copy(alpha = if (isUploading) 0.2f else 0.5f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReviewThumbnail(
+    bitmap: Bitmap,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    Box(
+        modifier = modifier
+            .aspectRatio(0.78f)
+            .clip(RoundedCornerShape(12.dp))
+            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
+    ) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = label,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop
+        )
+
+        // Retake icon
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(6.dp)
+                .size(26.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.5f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Default.Refresh,
+                contentDescription = "Retake",
+                modifier = Modifier.size(14.dp),
+                tint = Color.White
+            )
+        }
+
+        // Label at bottom
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.55f))
+                .padding(vertical = 4.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = label,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White
             )
         }
     }

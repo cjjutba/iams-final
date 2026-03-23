@@ -72,7 +72,7 @@ data class FaceRegisterResponse(
     @SerializedName("images_processed") val imagesProcessed: Int
 )
 data class FaceStatusResponse(
-    @SerializedName("face_registered") val faceRegistered: Boolean
+    @SerializedName("registered") val faceRegistered: Boolean
 )
 
 // === Schedule ===

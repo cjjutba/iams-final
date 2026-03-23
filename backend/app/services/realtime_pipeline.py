@@ -59,11 +59,29 @@ class SessionPipeline:
             from app.services.ml.faiss_manager import faiss_manager
             from app.services.ml.insightface_model import insightface_model
 
+            # Build a complete name_map: enrolled students + all face-registered users.
+            # Enrolled names come from presence service; augment with any registered
+            # user whose face is in FAISS so recognition always shows a name.
+            from app.models.face_registration import FaceRegistration
+            from app.models.user import User
+
+            full_name_map = dict(self._presence.name_map)
+            face_regs = (
+                db.query(FaceRegistration.user_id, User.first_name, User.last_name)
+                .join(User, FaceRegistration.user_id == User.id)
+                .filter(FaceRegistration.is_active)
+                .all()
+            )
+            for user_id, first_name, last_name in face_regs:
+                uid = str(user_id)
+                if uid not in full_name_map:
+                    full_name_map[uid] = f"{first_name} {last_name}"
+
             self._tracker = RealtimeTracker(
                 insightface_model=insightface_model,
                 faiss_manager=faiss_manager,
                 enrolled_user_ids=self._presence.enrolled_ids,
-                name_map=self._presence.name_map,
+                name_map=full_name_map,
             )
 
             self._last_flush = time.monotonic()

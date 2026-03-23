@@ -249,11 +249,13 @@ fun IAMSNavHost() {
                 arguments = listOf(
                     navArgument("mode") { type = NavType.StringType },
                 )
-            ) {
+            ) { backStackEntry ->
+                val mode = backStackEntry.arguments?.getString("mode") ?: "register"
                 // Standalone face registration from student profile (not during signup flow)
                 RegisterStep3Screen(
                     navController = navController,
-                    isStandalone = true
+                    isStandalone = true,
+                    isReregister = mode == "reregister"
                 )
             }
 

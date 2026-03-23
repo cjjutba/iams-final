@@ -328,7 +328,7 @@ class RegistrationViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(capturedFaces = emptyList())
     }
 
-    fun uploadFaceImages() {
+    fun uploadFaceImages(reregister: Boolean = false) {
         val faces = _uiState.value.capturedFaces
         if (faces.isEmpty()) return
 
@@ -351,7 +351,11 @@ class RegistrationViewModel @Inject constructor(
                     )
                 }
 
-                val response = apiService.registerFace(parts)
+                val response = if (reregister) {
+                    apiService.reregisterFace(parts)
+                } else {
+                    apiService.registerFace(parts)
+                }
 
                 if (response.isSuccessful) {
                     _uiState.value = _uiState.value.copy(

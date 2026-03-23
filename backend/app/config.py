@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     # Adaptive Threshold
     ADAPTIVE_THRESHOLD_ENABLED: bool = True
     ADAPTIVE_THRESHOLD_FLOOR: float = 0.35  # Minimum allowed threshold
-    ADAPTIVE_THRESHOLD_CEILING: float = 0.65  # Maximum allowed threshold
+    ADAPTIVE_THRESHOLD_CEILING: float = 0.50  # Maximum allowed threshold (lowered for cross-camera selfie→CCTV matching)
     ADAPTIVE_THRESHOLD_MIN_SAMPLES: int = 50  # Min samples before adapting
     ADAPTIVE_THRESHOLD_WINDOW: int = 500  # Rolling window size
 
