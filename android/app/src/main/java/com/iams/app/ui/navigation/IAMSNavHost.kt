@@ -24,7 +24,6 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.navigation
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.iams.app.ui.auth.EmailVerificationScreen
 import com.iams.app.ui.auth.FacultyLoginScreen
 import com.iams.app.ui.auth.ForgotPasswordScreen
 import com.iams.app.ui.auth.ResetPasswordScreen
@@ -162,20 +161,6 @@ fun IAMSNavHost() {
                     firstName = backStackEntry.arguments?.getString("firstName") ?: "",
                     lastName = backStackEntry.arguments?.getString("lastName") ?: "",
                     prefillEmail = if (emailArg == "_") "" else emailArg,
-                )
-            }
-
-            composable(
-                route = Routes.EMAIL_VERIFICATION,
-                arguments = listOf(
-                    navArgument("email") { type = NavType.StringType }
-                )
-            ) { backStackEntry ->
-                val rawEmail = backStackEntry.arguments?.getString("email") ?: ""
-                val email = try { java.net.URLDecoder.decode(rawEmail, "UTF-8") } catch (_: Exception) { rawEmail }
-                EmailVerificationScreen(
-                    navController = navController,
-                    email = email,
                 )
             }
 

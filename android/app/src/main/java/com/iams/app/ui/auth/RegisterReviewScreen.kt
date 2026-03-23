@@ -46,9 +46,9 @@ import com.iams.app.ui.theme.TextTertiary
 /**
  * Step 4 (Review): Shows collected data and creates the account.
  *
- * This is where register() is called (creates Supabase Auth user + sends verification email).
- * Face images are saved locally as "pending" and uploaded after the user logs in.
- * Matches the React Native flow in RegisterReviewScreen.tsx.
+ * This is where register() is called. After successful registration,
+ * the user is redirected to the login screen. Face images are saved
+ * locally as "pending" and uploaded after the user logs in.
  */
 @Composable
 fun RegisterReviewScreen(
@@ -75,7 +75,7 @@ fun RegisterReviewScreen(
         }
     }
 
-    // After registration succeeds → save pending face images → navigate to email verification
+    // After registration succeeds → save pending face images → navigate to login
     LaunchedEffect(uiState.registrationComplete) {
         if (uiState.registrationComplete) {
             // Save face images for later upload (after login, when we have a valid token)
@@ -83,14 +83,13 @@ fun RegisterReviewScreen(
                 viewModel.savePendingFaceImages()
             }
 
-            toastState.showToast("Account created! Please verify your email.", ToastType.SUCCESS)
+            toastState.showToast("Account created! You can now sign in.", ToastType.SUCCESS)
             RegistrationDataHolder.clear()
             viewModel.resetRegistration()
 
-            // Navigate to email verification. Don't popUpTo here — the face-flow
-            // back stack entry is still referenced by the shared ViewModel.
-            // EmailVerificationScreen handles back stack cleanup on completion.
-            navController.navigate(Routes.emailVerification(email))
+            navController.navigate(Routes.STUDENT_LOGIN) {
+                popUpTo(Routes.REGISTER_STEP1) { inclusive = true }
+            }
         }
     }
 

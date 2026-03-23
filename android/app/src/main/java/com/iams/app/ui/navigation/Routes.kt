@@ -19,7 +19,6 @@ object Routes {
     // Registration
     const val REGISTER_STEP1 = "register/step1"
     const val REGISTER_STEP2 = "register/step2/{studentId}/{firstName}/{lastName}/{email}"
-    const val EMAIL_VERIFICATION = "email-verification/{email}"
 
     // Face registration flow (nested nav graph for shared ViewModel)
     const val REGISTER_FACE_FLOW = "register/face-flow"
@@ -90,6 +89,4 @@ object Routes {
         "register/step2/$studentId/$firstName/$lastName/${email.ifBlank { "_" }}"
 
 
-    fun emailVerification(email: String) =
-        "email-verification/${java.net.URLEncoder.encode(email, "UTF-8")}"
 }

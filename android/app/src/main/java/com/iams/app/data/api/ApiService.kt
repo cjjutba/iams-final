@@ -25,17 +25,11 @@ interface ApiService {
     @GET("auth/me")
     suspend fun getMe(): Response<UserResponse>
 
-    @POST("auth/check-email-verified")
-    suspend fun checkEmailVerified(@Body request: CheckEmailRequest): Response<EmailVerifiedResponse>
-
     @POST("auth/change-password")
     suspend fun changePassword(@Body request: ChangePasswordRequest): Response<MessageResponse>
 
     @POST("auth/forgot-password")
     suspend fun forgotPassword(@Body request: ForgotPasswordRequest): Response<MessageResponse>
-
-    @POST("auth/resend-verification")
-    suspend fun resendVerification(@Body request: ResendVerificationRequest): Response<MessageResponse>
 
     @POST("auth/logout")
     suspend fun logout(): Response<MessageResponse>

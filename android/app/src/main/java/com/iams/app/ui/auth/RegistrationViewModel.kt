@@ -4,15 +4,12 @@ import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiService
-import com.iams.app.data.model.CheckEmailRequest
 import com.iams.app.data.model.RegisterRequest
-import com.iams.app.data.model.ResendVerificationRequest
 import com.iams.app.data.model.CheckStudentIdRequest
 import com.iams.app.data.model.VerifyStudentIdRequest
 import android.content.Context
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -36,11 +33,6 @@ data class RegistrationUiState(
     // Step 2 results
     val registrationComplete: Boolean = false,
     val registeredEmail: String = "",
-    // Email verification
-    val emailVerified: Boolean = false,
-    val isPolling: Boolean = false,
-    val isResending: Boolean = false,
-    val resendSuccess: Boolean = false,
     // Step 3 face capture
     val capturedFaces: List<Bitmap> = emptyList(),
     // Review / upload
@@ -214,101 +206,6 @@ class RegistrationViewModel @Inject constructor(
         }
     }
 
-    fun checkEmailVerified(email: String) {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
-
-            try {
-                val response = apiService.checkEmailVerified(CheckEmailRequest(email))
-
-                if (response.isSuccessful) {
-                    val body = response.body()!!
-                    if (body.verified) {
-                        _uiState.value = _uiState.value.copy(
-                            isLoading = false,
-                            emailVerified = true
-                        )
-                    } else {
-                        _uiState.value = _uiState.value.copy(
-                            isLoading = false,
-                            error = "Email not yet verified. Please check your inbox."
-                        )
-                    }
-                } else {
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        error = "Could not check verification status"
-                    )
-                }
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    error = "Network error. Please check your connection."
-                )
-            }
-        }
-    }
-
-    fun resendVerificationEmail(email: String) {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isResending = true, error = null)
-
-            try {
-                val response = apiService.resendVerification(
-                    ResendVerificationRequest(email)
-                )
-
-                if (response.isSuccessful) {
-                    _uiState.value = _uiState.value.copy(
-                        isResending = false,
-                        error = null,
-                        resendSuccess = true
-                    )
-                } else {
-                    val message = when (response.code()) {
-                        429 -> "Please wait before requesting another email"
-                        else -> response.errorBody()?.string() ?: "Failed to resend verification email"
-                    }
-                    _uiState.value = _uiState.value.copy(
-                        isResending = false,
-                        error = message
-                    )
-                }
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isResending = false,
-                    error = "Network error. Please check your connection."
-                )
-            }
-        }
-    }
-
-    fun startEmailPolling(email: String) {
-        if (_uiState.value.isPolling) return
-        _uiState.value = _uiState.value.copy(isPolling = true)
-
-        viewModelScope.launch {
-            while (_uiState.value.isPolling && !_uiState.value.emailVerified) {
-                delay(5000)
-                try {
-                    val response = apiService.checkEmailVerified(CheckEmailRequest(email))
-                    if (response.isSuccessful && response.body()?.verified == true) {
-                        _uiState.value = _uiState.value.copy(
-                            emailVerified = true,
-                            isPolling = false
-                        )
-                    }
-                } catch (_: Exception) {
-                    // Silently continue polling
-                }
-            }
-        }
-    }
-
-    fun stopEmailPolling() {
-        _uiState.value = _uiState.value.copy(isPolling = false)
-    }
-
     // Face capture methods
 
     fun addCapturedFace(bitmap: Bitmap) {
@@ -381,9 +278,8 @@ class RegistrationViewModel @Inject constructor(
 
     /**
      * Save captured face images to app-internal storage for later upload.
-     * In Supabase mode, the user isn't authenticated yet (email not verified),
+     * The user isn't authenticated yet at registration time,
      * so face images are uploaded after the user logs in.
-     * Matches React Native's storage.setPendingFaceImages() pattern.
      */
     fun savePendingFaceImages() {
         val faces = _uiState.value.capturedFaces
@@ -407,10 +303,6 @@ class RegistrationViewModel @Inject constructor(
             .putBoolean("has_pending_faces", true)
             .putInt("pending_face_count", faces.size)
             .apply()
-    }
-
-    fun clearResendSuccess() {
-        _uiState.value = _uiState.value.copy(resendSuccess = false)
     }
 
     fun clearError() {
