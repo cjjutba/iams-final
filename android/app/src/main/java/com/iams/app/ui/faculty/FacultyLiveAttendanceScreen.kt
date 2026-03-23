@@ -605,10 +605,11 @@ private fun EndSessionBar(
             .padding(horizontal = spacing.screenPadding, vertical = spacing.md)
     ) {
         IAMSButton(
-            text = if (isEnding) "Ending Session..." else "End Session",
+            text = "End Session",
             onClick = onEndSession,
             enabled = !isEnding,
             isLoading = isEnding,
+            loadingText = "Ending Session...",
             variant = IAMSButtonVariant.PRIMARY,
             leadingIcon = {
                 if (!isEnding) {

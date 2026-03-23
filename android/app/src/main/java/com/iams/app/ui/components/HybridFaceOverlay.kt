@@ -20,6 +20,9 @@ import kotlinx.coroutines.launch
 
 private const val TAG = "HybridFaceOverlay"
 
+/** How long a disappeared face stays visible (ms) before being removed. */
+private const val GRACE_PERIOD_MS = 3000L
+
 /**
  * Hybrid overlay that combines ML Kit real-time face detection (15-30fps)
  * with backend identity labels from WebSocket.
@@ -27,7 +30,13 @@ private const val TAG = "HybridFaceOverlay"
  * ML Kit provides instant bounding box positions (tracks face movement).
  * Backend provides identity (name, confidence, recognition status) via IoU matching.
  *
- * The overlay accounts for SurfaceViewRenderer's SCALE_ASPECT_FIT letterboxing
+ * Key behaviors:
+ * - Faces without a backend match yet show a subtle white box (no label).
+ * - Only faces the backend explicitly marks "unknown" show "Unknown" label.
+ * - Disappeared faces persist for [GRACE_PERIOD_MS] with gradual fade.
+ * - Unmatched recognized backend tracks render as fallback when ML Kit loses a face.
+ *
+ * The overlay accounts for SurfaceViewRenderer's SCALE_ASPECT_FILL cropping
  * by computing the video display rect and mapping normalized coords into it.
  */
 @Composable
@@ -42,7 +51,7 @@ fun HybridFaceOverlay(
     val animatedFaces = remember { mutableStateMapOf<Int, AnimatedFaceState>() }
     val coroutineScope = rememberCoroutineScope()
 
-    // Match ML Kit faces to backend tracks via IoU
+    // Match ML Kit faces to backend tracks via IoU, plus unmatched backend fallbacks
     val matched = remember(mlKitFaces, backendTracks) {
         matchFaces(mlKitFaces, backendTracks)
     }
@@ -50,12 +59,21 @@ fun HybridFaceOverlay(
     // Update animations when faces change
     LaunchedEffect(matched) {
         val currentIds = matched.map { it.faceKey }.toSet()
+        val now = System.currentTimeMillis()
 
-        // Remove faces no longer present
-        val removed = animatedFaces.keys - currentIds
-        removed.forEach { animatedFaces.remove(it) }
+        // For faces no longer present: check grace period instead of removing immediately
+        val disappeared = animatedFaces.keys - currentIds
+        val expired = mutableSetOf<Int>()
+        for (key in disappeared) {
+            val state = animatedFaces[key] ?: continue
+            if (now - state.lastSeenTime > GRACE_PERIOD_MS) {
+                expired.add(key)
+            }
+            // Otherwise keep it — it's within grace period, will fade in Canvas
+        }
+        expired.forEach { animatedFaces.remove(it) }
 
-        // Update or create animated state
+        // Update or create animated state for currently matched faces
         for (match in matched) {
             val existing = animatedFaces[match.faceKey]
             if (existing != null) {
@@ -66,6 +84,7 @@ fun HybridFaceOverlay(
                 existing.name = match.track?.name
                 existing.confidence = match.track?.confidence ?: 0f
                 existing.status = match.track?.status ?: "pending"
+                existing.lastSeenTime = now
                 if (existing.alpha.value < 1f) {
                     coroutineScope.launch { existing.alpha.animateTo(1f, tween(200)) }
                 }
@@ -79,6 +98,7 @@ fun HybridFaceOverlay(
                     name = match.track?.name,
                     confidence = match.track?.confidence ?: 0f,
                     status = match.track?.status ?: "pending",
+                    lastSeenTime = now,
                 )
                 animatedFaces[match.faceKey] = state
                 coroutineScope.launch { state.alpha.animateTo(1f, tween(300)) }
@@ -123,8 +143,20 @@ fun HybridFaceOverlay(
             cropOffsetY = 0f
         }
 
+        val now = System.currentTimeMillis()
+
         for ((_, state) in animatedFaces) {
-            val alpha = state.alpha.value
+            val baseAlpha = state.alpha.value
+            if (baseAlpha < 0.01f) continue
+
+            // Compute grace period fade: faces within grace period fade out gradually
+            val elapsed = now - state.lastSeenTime
+            val graceFade = if (elapsed > 0) {
+                (1f - (elapsed.toFloat() / GRACE_PERIOD_MS)).coerceIn(0f, 1f)
+            } else {
+                1f
+            }
+            val alpha = baseAlpha * graceFade
             if (alpha < 0.01f) continue
 
             // Map normalized 0-1 coords: scale to rendered size, then subtract crop offset
@@ -137,10 +169,12 @@ fun HybridFaceOverlay(
 
             if (boxWidth < 2f || boxHeight < 2f) continue
 
+            // Skip pending/unmatched faces entirely — only draw recognized or confirmed unknown
+            if (state.status != "recognized" && state.status != "unknown") continue
+
             val boxColor = when (state.status) {
                 "recognized" -> Color(0xFF4CAF50)  // Green
-                "unknown" -> Color(0xFFFF9800)     // Orange
-                else -> Color(0xFFFF9800)          // Default to orange (visible)
+                else -> Color(0xFFFF9800)          // Yellow/Orange — confirmed unrecognized
             }.copy(alpha = alpha)
 
             // Draw bounding box
@@ -152,7 +186,7 @@ fun HybridFaceOverlay(
             )
 
             // Draw name label
-            val label = state.name ?: if (state.status == "unknown" || state.status == "pending") "Unknown" else ""
+            val label = state.name ?: if (state.status == "unknown") "Unknown" else ""
             if (label.isNotEmpty()) {
                 drawNameLabel(
                     textMeasurer = textMeasurer,
@@ -185,7 +219,7 @@ private fun matchFaces(
     val usedTrackIds = mutableSetOf<Int>()
     var syntheticId = -1
 
-    return mlKitFaces.map { face ->
+    val result = mlKitFaces.map { face ->
         val faceBox = floatArrayOf(face.x1, face.y1, face.x2, face.y2)
 
         var bestTrack: TrackInfo? = null
@@ -211,7 +245,29 @@ private fun matchFaces(
         val key = face.faceId ?: syntheticId--
 
         MatchedFace(face, key, bestTrack)
+    }.toMutableList()
+
+    // Add unmatched recognized backend tracks as fallback entries.
+    // When ML Kit loses a face (occlusion, head turn) but the backend's ByteTrack
+    // still tracks it, render the backend bbox so the name label persists.
+    for (track in backendTracks) {
+        if (track.trackId in usedTrackIds) continue
+        if (track.status != "recognized") continue
+        if (track.bbox.size < 4) continue
+
+        val syntheticFace = MlKitFace(
+            x1 = track.bbox[0],
+            y1 = track.bbox[1],
+            x2 = track.bbox[2],
+            y2 = track.bbox[3],
+            faceId = null
+        )
+        // Use negative key offset by 1000 to avoid collision with ML Kit synthetic IDs
+        val key = -(track.trackId + 1000)
+        result.add(MatchedFace(syntheticFace, key, track))
     }
+
+    return result
 }
 
 private fun computeIoU(a: FloatArray, b: FloatArray): Float {
@@ -286,4 +342,5 @@ private class AnimatedFaceState(
     var name: String?,
     var confidence: Float,
     var status: String,
+    var lastSeenTime: Long,
 )

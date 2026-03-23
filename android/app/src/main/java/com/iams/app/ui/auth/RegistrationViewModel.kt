@@ -39,6 +39,7 @@ data class RegistrationUiState(
     // Email verification
     val emailVerified: Boolean = false,
     val isPolling: Boolean = false,
+    val isResending: Boolean = false,
     val resendSuccess: Boolean = false,
     // Step 3 face capture
     val capturedFaces: List<Bitmap> = emptyList(),
@@ -250,7 +251,7 @@ class RegistrationViewModel @Inject constructor(
 
     fun resendVerificationEmail(email: String) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+            _uiState.value = _uiState.value.copy(isResending = true, error = null)
 
             try {
                 val response = apiService.resendVerification(
@@ -259,7 +260,7 @@ class RegistrationViewModel @Inject constructor(
 
                 if (response.isSuccessful) {
                     _uiState.value = _uiState.value.copy(
-                        isLoading = false,
+                        isResending = false,
                         error = null,
                         resendSuccess = true
                     )
@@ -269,13 +270,13 @@ class RegistrationViewModel @Inject constructor(
                         else -> response.errorBody()?.string() ?: "Failed to resend verification email"
                     }
                     _uiState.value = _uiState.value.copy(
-                        isLoading = false,
+                        isResending = false,
                         error = message
                     )
                 }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
-                    isLoading = false,
+                    isResending = false,
                     error = "Network error. Please check your connection."
                 )
             }

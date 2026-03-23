@@ -436,6 +436,46 @@ class FAISSManager:
         except Exception as e:
             logger.warning(f"Failed to publish FAISS reload notification: {e}")
 
+    def rebuild_user_map_from_db(self):
+        """Rebuild user_map from database so FAISS IDs map to user_ids.
+
+        Must be called after load_or_create_index() to keep user_map in sync.
+        Without this, FAISS search returns vector matches but cannot resolve
+        them to user_ids, causing recognized faces to appear as "Unknown".
+
+        IMPORTANT: This only rebuilds the in-memory user_map dict.  It does
+        NOT call rebuild()/save() — doing so would publish another Redis
+        notification and create an infinite reload loop.
+        """
+        from app.database import SessionLocal
+        from app.repositories.face_repository import FaceRepository
+
+        db = SessionLocal()
+        try:
+            repo = FaceRepository(db)
+            self.user_map = {}
+
+            # Prefer multi-embedding table (face_embeddings)
+            multi_embs = repo.get_all_active_embeddings()
+            if multi_embs:
+                for emb in multi_embs:
+                    self.user_map[emb.faiss_id] = str(emb.registration.user_id)
+            else:
+                # Fallback: legacy single-embedding registrations
+                active_regs = repo.get_active_embeddings()
+                for reg in active_regs:
+                    self.user_map[reg.embedding_id] = str(reg.user_id)
+
+            logger.info(
+                "user_map rebuilt from DB: %d mappings, %d vectors",
+                len(self.user_map),
+                self.index.ntotal if self.index else 0,
+            )
+        except Exception:
+            logger.exception("Failed to rebuild user_map from DB")
+        finally:
+            db.close()
+
     async def subscribe_index_changes(self):
         """Listen for index-change events and reload (runs forever as a background task)."""
         import asyncio
@@ -453,6 +493,9 @@ class FAISSManager:
                     if message["type"] == "message":
                         try:
                             self.load_or_create_index()
+                            # Rebuild user_map from DB — without this,
+                            # FAISS search can't resolve IDs to user_ids
+                            self.rebuild_user_map_from_db()
                             logger.info("FAISS index reloaded from disk (notified by another worker)")
                         except Exception as e:
                             logger.error(f"Failed to reload FAISS index after notification: {e}")

@@ -303,6 +303,7 @@ fun StudentProfileScreen(
                             size = IAMSButtonSize.LG,
                             enabled = !uiState.isLoading,
                             isLoading = uiState.isLoading,
+                            loadingText = "Signing out...",
                             leadingIcon = {
                                 Icon(
                                     Icons.AutoMirrored.Filled.Logout,

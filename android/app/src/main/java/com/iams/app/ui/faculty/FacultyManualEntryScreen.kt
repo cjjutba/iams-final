@@ -283,6 +283,7 @@ fun FacultyManualEntryScreen(
                     )
                 },
                 isLoading = uiState.isSubmitting,
+                loadingText = "Submitting...",
                 enabled = !uiState.isSubmitting,
                 size = IAMSButtonSize.LG
             )

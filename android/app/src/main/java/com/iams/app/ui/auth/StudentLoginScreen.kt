@@ -158,7 +158,8 @@ fun StudentLoginScreen(
             onClick = { viewModel.login(studentId.trim().uppercase(), password.trim()) },
             size = IAMSButtonSize.LG,
             enabled = !uiState.isLoading,
-            isLoading = uiState.isLoading
+            isLoading = uiState.isLoading,
+            loadingText = "Signing in..."
         )
 
         Spacer(modifier = Modifier.height(32.dp))

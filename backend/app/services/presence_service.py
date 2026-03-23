@@ -197,7 +197,7 @@ class PresenceService:
         if user:
             return {
                 "user_id": student_id,
-                "name": f"{user.first_name} {user.last_name}",
+                "name": user.first_name,
                 "student_id": user.student_id,
             }
         return {"user_id": student_id, "name": "Unknown", "student_id": None}

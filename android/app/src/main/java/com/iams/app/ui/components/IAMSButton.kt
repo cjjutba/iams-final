@@ -39,6 +39,7 @@ fun IAMSButton(
     size: IAMSButtonSize = IAMSButtonSize.MD,
     enabled: Boolean = true,
     isLoading: Boolean = false,
+    loadingText: String? = null,
     fullWidth: Boolean = true,
     leadingIcon: @Composable (() -> Unit)? = null,
 ) {
@@ -73,6 +74,11 @@ fun IAMSButton(
                         else -> Primary
                     },
                     strokeWidth = 2.dp
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = loadingText ?: text,
+                    style = MaterialTheme.typography.labelLarge
                 )
             } else {
                 if (leadingIcon != null) {

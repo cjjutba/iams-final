@@ -75,7 +75,7 @@ class SessionPipeline:
             for user_id, first_name, last_name in face_regs:
                 uid = str(user_id)
                 if uid not in full_name_map:
-                    full_name_map[uid] = f"{first_name} {last_name}"
+                    full_name_map[uid] = first_name
 
             self._tracker = RealtimeTracker(
                 insightface_model=insightface_model,

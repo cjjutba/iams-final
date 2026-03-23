@@ -370,6 +370,7 @@ private fun CurrentClassCard(
                     fullWidth = false,
                     enabled = !sessionLoading,
                     isLoading = sessionLoading,
+                    loadingText = "Ending...",
                     leadingIcon = {
                         Icon(
                             Icons.Default.Stop,
@@ -398,6 +399,7 @@ private fun CurrentClassCard(
                 fullWidth = true,
                 enabled = !sessionLoading,
                 isLoading = sessionLoading,
+                loadingText = "Starting...",
                 leadingIcon = {
                     Icon(
                         Icons.Default.PlayArrow,

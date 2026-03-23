@@ -129,7 +129,8 @@ fun FacultyLoginScreen(
             onClick = { viewModel.login(email.trim().lowercase(), password.trim()) },
             size = IAMSButtonSize.LG,
             enabled = !uiState.isLoading,
-            isLoading = uiState.isLoading
+            isLoading = uiState.isLoading,
+            loadingText = "Signing in..."
         )
 
         Spacer(modifier = Modifier.height(32.dp))

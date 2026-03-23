@@ -187,8 +187,9 @@ fun EmailVerificationScreen(
             IAMSButton(
                 text = "Check Verification Status",
                 onClick = { viewModel.checkEmailVerified(email) },
-                enabled = !uiState.isLoading,
+                enabled = !uiState.isLoading && !uiState.isResending,
                 isLoading = uiState.isLoading,
+                loadingText = "Checking...",
                 size = IAMSButtonSize.LG
             )
 
@@ -199,7 +200,10 @@ fun EmailVerificationScreen(
                 text = "Resend Verification Email",
                 onClick = { viewModel.resendVerificationEmail(email) },
                 variant = IAMSButtonVariant.OUTLINE,
-                size = IAMSButtonSize.LG
+                size = IAMSButtonSize.LG,
+                enabled = !uiState.isLoading && !uiState.isResending,
+                isLoading = uiState.isResending,
+                loadingText = "Sending..."
             )
 
             Spacer(modifier = Modifier.height(12.dp))

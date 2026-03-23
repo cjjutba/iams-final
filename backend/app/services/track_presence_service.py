@@ -89,7 +89,7 @@ class TrackPresenceService:
         for student in students:
             sid = str(student.id)
             self._enrolled_ids.add(sid)
-            name = f"{student.first_name} {student.last_name}"
+            name = student.first_name
             self._name_map[sid] = name
 
             # Get or create attendance record

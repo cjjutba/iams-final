@@ -129,7 +129,8 @@ private fun FormContent(
         },
         size = IAMSButtonSize.LG,
         enabled = !uiState.isLoading,
-        isLoading = uiState.isLoading
+        isLoading = uiState.isLoading,
+        loadingText = "Sending..."
     )
 }
 

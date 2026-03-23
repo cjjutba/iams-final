@@ -217,7 +217,8 @@ fun RegisterReviewScreen(
                 )
             },
             enabled = !uiState.isLoading && isAgreed,
-            isLoading = uiState.isLoading
+            isLoading = uiState.isLoading,
+            loadingText = "Creating Account..."
         )
     }
 }

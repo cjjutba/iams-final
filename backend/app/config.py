@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     INSIGHTFACE_DET_SIZE: int = 640
     INSIGHTFACE_DET_THRESH: float = 0.5  # Detection confidence minimum (aligned with attendance engine filter)
     FAISS_INDEX_PATH: str = "data/faiss/faces.index"
-    RECOGNITION_THRESHOLD: float = 0.45  # Cosine similarity threshold (lowered for cross-camera matching)
+    RECOGNITION_THRESHOLD: float = 0.30  # Cosine similarity threshold (selfie→CCTV cross-domain scores 0.3-0.5)
     RECOGNITION_MARGIN: float = 0.1  # Min gap between top-1 and top-2 scores
     RECOGNITION_TOP_K: int = 3  # Number of neighbors to search in FAISS
     USE_GPU: bool = True  # Use GPU if available, fallback to CPU
@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     # Adaptive Threshold
     ADAPTIVE_THRESHOLD_ENABLED: bool = True
     ADAPTIVE_THRESHOLD_FLOOR: float = 0.35  # Minimum allowed threshold
-    ADAPTIVE_THRESHOLD_CEILING: float = 0.50  # Maximum allowed threshold (lowered for cross-camera selfie→CCTV matching)
+    ADAPTIVE_THRESHOLD_CEILING: float = 0.40  # Solo-match ceiling (lowered: selfie→CCTV cross-domain yields 0.3-0.5)
     ADAPTIVE_THRESHOLD_MIN_SAMPLES: int = 50  # Min samples before adapting
     ADAPTIVE_THRESHOLD_WINDOW: int = 500  # Rolling window size
 

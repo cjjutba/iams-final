@@ -193,7 +193,8 @@ fun RegisterStep1Screen(
                     }
                 },
                 enabled = !uiState.isLoading && birthdate.length == 8,
-                isLoading = uiState.isLoading
+                isLoading = uiState.isLoading,
+                loadingText = "Verifying..."
             )
         } else {
             // Phase 1: Continue button
@@ -201,7 +202,8 @@ fun RegisterStep1Screen(
                 text = "Continue",
                 onClick = { viewModel.checkStudentId(studentId) },
                 enabled = !uiState.isLoading && studentId.isNotBlank(),
-                isLoading = uiState.isLoading
+                isLoading = uiState.isLoading,
+                loadingText = "Checking..."
             )
         }
     }

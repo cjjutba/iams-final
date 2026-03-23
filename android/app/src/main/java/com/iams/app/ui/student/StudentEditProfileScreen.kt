@@ -160,6 +160,7 @@ fun StudentEditProfileScreen(
                     variant = IAMSButtonVariant.PRIMARY,
                     size = IAMSButtonSize.LG,
                     isLoading = uiState.isSavingProfile,
+                    loadingText = "Saving...",
                     enabled = !uiState.isSavingProfile
                 )
 
@@ -247,6 +248,7 @@ fun StudentEditProfileScreen(
                     variant = IAMSButtonVariant.SECONDARY,
                     size = IAMSButtonSize.LG,
                     isLoading = uiState.isChangingPassword,
+                    loadingText = "Changing...",
                     enabled = !uiState.isChangingPassword
                 )
 

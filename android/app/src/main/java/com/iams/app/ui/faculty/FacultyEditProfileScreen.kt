@@ -100,6 +100,7 @@ fun FacultyEditProfileScreen(
                     onClick = { viewModel.saveProfile() },
                     size = IAMSButtonSize.LG,
                     isLoading = uiState.isSavingProfile,
+                    loadingText = "Saving...",
                     enabled = uiState.profileDirty,
                 )
 
@@ -149,6 +150,7 @@ fun FacultyEditProfileScreen(
                     variant = IAMSButtonVariant.SECONDARY,
                     size = IAMSButtonSize.LG,
                     isLoading = uiState.isChangingPassword,
+                    loadingText = "Changing...",
                 )
 
                 Spacer(modifier = Modifier.height(spacing.xxl))

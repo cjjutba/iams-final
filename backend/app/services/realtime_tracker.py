@@ -244,6 +244,31 @@ class RealtimeTracker:
             )
         return self._identity_cache[track_id]
 
+    def _resolve_name(self, user_id: str) -> str:
+        """Resolve display name for a user_id, with DB fallback for new registrations."""
+        name = self._name_map.get(user_id)
+        if name:
+            return name
+
+        # User registered during active session — not in static name_map.
+        # Look up from DB and cache for future frames.
+        try:
+            from app.database import SessionLocal
+            from app.models.user import User
+
+            db = SessionLocal()
+            try:
+                user = db.query(User.first_name).filter(User.id == user_id).first()
+                if user:
+                    self._name_map[user_id] = user.first_name
+                    return user.first_name
+            finally:
+                db.close()
+        except Exception:
+            logger.debug("DB lookup failed for user %s", user_id)
+
+        return "Unknown"
+
     def _recognize_track(
         self, identity: TrackIdentity, embedding: np.ndarray, now: float
     ) -> None:
@@ -257,7 +282,7 @@ class RealtimeTracker:
         if user_id is not None and not is_ambiguous:
             identity.user_id = user_id
             identity.confidence = confidence
-            identity.name = self._name_map.get(user_id, "Unknown")
+            identity.name = self._resolve_name(user_id)
             identity.recognition_status = "recognized"
 
             if confidence > 0.3:

@@ -260,6 +260,7 @@ fun FacultyProfileScreen(
                             fullWidth = true,
                             enabled = !uiState.isLoading,
                             isLoading = uiState.isLoading,
+                            loadingText = "Signing out...",
                             leadingIcon = {
                                 Icon(
                                     Icons.AutoMirrored.Filled.Logout,
