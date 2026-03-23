@@ -4,6 +4,7 @@ import android.util.Log
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
+import com.google.mlkit.vision.face.FaceLandmark
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -48,10 +49,10 @@ class MlKitFrameSink : VideoSink, Closeable {
     private val faceDetector = FaceDetection.getClient(
         FaceDetectorOptions.Builder()
             .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
-            .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_NONE)
+            .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
             .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
             .setContourMode(FaceDetectorOptions.CONTOUR_MODE_NONE)
-            .setMinFaceSize(0.10f)
+            .setMinFaceSize(0.13f)
             .enableTracking()
             .build()
     )
@@ -132,7 +133,7 @@ class MlKitFrameSink : VideoSink, Closeable {
 
             faceDetector.process(inputImage)
                 .addOnSuccessListener { faces ->
-                    _faces.value = faces.map { face ->
+                    _faces.value = faces.filter { isValidFace(it) }.map { face ->
                         val b = face.boundingBox
                         val mlFace = MlKitFace(
                             x1 = (b.left / effW).coerceIn(0f, 1f),
@@ -154,6 +155,35 @@ class MlKitFrameSink : VideoSink, Closeable {
             Log.e(TAG, "processFrame error: ${e.message}")
             isProcessing.set(false)
         }
+    }
+
+    /**
+     * Filters out false positive face detections by checking:
+     * 1. Landmark presence — must have at least one eye AND nose
+     * 2. Aspect ratio — width/height must be between 0.5 and 1.5
+     */
+    private fun isValidFace(face: com.google.mlkit.vision.face.Face): Boolean {
+        // Landmark check: must have at least one eye + nose
+        val hasLeftEye = face.getLandmark(FaceLandmark.LEFT_EYE) != null
+        val hasRightEye = face.getLandmark(FaceLandmark.RIGHT_EYE) != null
+        val hasNose = face.getLandmark(FaceLandmark.NOSE_BASE) != null
+
+        if (!hasNose || (!hasLeftEye && !hasRightEye)) {
+            return false
+        }
+
+        // Aspect ratio check: valid faces are roughly 0.5–1.5 width/height
+        val b = face.boundingBox
+        val width = b.width().toFloat()
+        val height = b.height().toFloat()
+        if (height <= 0f) return false
+
+        val aspectRatio = width / height
+        if (aspectRatio < 0.5f || aspectRatio > 1.5f) {
+            return false
+        }
+
+        return true
     }
 
     override fun close() {
