@@ -1,29 +1,19 @@
 package com.iams.app.ui.auth
 
-import android.graphics.Bitmap
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
-import androidx.compose.material.icons.filled.Face
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -38,51 +28,69 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.iams.app.ui.components.AuthLayout
 import com.iams.app.ui.components.IAMSButton
-import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.LocalToastState
 import com.iams.app.ui.components.ToastType
 import com.iams.app.ui.navigation.Routes
-import com.iams.app.ui.theme.AbsentFg
 import com.iams.app.ui.theme.Border
 import com.iams.app.ui.theme.PresentFg
 import com.iams.app.ui.theme.Primary
-import com.iams.app.ui.theme.Secondary
 import com.iams.app.ui.theme.TextSecondary
 import com.iams.app.ui.theme.TextTertiary
 
+/**
+ * Step 4 (Review): Shows collected data and creates the account.
+ *
+ * This is where register() is called (creates Supabase Auth user + sends verification email).
+ * Face images are saved locally as "pending" and uploaded after the user logs in.
+ * Matches the React Native flow in RegisterReviewScreen.tsx.
+ */
 @Composable
 fun RegisterReviewScreen(
     navController: NavController,
-    viewModel: RegistrationViewModel = hiltViewModel()
+    viewModel: RegistrationViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val toastState = LocalToastState.current
     val hasFaces = uiState.capturedFaces.isNotEmpty()
     var isAgreed by remember { mutableStateOf(false) }
 
-    // Toast on upload error
-    LaunchedEffect(uiState.uploadError) {
-        uiState.uploadError?.let {
+    // Read registration data from holder (set in Step 2)
+    val regData = RegistrationDataHolder
+    val email = regData.email
+    val studentId = regData.studentId
+    val firstName = regData.firstName
+    val lastName = regData.lastName
+
+    // Toast on error
+    LaunchedEffect(uiState.error) {
+        uiState.error?.let {
             toastState.showToast(it, ToastType.ERROR)
-            viewModel.clearUploadError()
+            viewModel.clearError()
         }
     }
 
-    // Toast + navigate on successful upload
-    LaunchedEffect(uiState.uploadSuccess) {
-        if (uiState.uploadSuccess) {
-            toastState.showToast("Face registration complete!", ToastType.SUCCESS)
-            navController.navigate(Routes.LOGIN) {
-                popUpTo(Routes.LOGIN) { inclusive = true }
+    // After registration succeeds → save pending face images → navigate to email verification
+    LaunchedEffect(uiState.registrationComplete) {
+        if (uiState.registrationComplete) {
+            // Save face images for later upload (after login, when we have a valid token)
+            if (hasFaces) {
+                viewModel.savePendingFaceImages()
             }
+
+            toastState.showToast("Account created! Please verify your email.", ToastType.SUCCESS)
+            RegistrationDataHolder.clear()
+            viewModel.resetRegistration()
+
+            // Navigate to email verification. Don't popUpTo here — the face-flow
+            // back stack entry is still referenced by the shared ViewModel.
+            // EmailVerificationScreen handles back stack cleanup on completion.
+            navController.navigate(Routes.emailVerification(email))
         }
     }
 
@@ -92,7 +100,6 @@ fun RegisterReviewScreen(
         subtitle = "Step 4 of 4 - Review your information",
         onBack = { navController.popBackStack() }
     ) {
-        // Progress section
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
@@ -113,116 +120,63 @@ fun RegisterReviewScreen(
             trackColor = Border,
         )
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
-        // Student info card
-        IAMSCard {
-            Text(
-                text = "Student Information",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            ReviewInfoRow(
-                label = "Name",
-                value = "${uiState.firstName} ${uiState.lastName}".trim()
-                    .ifEmpty { "Completed in Step 1" }
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            ReviewInfoRow(
-                label = "Student ID",
-                value = uiState.studentId.ifEmpty { "Completed in Step 1" }
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            ReviewInfoRow(
-                label = "Email",
-                value = uiState.registeredEmail.ifEmpty { "Completed in Step 2" }
-            )
-        }
+        // ── Student Information ──────────────────────────
+        Text(
+            text = "Student Information",
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Face registration card
-        IAMSCard {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.Face,
-                    contentDescription = "Face",
-                    modifier = Modifier.size(20.dp),
-                    tint = if (hasFaces) PresentFg else AbsentFg
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Face Registration",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            if (hasFaces) {
-                Text(
-                    text = "${uiState.capturedFaces.size} face photo(s) captured",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = PresentFg
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Face image grid
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(
-                            ((uiState.capturedFaces.size + 2) / 3 * 110).dp
-                        ),
-                    contentPadding = PaddingValues(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    userScrollEnabled = false
-                ) {
-                    itemsIndexed(uiState.capturedFaces) { index, bitmap ->
-                        FaceGridItem(bitmap = bitmap, index = index)
-                    }
-                }
-            } else {
-                // Warning badge
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Secondary, RoundedCornerShape(10.dp))
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Default.Warning,
-                        contentDescription = "Warning",
-                        modifier = Modifier.size(16.dp),
-                        tint = AbsentFg
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Face registration was skipped. You can register your face later from your profile.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary
-                    )
-                }
-            }
-        }
+        ReviewInfoRow(label = "Student ID", value = studentId)
+        Spacer(modifier = Modifier.height(16.dp))
+        ReviewInfoRow(label = "Name", value = "$firstName $lastName".trim())
+        Spacer(modifier = Modifier.height(16.dp))
+        ReviewInfoRow(label = "Email", value = email)
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Terms checkbox
+        // ── Face Registration ────────────────────────────
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Face Registration",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            if (hasFaces) {
+                Icon(
+                    Icons.Default.CheckCircle,
+                    contentDescription = "Completed",
+                    modifier = Modifier.size(22.dp),
+                    tint = PresentFg
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = if (hasFaces) {
+                "${uiState.capturedFaces.size}/5 photos captured"
+            } else {
+                "Face registration was skipped. You can register your face later from your profile."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (hasFaces) PresentFg else TextSecondary
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // ── Terms Checkbox ───────────────────────────────
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -231,15 +185,15 @@ fun RegisterReviewScreen(
                     indication = null,
                     onClick = { isAgreed = !isAgreed }
                 ),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.Top
         ) {
             Icon(
                 imageVector = if (isAgreed) Icons.Filled.CheckBox else Icons.Filled.CheckBoxOutlineBlank,
                 contentDescription = if (isAgreed) "Agreed" else "Not agreed",
-                modifier = Modifier.size(24.dp),
-                tint = if (isAgreed) Primary else TextSecondary
+                modifier = Modifier.size(22.dp),
+                tint = if (isAgreed) Primary else TextTertiary
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(12.dp))
             Text(
                 text = "I agree to the Terms of Service and Privacy Policy",
                 style = MaterialTheme.typography.bodySmall,
@@ -247,25 +201,23 @@ fun RegisterReviewScreen(
             )
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(32.dp))
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Submit button
+        // ── Create Account Button ────────────────────────
         IAMSButton(
-            text = if (hasFaces) "Create Account" else "Create Account",
+            text = "Create Account",
             onClick = {
-                if (hasFaces) {
-                    viewModel.uploadFaceImages()
-                } else {
-                    // No faces captured -- go directly to login
-                    navController.navigate(Routes.LOGIN) {
-                        popUpTo(Routes.LOGIN) { inclusive = true }
-                    }
-                }
+                viewModel.register(
+                    email = email,
+                    password = regData.password,
+                    studentId = studentId,
+                    firstName = firstName,
+                    lastName = lastName,
+                    birthdate = "2000-01-01"  // Already validated in Step 1
+                )
             },
-            enabled = !uiState.isUploading && isAgreed,
-            isLoading = uiState.isUploading
+            enabled = !uiState.isLoading && isAgreed,
+            isLoading = uiState.isLoading
         )
     }
 }
@@ -275,34 +227,18 @@ private fun ReviewInfoRow(label: String, value: String) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.Top
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodySmall,
             color = TextTertiary
         )
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
+            fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onBackground
         )
     }
-}
-
-@Composable
-private fun FaceGridItem(bitmap: Bitmap, index: Int) {
-    Image(
-        bitmap = bitmap.asImageBitmap(),
-        contentDescription = "Face photo ${index + 1}",
-        modifier = Modifier
-            .size(100.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .border(
-                1.dp,
-                Border,
-                RoundedCornerShape(10.dp)
-            )
-    )
 }

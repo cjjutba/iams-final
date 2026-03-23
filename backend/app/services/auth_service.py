@@ -357,11 +357,13 @@ class AuthService:
 
     def login(self, identifier: str, password: str) -> tuple[User, dict]:
         """
-        Authenticate user and generate tokens (custom JWT mode).
+        Authenticate user and generate tokens.
 
-        When USE_SUPABASE_AUTH is True, login is handled by the mobile
-        Supabase SDK (signInWithPassword). This method remains for
-        backward compatibility and the dual-auth transition.
+        Supports both Supabase Auth users (password_hash is None) and
+        legacy users (password_hash stored locally).
+
+        For Supabase Auth users, authenticates via Supabase's
+        signInWithPassword endpoint and generates a local JWT.
 
         Args:
             identifier: Email or student ID
@@ -376,21 +378,57 @@ class AuthService:
             logger.warning(f"Login failed: User not found for identifier {identifier}")
             raise AuthenticationError("Invalid email/student ID or password")
 
-        if not user.password_hash:
-            raise AuthenticationError("This account uses Supabase Auth. Please login via the mobile app.")
-
-        if not verify_password(password, user.password_hash):
-            logger.warning(f"Login failed: Invalid password for user {user.id}")
-            raise AuthenticationError("Invalid email/student ID or password")
-
         if not user.is_active:
             logger.warning(f"Login failed: User {user.id} is inactive")
             raise AuthenticationError("User account is inactive")
+
+        if not user.password_hash:
+            # Supabase Auth user — authenticate via Supabase REST API
+            if settings.USE_SUPABASE_AUTH:
+                self._verify_supabase_password(user.email, password)
+            else:
+                raise AuthenticationError("Invalid email/student ID or password")
+        else:
+            # Legacy user — verify local password hash
+            if not verify_password(password, user.password_hash):
+                logger.warning(f"Login failed: Invalid password for user {user.id}")
+                raise AuthenticationError("Invalid email/student ID or password")
 
         tokens = self._generate_tokens(user)
 
         logger.info(f"User logged in successfully: {user.email}")
         return user, tokens
+
+    def _verify_supabase_password(self, email: str, password: str):
+        """Verify credentials via Supabase signInWithPassword endpoint."""
+        import httpx
+
+        try:
+            response = httpx.post(
+                f"{settings.SUPABASE_URL}/auth/v1/token?grant_type=password",
+                json={"email": email, "password": password},
+                headers={
+                    "apikey": settings.SUPABASE_ANON_KEY,
+                    "Content-Type": "application/json",
+                },
+                timeout=10.0,
+            )
+
+            if response.status_code == 400:
+                body = response.json()
+                error_msg = body.get("error_description") or body.get("msg") or "Invalid credentials"
+                if "email not confirmed" in error_msg.lower():
+                    raise AuthenticationError("Please verify your email before signing in.")
+                raise AuthenticationError("Invalid email/student ID or password")
+
+            if response.status_code != 200:
+                raise AuthenticationError("Invalid email/student ID or password")
+
+        except AuthenticationError:
+            raise
+        except Exception as e:
+            logger.error(f"Supabase login verification failed: {e}")
+            raise AuthenticationError("Authentication service unavailable. Please try again.") from e
 
     # ------------------------------------------------------------------
     # FUN-01-04: Refresh Token (custom JWT)

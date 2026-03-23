@@ -9,7 +9,9 @@ import com.iams.app.data.model.RegisterRequest
 import com.iams.app.data.model.ResendVerificationRequest
 import com.iams.app.data.model.CheckStudentIdRequest
 import com.iams.app.data.model.VerifyStudentIdRequest
+import android.content.Context
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,6 +32,7 @@ data class RegistrationUiState(
     val studentId: String = "",
     val firstName: String = "",
     val lastName: String = "",
+    val email: String = "",
     // Step 2 results
     val registrationComplete: Boolean = false,
     val registeredEmail: String = "",
@@ -47,7 +50,8 @@ data class RegistrationUiState(
 
 @HiltViewModel
 class RegistrationViewModel @Inject constructor(
-    private val apiService: ApiService
+    private val apiService: ApiService,
+    @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(RegistrationUiState())
@@ -127,6 +131,7 @@ class RegistrationViewModel @Inject constructor(
                             studentId = studentId,
                             firstName = info["first_name"]?.toString() ?: "",
                             lastName = info["last_name"]?.toString() ?: "",
+                            email = info["email"]?.toString() ?: "",
                         )
                     } else {
                         _uiState.value = _uiState.value.copy(
@@ -367,6 +372,36 @@ class RegistrationViewModel @Inject constructor(
                 )
             }
         }
+    }
+
+    /**
+     * Save captured face images to app-internal storage for later upload.
+     * In Supabase mode, the user isn't authenticated yet (email not verified),
+     * so face images are uploaded after the user logs in.
+     * Matches React Native's storage.setPendingFaceImages() pattern.
+     */
+    fun savePendingFaceImages() {
+        val faces = _uiState.value.capturedFaces
+        if (faces.isEmpty()) return
+
+        val dir = java.io.File(appContext.filesDir, "pending_faces")
+        dir.mkdirs()
+        // Clear any previous pending images
+        dir.listFiles()?.forEach { it.delete() }
+
+        faces.forEachIndexed { index, bitmap ->
+            val file = java.io.File(dir, "face_$index.jpg")
+            file.outputStream().use { out ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+            }
+        }
+
+        // Mark that we have pending face images
+        appContext.getSharedPreferences("iams_registration", Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("has_pending_faces", true)
+            .putInt("pending_face_count", faces.size)
+            .apply()
     }
 
     fun clearResendSuccess() {

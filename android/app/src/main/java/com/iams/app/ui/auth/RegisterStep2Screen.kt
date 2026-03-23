@@ -16,8 +16,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,7 +29,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.iams.app.ui.components.AuthLayout
 import com.iams.app.ui.components.IAMSButton
@@ -44,46 +41,32 @@ import com.iams.app.ui.theme.Primary
 import com.iams.app.ui.theme.Secondary
 import com.iams.app.ui.theme.TextSecondary
 
+/**
+ * Step 2: Collect email and password. NO API call here.
+ * Account creation happens in Step 4 (Review).
+ * Matches the React Native flow where Step 2 is data-collection only.
+ */
 @Composable
 fun RegisterStep2Screen(
     navController: NavController,
     studentId: String,
     firstName: String,
     lastName: String,
-    viewModel: RegistrationViewModel = hiltViewModel()
+    prefillEmail: String = "",
 ) {
-    val uiState by viewModel.uiState.collectAsState()
-    var email by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf(prefillEmail) }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
     val toastState = LocalToastState.current
 
-    // Store birthdate from step 1 -- passed via the viewModel or route
-    // We need it for the register call; since we only pass studentId/firstName/lastName
-    // in the route, we'll pass a placeholder birthdate that the backend already validated
-    var birthdate by remember { mutableStateOf("") }
-
-    // Toast on ViewModel error
-    LaunchedEffect(uiState.error) {
-        uiState.error?.let {
-            toastState.showToast(it, ToastType.ERROR)
-            viewModel.clearError()
-        }
-    }
-
-    // Toast + navigate on successful registration
-    LaunchedEffect(uiState.registrationComplete) {
-        if (uiState.registrationComplete) {
-            toastState.showToast("Account created! Check your email.", ToastType.SUCCESS)
-            navController.navigate(Routes.emailVerification(uiState.registeredEmail))
-            viewModel.resetRegistration()
-        }
-    }
-
-    fun attemptRegister() {
+    fun proceed() {
         if (email.isBlank() || password.isBlank() || confirmPassword.isBlank()) {
             toastState.showToast("Please fill in all fields", ToastType.ERROR)
+            return
+        }
+        if (!email.contains("@")) {
+            toastState.showToast("Please enter a valid email address", ToastType.ERROR)
             return
         }
         if (password != confirmPassword) {
@@ -94,14 +77,16 @@ fun RegisterStep2Screen(
             toastState.showToast("Password must be at least 6 characters", ToastType.ERROR)
             return
         }
-        viewModel.register(
-            email = email,
-            password = password,
-            studentId = studentId,
-            firstName = firstName,
-            lastName = lastName,
-            birthdate = birthdate.ifBlank { "2000-01-01" }
-        )
+
+        // Store data for Step 4 (Review) — no API call yet
+        RegistrationDataHolder.studentId = studentId
+        RegistrationDataHolder.firstName = firstName
+        RegistrationDataHolder.lastName = lastName
+        RegistrationDataHolder.email = email
+        RegistrationDataHolder.password = password
+
+        // Navigate to face capture (Step 3)
+        navController.navigate(Routes.REGISTER_FACE_FLOW)
     }
 
     AuthLayout(
@@ -110,7 +95,6 @@ fun RegisterStep2Screen(
         subtitle = "Step 2 of 4 - Set up your account",
         onBack = { navController.popBackStack() }
     ) {
-        // Progress section
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
@@ -133,7 +117,7 @@ fun RegisterStep2Screen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Student info badge section
+        // Student info badge
         Spacer(modifier = Modifier.height(16.dp))
 
         Row(
@@ -165,7 +149,6 @@ fun RegisterStep2Screen(
 
         Spacer(modifier = Modifier.height(32.dp))
 
-        // Helper text
         Text(
             text = "Set your contact details and secure password for your account.",
             style = MaterialTheme.typography.bodySmall,
@@ -177,13 +160,9 @@ fun RegisterStep2Screen(
         // Email field
         IAMSTextField(
             value = email,
-            onValueChange = {
-                email = it
-                viewModel.clearError()
-            },
+            onValueChange = { email = it },
             label = "Email",
             placeholder = "your.email@example.com",
-            enabled = !uiState.isLoading,
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Email,
                 imeAction = ImeAction.Next
@@ -198,14 +177,10 @@ fun RegisterStep2Screen(
         // Password field
         IAMSTextField(
             value = password,
-            onValueChange = {
-                password = it
-                viewModel.clearError()
-            },
+            onValueChange = { password = it },
             label = "Password",
             placeholder = "At least 6 characters",
             isPassword = true,
-            enabled = !uiState.isLoading,
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Password,
                 imeAction = ImeAction.Next
@@ -220,15 +195,10 @@ fun RegisterStep2Screen(
         // Confirm password field
         IAMSTextField(
             value = confirmPassword,
-            onValueChange = {
-                confirmPassword = it
-                viewModel.clearError()
-            },
+            onValueChange = { confirmPassword = it },
             label = "Confirm Password",
             placeholder = "Re-enter your password",
             isPassword = true,
-            enabled = !uiState.isLoading,
-            error = null,
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Password,
                 imeAction = ImeAction.Done
@@ -236,19 +206,17 @@ fun RegisterStep2Screen(
             keyboardActions = KeyboardActions(
                 onDone = {
                     focusManager.clearFocus()
-                    attemptRegister()
+                    proceed()
                 }
             )
         )
 
         Spacer(modifier = Modifier.height(32.dp))
 
-        // Create Account button
+        // Continue button (NOT "Create Account" — account is created in Step 4)
         IAMSButton(
-            text = "Create Account",
-            onClick = { attemptRegister() },
-            enabled = !uiState.isLoading,
-            isLoading = uiState.isLoading
+            text = "Continue",
+            onClick = { proceed() },
         )
     }
 }

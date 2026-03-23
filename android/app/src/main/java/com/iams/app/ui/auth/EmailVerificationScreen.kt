@@ -77,12 +77,12 @@ fun EmailVerificationScreen(
         onDispose { viewModel.stopEmailPolling() }
     }
 
-    // Toast + navigate on verified
+    // Toast + navigate on verified → go to student login
     LaunchedEffect(uiState.emailVerified) {
         if (uiState.emailVerified) {
-            toastState.showToast("Email verified!", ToastType.SUCCESS)
-            navController.navigate(Routes.REGISTER_STEP3) {
-                popUpTo(Routes.REGISTER_STEP1) { inclusive = true }
+            toastState.showToast("Email verified! You can now sign in.", ToastType.SUCCESS)
+            navController.navigate(Routes.STUDENT_LOGIN) {
+                popUpTo(0) { inclusive = true }
             }
         }
     }

@@ -62,7 +62,8 @@ fun RegisterStep1Screen(
                 Routes.registerStep2(
                     studentId = uiState.studentId,
                     firstName = uiState.firstName,
-                    lastName = uiState.lastName
+                    lastName = uiState.lastName,
+                    email = uiState.email
                 )
             )
             viewModel.resetVerification()

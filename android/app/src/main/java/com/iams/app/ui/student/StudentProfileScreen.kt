@@ -277,7 +277,7 @@ fun StudentProfileScreen(
                             ActionItem(
                                 icon = Icons.Default.CameraAlt,
                                 label = "Re-register Face",
-                                onClick = { navController.navigate(Routes.REGISTER_STEP3) }
+                                onClick = { navController.navigate(Routes.studentFaceRegister("reregister")) }
                             )
                             ActionItem(
                                 icon = Icons.Default.Notifications,

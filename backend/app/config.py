@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     # Face Quality Gating
     QUALITY_GATE_ENABLED: bool = True
     QUALITY_BLUR_THRESHOLD: float = 100.0  # Laplacian variance minimum (CCTV)
-    QUALITY_BLUR_THRESHOLD_MOBILE: float = 35.0  # Laplacian variance minimum (mobile selfie)
+    QUALITY_BLUR_THRESHOLD_MOBILE: float = 10.0  # Laplacian variance minimum (mobile CameraX bitmap capture)
     QUALITY_BRIGHTNESS_MIN: float = 40.0  # Mean pixel intensity minimum
     QUALITY_BRIGHTNESS_MAX: float = 220.0  # Mean pixel intensity maximum
     QUALITY_MIN_FACE_SIZE_RATIO: float = 0.05  # Face area / image area minimum

@@ -193,6 +193,9 @@ fun StudentHomeScreen(
                 if (!uiState.isLoading) {
                     FaceStatusCard(
                         faceRegistered = uiState.faceRegistered,
+                        onRegisterClick = {
+                            navController.navigate(Routes.studentFaceRegister("register"))
+                        }
                     )
                 }
 
@@ -278,13 +281,16 @@ fun StudentHomeScreen(
 @Composable
 private fun FaceStatusCard(
     faceRegistered: Boolean?,
+    onRegisterClick: () -> Unit = {},
 ) {
     val spacing = IAMSThemeTokens.spacing
 
     // Still loading
     if (faceRegistered == null) return
 
-    IAMSCard {
+    IAMSCard(
+        onClick = if (!faceRegistered) onRegisterClick else null
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically

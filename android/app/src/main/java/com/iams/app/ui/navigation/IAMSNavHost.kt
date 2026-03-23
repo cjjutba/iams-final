@@ -152,13 +152,16 @@ fun IAMSNavHost() {
                     navArgument("studentId") { type = NavType.StringType },
                     navArgument("firstName") { type = NavType.StringType },
                     navArgument("lastName") { type = NavType.StringType },
+                    navArgument("email") { type = NavType.StringType },
                 )
             ) { backStackEntry ->
+                val emailArg = backStackEntry.arguments?.getString("email") ?: ""
                 RegisterStep2Screen(
                     navController = navController,
                     studentId = backStackEntry.arguments?.getString("studentId") ?: "",
                     firstName = backStackEntry.arguments?.getString("firstName") ?: "",
                     lastName = backStackEntry.arguments?.getString("lastName") ?: "",
+                    prefillEmail = if (emailArg == "_") "" else emailArg,
                 )
             }
 
@@ -168,9 +171,11 @@ fun IAMSNavHost() {
                     navArgument("email") { type = NavType.StringType }
                 )
             ) { backStackEntry ->
+                val rawEmail = backStackEntry.arguments?.getString("email") ?: ""
+                val email = try { java.net.URLDecoder.decode(rawEmail, "UTF-8") } catch (_: Exception) { rawEmail }
                 EmailVerificationScreen(
                     navController = navController,
-                    email = backStackEntry.arguments?.getString("email") ?: "",
+                    email = email,
                 )
             }
 
@@ -179,7 +184,7 @@ fun IAMSNavHost() {
                 startDestination = Routes.REGISTER_STEP3_INNER,
                 route = Routes.REGISTER_FACE_FLOW
             ) {
-                composable(Routes.REGISTER_STEP3_INNER) { backStackEntry ->
+                composable(Routes.REGISTER_STEP3_INNER) {
                     val parentEntry = navController.getBackStackEntry(Routes.REGISTER_FACE_FLOW)
                     val sharedViewModel: RegistrationViewModel = hiltViewModel(parentEntry)
                     RegisterStep3Screen(
@@ -188,12 +193,12 @@ fun IAMSNavHost() {
                     )
                 }
 
-                composable(Routes.REGISTER_REVIEW_INNER) { backStackEntry ->
+                composable(Routes.REGISTER_REVIEW_INNER) {
                     val parentEntry = navController.getBackStackEntry(Routes.REGISTER_FACE_FLOW)
                     val sharedViewModel: RegistrationViewModel = hiltViewModel(parentEntry)
                     RegisterReviewScreen(
                         navController = navController,
-                        viewModel = sharedViewModel
+                        viewModel = sharedViewModel,
                     )
                 }
             }
@@ -244,12 +249,11 @@ fun IAMSNavHost() {
                 arguments = listOf(
                     navArgument("mode") { type = NavType.StringType },
                 )
-            ) { backStackEntry ->
-                val parentEntry = navController.getBackStackEntry(Routes.REGISTER_FACE_FLOW)
-                val sharedViewModel: RegistrationViewModel = hiltViewModel(parentEntry)
+            ) {
+                // Standalone face registration from student profile (not during signup flow)
                 RegisterStep3Screen(
                     navController = navController,
-                    viewModel = sharedViewModel
+                    isStandalone = true
                 )
             }
 

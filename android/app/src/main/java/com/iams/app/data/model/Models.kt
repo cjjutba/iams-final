@@ -29,7 +29,12 @@ data class RegisterRequest(
     @SerializedName("student_id") val studentId: String,
     val birthdate: String
 )
-data class RegisterResponse(val message: String, val user: UserResponse?)
+data class RegisterResponse(val message: String, val user: UserResponse?, val tokens: RegistrationTokens?)
+data class RegistrationTokens(
+    @SerializedName("access_token") val accessToken: String,
+    @SerializedName("refresh_token") val refreshToken: String?,
+    @SerializedName("token_type") val tokenType: String,
+)
 data class TokenResponse(
     @SerializedName("access_token") val accessToken: String,
     @SerializedName("refresh_token") val refreshToken: String,
@@ -38,7 +43,10 @@ data class TokenResponse(
 )
 data class RefreshRequest(@SerializedName("refresh_token") val refreshToken: String)
 data class CheckEmailRequest(val email: String)
-data class EmailVerifiedResponse(val verified: Boolean, val message: String)
+data class EmailVerifiedResponse(
+    @SerializedName("email_verified") val verified: Boolean,
+    val message: String? = null
+)
 data class ChangePasswordRequest(
     @SerializedName("old_password") val oldPassword: String,
     @SerializedName("new_password") val newPassword: String
