@@ -6,12 +6,12 @@
 -- ── Enum Types ───────────────────────────────────────────────────────────────
 
 DO $$ BEGIN
-    CREATE TYPE userrole AS ENUM ('student', 'faculty', 'admin');
+    CREATE TYPE userrole AS ENUM ('STUDENT', 'FACULTY', 'ADMIN');
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
 DO $$ BEGIN
-    CREATE TYPE attendancestatus AS ENUM ('present', 'late', 'absent', 'early_leave', 'excused');
+    CREATE TYPE attendancestatus AS ENUM ('PRESENT', 'LATE', 'ABSENT', 'EARLY_LEAVE', 'EXCUSED');
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
@@ -123,7 +123,7 @@ CREATE TABLE IF NOT EXISTS attendance_records (
     student_id      UUID NOT NULL REFERENCES users(id),
     schedule_id     UUID NOT NULL REFERENCES schedules(id),
     date            DATE NOT NULL DEFAULT CURRENT_DATE,
-    status          attendancestatus NOT NULL DEFAULT 'absent',
+    status          attendancestatus NOT NULL DEFAULT 'ABSENT',
     check_in_time   TIMESTAMP,
     check_out_time  TIMESTAMP,
     presence_score  DOUBLE PRECISION NOT NULL DEFAULT 0.0,

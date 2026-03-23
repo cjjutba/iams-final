@@ -19,10 +19,10 @@ INSERT INTO users (id, email, password_hash, role, first_name, last_name, email_
 VALUES
     ('00000000-0000-0000-0000-000000000001', 'maria.santos@jrmsu.edu.ph',
      '$2b$12$rXqVEONjSmvmT9xpOuUa0ehG7BTZpYZqCBJtacIwROmfixCTcFONK',
-     'faculty', 'Maria', 'Santos', TRUE, TRUE),
+     'FACULTY', 'Maria', 'Santos', TRUE, TRUE),
     ('00000000-0000-0000-0000-000000000002', 'jose.reyes@jrmsu.edu.ph',
      '$2b$12$rXqVEONjSmvmT9xpOuUa0ehG7BTZpYZqCBJtacIwROmfixCTcFONK',
-     'faculty', 'Jose', 'Reyes', TRUE, TRUE)
+     'FACULTY', 'Jose', 'Reyes', TRUE, TRUE)
 ON CONFLICT DO NOTHING;
 
 -- ── Rooms ───────────────────────────────────────────────────────────────────
@@ -53,10 +53,10 @@ INSERT INTO users (id, email, password_hash, role, first_name, last_name, studen
 VALUES
     ('00000000-0000-0000-0000-000000000011', 'juan.delacruz@jrmsu.edu.ph',
      '$2b$12$rXqVEONjSmvmT9xpOuUa0ehG7BTZpYZqCBJtacIwROmfixCTcFONK',
-     'student', 'Juan', 'Dela Cruz', '21-A-0001', TRUE, TRUE),
+     'STUDENT', 'Juan', 'Dela Cruz', '21-A-0001', TRUE, TRUE),
     ('00000000-0000-0000-0000-000000000012', 'anna.torres@jrmsu.edu.ph',
      '$2b$12$rXqVEONjSmvmT9xpOuUa0ehG7BTZpYZqCBJtacIwROmfixCTcFONK',
-     'student', 'Anna', 'Torres', '21-A-0002', TRUE, TRUE)
+     'STUDENT', 'Anna', 'Torres', '21-A-0002', TRUE, TRUE)
 ON CONFLICT DO NOTHING;
 
 -- ── Schedules ───────────────────────────────────────────────────────────────
