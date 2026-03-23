@@ -16,8 +16,8 @@ services:
     container_name: iams-postgres
     environment:
       POSTGRES_DB: iams
-      POSTGRES_USER: iams
-      POSTGRES_PASSWORD: iams_dev_password
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: "123"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
@@ -25,7 +25,7 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U iams -d iams"]
+      test: ["CMD-SHELL", "pg_isready -U admin -d iams"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -91,7 +91,7 @@ services:
       - ./backend/.env
     environment:
       - SERVICE_ROLE=api-gateway
-      - DATABASE_URL=postgresql://iams:iams_dev_password@postgres:5432/iams
+      - DATABASE_URL=postgresql://admin:123@postgres:5432/iams
       - REDIS_URL=redis://redis:6379/0
       - MEDIAMTX_EXTERNAL=true
       - MEDIAMTX_API_URL=http://mediamtx:9997
@@ -131,6 +131,8 @@ services:
   adminer:
     image: adminer:latest
     container_name: iams-adminer
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
     ports:
       - "8080:8080"
     depends_on:
