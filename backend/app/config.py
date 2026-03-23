@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     # Face Recognition
     INSIGHTFACE_MODEL: str = "buffalo_l"
     INSIGHTFACE_DET_SIZE: int = 640
-    INSIGHTFACE_DET_THRESH: float = 0.3  # Lower threshold for surveillance cameras
+    INSIGHTFACE_DET_THRESH: float = 0.5  # Detection confidence minimum (aligned with attendance engine filter)
     FAISS_INDEX_PATH: str = "data/faiss/faces.index"
     RECOGNITION_THRESHOLD: float = 0.45  # Cosine similarity threshold (lowered for cross-camera matching)
     RECOGNITION_MARGIN: float = 0.1  # Min gap between top-1 and top-2 scores
