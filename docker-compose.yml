@@ -22,6 +22,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
       - ./backend/db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+      - ./backend/db/reset.sql:/docker-entrypoint-initdb.d/reset.sql:ro
     ports:
       - "5432:5432"
     healthcheck:
