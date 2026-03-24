@@ -55,7 +55,7 @@ writeQueueSize: 512
 
 paths:
   capstone-lab:
-    source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.10:554/h264Preview_01_main
+    source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.10:554/h264Preview_01_sub
     sourceOnDemand: yes
 
   all_others:

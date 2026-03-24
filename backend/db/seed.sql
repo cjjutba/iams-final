@@ -34,9 +34,9 @@ ON CONFLICT DO NOTHING;
 INSERT INTO rooms (id, name, building, capacity, camera_endpoint, stream_key, is_active)
 VALUES
     ('00000000-0000-0000-0000-000000000101', 'Room 226', 'Engineering Building', 40,
-     'rtsp://mediamtx:8554/eb-226/raw', 'eb-226', TRUE),
+     'rtsp://host.docker.internal:8554/capstone-lab', 'capstone-lab', TRUE),
     ('00000000-0000-0000-0000-000000000102', 'Room 301', 'Engineering Building', 35,
-     'rtsp://mediamtx:8554/eb-301/raw', 'eb-301', TRUE)
+     'rtsp://host.docker.internal:8554/capstone-lab', 'capstone-lab', TRUE)
 ON CONFLICT DO NOTHING;
 
 -- ── Student Records (SIS mirror) ────────────────────────────────────────────

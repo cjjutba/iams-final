@@ -55,9 +55,12 @@ services:
     volumes:
       - ./deploy/mediamtx.dev.yml:/mediamtx.yml:ro
     ports:
-      - "8554:8554"      # RTSP ingest from RPi
+      - "8554:8554"      # RTSP
       - "8887:8887/udp"  # WebRTC media UDP
       - "8889:8889"      # WHEP endpoint
+      - "9997:9997"      # API
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   coturn:
@@ -95,9 +98,9 @@ services:
       - DATABASE_URL=postgresql://admin:123@postgres:5432/iams
       - REDIS_URL=redis://redis:6379/0
       - MEDIAMTX_EXTERNAL=true
-      - MEDIAMTX_API_URL=http://mediamtx:9997
-      - MEDIAMTX_WEBRTC_URL=http://mediamtx:8889
-      - MEDIAMTX_RTSP_URL=rtsp://mediamtx:8554
+      - MEDIAMTX_API_URL=http://host.docker.internal:9997
+      - MEDIAMTX_WEBRTC_URL=http://host.docker.internal:8889
+      - MEDIAMTX_RTSP_URL=rtsp://host.docker.internal:8554
       - EDGE_API_KEY=iams-edge-key-2026-prod
     volumes:
       - ./backend:/app
@@ -114,8 +117,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      mediamtx:
-        condition: service_started
     restart: unless-stopped
 
   # ── Dev Tools ───────────────────────────────────────────────────────────────
