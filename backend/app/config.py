@@ -41,7 +41,7 @@ class Settings(BaseSettings):
 
     # Face Recognition
     INSIGHTFACE_MODEL: str = "buffalo_l"
-    INSIGHTFACE_DET_SIZE: int = 640
+    INSIGHTFACE_DET_SIZE: int = 320  # 320 for faster detection on CPU (640 for higher accuracy)
     INSIGHTFACE_DET_THRESH: float = 0.5  # Detection confidence minimum (aligned with attendance engine filter)
     FAISS_INDEX_PATH: str = "data/faiss/faces.index"
     RECOGNITION_THRESHOLD: float = 0.30  # Cosine similarity threshold (selfie→CCTV cross-domain scores 0.3-0.5)
@@ -96,8 +96,8 @@ class Settings(BaseSettings):
 
     # Frame Grabber
     FRAME_GRABBER_FPS: float = 10.0  # FFmpeg output frame rate
-    FRAME_GRABBER_WIDTH: int = 640  # Output frame width
-    FRAME_GRABBER_HEIGHT: int = 480  # Output frame height
+    FRAME_GRABBER_WIDTH: int = 480  # Output frame width (smaller = faster SCRFD)
+    FRAME_GRABBER_HEIGHT: int = 360  # Output frame height
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
