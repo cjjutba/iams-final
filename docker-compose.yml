@@ -104,6 +104,7 @@ services:
       - EDGE_API_KEY=iams-edge-key-2026-prod
     volumes:
       - ./backend:/app
+      - ./docs/data:/docs/data:ro
       - faiss_data:/app/data/faiss
       - face_uploads:/app/data/uploads/faces
     ports:
