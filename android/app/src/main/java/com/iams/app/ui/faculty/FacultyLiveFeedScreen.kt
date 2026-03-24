@@ -173,9 +173,7 @@ fun FacultyLiveFeedScreen(
                 isConnected = wsConnected,
                 isWaitingForCamera = uiState.videoUrl.isEmpty(),
                 presentCount = uiState.presentCount,
-                totalEnrolled = uiState.totalEnrolled,
-                fps = uiState.fps,
-                processingMs = uiState.processingMs
+                totalEnrolled = uiState.totalEnrolled
             )
 
             // Session control bar
@@ -497,9 +495,7 @@ private fun ConnectionStatusBar(
     isConnected: Boolean,
     isWaitingForCamera: Boolean,
     presentCount: Int,
-    totalEnrolled: Int,
-    fps: Float,
-    processingMs: Float
+    totalEnrolled: Int
 ) {
     val spacing = IAMSThemeTokens.spacing
 
@@ -548,13 +544,6 @@ private fun ConnectionStatusBar(
         ) {
             if (isConnected) {
                 LivePulse()
-            }
-            if (fps > 0) {
-                Text(
-                    text = "${fps.toInt()}fps ${processingMs.toInt()}ms",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary
-                )
             }
             if (presentCount > 0) {
                 Text(

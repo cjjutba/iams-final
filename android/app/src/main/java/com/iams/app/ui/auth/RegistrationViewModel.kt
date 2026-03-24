@@ -285,24 +285,38 @@ class RegistrationViewModel @Inject constructor(
         val faces = _uiState.value.capturedFaces
         if (faces.isEmpty()) return
 
-        val dir = java.io.File(appContext.filesDir, "pending_faces")
-        dir.mkdirs()
-        // Clear any previous pending images
-        dir.listFiles()?.forEach { it.delete() }
+        try {
+            val dir = java.io.File(appContext.filesDir, "pending_faces")
+            dir.mkdirs()
+            // Clear any previous pending images
+            dir.listFiles()?.forEach { it.delete() }
 
-        faces.forEachIndexed { index, bitmap ->
-            val file = java.io.File(dir, "face_$index.jpg")
-            file.outputStream().use { out ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+            var savedCount = 0
+            faces.forEachIndexed { index, bitmap ->
+                try {
+                    if (!bitmap.isRecycled) {
+                        val file = java.io.File(dir, "face_$index.jpg")
+                        file.outputStream().use { out ->
+                            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                        }
+                        savedCount++
+                    }
+                } catch (_: Exception) {
+                    // Skip bitmaps that can't be saved (recycled, etc.)
+                }
             }
-        }
 
-        // Mark that we have pending face images
-        appContext.getSharedPreferences("iams_registration", Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean("has_pending_faces", true)
-            .putInt("pending_face_count", faces.size)
-            .apply()
+            if (savedCount > 0) {
+                // Mark that we have pending face images
+                appContext.getSharedPreferences("iams_registration", Context.MODE_PRIVATE)
+                    .edit()
+                    .putBoolean("has_pending_faces", true)
+                    .putInt("pending_face_count", savedCount)
+                    .apply()
+            }
+        } catch (_: Exception) {
+            // Don't let face saving crash the registration flow
+        }
     }
 
     fun clearError() {

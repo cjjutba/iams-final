@@ -88,7 +88,8 @@ fun RegisterReviewScreen(
             viewModel.resetRegistration()
 
             navController.navigate(Routes.STUDENT_LOGIN) {
-                popUpTo(Routes.REGISTER_STEP1) { inclusive = true }
+                // Pop the entire registration flow from back stack
+                popUpTo(0) { inclusive = false }
             }
         }
     }
