@@ -86,12 +86,12 @@ class Settings(BaseSettings):
     WS_BROADCAST_FPS: float = 10.0  # WebSocket broadcast rate
 
     # ByteTrack / Track Lifecycle
-    TRACK_LOST_TIMEOUT: float = 5.0  # Seconds before removing lost track
-    REVERIFY_INTERVAL: float = 30.0  # Re-run ArcFace on existing tracks (seconds)
+    TRACK_LOST_TIMEOUT: float = 30.0  # Seconds before removing lost track (holds bbox during occlusion)
+    REVERIFY_INTERVAL: float = 15.0  # Re-run ArcFace on existing tracks (seconds)
     TRACK_CONFIRM_FRAMES: int = 3  # Frames before track is considered confirmed
 
     # Track-Based Presence
-    EARLY_LEAVE_TIMEOUT: float = 45.0  # Seconds absent before early-leave alert
+    EARLY_LEAVE_TIMEOUT: float = 60.0  # Seconds absent before early-leave alert (must exceed TRACK_LOST_TIMEOUT)
     PRESENCE_FLUSH_INTERVAL: float = 10.0  # Seconds between DB presence flushes
 
     # Frame Grabber
