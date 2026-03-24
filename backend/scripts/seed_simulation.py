@@ -30,7 +30,6 @@ from app.models import (
 )
 from app.utils.security import hash_password
 from app.config import logger
-from scripts.seed_data import _sync_supabase_auth_user
 
 # Fixed seed for reproducible "random" data
 random.seed(42)
@@ -143,29 +142,12 @@ def seed_simulation():
 
         db.flush()  # Get UUIDs
 
-        # Link Supabase Auth
         for sr in student_records:
             if sr.student_id not in student_users:
                 continue
             user, _ = student_users[sr.student_id]
             print(f"  Created: {sr.student_id} — {sr.first_name} {sr.last_name} (ID: {user.id})")
-            try:
-                sb_id = _sync_supabase_auth_user(
-                    email=sr.email,
-                    password="password123",
-                    metadata={
-                        "first_name": sr.first_name,
-                        "last_name": sr.last_name,
-                        "role": "student",
-                        "student_id": sr.student_id,
-                    },
-                )
-                if sb_id:
-                    user.supabase_user_id = sb_id
-            except Exception as e:
-                print(f"    Supabase Auth warning for {sr.email}: {e}")
 
-        db.flush()
         print(f"  Total: {len(student_users)} student accounts")
 
         # ------------------------------------------------------------------

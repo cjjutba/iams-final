@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.config import logger, settings
+from app.config import logger
 from app.database import SessionLocal
 from app.models.faculty_record import FacultyRecord
 from app.models.room import Room
@@ -325,56 +325,6 @@ def deduplicate_students(entries: list[dict]) -> list[dict]:
     return list(merged.values())
 
 
-# ─── Supabase Auth Sync ───────────────────────────────────────────
-
-
-def _sync_supabase_auth_user(email: str, password: str, metadata: dict) -> str | None:
-    """Create user in Supabase Auth if configured. Returns Supabase user ID or None."""
-    if not settings.USE_SUPABASE_AUTH:
-        return None
-    if not settings.SUPABASE_URL or not settings.SUPABASE_SERVICE_KEY:
-        return None
-
-    import requests
-
-    headers = {
-        "apikey": settings.SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        resp = requests.get(
-            f"{settings.SUPABASE_URL}/auth/v1/admin/users",
-            headers=headers,
-            timeout=10,
-        )
-        resp.raise_for_status()
-        for u in resp.json().get("users", []):
-            if u.get("email") == email:
-                print(f"    [Supabase] {email} already exists")
-                return u.get("id")
-
-        resp = requests.post(
-            f"{settings.SUPABASE_URL}/auth/v1/admin/users",
-            headers=headers,
-            json={
-                "email": email,
-                "password": password,
-                "email_confirm": True,
-                "user_metadata": metadata,
-            },
-            timeout=10,
-        )
-        resp.raise_for_status()
-        sb_id = resp.json().get("id")
-        print(f"    [Supabase] Created {email}")
-        return sb_id
-    except Exception as e:
-        print(f"    [Supabase] Warning: {e}")
-        return None
-
-
 # ─── Main Seed Function ───────────────────────────────────────────
 
 
@@ -414,19 +364,6 @@ def seed():
                 db.flush()
                 faculty_map[fdef["email"]] = user
                 print(f"  ADD   {fdef['first_name']} {fdef['last_name']} ({fdef['email']})")
-
-                sb_id = _sync_supabase_auth_user(
-                    fdef["email"],
-                    DEFAULT_PASSWORD,
-                    {
-                        "first_name": fdef["first_name"],
-                        "last_name": fdef["last_name"],
-                        "role": "faculty",
-                    },
-                )
-                if sb_id:
-                    user.supabase_user_id = sb_id
-                    db.flush()
 
             # Faculty record
             existing_fr = (

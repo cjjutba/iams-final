@@ -1,11 +1,17 @@
 #!/bin/bash
-# Wipe all data and reseed the database (Docker stays running)
+# Wipe all user data and reseed with JRMSU school data
 #
 # Usage: ./scripts/db-reset.sh
+#        ./scripts/db-reset.sh --no-sim   # Skip simulation data
 
 set -e
 
-echo "Wiping all data and reseeding..."
-docker compose exec -T postgres psql -U admin -d iams -f /docker-entrypoint-initdb.d/reset.sql
+echo "Wiping user data..."
+docker compose exec -T api-gateway python -m scripts.wipe_user_data --confirm
+
 echo ""
-echo "Done. Database has been reset and reseeded."
+echo "Seeding JRMSU school data..."
+docker compose exec -T api-gateway python -m scripts.seed_all "$@"
+
+echo ""
+echo "Done. Database reset and reseeded with JRMSU data."

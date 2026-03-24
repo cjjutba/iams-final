@@ -9,7 +9,6 @@ Use this to start a fresh pilot-test run without having to re-import
 school data or reconfigure rooms and schedules.
 
 What is DELETED:
-  - Supabase Auth users    (all except faculty@gmail.com)
   - users                  (all registered app users)
   - face_registrations     (all face embeddings)
   - attendance_records     (all attendance history)
@@ -52,59 +51,6 @@ from app.models import (
 )
 from app.utils.security import hash_password
 from app.config import settings, logger
-
-
-def _wipe_supabase_auth_users(keep_emails: list[str] | None = None) -> int:
-    """Delete all Supabase Auth users except those in *keep_emails*.
-
-    Returns the number of users deleted.  Silently skips if Supabase
-    Auth is disabled or the admin API is unreachable.
-    """
-    if keep_emails is None:
-        keep_emails = ["faculty@gmail.com", "admin@admin.com"]
-    if not settings.USE_SUPABASE_AUTH:
-        print("  Supabase Auth disabled — skipping Auth user cleanup.")
-        return 0
-
-    try:
-        import httpx
-
-        headers = {
-            "apikey": settings.SUPABASE_ANON_KEY,
-            "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
-        }
-
-        # Fetch all auth users
-        resp = httpx.get(
-            f"{settings.SUPABASE_URL}/auth/v1/admin/users",
-            headers=headers,
-            timeout=15.0,
-        )
-        if resp.status_code != 200:
-            print(f"  WARNING: Could not list Supabase Auth users ({resp.status_code})")
-            return 0
-
-        users = resp.json().get("users", [])
-        deleted = 0
-        keep_lower = [e.lower() for e in keep_emails]
-        for u in users:
-            if u.get("email", "").lower() in keep_lower:
-                continue
-            del_resp = httpx.delete(
-                f"{settings.SUPABASE_URL}/auth/v1/admin/users/{u['id']}",
-                headers=headers,
-                timeout=15.0,
-            )
-            if del_resp.status_code == 200:
-                deleted += 1
-                print(f"  Deleted Supabase Auth user: {u.get('email')}")
-            else:
-                print(f"  WARNING: Failed to delete {u.get('email')} ({del_resp.status_code})")
-        return deleted
-
-    except Exception as e:
-        print(f"  WARNING: Supabase Auth cleanup failed: {e}")
-        return 0
 
 
 def _delete_faiss_index() -> bool:
@@ -234,17 +180,13 @@ def wipe_user_data(confirm: bool = False):
         db.commit()
         logger.info("User data wiped successfully")
 
-        # STEP 4: Clean up Supabase Auth users (except faculty and admin)
-        sb_deleted = _wipe_supabase_auth_users(keep_emails=["faculty@gmail.com", "admin@admin.com"])
-
-        # STEP 5: Delete FAISS index file for a clean start
+        # STEP 4: Delete FAISS index file for a clean start
         faiss_deleted = _delete_faiss_index()
 
         print("\n" + "=" * 60)
         print("WIPE COMPLETE")
         print("=" * 60)
         print(f"\nTotal DB rows deleted: {total_deleted}")
-        print(f"Supabase Auth users deleted: {sb_deleted}")
         print(f"FAISS index deleted: {faiss_deleted}")
         print("\nReference data (student_records, faculty_records, rooms, schedules) preserved.")
         print(f"All {schedule_count} schedules have been reassigned to the new faculty account.")

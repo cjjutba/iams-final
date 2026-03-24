@@ -32,67 +32,7 @@ from datetime import time
 from app.database import SessionLocal, engine, Base
 from app.models import User, UserRole, Room, Schedule
 from app.utils.security import hash_password
-from app.config import settings, logger
-
-
-def _sync_supabase_auth_user(email: str, password: str, metadata: dict) -> str | None:
-    """
-    Create (or skip if exists) a user in Supabase Auth so the mobile app
-    can authenticate via supabase.auth.signInWithPassword().
-
-    Uses the Supabase Admin REST API directly (no SDK needed).
-    Requires SUPABASE_URL and SUPABASE_SERVICE_KEY in backend .env.
-    Silently skips if Supabase is not configured.
-
-    Returns the Supabase Auth user ID (UUID string) or None.
-    """
-    if not settings.USE_SUPABASE_AUTH:
-        print("  [Supabase Auth] Skipped — USE_SUPABASE_AUTH is disabled")
-        return None
-
-    if not settings.SUPABASE_URL or not settings.SUPABASE_SERVICE_KEY:
-        print("  [Supabase Auth] Skipped — SUPABASE_URL or SUPABASE_SERVICE_KEY not set")
-        return None
-
-    import requests
-
-    base_url = settings.SUPABASE_URL
-    headers = {
-        "apikey": settings.SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        # Check if user already exists
-        resp = requests.get(f"{base_url}/auth/v1/admin/users", headers=headers, timeout=10)
-        resp.raise_for_status()
-        users = resp.json().get("users", [])
-        for u in users:
-            if u.get("email") == email:
-                print(f"  [Supabase Auth] User {email} already exists — skipped")
-                return u.get("id")
-
-        # Create user with email_confirm=True so they can login immediately
-        resp = requests.post(
-            f"{base_url}/auth/v1/admin/users",
-            headers=headers,
-            json={
-                "email": email,
-                "password": password,
-                "email_confirm": True,
-                "user_metadata": metadata,
-            },
-            timeout=10,
-        )
-        resp.raise_for_status()
-        sb_id = resp.json().get("id")
-        print(f"  [Supabase Auth] Created user {email}")
-        return sb_id
-    except Exception as e:
-        print(f"  [Supabase Auth] Warning: {e}")
-        print("  (Continuing with local DB seed — Supabase Auth user can be created later)")
-        return None
+from app.config import logger
 
 
 # ---------------------------------------------------------------------------
@@ -114,8 +54,8 @@ FACULTY_DEFS = [
 # ---------------------------------------------------------------------------
 ROOM_DEFS = [
     ("EB226", "Engineering Building", 50,
-     "rtsp://admin:%40Iams2026THESIS%21@192.168.88.10:554/h264Preview_01_main",
-     "capstone-lab"),
+     "rtsp://host.docker.internal:8554/capstone-lab-recognition",  # Sub stream for recognition
+     "capstone-lab"),  # HD stream key for app WebRTC
     ("EB227", "Engineering Building", 50, "", ""),
 ]
 
@@ -163,7 +103,7 @@ SCHEDULE_DEFS = [
 
 
 def _create_faculty_user(db, email, first_name, last_name, common_hash):
-    """Create a single faculty user and sync to Supabase Auth."""
+    """Create a single faculty user."""
     user = User(
         email=email,
         password_hash=common_hash,
@@ -176,16 +116,6 @@ def _create_faculty_user(db, email, first_name, last_name, common_hash):
     db.add(user)
     db.flush()
     print(f"  Created: {first_name} {last_name} ({email}, ID: {user.id})")
-
-    sb_user_id = _sync_supabase_auth_user(
-        email=email,
-        password="password123",
-        metadata={"first_name": first_name, "last_name": last_name, "role": "faculty"},
-    )
-    if sb_user_id:
-        user.supabase_user_id = sb_user_id
-        db.flush()
-
     return user
 
 
