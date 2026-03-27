@@ -31,6 +31,8 @@ import com.iams.app.ui.components.LocalToastState
 import com.iams.app.ui.components.ToastType
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.TextSecondary
+import com.iams.app.ui.utils.InputSanitizer
+import com.iams.app.ui.utils.InputValidation
 
 @Composable
 fun FacultyLoginScreen(
@@ -40,6 +42,8 @@ fun FacultyLoginScreen(
     val uiState by viewModel.uiState.collectAsState()
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var emailError by remember { mutableStateOf<String?>(null) }
+    var passwordError by remember { mutableStateOf<String?>(null) }
     val focusManager = LocalFocusManager.current
 
     val toastState = LocalToastState.current
@@ -67,6 +71,16 @@ fun FacultyLoginScreen(
         }
     }
 
+    fun submit() {
+        val eErr = InputValidation.validateEmail(email)
+        val pErr = InputValidation.validateRequired(password, "Password")
+        emailError = eErr
+        passwordError = pErr
+        if (eErr != null || pErr != null) return
+        focusManager.clearFocus()
+        viewModel.login(InputSanitizer.email(email), InputSanitizer.trimmed(password))
+    }
+
     AuthLayout(
         showBack = true,
         title = "Welcome, Faculty!",
@@ -81,11 +95,13 @@ fun FacultyLoginScreen(
             value = email,
             onValueChange = {
                 email = it
+                emailError = null
                 viewModel.clearError()
             },
             label = "Email",
             placeholder = "your.email@example.com",
             enabled = !uiState.isLoading,
+            error = emailError,
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Email,
                 imeAction = ImeAction.Next
@@ -102,22 +118,20 @@ fun FacultyLoginScreen(
             value = password,
             onValueChange = {
                 password = it
+                passwordError = null
                 viewModel.clearError()
             },
             label = "Password",
             placeholder = "Enter your password",
             isPassword = true,
             enabled = !uiState.isLoading,
-            error = null,
+            error = passwordError,
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Password,
                 imeAction = ImeAction.Done
             ),
             keyboardActions = KeyboardActions(
-                onDone = {
-                    focusManager.clearFocus()
-                    viewModel.login(email.trim().lowercase(), password.trim())
-                }
+                onDone = { submit() }
             )
         )
 
@@ -126,7 +140,7 @@ fun FacultyLoginScreen(
         // Login button
         IAMSButton(
             text = "Sign In",
-            onClick = { viewModel.login(email.trim().lowercase(), password.trim()) },
+            onClick = { submit() },
             size = IAMSButtonSize.LG,
             enabled = !uiState.isLoading,
             isLoading = uiState.isLoading,
