@@ -94,7 +94,7 @@ class RealtimeTracker:
 
         # ByteTrack with tuned parameters for face tracking
         self._tracker = sv.ByteTrack(
-            track_activation_threshold=0.25,
+            track_activation_threshold=0.1,
             lost_track_buffer=int(settings.TRACK_LOST_TIMEOUT * settings.PROCESSING_FPS),
             minimum_matching_threshold=0.8,
             frame_rate=int(settings.PROCESSING_FPS),
@@ -307,7 +307,7 @@ class RealtimeTracker:
             identity.recognition_status = "recognized"
 
             if confidence > 0.3:
-                logger.debug(
+                logger.info(
                     "Track %d recognized: %s (%.3f)",
                     identity.track_id, identity.name, confidence,
                 )

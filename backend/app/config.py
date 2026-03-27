@@ -41,11 +41,11 @@ class Settings(BaseSettings):
 
     # Face Recognition
     INSIGHTFACE_MODEL: str = "buffalo_l"
-    INSIGHTFACE_DET_SIZE: int = 320  # 320 for faster detection on CPU (640 for higher accuracy)
-    INSIGHTFACE_DET_THRESH: float = 0.5  # Detection confidence minimum (aligned with attendance engine filter)
+    INSIGHTFACE_DET_SIZE: int = 480  # 480 balances speed and accuracy (640 max, 320 fast)
+    INSIGHTFACE_DET_THRESH: float = 0.5  # Detection confidence minimum
     FAISS_INDEX_PATH: str = "data/faiss/faces.index"
-    RECOGNITION_THRESHOLD: float = 0.30  # Cosine similarity threshold (selfie→CCTV cross-domain scores 0.3-0.5)
-    RECOGNITION_MARGIN: float = 0.1  # Min gap between top-1 and top-2 scores
+    RECOGNITION_THRESHOLD: float = 0.25  # Cosine similarity threshold (selfie→CCTV cross-domain scores 0.3-0.5)
+    RECOGNITION_MARGIN: float = 0.05  # Min gap between top-1 and top-2 scores
     RECOGNITION_TOP_K: int = 3  # Number of neighbors to search in FAISS
     USE_GPU: bool = True  # Use GPU if available, fallback to CPU
     MIN_FACE_IMAGES: int = 3  # Minimum images for registration
@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     # Adaptive Threshold
     ADAPTIVE_THRESHOLD_ENABLED: bool = True
     ADAPTIVE_THRESHOLD_FLOOR: float = 0.35  # Minimum allowed threshold
-    ADAPTIVE_THRESHOLD_CEILING: float = 0.40  # Solo-match ceiling (lowered: selfie→CCTV cross-domain yields 0.3-0.5)
+    ADAPTIVE_THRESHOLD_CEILING: float = 0.30  # Solo-match ceiling (cross-domain selfie→CCTV yields 0.3-0.5)
     ADAPTIVE_THRESHOLD_MIN_SAMPLES: int = 50  # Min samples before adapting
     ADAPTIVE_THRESHOLD_WINDOW: int = 500  # Rolling window size
 
@@ -86,9 +86,9 @@ class Settings(BaseSettings):
     WS_BROADCAST_FPS: float = 10.0  # WebSocket broadcast rate
 
     # ByteTrack / Track Lifecycle
-    TRACK_LOST_TIMEOUT: float = 30.0  # Seconds before removing lost track (holds bbox during occlusion)
+    TRACK_LOST_TIMEOUT: float = 5.0  # Seconds before removing lost track
     REVERIFY_INTERVAL: float = 15.0  # Re-run ArcFace on existing tracks (seconds)
-    TRACK_CONFIRM_FRAMES: int = 3  # Frames before track is considered confirmed
+    TRACK_CONFIRM_FRAMES: int = 1  # Recognize immediately on first detection
 
     # Track-Based Presence
     EARLY_LEAVE_TIMEOUT: float = 60.0  # Seconds absent before early-leave alert (must exceed TRACK_LOST_TIMEOUT)
