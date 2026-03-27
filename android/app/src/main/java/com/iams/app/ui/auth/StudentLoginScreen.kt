@@ -40,6 +40,8 @@ import com.iams.app.ui.components.ToastType
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.Primary
 import com.iams.app.ui.theme.TextSecondary
+import com.iams.app.ui.utils.InputSanitizer
+import com.iams.app.ui.utils.InputValidation
 
 @Composable
 fun StudentLoginScreen(
@@ -49,6 +51,8 @@ fun StudentLoginScreen(
     val uiState by viewModel.uiState.collectAsState()
     var studentId by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var studentIdError by remember { mutableStateOf<String?>(null) }
+    var passwordError by remember { mutableStateOf<String?>(null) }
     val focusManager = LocalFocusManager.current
 
     val toastState = LocalToastState.current
@@ -80,6 +84,16 @@ fun StudentLoginScreen(
         }
     }
 
+    fun submit() {
+        val idErr = InputValidation.validateStudentId(studentId)
+        val pwErr = InputValidation.validateRequired(password, "Password")
+        studentIdError = idErr
+        passwordError = pwErr
+        if (idErr != null || pwErr != null) return
+        focusManager.clearFocus()
+        viewModel.login(InputSanitizer.studentId(studentId), InputSanitizer.trimmed(password))
+    }
+
     AuthLayout(
         showBack = true,
         title = "Student Login",
@@ -93,11 +107,13 @@ fun StudentLoginScreen(
             value = studentId,
             onValueChange = {
                 studentId = it
+                studentIdError = null
                 viewModel.clearError()
             },
             label = "Student ID",
             placeholder = "e.g., 21-A-01234",
             enabled = !uiState.isLoading,
+            error = studentIdError,
             keyboardOptions = KeyboardOptions(
                 capitalization = KeyboardCapitalization.Characters,
                 keyboardType = KeyboardType.Text,
@@ -115,22 +131,20 @@ fun StudentLoginScreen(
             value = password,
             onValueChange = {
                 password = it
+                passwordError = null
                 viewModel.clearError()
             },
             label = "Password",
             placeholder = "Enter your password",
             isPassword = true,
             enabled = !uiState.isLoading,
-            error = null,
+            error = passwordError,
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Password,
                 imeAction = ImeAction.Done
             ),
             keyboardActions = KeyboardActions(
-                onDone = {
-                    focusManager.clearFocus()
-                    viewModel.login(studentId.trim().uppercase(), password.trim())
-                }
+                onDone = { submit() }
             )
         )
 
@@ -155,7 +169,7 @@ fun StudentLoginScreen(
         // Login button
         IAMSButton(
             text = "Login",
-            onClick = { viewModel.login(studentId.trim().uppercase(), password.trim()) },
+            onClick = { submit() },
             size = IAMSButtonSize.LG,
             enabled = !uiState.isLoading,
             isLoading = uiState.isLoading,
