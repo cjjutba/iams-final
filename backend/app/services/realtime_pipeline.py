@@ -198,6 +198,7 @@ class SessionPipeline:
                     "confidence": t.confidence,
                     "user_id": t.user_id,
                     "status": t.status,
+                    "is_active": True,  # All broadcast tracks are currently active
                 }
                 for t in track_frame.tracks
             ]

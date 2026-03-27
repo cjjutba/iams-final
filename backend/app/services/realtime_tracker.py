@@ -52,6 +52,7 @@ class TrackResult:
     name: str | None
     confidence: float
     status: str  # "recognized" | "unknown" | "pending"
+    is_active: bool  # True if matched to a detection this frame
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +146,11 @@ class RealtimeTracker:
             confidences.append(float(face.det_score))
             embeddings_list.append(face.normed_embedding.copy())
 
+        # Apply NMS to remove duplicate face detections
+        bboxes, confidences, embeddings_list = self._nms_faces(
+            bboxes, confidences, embeddings_list
+        )
+
         det_array = np.array(bboxes, dtype=np.float32)
         conf_array = np.array(confidences, dtype=np.float32)
 
@@ -203,9 +209,24 @@ class RealtimeTracker:
                 name=identity.name,
                 confidence=identity.confidence,
                 status=identity.recognition_status,
+                is_active=True,
             ))
 
-        # 6. Expire lost tracks
+        # 6. Deduplicate by user_id — keep highest confidence per user
+        seen_users: dict[str, int] = {}
+        deduped_results: list[TrackResult] = []
+        for r in results:
+            if r.user_id and r.user_id in seen_users:
+                existing_idx = seen_users[r.user_id]
+                if r.confidence > deduped_results[existing_idx].confidence:
+                    deduped_results[existing_idx] = r
+                continue
+            if r.user_id:
+                seen_users[r.user_id] = len(deduped_results)
+            deduped_results.append(r)
+        results = deduped_results
+
+        # 7. Expire lost tracks
         self._expire_lost_tracks(now, active_track_ids)
 
         duration_ms = (time.monotonic() - t0) * 1000.0
@@ -345,6 +366,34 @@ class RealtimeTracker:
         union = area_a + area_b - inter
 
         return float(inter / union) if union > 0 else 0.0
+
+    @staticmethod
+    def _nms_faces(bboxes, confidences, embeddings, iou_threshold=0.5):
+        """Remove overlapping face detections (non-max suppression)."""
+        if len(bboxes) <= 1:
+            return bboxes, confidences, embeddings
+
+        indices = np.argsort(confidences)[::-1]  # Sort by confidence descending
+        keep = []
+
+        while len(indices) > 0:
+            i = indices[0]
+            keep.append(i)
+            if len(indices) == 1:
+                break
+
+            remaining = indices[1:]
+            ious = np.array([
+                RealtimeTracker._compute_iou(bboxes[i], bboxes[j])
+                for j in remaining
+            ])
+            indices = remaining[ious <= iou_threshold]
+
+        return (
+            [bboxes[i] for i in keep],
+            [confidences[i] for i in keep],
+            [embeddings[i] for i in keep],
+        )
 
     def _expire_lost_tracks(
         self, now: float, active_ids: set[int] | None = None
