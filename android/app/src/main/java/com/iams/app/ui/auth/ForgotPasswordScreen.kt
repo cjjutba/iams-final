@@ -36,6 +36,8 @@ import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSTextField
 import com.iams.app.ui.components.LocalToastState
 import com.iams.app.ui.components.ToastType
+import com.iams.app.ui.utils.InputSanitizer
+import com.iams.app.ui.utils.InputValidation
 import com.iams.app.ui.theme.PresentFg
 import com.iams.app.ui.theme.Primary
 import com.iams.app.ui.theme.TextSecondary
@@ -89,7 +91,16 @@ private fun FormContent(
     onSubmit: (String) -> Unit
 ) {
     var email by remember { mutableStateOf("") }
+    var emailError by remember { mutableStateOf<String?>(null) }
     val focusManager = LocalFocusManager.current
+
+    fun submit() {
+        val err = InputValidation.validateEmail(email)
+        emailError = err
+        if (err != null) return
+        focusManager.clearFocus()
+        onSubmit(InputSanitizer.email(email))
+    }
 
     Spacer(modifier = Modifier.height(32.dp))
 
@@ -98,21 +109,19 @@ private fun FormContent(
         value = email,
         onValueChange = {
             email = it
+            emailError = null
             viewModel.clearError()
         },
         label = "Email",
         placeholder = "your.email@example.com",
         enabled = !uiState.isLoading,
-        error = null,
+        error = emailError,
         keyboardOptions = KeyboardOptions(
             keyboardType = KeyboardType.Email,
             imeAction = ImeAction.Done
         ),
         keyboardActions = KeyboardActions(
-            onDone = {
-                focusManager.clearFocus()
-                onSubmit(email.trim())
-            }
+            onDone = { submit() }
         )
     )
 
@@ -123,10 +132,7 @@ private fun FormContent(
     // Submit button
     IAMSButton(
         text = "Send Reset Link",
-        onClick = {
-            focusManager.clearFocus()
-            onSubmit(email.trim())
-        },
+        onClick = { submit() },
         size = IAMSButtonSize.LG,
         enabled = !uiState.isLoading,
         isLoading = uiState.isLoading,
