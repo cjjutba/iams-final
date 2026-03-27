@@ -19,9 +19,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -44,6 +46,8 @@ import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.navigation.Routes
+import com.iams.app.ui.theme.TextPrimary
 import com.iams.app.ui.components.LocalToastState
 import com.iams.app.ui.components.ToastType
 import com.iams.app.ui.theme.Background
@@ -88,7 +92,19 @@ fun StudentScheduleScreen(
                 .fillMaxSize()
                 .background(Background)
         ) {
-            IAMSHeader(title = "My Schedule")
+            IAMSHeader(
+                title = "Schedule",
+                trailing = {
+                    IconButton(onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) }) {
+                        Icon(
+                            Icons.Outlined.Notifications,
+                            contentDescription = "Notifications",
+                            modifier = Modifier.size(24.dp),
+                            tint = TextPrimary,
+                        )
+                    }
+                },
+            )
 
             Box(
                 modifier = Modifier
@@ -132,7 +148,19 @@ fun StudentScheduleScreen(
             .fillMaxSize()
             .background(Background)
     ) {
-        IAMSHeader(title = "My Schedule")
+        IAMSHeader(
+                title = "Schedule",
+                trailing = {
+                    IconButton(onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) }) {
+                        Icon(
+                            Icons.Outlined.Notifications,
+                            contentDescription = "Notifications",
+                            modifier = Modifier.size(24.dp),
+                            tint = TextPrimary,
+                        )
+                    }
+                },
+            )
 
         // Day selector
         val todayBackend = LocalDate.now().dayOfWeek.value - 1

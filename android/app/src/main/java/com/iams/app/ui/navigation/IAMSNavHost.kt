@@ -6,9 +6,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.outlined.Assessment
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.ReportProblem
+import androidx.compose.material.icons.outlined.Schedule
 
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
@@ -77,18 +83,18 @@ fun IAMSNavHost() {
     val startDestination = Routes.SPLASH
 
     val studentTabs = listOf(
-        BottomNavTab("Home", Icons.Default.Home, Routes.STUDENT_HOME),
-        BottomNavTab("Schedule", Icons.Default.Schedule, Routes.STUDENT_SCHEDULE),
-        BottomNavTab("History", Icons.Default.History, Routes.STUDENT_HISTORY),
-        BottomNavTab("Profile", Icons.Default.Person, Routes.STUDENT_PROFILE),
+        BottomNavTab("Home", Icons.Outlined.Home, Icons.Filled.Home, Routes.STUDENT_HOME),
+        BottomNavTab("Schedule", Icons.Outlined.Schedule, Icons.Filled.Schedule, Routes.STUDENT_SCHEDULE),
+        BottomNavTab("History", Icons.Outlined.History, Icons.Filled.History, Routes.STUDENT_HISTORY),
+        BottomNavTab("Profile", Icons.Outlined.Person, Icons.Filled.Person, Routes.STUDENT_PROFILE),
     )
 
     val facultyTabs = listOf(
-        BottomNavTab("Home", Icons.Default.Home, Routes.FACULTY_HOME),
-        BottomNavTab("Schedule", Icons.Default.Schedule, Routes.FACULTY_SCHEDULE),
-        BottomNavTab("Analytics", Icons.Default.Assessment, Routes.FACULTY_ANALYTICS_DASHBOARD),
-        BottomNavTab("Alerts", Icons.Default.Notifications, Routes.FACULTY_ALERTS),
-        BottomNavTab("Profile", Icons.Default.Person, Routes.FACULTY_PROFILE),
+        BottomNavTab("Home", Icons.Outlined.Home, Icons.Filled.Home, Routes.FACULTY_HOME),
+        BottomNavTab("Schedule", Icons.Outlined.Schedule, Icons.Filled.Schedule, Routes.FACULTY_SCHEDULE),
+        BottomNavTab("Analytics", Icons.Outlined.Assessment, Icons.Filled.Assessment, Routes.FACULTY_ANALYTICS_DASHBOARD),
+        BottomNavTab("Alerts", Icons.Outlined.ReportProblem, Icons.Filled.ReportProblem, Routes.FACULTY_ALERTS),
+        BottomNavTab("Profile", Icons.Outlined.Person, Icons.Filled.Person, Routes.FACULTY_PROFILE),
     )
 
     val isStudentSection = currentRoute in studentTabs.map { it.route }

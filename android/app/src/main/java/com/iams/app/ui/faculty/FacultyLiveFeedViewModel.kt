@@ -9,6 +9,7 @@ import com.iams.app.data.model.AttendanceSummaryMessage
 import com.iams.app.data.model.FrameUpdateMessage
 import com.iams.app.data.model.RoomResponse
 import com.iams.app.data.model.ScheduleResponse
+import com.iams.app.data.model.SessionStartRequest
 import com.iams.app.data.model.StudentAttendanceStatus
 import com.iams.app.data.model.TrackInfo
 import android.util.Log
@@ -34,6 +35,8 @@ data class LiveFeedUiState(
     val totalEnrolled: Int = 0,
     val fps: Float = 0f,
     val processingMs: Float = 0f,
+    val sessionActive: Boolean = false,
+    val sessionLoading: Boolean = false,
 )
 
 @HiltViewModel
@@ -56,10 +59,24 @@ class FacultyLiveFeedViewModel @Inject constructor(
     fun initialize(scheduleId: String, roomId: String) {
         if (initialized) return
         initialized = true
+        currentScheduleId = scheduleId
 
         // Start WebSocket immediately
         wsClient.connect(scheduleId)
         observeWebSocket()
+
+        // Check if session is already active
+        viewModelScope.launch {
+            try {
+                val response = apiService.getActiveSessions()
+                if (response.isSuccessful) {
+                    val active = response.body()?.activeSessions ?: emptyList()
+                    _uiState.value = _uiState.value.copy(
+                        sessionActive = active.contains(scheduleId)
+                    )
+                }
+            } catch (_: Exception) {}
+        }
 
         // Fetch room info (needed for RTSP URL)
         viewModelScope.launch {
@@ -181,6 +198,48 @@ class FacultyLiveFeedViewModel @Inject constructor(
 
     fun onVideoError(error: String) {
         _uiState.value = _uiState.value.copy(videoError = error)
+    }
+
+    private var currentScheduleId: String = ""
+
+    fun startSession() {
+        if (currentScheduleId.isEmpty()) return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(sessionLoading = true)
+            try {
+                val response = apiService.startSession(SessionStartRequest(currentScheduleId))
+                if (response.isSuccessful) {
+                    _uiState.value = _uiState.value.copy(
+                        sessionActive = true,
+                        sessionLoading = false
+                    )
+                } else {
+                    _uiState.value = _uiState.value.copy(sessionLoading = false)
+                }
+            } catch (_: Exception) {
+                _uiState.value = _uiState.value.copy(sessionLoading = false)
+            }
+        }
+    }
+
+    fun endSession() {
+        if (currentScheduleId.isEmpty()) return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(sessionLoading = true)
+            try {
+                val response = apiService.endSession(currentScheduleId)
+                if (response.isSuccessful) {
+                    _uiState.value = _uiState.value.copy(
+                        sessionActive = false,
+                        sessionLoading = false
+                    )
+                } else {
+                    _uiState.value = _uiState.value.copy(sessionLoading = false)
+                }
+            } catch (_: Exception) {
+                _uiState.value = _uiState.value.copy(sessionLoading = false)
+            }
+        }
     }
 
     override fun onCleared() {

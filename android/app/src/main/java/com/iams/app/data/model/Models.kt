@@ -277,11 +277,19 @@ data class SubjectBreakdown(
 // === Notifications ===
 data class NotificationResponse(
     val id: String,
+    @SerializedName("user_id") val userId: String = "",
     val type: String,
     val title: String,
     val message: String,
-    val timestamp: String,
     val read: Boolean,
+    @SerializedName("read_at") val readAt: String? = null,
+    @SerializedName("reference_id") val referenceId: String? = null,
+    @SerializedName("reference_type") val referenceType: String? = null,
+    @SerializedName("created_at") val createdAt: String = "",
+)
+
+data class UnreadCountResponse(
+    @SerializedName("unread_count") val unreadCount: Int
 )
 
 // === Profile ===

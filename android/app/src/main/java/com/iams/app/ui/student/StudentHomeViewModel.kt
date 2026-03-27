@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiService
 import com.iams.app.data.api.TokenManager
 import com.iams.app.data.model.AttendanceRecordResponse
+import com.iams.app.data.model.AttendanceSummaryResponse
 import com.iams.app.data.model.ScheduleResponse
 import com.iams.app.data.model.UserResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -13,10 +14,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalTime
 import java.util.Calendar
 import javax.inject.Inject
+
+enum class ScheduleTimeState { COMPLETED, ACTIVE, UPCOMING }
 
 data class StudentHomeUiState(
     val isLoading: Boolean = false,
@@ -30,6 +34,8 @@ data class StudentHomeUiState(
     val faceRegistered: Boolean? = null, // null = loading
     val recentActivity: List<AttendanceRecordResponse> = emptyList(),
     val todayAttendanceMap: Map<String, AttendanceRecordResponse> = emptyMap(),
+    val unreadNotificationCount: Int = 0,
+    val attendanceSummary: AttendanceSummaryResponse? = null,
 )
 
 @HiltViewModel
@@ -82,10 +88,26 @@ class StudentHomeViewModel @Inject constructor(
                     } catch (_: Exception) { emptyList() }
                 }
 
+                val unreadCountDeferred = async {
+                    try {
+                        val response = apiService.getUnreadCount()
+                        if (response.isSuccessful) response.body()?.unreadCount ?: 0 else 0
+                    } catch (_: Exception) { 0 }
+                }
+
+                val summaryDeferred = async {
+                    try {
+                        val response = apiService.getMyAttendanceSummary()
+                        if (response.isSuccessful) response.body() else null
+                    } catch (_: Exception) { null }
+                }
+
                 val user = userDeferred.await()
                 val allSchedules = schedulesDeferred.await()
                 val faceRegistered = faceDeferred.await()
                 val recentActivity = activityDeferred.await()
+                val unreadCount = unreadCountDeferred.await()
+                val summary = summaryDeferred.await()
 
                 // Filter today's schedules (backend: 0=Monday)
                 val todayBackendDay = todayBackendDayOfWeek()
@@ -108,6 +130,12 @@ class StudentHomeViewModel @Inject constructor(
                     }
                 } else null
 
+                // Build today's attendance map from recent activity
+                val todayStr = LocalDate.now().toString()
+                val todayAttMap = recentActivity
+                    .filter { it.date == todayStr }
+                    .associateBy { it.scheduleId }
+
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
                     user = user,
@@ -117,6 +145,9 @@ class StudentHomeViewModel @Inject constructor(
                     nextClass = nextClass,
                     faceRegistered = faceRegistered,
                     recentActivity = recentActivity,
+                    todayAttendanceMap = todayAttMap,
+                    unreadNotificationCount = unreadCount,
+                    attendanceSummary = summary,
                 )
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
@@ -201,6 +232,40 @@ class StudentHomeViewModel @Inject constructor(
                 LocalTime.of(parts[0].toInt(), parts[1].toInt())
             } catch (_: Exception) { null }
         }
+    }
+
+    fun getScheduleTimeState(schedule: ScheduleResponse): ScheduleTimeState {
+        val now = LocalTime.now()
+        val start = parseTime(schedule.startTime) ?: return ScheduleTimeState.UPCOMING
+        val end = parseTime(schedule.endTime) ?: return ScheduleTimeState.UPCOMING
+        return when {
+            now.isAfter(end) -> ScheduleTimeState.COMPLETED
+            now.isBefore(start) -> ScheduleTimeState.UPCOMING
+            else -> ScheduleTimeState.ACTIVE
+        }
+    }
+
+    fun getMinutesUntilStart(schedule: ScheduleResponse): Long {
+        val start = parseTime(schedule.startTime) ?: return 0
+        return Duration.between(LocalTime.now(), start).toMinutes().coerceAtLeast(0)
+    }
+
+    fun formatTime(timeStr: String): String {
+        val time = parseTime(timeStr) ?: return timeStr
+        return try {
+            val hours = time.hour
+            val minutes = time.minute
+            val period = if (hours >= 12) "PM" else "AM"
+            val displayHours = if (hours % 12 == 0) 12 else hours % 12
+            "$displayHours:${minutes.toString().padStart(2, '0')} $period"
+        } catch (_: Exception) { timeStr }
+    }
+
+    /**
+     * Get today's attendance status for a given schedule.
+     */
+    fun getTodayStatus(scheduleId: String): String? {
+        return _uiState.value.todayAttendanceMap[scheduleId]?.status
     }
 
     fun logout() {

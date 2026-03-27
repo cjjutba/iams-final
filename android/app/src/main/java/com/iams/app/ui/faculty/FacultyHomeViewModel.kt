@@ -4,19 +4,26 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiService
 import com.iams.app.data.api.TokenManager
+import com.iams.app.data.model.LiveAttendanceResponse
 import com.iams.app.data.model.ScheduleResponse
 import com.iams.app.data.model.SessionStartRequest
 import com.iams.app.data.model.UserResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.Calendar
 import javax.inject.Inject
+
+enum class ScheduleTimeState { COMPLETED, ACTIVE, UPCOMING }
 
 data class FacultyHomeUiState(
     val isLoading: Boolean = false,
@@ -29,6 +36,8 @@ data class FacultyHomeUiState(
     val activeSessionIds: List<String> = emptyList(),
     val sessionLoading: Boolean = false,
     val sessionMessage: String? = null,
+    val unreadNotificationCount: Int = 0,
+    val liveAttendance: LiveAttendanceResponse? = null,
 )
 
 @HiltViewModel
@@ -39,6 +48,11 @@ class FacultyHomeViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(FacultyHomeUiState())
     val uiState: StateFlow<FacultyHomeUiState> = _uiState.asStateFlow()
+
+    private var liveAttendanceJob: Job? = null
+
+    private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+    private val shortTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
     init {
         loadData()
@@ -88,14 +102,33 @@ class FacultyHomeViewModel @Inject constructor(
                     } catch (_: Exception) {}
                 }
 
+                // Fetch unread notification count
+                val unreadCountJob = viewModelScope.launch {
+                    try {
+                        val response = apiService.getUnreadCount()
+                        if (response.isSuccessful) {
+                            _uiState.value = _uiState.value.copy(
+                                unreadNotificationCount = response.body()?.unreadCount ?: 0
+                            )
+                        }
+                    } catch (_: Exception) {}
+                }
+
                 userJob.join()
                 schedulesJob.join()
                 sessionsJob.join()
+                unreadCountJob.join()
 
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
                     initialLoadDone = true
                 )
+
+                // Auto-start polling if a current class has an active session
+                val current = getCurrentClass()
+                if (current != null && isSessionActive(current.id)) {
+                    startLiveAttendancePolling(current.id)
+                }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
@@ -123,28 +156,72 @@ class FacultyHomeViewModel @Inject constructor(
         }
     }
 
-    fun getCurrentClass(): ScheduleResponse? {
-        val now = LocalTime.now()
-        val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
-        val shortFormatter = DateTimeFormatter.ofPattern("HH:mm")
-
-        return _uiState.value.todaySchedules.firstOrNull { schedule ->
+    private fun parseTime(timeStr: String): LocalTime? {
+        return try {
+            LocalTime.parse(timeStr, timeFormatter)
+        } catch (_: Exception) {
             try {
-                val startTime = try {
-                    LocalTime.parse(schedule.startTime, timeFormatter)
-                } catch (_: Exception) {
-                    LocalTime.parse(schedule.startTime, shortFormatter)
-                }
-                val endTime = try {
-                    LocalTime.parse(schedule.endTime, timeFormatter)
-                } catch (_: Exception) {
-                    LocalTime.parse(schedule.endTime, shortFormatter)
-                }
-                now in startTime..endTime
+                LocalTime.parse(timeStr, shortTimeFormatter)
             } catch (_: Exception) {
-                false
+                null
             }
         }
+    }
+
+    fun getCurrentClass(): ScheduleResponse? {
+        val now = LocalTime.now()
+        return _uiState.value.todaySchedules.firstOrNull { schedule ->
+            val start = parseTime(schedule.startTime) ?: return@firstOrNull false
+            val end = parseTime(schedule.endTime) ?: return@firstOrNull false
+            now in start..end
+        }
+    }
+
+    fun getScheduleTimeState(schedule: ScheduleResponse): ScheduleTimeState {
+        val now = LocalTime.now()
+        val start = parseTime(schedule.startTime) ?: return ScheduleTimeState.UPCOMING
+        val end = parseTime(schedule.endTime) ?: return ScheduleTimeState.UPCOMING
+        return when {
+            now.isAfter(end) -> ScheduleTimeState.COMPLETED
+            now.isBefore(start) -> ScheduleTimeState.UPCOMING
+            else -> ScheduleTimeState.ACTIVE
+        }
+    }
+
+    fun getElapsedMinutes(schedule: ScheduleResponse): Long {
+        val start = parseTime(schedule.startTime) ?: return 0
+        return Duration.between(start, LocalTime.now()).toMinutes().coerceAtLeast(0)
+    }
+
+    fun getRemainingMinutes(schedule: ScheduleResponse): Long {
+        val end = parseTime(schedule.endTime) ?: return 0
+        return Duration.between(LocalTime.now(), end).toMinutes().coerceAtLeast(0)
+    }
+
+    fun getMinutesUntilStart(schedule: ScheduleResponse): Long {
+        val start = parseTime(schedule.startTime) ?: return 0
+        return Duration.between(LocalTime.now(), start).toMinutes().coerceAtLeast(0)
+    }
+
+    fun startLiveAttendancePolling(scheduleId: String) {
+        liveAttendanceJob?.cancel()
+        liveAttendanceJob = viewModelScope.launch {
+            while (isActive) {
+                try {
+                    val response = apiService.getLiveAttendance(scheduleId)
+                    if (response.isSuccessful) {
+                        _uiState.value = _uiState.value.copy(liveAttendance = response.body())
+                    }
+                } catch (_: Exception) {}
+                delay(15_000)
+            }
+        }
+    }
+
+    fun stopLiveAttendancePolling() {
+        liveAttendanceJob?.cancel()
+        liveAttendanceJob = null
+        _uiState.value = _uiState.value.copy(liveAttendance = null)
     }
 
     fun isSessionActive(scheduleId: String): Boolean {
@@ -163,6 +240,7 @@ class FacultyHomeViewModel @Inject constructor(
                         activeSessionIds = _uiState.value.activeSessionIds + scheduleId,
                         sessionMessage = "Session started with ${result?.studentCount ?: 0} students"
                     )
+                    startLiveAttendancePolling(scheduleId)
                 } else {
                     _uiState.value = _uiState.value.copy(
                         sessionLoading = false,
@@ -185,6 +263,7 @@ class FacultyHomeViewModel @Inject constructor(
                 val response = apiService.endSession(scheduleId)
                 if (response.isSuccessful) {
                     val result = response.body()
+                    stopLiveAttendancePolling()
                     _uiState.value = _uiState.value.copy(
                         sessionLoading = false,
                         activeSessionIds = _uiState.value.activeSessionIds.filter { it != scheduleId },
@@ -210,18 +289,13 @@ class FacultyHomeViewModel @Inject constructor(
     }
 
     fun formatTime(timeStr: String): String {
-        return try {
-            val formatter = DateTimeFormatter.ofPattern("HH:mm:ss")
-            val shortFormatter = DateTimeFormatter.ofPattern("HH:mm")
-            val time = try {
-                LocalTime.parse(timeStr, formatter)
-            } catch (_: Exception) {
-                LocalTime.parse(timeStr, shortFormatter)
-            }
-            time.format(DateTimeFormatter.ofPattern("h:mm a"))
-        } catch (_: Exception) {
-            timeStr
-        }
+        val time = parseTime(timeStr) ?: return timeStr
+        return time.format(DateTimeFormatter.ofPattern("h:mm a"))
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        liveAttendanceJob?.cancel()
     }
 
     fun logout() {

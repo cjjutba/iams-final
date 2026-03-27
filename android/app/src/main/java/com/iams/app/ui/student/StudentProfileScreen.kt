@@ -127,8 +127,6 @@ fun StudentProfileScreen(
             .fillMaxSize()
             .background(Background)
     ) {
-        IAMSHeader(title = "Profile")
-
         when {
             uiState.isLoading && uiState.user == null -> {
                 Box(

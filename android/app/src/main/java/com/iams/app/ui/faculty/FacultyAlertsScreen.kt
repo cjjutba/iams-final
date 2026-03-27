@@ -21,10 +21,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -45,6 +47,8 @@ import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.navigation.Routes
+import com.iams.app.ui.theme.TextPrimary
 import com.iams.app.ui.theme.Border
 import com.iams.app.ui.theme.EarlyLeaveBg
 import com.iams.app.ui.theme.EarlyLeaveFg
@@ -68,7 +72,19 @@ fun FacultyAlertsScreen(
     val spacing = IAMSThemeTokens.spacing
 
     Column(modifier = Modifier.fillMaxSize()) {
-        IAMSHeader(title = "Alerts")
+        IAMSHeader(
+            title = "Alerts",
+            trailing = {
+                IconButton(onClick = { navController.navigate(Routes.FACULTY_NOTIFICATIONS) }) {
+                    Icon(
+                        Icons.Outlined.Notifications,
+                        contentDescription = "Notifications",
+                        modifier = Modifier.size(24.dp),
+                        tint = TextPrimary,
+                    )
+                }
+            },
+        )
 
         // Error state (no data)
         if (uiState.error != null && !uiState.isRefreshing && uiState.alerts.isEmpty()) {

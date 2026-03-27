@@ -19,9 +19,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.TrendingDown
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -46,6 +48,8 @@ import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.navigation.Routes
+import com.iams.app.ui.theme.TextPrimary
 import com.iams.app.ui.components.SkeletonBox
 import com.iams.app.ui.theme.AbsentBg
 import com.iams.app.ui.theme.AbsentFg
@@ -98,7 +102,19 @@ fun FacultyAnalyticsDashboardScreen(
             .fillMaxSize()
             .background(Background)
     ) {
-        IAMSHeader(title = "Analytics")
+        IAMSHeader(
+            title = "Analytics",
+            trailing = {
+                IconButton(onClick = { navController.navigate(Routes.FACULTY_NOTIFICATIONS) }) {
+                    Icon(
+                        Icons.Outlined.Notifications,
+                        contentDescription = "Notifications",
+                        modifier = Modifier.size(24.dp),
+                        tint = TextPrimary,
+                    )
+                }
+            },
+        )
 
         when {
             // Loading — skeleton placeholders

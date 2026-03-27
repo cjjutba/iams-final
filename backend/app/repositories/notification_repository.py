@@ -115,3 +115,18 @@ class NotificationRepository:
         )
         self.db.commit()
         return count
+
+    def delete(self, notification_id: str) -> bool:
+        """Delete a notification by ID. Returns True if deleted."""
+        notification = self.get_by_id(notification_id)
+        if not notification:
+            return False
+        self.db.delete(notification)
+        self.db.commit()
+        return True
+
+    def delete_all(self, user_id: str) -> int:
+        """Delete all notifications for a user. Returns count deleted."""
+        count = self.db.query(Notification).filter(Notification.user_id == _to_uuid(user_id)).delete()
+        self.db.commit()
+        return count

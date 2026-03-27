@@ -15,12 +15,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -34,6 +38,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -57,8 +62,11 @@ import com.iams.app.ui.theme.AbsentFg
 import com.iams.app.ui.theme.Background
 import com.iams.app.ui.theme.Border
 import com.iams.app.ui.theme.IAMSThemeTokens
+import com.iams.app.ui.theme.LateFg
+import com.iams.app.ui.theme.PresentBorder
 import com.iams.app.ui.theme.PresentFg
 import com.iams.app.ui.theme.Primary
+import com.iams.app.ui.theme.Secondary
 import com.iams.app.ui.theme.TextPrimary
 import com.iams.app.ui.theme.TextSecondary
 import com.iams.app.ui.theme.TextTertiary
@@ -127,6 +135,9 @@ fun StudentHomeScreen(
         return
     }
 
+    val currentClass = uiState.currentClass
+    val otherSchedules = uiState.todaySchedules.filter { it.id != currentClass?.id }
+
     PullToRefreshBox(
         isRefreshing = uiState.isRefreshing,
         onRefresh = { viewModel.refresh() },
@@ -139,11 +150,10 @@ fun StudentHomeScreen(
                 .fillMaxSize()
                 .padding(horizontal = spacing.lg),
         ) {
-            // ── Header content ──
+            // ── Header: greeting + notification bell + date ──
             item {
                 Spacer(modifier = Modifier.height(spacing.lg))
 
-                // Greeting row with notification bell
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -157,65 +167,112 @@ fun StudentHomeScreen(
                         modifier = Modifier.weight(1f)
                     )
                     IconButton(onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) }) {
-                        Icon(
-                            Icons.Default.Notifications,
-                            contentDescription = "Notifications",
-                            modifier = Modifier.size(24.dp),
-                            tint = TextPrimary
-                        )
+                        BadgedBox(
+                            badge = {
+                                val count = uiState.unreadNotificationCount
+                                if (count > 0) {
+                                    Badge(
+                                        containerColor = Color(0xFFDC2626),
+                                        contentColor = Color.White
+                                    ) {
+                                        Text(
+                                            text = if (count > 99) "99+" else count.toString(),
+                                            style = MaterialTheme.typography.labelSmall
+                                        )
+                                    }
+                                }
+                            }
+                        ) {
+                            Icon(
+                                Icons.Outlined.Notifications,
+                                contentDescription = "Notifications",
+                                modifier = Modifier.size(24.dp),
+                                tint = TextPrimary
+                            )
+                        }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(spacing.sm))
 
-                // Date
-                val today = LocalDate.now()
-                val dateFormatter = DateTimeFormatter.ofPattern(
-                    "EEEE, MMMM d, yyyy", Locale.getDefault()
-                )
                 Text(
-                    text = today.format(dateFormatter),
+                    text = LocalDate.now().format(
+                        DateTimeFormatter.ofPattern("EEEE, MMMM d, yyyy", Locale.getDefault())
+                    ),
                     style = MaterialTheme.typography.bodyLarge,
                     color = TextSecondary
                 )
+            }
 
-                Spacer(modifier = Modifier.height(spacing.xxl))
-
-                // Loading skeleton placeholders
-                if (uiState.isLoading) {
+            // ── Loading skeletons ──
+            if (uiState.isLoading) {
+                item {
                     Spacer(modifier = Modifier.height(spacing.xxl))
                     CardSkeleton()
-                    Spacer(modifier = Modifier.height(spacing.xxl))
+                    Spacer(modifier = Modifier.height(spacing.sm))
+                    CardSkeleton()
+                    Spacer(modifier = Modifier.height(spacing.sm))
                     CardSkeleton()
                 }
+            }
 
-                // Face status card
-                if (!uiState.isLoading) {
-                    FaceStatusCard(
-                        faceRegistered = uiState.faceRegistered,
+            // ── Face NOT registered warning (only when not registered) ──
+            if (!uiState.isLoading && uiState.faceRegistered == false) {
+                item {
+                    Spacer(modifier = Modifier.height(spacing.xxl))
+                    FaceNotRegisteredCard(
                         onRegisterClick = {
                             navController.navigate(Routes.studentFaceRegister("register"))
                         }
                     )
                 }
+            }
 
+            // ── Attendance rate + quick stats row ──
+            if (!uiState.isLoading && uiState.attendanceSummary != null) {
+                item {
+                    Spacer(modifier = Modifier.height(spacing.xxl))
+                    AttendanceStatsRow(
+                        attendanceRate = uiState.attendanceSummary!!.attendanceRate,
+                        totalClasses = uiState.attendanceSummary!!.totalClasses,
+                        presentCount = uiState.attendanceSummary!!.presentCount,
+                        lateCount = uiState.attendanceSummary!!.lateCount
+                    )
+                }
+            }
+
+            // ── Current class hero card ──
+            if (!uiState.isLoading && currentClass != null) {
+                item {
+                    Spacer(modifier = Modifier.height(spacing.xxl))
+                    CurrentClassCard(
+                        schedule = currentClass,
+                        todayStatus = viewModel.getTodayStatus(currentClass.id),
+                        formatTime = { viewModel.formatTime(it) }
+                    )
+                }
+            }
+
+            // ── Upcoming class card (only when no current class) ──
+            if (!uiState.isLoading && currentClass == null && uiState.nextClass != null) {
+                item {
+                    Spacer(modifier = Modifier.height(spacing.xxl))
+                    UpcomingClassCard(
+                        schedule = uiState.nextClass!!,
+                        minutesUntilStart = viewModel.getMinutesUntilStart(uiState.nextClass!!),
+                        formatTime = { viewModel.formatTime(it) }
+                    )
+                }
+            }
+
+            // ── Section title: Today's Classes ──
+            item {
                 Spacer(modifier = Modifier.height(spacing.xxl))
-
-                // Current class card
-                if (!uiState.isLoading && uiState.currentClass != null) {
-                    CurrentClassCard(schedule = uiState.currentClass!!)
-                    Spacer(modifier = Modifier.height(spacing.xxl))
-                }
-
-                // Upcoming class card (only when no current class)
-                if (!uiState.isLoading && uiState.currentClass == null && uiState.nextClass != null) {
-                    UpcomingClassCard(schedule = uiState.nextClass!!)
-                    Spacer(modifier = Modifier.height(spacing.xxl))
-                }
-
-                // Section title
                 Text(
-                    text = "Today's Classes",
+                    text = if (!uiState.isLoading)
+                        "Today's Classes (${uiState.todaySchedules.size})"
+                    else
+                        "Today's Classes",
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = Primary
@@ -223,26 +280,33 @@ fun StudentHomeScreen(
                 Spacer(modifier = Modifier.height(spacing.lg))
             }
 
-            // ── Loading skeleton for schedule cards ──
-            if (uiState.isLoading) {
-                items(3) {
-                    CardSkeleton()
-                    Spacer(modifier = Modifier.height(spacing.sm))
-                }
-            }
-
-            // ── Today's schedule cards ──
-            if (!uiState.isLoading && uiState.todaySchedules.isNotEmpty()) {
-                items(uiState.todaySchedules, key = { it.id }) { schedule ->
-                    TodayScheduleCard(schedule = schedule)
-                    Spacer(modifier = Modifier.height(spacing.sm))
-                }
-            }
-
-            // ── Empty state ──
-            if (uiState.todaySchedules.isEmpty() && !uiState.isLoading) {
+            // ── Today's schedule cards (deduplicated) ──
+            if (!uiState.isLoading && uiState.todaySchedules.isEmpty()) {
                 item {
                     EmptyScheduleState(viewModel = viewModel)
+                }
+            } else if (!uiState.isLoading && otherSchedules.isEmpty() && currentClass != null) {
+                item {
+                    Text(
+                        text = "This is your only class today.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextTertiary,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = spacing.xl)
+                    )
+                }
+            } else if (!uiState.isLoading) {
+                items(otherSchedules, key = { it.id }) { schedule ->
+                    TodayScheduleCard(
+                        schedule = schedule,
+                        timeState = viewModel.getScheduleTimeState(schedule),
+                        minutesUntilStart = viewModel.getMinutesUntilStart(schedule),
+                        todayStatus = viewModel.getTodayStatus(schedule.id),
+                        formatTime = { viewModel.formatTime(it) }
+                    )
+                    Spacer(modifier = Modifier.height(spacing.sm))
                 }
             }
 
@@ -276,45 +340,35 @@ fun StudentHomeScreen(
     }
 }
 
-// ── Face Status Card ──
+// ── Face Not Registered Card (only shown when NOT registered) ──
 
 @Composable
-private fun FaceStatusCard(
-    faceRegistered: Boolean?,
-    onRegisterClick: () -> Unit = {},
+private fun FaceNotRegisteredCard(
+    onRegisterClick: () -> Unit
 ) {
     val spacing = IAMSThemeTokens.spacing
 
-    // Still loading
-    if (faceRegistered == null) return
-
-    IAMSCard(
-        onClick = if (!faceRegistered) onRegisterClick else null
-    ) {
+    IAMSCard(onClick = onRegisterClick) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
-                imageVector = if (faceRegistered) Icons.Default.CheckCircle else Icons.Default.Warning,
+                imageVector = Icons.Default.Warning,
                 contentDescription = null,
                 modifier = Modifier.size(20.dp),
-                tint = if (faceRegistered) PresentFg else AbsentFg
+                tint = AbsentFg
             )
             Spacer(modifier = Modifier.width(spacing.md))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = if (faceRegistered) "Face Registered" else "Face Not Registered",
+                    text = "Face Not Registered",
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.SemiBold,
-                    color = if (faceRegistered) PresentFg else AbsentFg
+                    color = AbsentFg
                 )
                 Text(
-                    text = if (faceRegistered) {
-                        "Your face is registered for attendance"
-                    } else {
-                        "Register your face to enable attendance tracking"
-                    },
+                    text = "Register your face to enable attendance tracking",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary
                 )
@@ -323,44 +377,150 @@ private fun FaceStatusCard(
     }
 }
 
+// ── Attendance Stats Row ──
+
+@Composable
+private fun AttendanceStatsRow(
+    attendanceRate: Float,
+    totalClasses: Int,
+    presentCount: Int,
+    lateCount: Int
+) {
+    val spacing = IAMSThemeTokens.spacing
+    val ratePercent = (attendanceRate * 100).toInt()
+    val rateColor = when {
+        ratePercent >= 80 -> PresentFg
+        ratePercent >= 60 -> LateFg
+        else -> AbsentFg
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(spacing.sm)
+    ) {
+        // Attendance rate
+        IAMSCard(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "${ratePercent}%",
+                style = MaterialTheme.typography.headlineLarge,
+                fontWeight = FontWeight.Bold,
+                color = rateColor
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = "Attendance",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary
+            )
+        }
+
+        // Present count
+        IAMSCard(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "$presentCount",
+                style = MaterialTheme.typography.headlineLarge,
+                fontWeight = FontWeight.Bold,
+                color = PresentFg
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = "Present",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary
+            )
+        }
+
+        // Classes count
+        IAMSCard(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "$totalClasses",
+                style = MaterialTheme.typography.headlineLarge,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = "Classes",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary
+            )
+        }
+    }
+}
+
 // ── Current Class Card ──
 
 @Composable
-private fun CurrentClassCard(schedule: ScheduleResponse) {
+private fun CurrentClassCard(
+    schedule: ScheduleResponse,
+    todayStatus: String?,
+    formatTime: (String) -> String
+) {
     val spacing = IAMSThemeTokens.spacing
     val radius = IAMSThemeTokens.radius
+
+    val borderColor = if (todayStatus == "present") PresentBorder else Border
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = radius.cardShape,
         color = Background,
-        border = BorderStroke(1.dp, Border),
+        border = BorderStroke(if (todayStatus == "present") 1.5.dp else 1.dp, borderColor),
         shadowElevation = 0.dp,
     ) {
         Column(modifier = Modifier.padding(spacing.cardPadding)) {
-            Text(
-                text = "CURRENT CLASS",
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold,
-                color = Primary,
-                letterSpacing = 0.5.sp
-            )
-            Spacer(modifier = Modifier.height(spacing.xs))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(PresentFg)
+                    )
+                    Spacer(modifier = Modifier.width(spacing.sm))
+                    Text(
+                        text = "CURRENT CLASS",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            letterSpacing = 0.5.sp
+                        ),
+                        fontWeight = FontWeight.SemiBold,
+                        color = PresentFg
+                    )
+                }
+
+                // Attendance status indicator
+                if (todayStatus != null) {
+                    val (statusText, statusColor) = when (todayStatus.lowercase()) {
+                        "present" -> "Marked Present" to PresentFg
+                        "late" -> "Marked Late" to LateFg
+                        else -> "Marked ${todayStatus.replaceFirstChar { it.uppercase() }}" to TextSecondary
+                    }
+                    Text(
+                        text = statusText,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        color = statusColor
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(spacing.md))
+
             Text(
                 text = schedule.subjectName,
                 style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
                 color = Primary
             )
+
             Spacer(modifier = Modifier.height(spacing.xs))
+
             Text(
-                text = buildString {
-                    if (!schedule.roomName.isNullOrBlank()) {
-                        append(schedule.roomName)
-                        append(" \u2022 ")
-                    }
-                    append("Ongoing")
-                },
+                text = "${schedule.roomName ?: "No room"} \u2022 ${formatTime(schedule.startTime)} - ${formatTime(schedule.endTime)}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextSecondary
             )
@@ -371,7 +531,11 @@ private fun CurrentClassCard(schedule: ScheduleResponse) {
 // ── Upcoming Class Card ──
 
 @Composable
-private fun UpcomingClassCard(schedule: ScheduleResponse) {
+private fun UpcomingClassCard(
+    schedule: ScheduleResponse,
+    minutesUntilStart: Long,
+    formatTime: (String) -> String
+) {
     val spacing = IAMSThemeTokens.spacing
     val radius = IAMSThemeTokens.radius
 
@@ -383,31 +547,48 @@ private fun UpcomingClassCard(schedule: ScheduleResponse) {
         shadowElevation = 0.dp,
     ) {
         Column(modifier = Modifier.padding(spacing.cardPadding)) {
-            Text(
-                text = "UPCOMING CLASS",
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold,
-                color = TextSecondary,
-                letterSpacing = 0.5.sp
-            )
-            Spacer(modifier = Modifier.height(spacing.xs))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Outlined.Schedule,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                        tint = TextTertiary
+                    )
+                    Spacer(modifier = Modifier.width(spacing.xs))
+                    Text(
+                        text = "UPCOMING",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            letterSpacing = 0.5.sp
+                        ),
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextTertiary
+                    )
+                }
+                Text(
+                    text = if (minutesUntilStart <= 60) "in ${minutesUntilStart} min" else "Later today",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+            }
+
+            Spacer(modifier = Modifier.height(spacing.md))
+
             Text(
                 text = schedule.subjectName,
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = Primary
             )
+
             Spacer(modifier = Modifier.height(spacing.xs))
+
             Text(
-                text = buildString {
-                    append(formatTimeDisplay(schedule.startTime))
-                    append(" - ")
-                    append(formatTimeDisplay(schedule.endTime))
-                    if (!schedule.roomName.isNullOrBlank()) {
-                        append(" \u2022 ")
-                        append(schedule.roomName)
-                    }
-                },
+                text = "${formatTime(schedule.startTime)} - ${formatTime(schedule.endTime)} \u2022 ${schedule.roomName ?: "No room"}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextSecondary
             )
@@ -418,46 +599,81 @@ private fun UpcomingClassCard(schedule: ScheduleResponse) {
 // ── Today Schedule Card ──
 
 @Composable
-private fun TodayScheduleCard(schedule: ScheduleResponse) {
+private fun TodayScheduleCard(
+    schedule: ScheduleResponse,
+    timeState: ScheduleTimeState,
+    minutesUntilStart: Long,
+    todayStatus: String?,
+    formatTime: (String) -> String
+) {
     val spacing = IAMSThemeTokens.spacing
 
     IAMSCard {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            // Subject code
-            if (!schedule.subjectCode.isNullOrBlank()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = schedule.subjectCode,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextTertiary
+                    text = "${formatTime(schedule.startTime)} - ${formatTime(schedule.endTime)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
                 )
                 Spacer(modifier = Modifier.height(spacing.xs))
+                Text(
+                    text = schedule.subjectName,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(spacing.xs))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = schedule.roomName ?: "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                    // Show attendance status for completed classes
+                    if (timeState == ScheduleTimeState.COMPLETED && todayStatus != null) {
+                        Text(
+                            text = " \u2022 ",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                        val (label, color) = when (todayStatus.lowercase()) {
+                            "present" -> "Present" to PresentFg
+                            "late" -> "Late" to LateFg
+                            "absent" -> "Absent" to AbsentFg
+                            else -> todayStatus to TextSecondary
+                        }
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = color
+                        )
+                    }
+                }
             }
 
-            // Subject name
+            // Right: time state
             Text(
-                text = schedule.subjectName,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = Primary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            Spacer(modifier = Modifier.height(spacing.sm))
-
-            // Time and room
-            Text(
-                text = buildString {
-                    append(formatTimeDisplay(schedule.startTime))
-                    append(" - ")
-                    append(formatTimeDisplay(schedule.endTime))
-                    if (!schedule.roomName.isNullOrBlank()) {
-                        append(" \u2022 ")
-                        append(schedule.roomName)
-                    }
+                text = when (timeState) {
+                    ScheduleTimeState.COMPLETED -> "Completed"
+                    ScheduleTimeState.UPCOMING -> if (minutesUntilStart <= 60) "in ${minutesUntilStart} min" else "Upcoming"
+                    ScheduleTimeState.ACTIVE -> "Now"
                 },
-                style = MaterialTheme.typography.bodyMedium,
-                color = TextSecondary
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                color = when (timeState) {
+                    ScheduleTimeState.COMPLETED -> TextTertiary
+                    ScheduleTimeState.UPCOMING -> TextSecondary
+                    ScheduleTimeState.ACTIVE -> PresentFg
+                }
             )
         }
     }
@@ -522,9 +738,9 @@ private fun EmptyScheduleState(viewModel: StudentHomeViewModel) {
                         )
                         Text(
                             text = buildString {
-                                append(formatTimeDisplay(schedule.startTime))
+                                append(viewModel.formatTime(schedule.startTime))
                                 append(" - ")
-                                append(formatTimeDisplay(schedule.endTime))
+                                append(viewModel.formatTime(schedule.endTime))
                                 if (!schedule.roomName.isNullOrBlank()) {
                                     append(" \u2022 ")
                                     append(schedule.roomName)
@@ -568,7 +784,7 @@ private fun ActivityFeedItem(
     viewModel: StudentHomeViewModel
 ) {
     val spacing = IAMSThemeTokens.spacing
-    val (subjectName, subjectCode) = viewModel.getScheduleInfoForRecord(record)
+    val (subjectName, _) = viewModel.getScheduleInfoForRecord(record)
     val status = parseStatus(record.status)
 
     IAMSCard {
@@ -577,14 +793,6 @@ private fun ActivityFeedItem(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                if (subjectCode.isNotBlank()) {
-                    Text(
-                        text = subjectCode,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextTertiary
-                    )
-                    Spacer(modifier = Modifier.height(spacing.xs))
-                }
                 Text(
                     text = subjectName,
                     style = MaterialTheme.typography.bodyMedium,
@@ -608,26 +816,6 @@ private fun ActivityFeedItem(
 
 // ── Utility functions ──
 
-/**
- * Format "HH:MM:SS" or "HH:MM" to "h:mm AM/PM"
- */
-private fun formatTimeDisplay(time: String): String {
-    return try {
-        val parts = time.split(":")
-        val hours = parts[0].toInt()
-        val minutes = parts[1].toInt()
-        val period = if (hours >= 12) "PM" else "AM"
-        val displayHours = if (hours % 12 == 0) 12 else hours % 12
-        val displayMinutes = minutes.toString().padStart(2, '0')
-        "$displayHours:$displayMinutes $period"
-    } catch (_: Exception) {
-        time
-    }
-}
-
-/**
- * Format "YYYY-MM-DD" to "MMM dd, yyyy"
- */
 private fun formatDateDisplay(date: String): String {
     return try {
         val localDate = LocalDate.parse(date)
@@ -637,17 +825,11 @@ private fun formatDateDisplay(date: String): String {
     }
 }
 
-/**
- * Convert backend day number (0=Monday) to full name.
- */
 private fun getDayName(backendDay: Int): String {
     val days = listOf("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
     return days.getOrElse(backendDay) { "" }
 }
 
-/**
- * Parse status string to AttendanceStatus enum.
- */
 private fun parseStatus(status: String): AttendanceStatus {
     return when (status.lowercase()) {
         "present" -> AttendanceStatus.PRESENT

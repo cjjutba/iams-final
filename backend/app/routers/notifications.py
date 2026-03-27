@@ -100,6 +100,29 @@ def mark_all_notifications_read(current_user: User = Depends(get_current_user), 
     return {"success": True, "message": f"{count} notification(s) marked as read"}
 
 
+@router.delete("/{notification_id}", status_code=status.HTTP_200_OK)
+def delete_notification(
+    notification_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """Delete a single notification. Only the owner can delete it."""
+    notification_repo = NotificationRepository(db)
+    notification = notification_repo.get_by_id(notification_id)
+    if not notification:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
+    if str(notification.user_id) != str(current_user.id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    notification_repo.delete(notification_id)
+    return {"success": True, "message": "Notification deleted"}
+
+
+@router.delete("/", status_code=status.HTTP_200_OK)
+def delete_all_notifications(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Delete all notifications for the current user."""
+    notification_repo = NotificationRepository(db)
+    count = notification_repo.delete_all(str(current_user.id))
+    return {"success": True, "message": f"{count} notification(s) deleted"}
+
+
 @router.get("/unread-count", status_code=status.HTTP_200_OK)
 def get_unread_count(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """

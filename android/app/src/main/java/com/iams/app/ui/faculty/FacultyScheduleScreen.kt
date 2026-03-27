@@ -20,8 +20,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -39,6 +43,8 @@ import androidx.navigation.NavController
 import com.iams.app.data.model.ScheduleResponse
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.navigation.Routes
+import com.iams.app.ui.theme.TextPrimary
 import com.iams.app.ui.theme.Border
 import com.iams.app.ui.theme.IAMSThemeTokens
 import com.iams.app.ui.theme.Primary
@@ -61,7 +67,19 @@ fun FacultyScheduleScreen(
     val todayDay = viewModel.todayScheduleDay()
 
     Column(modifier = Modifier.fillMaxSize()) {
-        IAMSHeader(title = "My Schedule")
+        IAMSHeader(
+            title = "Schedule",
+            trailing = {
+                IconButton(onClick = { navController.navigate(Routes.FACULTY_NOTIFICATIONS) }) {
+                    Icon(
+                        Icons.Outlined.Notifications,
+                        contentDescription = "Notifications",
+                        modifier = Modifier.size(24.dp),
+                        tint = TextPrimary,
+                    )
+                }
+            },
+        )
 
         // Day selector
         Row(

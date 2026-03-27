@@ -121,7 +121,19 @@ interface ApiService {
     suspend fun getNotifications(): Response<List<NotificationResponse>>
 
     @PATCH("notifications/{id}/read")
-    suspend fun markNotificationRead(@Path("id") id: String): Response<MessageResponse>
+    suspend fun markNotificationRead(@Path("id") id: String): Response<NotificationResponse>
+
+    @GET("notifications/unread-count")
+    suspend fun getUnreadCount(): Response<UnreadCountResponse>
+
+    @POST("notifications/read-all")
+    suspend fun markAllNotificationsRead(): Response<MessageResponse>
+
+    @DELETE("notifications/{id}")
+    suspend fun deleteNotification(@Path("id") id: String): Response<MessageResponse>
+
+    @DELETE("notifications/")
+    suspend fun deleteAllNotifications(): Response<MessageResponse>
 
     // Profile
     @PUT("auth/profile")

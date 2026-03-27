@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -50,6 +51,8 @@ import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.navigation.Routes
+import com.iams.app.ui.theme.TextPrimary
 import com.iams.app.ui.theme.Background
 import com.iams.app.ui.theme.Border
 import com.iams.app.ui.theme.IAMSThemeTokens
@@ -98,7 +101,19 @@ fun StudentHistoryScreen(
                 .fillMaxSize()
                 .background(Background)
         ) {
-            IAMSHeader(title = "History")
+            IAMSHeader(
+                title = "History",
+                trailing = {
+                    IconButton(onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) }) {
+                        Icon(
+                            Icons.Outlined.Notifications,
+                            contentDescription = "Notifications",
+                            modifier = Modifier.size(24.dp),
+                            tint = TextPrimary,
+                        )
+                    }
+                },
+            )
 
             Box(
                 modifier = Modifier
@@ -142,7 +157,19 @@ fun StudentHistoryScreen(
             .fillMaxSize()
             .background(Background)
     ) {
-        IAMSHeader(title = "History")
+        IAMSHeader(
+                title = "History",
+                trailing = {
+                    IconButton(onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) }) {
+                        Icon(
+                            Icons.Outlined.Notifications,
+                            contentDescription = "Notifications",
+                            modifier = Modifier.size(24.dp),
+                            tint = TextPrimary,
+                        )
+                    }
+                },
+            )
 
         // Filters container
         Column(

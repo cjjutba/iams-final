@@ -1,5 +1,6 @@
 package com.iams.app.ui.faculty
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -18,39 +19,58 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.DoneAll
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.iams.app.data.model.NotificationResponse
 import com.iams.app.ui.components.IAMSButton
+import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
-import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.theme.Background
+import com.iams.app.ui.theme.Border
 import com.iams.app.ui.theme.IAMSThemeTokens
 import com.iams.app.ui.theme.InfoFg
 import com.iams.app.ui.theme.LateFg
-import com.iams.app.ui.theme.Primary
 import com.iams.app.ui.theme.PresentFg
 import com.iams.app.ui.theme.Secondary
+import com.iams.app.ui.theme.TextPrimary
 import com.iams.app.ui.theme.TextSecondary
 import com.iams.app.ui.theme.TextTertiary
 import java.time.Duration
@@ -65,56 +85,150 @@ fun FacultyNotificationsScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val spacing = IAMSThemeTokens.spacing
+    var showMenu by remember { mutableStateOf(false) }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    val unreadNotifications = uiState.notifications.filter { !it.read }
+    val readNotifications = uiState.notifications.filter { it.read }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Background)
+    ) {
+        // Header with overflow menu
         IAMSHeader(
             title = "Notifications",
-            onBack = { navController.popBackStack() }
+            onBack = { navController.popBackStack() },
+            trailing = {
+                if (uiState.notifications.isNotEmpty()) {
+                    Box {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(
+                                Icons.Outlined.MoreVert,
+                                contentDescription = "More options",
+                                modifier = Modifier.size(22.dp),
+                                tint = TextPrimary
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false }
+                        ) {
+                            if (viewModel.hasUnread) {
+                                DropdownMenuItem(
+                                    text = { Text("Mark all as read") },
+                                    onClick = {
+                                        showMenu = false
+                                        viewModel.markAllAsRead()
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Outlined.DoneAll,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text("Delete all", color = Color(0xFFDC2626)) },
+                                onClick = {
+                                    showMenu = false
+                                    viewModel.deleteAllNotifications()
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Outlined.Delete,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp),
+                                        tint = Color(0xFFDC2626)
+                                    )
+                                }
+                            )
+                        }
+                    }
+                }
+            }
         )
 
-        // Error state (no data)
+        // Error state
         if (uiState.error != null && !uiState.isRefreshing && uiState.notifications.isEmpty()) {
             NotificationsErrorState(onRetry = { viewModel.loadNotifications() })
-            return
+            return@Column
         }
 
-        // Loading state (no data)
+        // Loading state
         if (uiState.isLoading && uiState.notifications.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
+                contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator()
+                CircularProgressIndicator(color = TextPrimary, strokeWidth = 2.dp)
             }
-            return
+            return@Column
         }
 
-        // Notifications list
+        // Main content
         PullToRefreshBox(
             isRefreshing = uiState.isRefreshing,
             onRefresh = { viewModel.refresh() },
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize()
         ) {
-            LazyColumn(
-                contentPadding = PaddingValues(spacing.lg),
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                if (uiState.notifications.isEmpty()) {
-                    item {
-                        NotificationsEmptyState()
+            if (uiState.notifications.isEmpty()) {
+                NotificationsEmptyState()
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(
+                        start = spacing.screenPadding,
+                        end = spacing.screenPadding,
+                        top = spacing.md,
+                        bottom = spacing.xxl
+                    )
+                ) {
+                    // Unread section
+                    if (unreadNotifications.isNotEmpty()) {
+                        item(key = "unread_header") {
+                            SectionHeader(
+                                title = "Unread",
+                                count = unreadNotifications.size
+                            )
+                        }
+                        items(
+                            items = unreadNotifications,
+                            key = { "unread_${it.id}" }
+                        ) { notification ->
+                            SwipeableNotificationItem(
+                                notification = notification,
+                                isMarkingRead = uiState.markingReadIds.contains(notification.id),
+                                onMarkAsRead = { viewModel.markAsRead(notification.id) },
+                                onDelete = { viewModel.deleteNotification(notification.id) }
+                            )
+                        }
                     }
-                } else {
-                    items(uiState.notifications, key = { it.id }) { notification ->
-                        NotificationItem(
-                            notification = notification,
-                            isMarkingRead = uiState.markingReadIds.contains(notification.id),
-                            onMarkAsRead = {
-                                if (!notification.read && !uiState.markingReadIds.contains(notification.id)) {
-                                    viewModel.markAsRead(notification.id)
-                                }
+
+                    // Read section
+                    if (readNotifications.isNotEmpty()) {
+                        item(key = "read_header") {
+                            if (unreadNotifications.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(spacing.lg))
                             }
-                        )
-                        Spacer(modifier = Modifier.height(spacing.md))
+                            SectionHeader(
+                                title = "Read",
+                                count = readNotifications.size
+                            )
+                        }
+                        items(
+                            items = readNotifications,
+                            key = { "read_${it.id}" }
+                        ) { notification ->
+                            SwipeableNotificationItem(
+                                notification = notification,
+                                isMarkingRead = false,
+                                onMarkAsRead = {},
+                                onDelete = { viewModel.deleteNotification(notification.id) }
+                            )
+                        }
                     }
                 }
             }
@@ -123,33 +237,159 @@ fun FacultyNotificationsScreen(
 }
 
 @Composable
-private fun NotificationItem(
+private fun SectionHeader(title: String, count: Int) {
+    val spacing = IAMSThemeTokens.spacing
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = TextSecondary
+        )
+        Text(
+            text = count.toString(),
+            style = MaterialTheme.typography.bodySmall,
+            color = TextTertiary
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SwipeableNotificationItem(
     notification: NotificationResponse,
     isMarkingRead: Boolean,
     onMarkAsRead: () -> Unit,
+    onDelete: () -> Unit
 ) {
     val spacing = IAMSThemeTokens.spacing
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            when (value) {
+                SwipeToDismissBoxValue.EndToStart -> {
+                    onDelete()
+                    true
+                }
+                SwipeToDismissBoxValue.StartToEnd -> {
+                    if (!notification.read) onMarkAsRead()
+                    true
+                }
+                SwipeToDismissBoxValue.Settled -> false
+            }
+        }
+    )
 
-    val cardModifier = if (!notification.read && !isMarkingRead) {
-        Modifier.fillMaxWidth()
-    } else {
-        Modifier.fillMaxWidth()
+    LaunchedEffect(notification.read) {
+        if (notification.read && dismissState.currentValue == SwipeToDismissBoxValue.StartToEnd) {
+            dismissState.snapTo(SwipeToDismissBoxValue.Settled)
+        }
     }
 
-    IAMSCard(
-        onClick = if (!notification.read && !isMarkingRead) onMarkAsRead else null,
-        modifier = if (!notification.read) {
-            Modifier.background(Secondary)
-        } else {
-            Modifier
+    SwipeToDismissBox(
+        state = dismissState,
+        backgroundContent = {
+            val direction = dismissState.dismissDirection
+
+            val bgColor by animateColorAsState(
+                targetValue = when (direction) {
+                    SwipeToDismissBoxValue.EndToStart -> Color(0xFFFEE2E2)
+                    SwipeToDismissBoxValue.StartToEnd -> if (!notification.read) Color(0xFFDCFCE7) else Color.Transparent
+                    else -> Color.Transparent
+                },
+                label = "swipeBg"
+            )
+
+            val iconTint = when (direction) {
+                SwipeToDismissBoxValue.EndToStart -> Color(0xFFDC2626)
+                SwipeToDismissBoxValue.StartToEnd -> PresentFg
+                else -> Color.Transparent
+            }
+
+            val icon = when (direction) {
+                SwipeToDismissBoxValue.EndToStart -> Icons.Outlined.Delete
+                SwipeToDismissBoxValue.StartToEnd -> Icons.Outlined.DoneAll
+                else -> Icons.Outlined.Delete
+            }
+
+            val alignment = when (direction) {
+                SwipeToDismissBoxValue.EndToStart -> Alignment.CenterEnd
+                SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
+                else -> Alignment.CenterEnd
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(bgColor)
+                    .padding(horizontal = spacing.xl),
+                contentAlignment = alignment
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(22.dp),
+                    tint = iconTint
+                )
+            }
         },
+        enableDismissFromStartToEnd = !notification.read,
+        enableDismissFromEndToStart = true
+    ) {
+        NotificationItemContent(
+            notification = notification,
+            isMarkingRead = isMarkingRead,
+            onMarkAsRead = onMarkAsRead
+        )
+    }
+}
+
+@Composable
+private fun NotificationItemContent(
+    notification: NotificationResponse,
+    isMarkingRead: Boolean,
+    onMarkAsRead: () -> Unit
+) {
+    val spacing = IAMSThemeTokens.spacing
+    val iconInfo = getNotificationIcon(notification.type)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Background)
+            .then(
+                if (!notification.read && !isMarkingRead)
+                    Modifier.clickable { onMarkAsRead() }
+                else Modifier
+            )
     ) {
         Row(
-            verticalAlignment = Alignment.Top,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = spacing.md),
+            verticalAlignment = Alignment.Top
         ) {
-            // Type icon
-            NotificationTypeIcon(type = notification.type)
+            // Type icon in circle
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(if (!notification.read) iconInfo.color.copy(alpha = 0.1f) else Secondary),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    iconInfo.icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = if (!notification.read) iconInfo.color else TextTertiary
+                )
+            }
 
             Spacer(modifier = Modifier.width(spacing.md))
 
@@ -157,75 +397,64 @@ private fun NotificationItem(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = notification.title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (!notification.read) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (!notification.read) TextPrimary else TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(spacing.xs))
+
+                Spacer(modifier = Modifier.height(2.dp))
+
                 Text(
                     text = notification.message,
                     style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary,
+                    color = if (!notification.read) TextSecondary else TextTertiary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(spacing.sm))
+
+                Spacer(modifier = Modifier.height(spacing.xs))
+
                 Text(
-                    text = notificationTimeAgo(notification.timestamp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextTertiary,
+                    text = notificationTimeAgo(notification.createdAt),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextTertiary
                 )
             }
 
-            // Unread dot or loading spinner
+            Spacer(modifier = Modifier.width(spacing.sm))
+
+            // Red unread dot or loading
             if (!notification.read && !isMarkingRead) {
                 Box(
                     modifier = Modifier
-                        .padding(start = spacing.sm, top = spacing.xs)
+                        .padding(top = spacing.sm)
                         .size(8.dp)
                         .clip(CircleShape)
-                        .background(Primary),
+                        .background(Color(0xFFDC2626))
                 )
             }
+
             if (isMarkingRead) {
                 CircularProgressIndicator(
                     modifier = Modifier
-                        .padding(start = spacing.sm)
-                        .size(16.dp),
-                    strokeWidth = 2.dp,
+                        .padding(top = spacing.xs)
+                        .size(14.dp),
                     color = TextTertiary,
+                    strokeWidth = 1.5.dp
                 )
             }
         }
+
+        HorizontalDivider(
+            color = Border,
+            thickness = 0.5.dp
+        )
     }
 }
 
-@Composable
-private fun NotificationTypeIcon(type: String) {
-    when (type.lowercase()) {
-        "success" -> Icon(
-            Icons.Default.CheckCircle,
-            contentDescription = null,
-            modifier = Modifier.size(24.dp),
-            tint = PresentFg,
-        )
-        "warning" -> Icon(
-            Icons.Default.Warning,
-            contentDescription = null,
-            modifier = Modifier.size(24.dp),
-            tint = LateFg,
-        )
-        "info" -> Icon(
-            Icons.Default.Info,
-            contentDescription = null,
-            modifier = Modifier.size(24.dp),
-            tint = InfoFg,
-        )
-        else -> Icon(
-            Icons.Default.Notifications,
-            contentDescription = null,
-            modifier = Modifier.size(24.dp),
-            tint = TextTertiary,
-        )
-    }
-}
+// --- Empty / Error states ---
 
 @Composable
 private fun NotificationsEmptyState() {
@@ -233,29 +462,35 @@ private fun NotificationsEmptyState() {
 
     Column(
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 48.dp),
+            .fillMaxSize()
+            .padding(vertical = 96.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
         Icon(
-            Icons.Default.Notifications,
+            Icons.Outlined.Notifications,
             contentDescription = null,
             modifier = Modifier.size(48.dp),
-            tint = TextTertiary,
+            tint = TextTertiary
         )
+
         Spacer(modifier = Modifier.height(spacing.lg))
+
         Text(
             text = "No notifications",
             style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.Medium,
             color = TextSecondary,
-            textAlign = TextAlign.Center,
+            textAlign = TextAlign.Center
         )
-        Spacer(modifier = Modifier.height(spacing.sm))
+
+        Spacer(modifier = Modifier.height(spacing.xs))
+
         Text(
             text = "You're all caught up!",
             style = MaterialTheme.typography.bodySmall,
             color = TextTertiary,
-            textAlign = TextAlign.Center,
+            textAlign = TextAlign.Center
         )
     }
 }
@@ -264,37 +499,71 @@ private fun NotificationsEmptyState() {
 private fun NotificationsErrorState(onRetry: () -> Unit) {
     val spacing = IAMSThemeTokens.spacing
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = spacing.xxl),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
     ) {
-        Icon(
-            Icons.Default.Refresh,
-            contentDescription = null,
-            modifier = Modifier.size(40.dp),
-            tint = TextTertiary,
-        )
-        Spacer(modifier = Modifier.height(spacing.lg))
-        Text(
-            text = "Unable to load notifications. Please try again.",
-            style = MaterialTheme.typography.bodyLarge,
-            color = TextSecondary,
-            textAlign = TextAlign.Center,
-        )
-        Spacer(modifier = Modifier.height(spacing.lg))
-        IAMSButton(
-            text = "Retry",
-            onClick = onRetry,
-            variant = IAMSButtonVariant.SECONDARY,
-            fullWidth = false,
-        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(horizontal = spacing.xxl)
+        ) {
+            Icon(
+                Icons.Outlined.Refresh,
+                contentDescription = null,
+                modifier = Modifier.size(40.dp),
+                tint = TextTertiary
+            )
+
+            Spacer(modifier = Modifier.height(spacing.lg))
+
+            Text(
+                text = "Unable to load notifications",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                color = TextSecondary,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(spacing.sm))
+
+            Text(
+                text = "Please check your connection and try again.",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextTertiary,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(spacing.lg))
+
+            IAMSButton(
+                text = "Retry",
+                onClick = onRetry,
+                variant = IAMSButtonVariant.SECONDARY,
+                size = IAMSButtonSize.MD,
+                fullWidth = false
+            )
+        }
     }
 }
 
-/** Format a timestamp string into a relative "time ago" string. */
+// --- Helpers ---
+
+private data class NotificationIconInfo(
+    val icon: ImageVector,
+    val color: Color
+)
+
+private fun getNotificationIcon(type: String): NotificationIconInfo {
+    return when (type.lowercase()) {
+        "check_in" -> NotificationIconInfo(Icons.Outlined.CheckCircle, PresentFg)
+        "early_leave" -> NotificationIconInfo(Icons.Outlined.Warning, LateFg)
+        "early_leave_return" -> NotificationIconInfo(Icons.Outlined.CheckCircle, PresentFg)
+        "broadcast" -> NotificationIconInfo(Icons.Outlined.Notifications, InfoFg)
+        "system" -> NotificationIconInfo(Icons.Outlined.Info, InfoFg)
+        else -> NotificationIconInfo(Icons.Outlined.Info, InfoFg)
+    }
+}
+
 private fun notificationTimeAgo(timestamp: String): String {
     if (timestamp.isBlank()) return ""
     return try {
