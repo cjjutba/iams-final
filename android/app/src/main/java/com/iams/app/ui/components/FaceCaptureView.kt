@@ -1,6 +1,7 @@
 package com.iams.app.ui.components
 
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.util.Log
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -197,7 +198,13 @@ fun FaceCaptureView(
             onClick = {
                 val bitmap = previewView.bitmap
                 if (bitmap != null && faceDetected) {
-                    onCapture(bitmap)
+                    // Front camera preview is mirrored, but previewView.bitmap is NOT.
+                    // Flip horizontally so the captured image matches what the user sees
+                    // (e.g., "turn left" actually captures the left side of their face).
+                    val matrix = Matrix()
+                    matrix.preScale(-1f, 1f)
+                    val flipped = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+                    onCapture(flipped)
                 }
             },
             shape = CircleShape,

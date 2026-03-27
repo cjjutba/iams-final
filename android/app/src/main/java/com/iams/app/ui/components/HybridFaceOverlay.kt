@@ -247,25 +247,9 @@ private fun matchFaces(
         MatchedFace(face, key, bestTrack)
     }.toMutableList()
 
-    // Add unmatched recognized backend tracks as fallback entries.
-    // When ML Kit loses a face (occlusion, head turn) but the backend's ByteTrack
-    // still tracks it, render the backend bbox so the name label persists.
-    for (track in backendTracks) {
-        if (track.trackId in usedTrackIds) continue
-        if (track.status != "recognized") continue
-        if (track.bbox.size < 4) continue
-
-        val syntheticFace = MlKitFace(
-            x1 = track.bbox[0],
-            y1 = track.bbox[1],
-            x2 = track.bbox[2],
-            y2 = track.bbox[3],
-            faceId = null
-        )
-        // Use negative key offset by 1000 to avoid collision with ML Kit synthetic IDs
-        val key = -(track.trackId + 1000)
-        result.add(MatchedFace(syntheticFace, key, track))
-    }
+    // Backend-only fallback tracks removed: only render boxes when ML Kit detects
+    // a face. This prevents ghost/stale boxes when a face is covered or leaves the
+    // frame but the backend's last WebSocket update still contains the track.
 
     return result
 }
