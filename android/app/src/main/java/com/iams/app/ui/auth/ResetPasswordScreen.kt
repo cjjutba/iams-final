@@ -36,6 +36,7 @@ import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSTextField
 import com.iams.app.ui.components.LocalToastState
 import com.iams.app.ui.components.ToastType
+import com.iams.app.ui.utils.InputValidation
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.PresentFg
 import com.iams.app.ui.theme.Primary
@@ -96,7 +97,19 @@ private fun FormContent(
 ) {
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
+    var passwordError by remember { mutableStateOf<String?>(null) }
+    var confirmPasswordError by remember { mutableStateOf<String?>(null) }
     val focusManager = LocalFocusManager.current
+
+    fun submit() {
+        val pErr = InputValidation.validatePassword(password)
+        val cErr = InputValidation.validatePasswordMatch(password, confirmPassword)
+        passwordError = pErr
+        confirmPasswordError = cErr
+        if (pErr != null || cErr != null) return
+        focusManager.clearFocus()
+        onSubmit(password, confirmPassword)
+    }
 
     Spacer(modifier = Modifier.height(32.dp))
 
@@ -105,13 +118,14 @@ private fun FormContent(
         value = password,
         onValueChange = {
             password = it
+            passwordError = null
             viewModel.clearError()
         },
         label = "New Password",
-        placeholder = "Enter new password",
+        placeholder = "At least 8 characters",
         isPassword = true,
         enabled = !uiState.isLoading,
-        error = null,
+        error = passwordError,
         keyboardOptions = KeyboardOptions(
             keyboardType = KeyboardType.Password,
             imeAction = ImeAction.Next
@@ -125,22 +139,20 @@ private fun FormContent(
         value = confirmPassword,
         onValueChange = {
             confirmPassword = it
+            confirmPasswordError = null
             viewModel.clearError()
         },
         label = "Confirm Password",
         placeholder = "Confirm new password",
         isPassword = true,
         enabled = !uiState.isLoading,
-        error = null,
+        error = confirmPasswordError,
         keyboardOptions = KeyboardOptions(
             keyboardType = KeyboardType.Password,
             imeAction = ImeAction.Done
         ),
         keyboardActions = KeyboardActions(
-            onDone = {
-                focusManager.clearFocus()
-                onSubmit(password, confirmPassword)
-            }
+            onDone = { submit() }
         )
     )
 
@@ -149,10 +161,7 @@ private fun FormContent(
     // Submit button
     IAMSButton(
         text = "Reset Password",
-        onClick = {
-            focusManager.clearFocus()
-            onSubmit(password, confirmPassword)
-        },
+        onClick = { submit() },
         size = IAMSButtonSize.LG,
         enabled = !uiState.isLoading,
         isLoading = uiState.isLoading,
