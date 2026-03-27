@@ -191,7 +191,6 @@ fun HybridFaceOverlay(
                 drawNameLabel(
                     textMeasurer = textMeasurer,
                     label = label,
-                    confidence = state.confidence,
                     x = left,
                     y = top,
                     boxWidth = boxWidth,
@@ -276,18 +275,13 @@ private fun computeIoU(a: FloatArray, b: FloatArray): Float {
 private fun DrawScope.drawNameLabel(
     textMeasurer: TextMeasurer,
     label: String,
-    confidence: Float,
     x: Float,
     y: Float,
     boxWidth: Float,
     color: Color,
     alpha: Float,
 ) {
-    val displayText = if (confidence > 0.01f) {
-        "$label ${(confidence * 100).toInt()}%"
-    } else {
-        label
-    }
+    val displayText = label
 
     val textResult = textMeasurer.measure(
         text = AnnotatedString(displayText),

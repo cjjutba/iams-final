@@ -172,16 +172,15 @@ fun FacultyLiveFeedScreen(
             ConnectionStatusBar(
                 isConnected = wsConnected,
                 isWaitingForCamera = uiState.videoUrl.isEmpty(),
-                presentCount = uiState.presentCount,
-                totalEnrolled = uiState.totalEnrolled
+                detectedCount = tracks.size
             )
 
             // Session control bar
             SessionControlBar(
-                sessionActive = true,
-                onStartSession = { },
-                onEndSession = { },
-                sessionLoading = false
+                sessionActive = uiState.sessionActive,
+                onStartSession = { viewModel.startSession() },
+                onEndSession = { viewModel.endSession() },
+                sessionLoading = uiState.sessionLoading
             )
 
             // Video feed area (~55%)
@@ -293,6 +292,22 @@ fun FacultyLiveFeedScreen(
                     .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                     .background(Background)
             ) {
+                // Drag handle indicator
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = spacing.sm),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(36.dp)
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(Border)
+                    )
+                }
+
                 // Tab bar
                 Row(
                     modifier = Modifier
@@ -426,14 +441,14 @@ fun FacultyLiveFeedScreen(
                             if (recognized.isNotEmpty()) {
                                 item { AttendanceSectionLabel("Recognized (${recognized.size})", PresentFg) }
                                 items(recognized, key = { it.trackId }) { track ->
-                                    TrackRow(name = track.name ?: "Unknown", confidence = track.confidence, dotColor = PresentFg)
+                                    TrackRow(name = track.name ?: "Unknown", dotColor = PresentFg)
                                     HorizontalDivider(color = Border, thickness = 0.5.dp)
                                 }
                             }
                             if (unknown.isNotEmpty()) {
                                 item { AttendanceSectionLabel("Unknown (${unknown.size})", Color(0xFFFF9800)) }
                                 items(unknown, key = { it.trackId }) { track ->
-                                    TrackRow(name = "Unknown", confidence = track.confidence, dotColor = Color(0xFFFF9800))
+                                    TrackRow(name = "Unknown", dotColor = Color(0xFFFF9800))
                                     HorizontalDivider(color = Border, thickness = 0.5.dp)
                                 }
                             }
@@ -475,7 +490,11 @@ fun FacultyLiveFeedScreen(
                 // Switch to List View button
                 IAMSButton(
                     text = "Switch to List View",
-                    onClick = { /* Navigate to LiveAttendance list screen */ },
+                    onClick = {
+                        navController.navigate(
+                            com.iams.app.ui.navigation.Routes.facultyLiveAttendance(scheduleId)
+                        )
+                    },
                     variant = IAMSButtonVariant.OUTLINE,
                     size = IAMSButtonSize.MD,
                     fullWidth = true,
@@ -494,8 +513,7 @@ fun FacultyLiveFeedScreen(
 private fun ConnectionStatusBar(
     isConnected: Boolean,
     isWaitingForCamera: Boolean,
-    presentCount: Int,
-    totalEnrolled: Int
+    detectedCount: Int
 ) {
     val spacing = IAMSThemeTokens.spacing
 
@@ -545,14 +563,12 @@ private fun ConnectionStatusBar(
             if (isConnected) {
                 LivePulse()
             }
-            if (presentCount > 0) {
-                Text(
-                    text = "$presentCount detected",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = TextSecondary
-                )
-            }
+            Text(
+                text = "$detectedCount detected",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = TextSecondary
+            )
         }
     }
 }
@@ -748,7 +764,6 @@ private fun AttendanceSectionLabel(label: String, color: Color) {
 @Composable
 private fun TrackRow(
     name: String,
-    confidence: Float,
     dotColor: Color
 ) {
     val spacing = IAMSThemeTokens.spacing
@@ -774,14 +789,7 @@ private fun TrackRow(
             modifier = Modifier.weight(1f),
             maxLines = 1
         )
-        if (confidence > 0.01f) {
-            Text(
-                text = "${(confidence * 100).toInt()}%",
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold,
-                color = TextSecondary
-            )
-        }
+        // Confidence score intentionally not displayed to users
     }
 }
 
@@ -813,8 +821,9 @@ private fun StudentRow(
                 color = TextPrimary,
                 maxLines = 1
             )
+            val displayId = student.studentNumber ?: student.studentId.take(8)
             Text(
-                text = student.studentId,
+                text = displayId,
                 style = MaterialTheme.typography.bodySmall,
                 color = TextSecondary
             )
