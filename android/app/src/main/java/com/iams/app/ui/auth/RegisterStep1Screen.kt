@@ -31,6 +31,8 @@ import com.iams.app.ui.components.IAMSTextField
 import com.iams.app.ui.components.LocalToastState
 import com.iams.app.ui.components.ToastType
 import com.iams.app.ui.navigation.Routes
+import com.iams.app.ui.utils.InputSanitizer
+import com.iams.app.ui.utils.InputValidation
 import com.iams.app.ui.theme.Border
 import com.iams.app.ui.theme.Primary
 import com.iams.app.ui.theme.TextSecondary
@@ -43,6 +45,8 @@ fun RegisterStep1Screen(
     val uiState by viewModel.uiState.collectAsState()
     var studentId by remember { mutableStateOf("") }
     var birthdate by remember { mutableStateOf("") }
+    var studentIdError by remember { mutableStateOf<String?>(null) }
+    var birthdateError by remember { mutableStateOf<String?>(null) }
     val focusManager = LocalFocusManager.current
     val toastState = LocalToastState.current
 
@@ -126,10 +130,12 @@ fun RegisterStep1Screen(
             value = studentId,
             onValueChange = {
                 studentId = it
+                studentIdError = null
                 viewModel.clearError()
             },
             label = "Student ID",
             placeholder = "e.g., 21-A-01234",
+            error = studentIdError,
             enabled = !uiState.isLoading && !uiState.studentIdChecked,
             keyboardOptions = KeyboardOptions(
                 capitalization = KeyboardCapitalization.Characters,
@@ -153,13 +159,14 @@ fun RegisterStep1Screen(
             IAMSTextField(
                 value = birthdate,
                 onValueChange = { newValue ->
-                    // Only allow digits, max 8 characters (MMDDYYYY)
-                    val filtered = newValue.filter { it.isDigit() }.take(8)
-                    birthdate = filtered
+                    birthdate = InputSanitizer.digitsOnly(newValue, 8)
+                    birthdateError = null
                     viewModel.clearError()
                 },
                 label = "Birthdate",
                 placeholder = "e.g., 01132003",
+                error = birthdateError,
+                supportingText = "Format: MMDDYYYY",
                 enabled = !uiState.isLoading,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Number,
@@ -168,10 +175,11 @@ fun RegisterStep1Screen(
                 keyboardActions = KeyboardActions(
                     onDone = {
                         focusManager.clearFocus()
-                        if (birthdate.length == 8) {
-                            val formatted = formatBirthdateForApi(birthdate)
-                            viewModel.verifyStudentId(studentId, formatted)
-                        }
+                        val err = InputValidation.validateBirthdate(birthdate)
+                        birthdateError = err
+                        if (err != null) return@KeyboardActions
+                        val formatted = formatBirthdateForApi(birthdate)
+                        viewModel.verifyStudentId(studentId, formatted)
                     }
                 )
             )
@@ -184,15 +192,13 @@ fun RegisterStep1Screen(
             IAMSButton(
                 text = "Verify",
                 onClick = {
-                    if (birthdate.length == 8) {
-                        val formatted = formatBirthdateForApi(birthdate)
-                        viewModel.verifyStudentId(studentId, formatted)
-                    } else {
-                        viewModel.clearError()
-                        toastState.showToast("Please enter a valid birthdate (MMDDYYYY)", ToastType.ERROR)
-                    }
+                    val err = InputValidation.validateBirthdate(birthdate)
+                    birthdateError = err
+                    if (err != null) return@IAMSButton
+                    val formatted = formatBirthdateForApi(birthdate)
+                    viewModel.verifyStudentId(studentId, formatted)
                 },
-                enabled = !uiState.isLoading && birthdate.length == 8,
+                enabled = !uiState.isLoading,
                 isLoading = uiState.isLoading,
                 loadingText = "Verifying..."
             )
@@ -200,7 +206,12 @@ fun RegisterStep1Screen(
             // Phase 1: Continue button
             IAMSButton(
                 text = "Continue",
-                onClick = { viewModel.checkStudentId(studentId) },
+                onClick = {
+                    val err = InputValidation.validateStudentId(studentId)
+                    studentIdError = err
+                    if (err != null) return@IAMSButton
+                    viewModel.checkStudentId(studentId)
+                },
                 enabled = !uiState.isLoading && studentId.isNotBlank(),
                 isLoading = uiState.isLoading,
                 loadingText = "Checking..."
