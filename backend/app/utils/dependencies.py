@@ -93,7 +93,10 @@ async def get_current_user(
             detail=e.message,
         ) from e
     except (AuthenticationError, NotFoundError) as e:
-        logger.error(f"Authentication failed: {e.message}")
+        if "expired" in str(e.message).lower():
+            logger.debug("Token expired for request")
+        else:
+            logger.error(f"Authentication failed: {e.message}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=e.message,

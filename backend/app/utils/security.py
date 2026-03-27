@@ -7,7 +7,7 @@ and utility functions for authentication.
 
 from datetime import datetime, timedelta
 
-from jose import JWTError, jwt
+from jose import ExpiredSignatureError, JWTError, jwt
 from passlib.context import CryptContext
 
 from app.config import logger, settings
@@ -110,9 +110,12 @@ def verify_token(token: str) -> dict:
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         return payload
+    except ExpiredSignatureError as e:
+        logger.debug("JWT token expired")
+        raise AuthenticationError("Token expired") from e
     except JWTError as e:
         logger.error(f"JWT verification failed: {e}")
-        raise AuthenticationError("Invalid or expired token") from e
+        raise AuthenticationError(f"Invalid token: {e}") from e
 
 
 

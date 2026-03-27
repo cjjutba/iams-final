@@ -203,6 +203,8 @@ async def startup_event():
             id="faiss_health_check",
             replace_existing=True,
             max_instances=1,
+            misfire_grace_time=300,
+            coalesce=True,
         )
 
         # Session lifecycle management — creates/stops SessionPipelines
@@ -337,6 +339,8 @@ async def startup_event():
             id="session_lifecycle_check",
             replace_existing=True,
             max_instances=1,
+            misfire_grace_time=60,
+            coalesce=True,
         )
 
         # Start the scheduler
