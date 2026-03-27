@@ -33,9 +33,9 @@ import androidx.navigation.NavController
 import com.iams.app.ui.components.AuthLayout
 import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSTextField
-import com.iams.app.ui.components.LocalToastState
-import com.iams.app.ui.components.ToastType
 import com.iams.app.ui.navigation.Routes
+import com.iams.app.ui.utils.InputSanitizer
+import com.iams.app.ui.utils.InputValidation
 import com.iams.app.ui.theme.Border
 import com.iams.app.ui.theme.Primary
 import com.iams.app.ui.theme.Secondary
@@ -57,32 +57,25 @@ fun RegisterStep2Screen(
     var email by remember { mutableStateOf(prefillEmail) }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
+    var emailError by remember { mutableStateOf<String?>(null) }
+    var passwordError by remember { mutableStateOf<String?>(null) }
+    var confirmPasswordError by remember { mutableStateOf<String?>(null) }
     val focusManager = LocalFocusManager.current
-    val toastState = LocalToastState.current
 
     fun proceed() {
-        if (email.isBlank() || password.isBlank() || confirmPassword.isBlank()) {
-            toastState.showToast("Please fill in all fields", ToastType.ERROR)
-            return
-        }
-        if (!email.contains("@")) {
-            toastState.showToast("Please enter a valid email address", ToastType.ERROR)
-            return
-        }
-        if (password != confirmPassword) {
-            toastState.showToast("Passwords do not match", ToastType.ERROR)
-            return
-        }
-        if (password.length < 6) {
-            toastState.showToast("Password must be at least 6 characters", ToastType.ERROR)
-            return
-        }
+        val eErr = InputValidation.validateEmail(email)
+        val pErr = InputValidation.validatePassword(password, minLength = 8)
+        val cErr = InputValidation.validatePasswordMatch(password, confirmPassword)
+        emailError = eErr
+        passwordError = pErr
+        confirmPasswordError = cErr
+        if (eErr != null || pErr != null || cErr != null) return
 
         // Store data for Step 4 (Review) — no API call yet
         RegistrationDataHolder.studentId = studentId
         RegistrationDataHolder.firstName = firstName
         RegistrationDataHolder.lastName = lastName
-        RegistrationDataHolder.email = email
+        RegistrationDataHolder.email = InputSanitizer.email(email)
         RegistrationDataHolder.password = password
 
         // Navigate to face capture (Step 3)
@@ -160,8 +153,9 @@ fun RegisterStep2Screen(
         // Email field
         IAMSTextField(
             value = email,
-            onValueChange = { email = it },
+            onValueChange = { email = it; emailError = null },
             label = "Email",
+            error = emailError,
             placeholder = "your.email@example.com",
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Email,
@@ -177,9 +171,10 @@ fun RegisterStep2Screen(
         // Password field
         IAMSTextField(
             value = password,
-            onValueChange = { password = it },
+            onValueChange = { password = it; passwordError = null },
             label = "Password",
-            placeholder = "At least 6 characters",
+            placeholder = "At least 8 characters",
+            error = passwordError,
             isPassword = true,
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Password,
@@ -195,8 +190,9 @@ fun RegisterStep2Screen(
         // Confirm password field
         IAMSTextField(
             value = confirmPassword,
-            onValueChange = { confirmPassword = it },
+            onValueChange = { confirmPassword = it; confirmPasswordError = null },
             label = "Confirm Password",
+            error = confirmPasswordError,
             placeholder = "Re-enter your password",
             isPassword = true,
             keyboardOptions = KeyboardOptions(
