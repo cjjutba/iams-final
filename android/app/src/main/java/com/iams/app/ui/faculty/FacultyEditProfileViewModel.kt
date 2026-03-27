@@ -6,6 +6,8 @@ import com.iams.app.data.api.ApiService
 import com.iams.app.data.model.ChangePasswordRequest
 import com.iams.app.data.model.UpdateProfileRequest
 import com.iams.app.data.model.UserResponse
+import com.iams.app.ui.utils.InputSanitizer
+import com.iams.app.ui.utils.InputValidation
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -114,28 +116,20 @@ class FacultyEditProfileViewModel @Inject constructor(
         val state = _uiState.value
 
         // Validate
-        var hasError = false
-        if (state.email.isBlank()) {
-            _uiState.value = _uiState.value.copy(emailError = "Email is required")
-            hasError = true
-        } else if (!android.util.Patterns.EMAIL_ADDRESS.matcher(state.email).matches()) {
-            _uiState.value = _uiState.value.copy(emailError = "Invalid email address")
-            hasError = true
-        }
+        val emailErr = InputValidation.validateEmail(state.email)
+        val phoneErr = InputValidation.validatePhoneOptional(state.phone)
 
-        if (state.phone.isNotBlank() && !state.phone.matches(Regex("^09\\d{9}$"))) {
-            _uiState.value = _uiState.value.copy(phoneError = "Invalid phone number (09XXXXXXXXX)")
-            hasError = true
+        if (emailErr != null || phoneErr != null) {
+            _uiState.value = _uiState.value.copy(emailError = emailErr, phoneError = phoneErr)
+            return
         }
-
-        if (hasError) return
 
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isSavingProfile = true, successMessage = null, errorMessage = null)
             try {
                 val request = UpdateProfileRequest(
-                    email = state.email,
-                    phone = state.phone.ifBlank { null },
+                    email = InputSanitizer.email(state.email),
+                    phone = InputSanitizer.trimmed(state.phone).ifBlank { null },
                 )
                 val response = apiService.updateProfile(request)
                 if (response.isSuccessful) {
@@ -166,27 +160,18 @@ class FacultyEditProfileViewModel @Inject constructor(
         val state = _uiState.value
 
         // Validate
-        var hasError = false
-        if (state.currentPassword.isBlank()) {
-            _uiState.value = _uiState.value.copy(currentPasswordError = "Required")
-            hasError = true
-        }
-        if (state.newPassword.isBlank()) {
-            _uiState.value = _uiState.value.copy(newPasswordError = "Required")
-            hasError = true
-        } else if (state.newPassword.length < 8) {
-            _uiState.value = _uiState.value.copy(newPasswordError = "At least 8 characters")
-            hasError = true
-        }
-        if (state.confirmPassword.isBlank()) {
-            _uiState.value = _uiState.value.copy(confirmPasswordError = "Required")
-            hasError = true
-        } else if (state.newPassword != state.confirmPassword) {
-            _uiState.value = _uiState.value.copy(confirmPasswordError = "Passwords do not match")
-            hasError = true
-        }
+        val currentErr = InputValidation.validateRequired(state.currentPassword, "Current password")
+        val newErr = InputValidation.validatePassword(state.newPassword)
+        val confirmErr = InputValidation.validatePasswordMatch(state.newPassword, state.confirmPassword)
 
-        if (hasError) return
+        if (currentErr != null || newErr != null || confirmErr != null) {
+            _uiState.value = _uiState.value.copy(
+                currentPasswordError = currentErr,
+                newPasswordError = newErr,
+                confirmPasswordError = confirmErr
+            )
+            return
+        }
 
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isChangingPassword = true, successMessage = null, errorMessage = null)

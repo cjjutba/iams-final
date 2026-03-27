@@ -6,6 +6,8 @@ import com.iams.app.data.api.ApiService
 import com.iams.app.data.model.ChangePasswordRequest
 import com.iams.app.data.model.UpdateProfileRequest
 import com.iams.app.data.model.UserResponse
+import com.iams.app.ui.utils.InputSanitizer
+import com.iams.app.ui.utils.InputValidation
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -129,27 +131,10 @@ class StudentEditProfileViewModel @Inject constructor(
         val state = _uiState.value
 
         // Validate
-        var hasError = false
-        var emailErr: String? = null
-        var phoneErr: String? = null
+        val emailErr = InputValidation.validateEmail(state.email)
+        val phoneErr = InputValidation.validatePhone(state.phone)
 
-        if (state.email.isBlank()) {
-            emailErr = "Email is required"
-            hasError = true
-        } else if (!android.util.Patterns.EMAIL_ADDRESS.matcher(state.email).matches()) {
-            emailErr = "Invalid email address"
-            hasError = true
-        }
-
-        if (state.phone.isBlank()) {
-            phoneErr = "Phone number is required"
-            hasError = true
-        } else if (!state.phone.matches(Regex("^09\\d{9}$"))) {
-            phoneErr = "Invalid phone number (09XXXXXXXXX)"
-            hasError = true
-        }
-
-        if (hasError) {
+        if (emailErr != null || phoneErr != null) {
             _uiState.value = state.copy(emailError = emailErr, phoneError = phoneErr)
             return
         }
@@ -164,8 +149,8 @@ class StudentEditProfileViewModel @Inject constructor(
             try {
                 val response = apiService.updateProfile(
                     UpdateProfileRequest(
-                        email = state.email,
-                        phone = state.phone
+                        email = InputSanitizer.email(state.email),
+                        phone = InputSanitizer.trimmed(state.phone)
                     )
                 )
 
@@ -196,33 +181,11 @@ class StudentEditProfileViewModel @Inject constructor(
         val state = _uiState.value
 
         // Validate
-        var hasError = false
-        var currentErr: String? = null
-        var newErr: String? = null
-        var confirmErr: String? = null
+        val currentErr = InputValidation.validateRequired(state.currentPassword, "Current password")
+        val newErr = InputValidation.validatePassword(state.newPassword)
+        val confirmErr = InputValidation.validatePasswordMatch(state.newPassword, state.confirmPassword)
 
-        if (state.currentPassword.isBlank()) {
-            currentErr = "Current password is required"
-            hasError = true
-        }
-
-        if (state.newPassword.isBlank()) {
-            newErr = "New password is required"
-            hasError = true
-        } else if (state.newPassword.length < 8) {
-            newErr = "Password must be at least 8 characters"
-            hasError = true
-        }
-
-        if (state.confirmPassword.isBlank()) {
-            confirmErr = "Please confirm your password"
-            hasError = true
-        } else if (state.newPassword != state.confirmPassword) {
-            confirmErr = "Passwords do not match"
-            hasError = true
-        }
-
-        if (hasError) {
+        if (currentErr != null || newErr != null || confirmErr != null) {
             _uiState.value = state.copy(
                 currentPasswordError = currentErr,
                 newPasswordError = newErr,
