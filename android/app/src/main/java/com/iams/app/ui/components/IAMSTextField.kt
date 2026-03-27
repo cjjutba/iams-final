@@ -55,6 +55,8 @@ fun IAMSTextField(
     keyboardActions: KeyboardActions = KeyboardActions.Default,
     leadingIcon: @Composable (() -> Unit)? = null,
     trailingIcon: @Composable (() -> Unit)? = null,
+    maxLength: Int? = null,
+    supportingText: String? = null,
 ) {
     val radius = IAMSThemeTokens.radius
     val layout = IAMSThemeTokens.layout
@@ -86,7 +88,13 @@ fun IAMSTextField(
         // Input field
         BasicTextField(
             value = value,
-            onValueChange = onValueChange,
+            onValueChange = { newValue ->
+                if (maxLength != null) {
+                    if (newValue.length <= maxLength) onValueChange(newValue)
+                } else {
+                    onValueChange(newValue)
+                }
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(layout.inputHeightMd)
@@ -168,6 +176,16 @@ fun IAMSTextField(
                 text = error,
                 style = MaterialTheme.typography.bodySmall,
                 color = AbsentFg,
+            )
+        }
+
+        // Supporting text (shown when no error)
+        if (error == null && supportingText != null) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = supportingText,
+                style = MaterialTheme.typography.bodySmall,
+                color = TextTertiary,
             )
         }
     }
