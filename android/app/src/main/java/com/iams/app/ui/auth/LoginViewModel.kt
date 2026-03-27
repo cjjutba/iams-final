@@ -40,10 +40,8 @@ class LoginViewModel @Inject constructor(
     val uiState: StateFlow<LoginUiState> = _uiState.asStateFlow()
 
     fun login(identifier: String, password: String) {
-        if (identifier.isBlank() || password.isBlank()) {
-            _uiState.value = _uiState.value.copy(error = "Please fill in all fields")
-            return
-        }
+        // Callers (StudentLoginScreen, FacultyLoginScreen) validate before calling
+        if (identifier.isBlank() || password.isBlank()) return
 
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)

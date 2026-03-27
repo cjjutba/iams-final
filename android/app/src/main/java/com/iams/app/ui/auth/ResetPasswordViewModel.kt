@@ -25,18 +25,8 @@ class ResetPasswordViewModel @Inject constructor(
     val uiState: StateFlow<ResetPasswordUiState> = _uiState.asStateFlow()
 
     fun resetPassword(password: String, confirmPassword: String) {
-        if (password.isBlank() || confirmPassword.isBlank()) {
-            _uiState.value = _uiState.value.copy(error = "Please fill in all fields")
-            return
-        }
-        if (password.length < 8) {
-            _uiState.value = _uiState.value.copy(error = "Password must be at least 8 characters")
-            return
-        }
-        if (password != confirmPassword) {
-            _uiState.value = _uiState.value.copy(error = "Passwords do not match")
-            return
-        }
+        // Caller (ResetPasswordScreen) validates before calling
+        if (password.isBlank() || confirmPassword.isBlank()) return
 
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)

@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiService
 import com.iams.app.data.model.ManualEntryRequest
 import com.iams.app.ui.utils.InputSanitizer
+import com.iams.app.ui.utils.InputValidation
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -54,8 +55,9 @@ class FacultyManualEntryViewModel @Inject constructor(
         val state = _uiState.value
 
         // Validate
-        if (state.studentId.isBlank()) {
-            _uiState.value = state.copy(studentIdError = "Student ID is required")
+        val idErr = InputValidation.validateStudentId(state.studentId)
+        if (idErr != null) {
+            _uiState.value = state.copy(studentIdError = idErr)
             return
         }
 
