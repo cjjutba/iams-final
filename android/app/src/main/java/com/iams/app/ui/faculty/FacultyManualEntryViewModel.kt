@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiService
 import com.iams.app.data.model.ManualEntryRequest
+import com.iams.app.ui.utils.InputSanitizer
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -62,13 +63,15 @@ class FacultyManualEntryViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(isSubmitting = true, error = null)
 
             try {
+                val sanitizedId = InputSanitizer.studentId(state.studentId)
+                val sanitizedRemarks = InputSanitizer.trimmed(state.remarks)
                 val today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
                 val request = ManualEntryRequest(
                     scheduleId = scheduleId,
-                    studentId = state.studentId,
+                    studentId = sanitizedId,
                     date = today,
                     status = state.selectedStatus,
-                    remarks = state.remarks.ifBlank { null },
+                    remarks = sanitizedRemarks.ifBlank { null },
                 )
 
                 val response = apiService.createManualEntry(request)

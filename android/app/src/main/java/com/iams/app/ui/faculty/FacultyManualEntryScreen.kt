@@ -3,7 +3,6 @@ package com.iams.app.ui.faculty
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,7 +12,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -32,7 +30,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
@@ -40,16 +37,13 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonSize
-import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
-import com.iams.app.ui.theme.AbsentFg
+import com.iams.app.ui.components.IAMSTextField
 import com.iams.app.ui.theme.Background
 import com.iams.app.ui.theme.Border
 import com.iams.app.ui.theme.IAMSThemeTokens
-import com.iams.app.ui.theme.InputBackground
 import com.iams.app.ui.theme.Primary
 import com.iams.app.ui.theme.TextSecondary
-import com.iams.app.ui.theme.TextTertiary
 
 @Composable
 fun FacultyManualEntryScreen(
@@ -130,53 +124,16 @@ fun FacultyManualEntryScreen(
             Spacer(modifier = Modifier.height(spacing.xxl))
 
             // Student ID field
-            Text(
-                text = "Student ID",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                color = Primary
-            )
-            Spacer(modifier = Modifier.height(spacing.sm))
-            BasicTextField(
+            IAMSTextField(
                 value = uiState.studentId,
                 onValueChange = { viewModel.updateStudentId(it) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(radius.mdShape)
-                    .background(InputBackground)
-                    .border(
-                        width = 1.dp,
-                        color = if (uiState.studentIdError != null) AbsentFg else Border,
-                        shape = radius.mdShape
-                    )
-                    .padding(horizontal = spacing.lg, vertical = spacing.md),
-                textStyle = MaterialTheme.typography.bodyLarge.copy(color = Primary),
-                singleLine = true,
-                cursorBrush = SolidColor(Primary),
+                label = "Student ID",
+                placeholder = "e.g. 21-A-012345",
+                error = uiState.studentIdError,
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.Characters
                 ),
-                decorationBox = { innerTextField ->
-                    Box {
-                        if (uiState.studentId.isEmpty()) {
-                            Text(
-                                text = "e.g. 21-A-012345",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = TextTertiary
-                            )
-                        }
-                        innerTextField()
-                    }
-                }
             )
-            if (uiState.studentIdError != null) {
-                Spacer(modifier = Modifier.height(spacing.xs))
-                Text(
-                    text = uiState.studentIdError!!,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AbsentFg
-                )
-            }
 
             Spacer(modifier = Modifier.height(spacing.lg))
 
@@ -237,37 +194,14 @@ fun FacultyManualEntryScreen(
             Spacer(modifier = Modifier.height(spacing.lg))
 
             // Remarks field
-            Text(
-                text = "Remarks",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                color = Primary
-            )
-            Spacer(modifier = Modifier.height(spacing.sm))
-            BasicTextField(
+            IAMSTextField(
                 value = uiState.remarks,
                 onValueChange = { viewModel.updateRemarks(it) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(88.dp)
-                    .clip(radius.mdShape)
-                    .background(InputBackground)
-                    .border(1.dp, Border, radius.mdShape)
-                    .padding(horizontal = spacing.lg, vertical = spacing.md),
-                textStyle = MaterialTheme.typography.bodyLarge.copy(color = Primary),
-                cursorBrush = SolidColor(Primary),
-                decorationBox = { innerTextField ->
-                    Box {
-                        if (uiState.remarks.isEmpty()) {
-                            Text(
-                                text = "Optional remarks (e.g., reason for manual entry)",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = TextTertiary
-                            )
-                        }
-                        innerTextField()
-                    }
-                }
+                label = "Remarks",
+                placeholder = "Optional remarks (e.g., reason for manual entry)",
+                singleLine = false,
+                modifier = Modifier.height(88.dp),
+                maxLength = 500,
             )
 
             Spacer(modifier = Modifier.height(spacing.xxl))
