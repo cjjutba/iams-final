@@ -54,15 +54,29 @@ rtmp: no
 writeQueueSize: 512
 
 paths:
-  # HD stream — for Android app live feed (2560x1440, 20fps, H264)
-  capstone-lab:
+  # ── EB 226 (192.168.88.10) ──────────────────────────────────────────────
+  # HD stream for app live feed
+  eb226:
     source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.10:554/h264Preview_01_main
     sourceOnDemand: yes
     sourceProtocol: tcp
 
-  # Sub stream — for backend face recognition (896x512, 15fps, H264 sub)
-  capstone-lab-recognition:
+  # Sub stream for backend face recognition
+  eb226-recognition:
     source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.10:554/h264Preview_01_sub
+    sourceOnDemand: yes
+    sourceProtocol: tcp
+
+  # ── EB 227 (192.168.88.11) ──────────────────────────────────────────────
+  # HD stream for app live feed
+  eb227:
+    source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.11:554/h264Preview_01_main
+    sourceOnDemand: yes
+    sourceProtocol: tcp
+
+  # Sub stream for backend face recognition
+  eb227-recognition:
+    source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.11:554/h264Preview_01_sub
     sourceOnDemand: yes
     sourceProtocol: tcp
 

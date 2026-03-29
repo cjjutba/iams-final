@@ -54,11 +54,13 @@ def main():
     print("=" * 60)
     print("\nReady for development/testing.")
     print("\nFaculty logins (all use password123):")
-    print("  faculty@gmail.com              (default test account)")
+    print("  faculty@gmail.com              (default test account — EB226)")
+    print("  faculty.eb226@gmail.com        (EB226 dedicated — 24/7 test)")
+    print("  faculty.eb227@gmail.com        (EB227 dedicated — 24/7 test)")
     print("  ryan.elumba@jrmsu.edu.ph       (Elumba, Ryan Z.)")
     print("  maricon.gahisan@jrmsu.edu.ph   (Gahisan, Maricon Denber)")
     print("  troy.lasco@jrmsu.edu.ph        (Lasco, Troy C.)")
-    print("Rooms: EB226, EB227 (Engineering Building)")
+    print("Rooms: EB226 (cam 192.168.88.10), EB227 (cam 192.168.88.11)")
 
     if skip_sim:
         print("\nStudent registration: use mobile app with a Student ID from the school roster")

@@ -60,9 +60,11 @@ TEST_STUDENT = {
 # ---------------------------------------------------------------------------
 MOCK_FACULTY = [
     ("FAC-001", "Faculty", "User", "faculty@gmail.com", "Computer Engineering"),
-    ("FAC-002", "Ryan", "Elumba", "ryan.elumba@jrmsu.edu.ph", "Computer Engineering"),
-    ("FAC-003", "Maricon Denber", "Gahisan", "maricon.gahisan@jrmsu.edu.ph", "Computer Engineering"),
-    ("FAC-004", "Troy", "Lasco", "troy.lasco@jrmsu.edu.ph", "Computer Engineering"),
+    ("FAC-002", "Faculty", "EB226", "faculty.eb226@gmail.com", "Computer Engineering"),
+    ("FAC-003", "Faculty", "EB227", "faculty.eb227@gmail.com", "Computer Engineering"),
+    ("FAC-004", "Ryan", "Elumba", "ryan.elumba@jrmsu.edu.ph", "Computer Engineering"),
+    ("FAC-005", "Maricon Denber", "Gahisan", "maricon.gahisan@jrmsu.edu.ph", "Computer Engineering"),
+    ("FAC-006", "Troy", "Lasco", "troy.lasco@jrmsu.edu.ph", "Computer Engineering"),
 ]
 
 

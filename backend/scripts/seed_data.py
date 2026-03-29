@@ -41,6 +41,8 @@ from app.config import logger
 # ---------------------------------------------------------------------------
 FACULTY_DEFS = [
     ("faculty@gmail.com",              "Faculty",        "User"),
+    ("faculty.eb226@gmail.com",        "Faculty",        "EB226"),
+    ("faculty.eb227@gmail.com",        "Faculty",        "EB227"),
     ("ryan.elumba@jrmsu.edu.ph",       "Ryan",           "Elumba"),
     ("maricon.gahisan@jrmsu.edu.ph",   "Maricon Denber", "Gahisan"),
     ("troy.lasco@jrmsu.edu.ph",        "Troy",           "Lasco"),
@@ -54,9 +56,11 @@ FACULTY_DEFS = [
 # ---------------------------------------------------------------------------
 ROOM_DEFS = [
     ("EB226", "Engineering Building", 50,
-     "rtsp://host.docker.internal:8554/capstone-lab-recognition",  # Sub stream for recognition
-     "capstone-lab"),  # HD stream key for app WebRTC
-    ("EB227", "Engineering Building", 50, "", ""),
+     "rtsp://host.docker.internal:8554/eb226-recognition",  # Sub stream for recognition
+     "eb226"),  # HD stream key for app WebRTC
+    ("EB227", "Engineering Building", 50,
+     "rtsp://host.docker.internal:8554/eb227-recognition",  # Sub stream for recognition
+     "eb227"),  # HD stream key for app WebRTC
 ]
 
 # ---------------------------------------------------------------------------
@@ -66,9 +70,13 @@ ROOM_DEFS = [
 # day_of_week: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
 # ---------------------------------------------------------------------------
 SCHEDULE_DEFS = [
-    # ── Test (faculty@gmail.com) ──────────────────────────────────────
-    # TEST 000 — 24/7 test schedule in EB226 (has camera) for live feed testing
+    # ── Test schedules (24/7 for testing) ────────────────────────────
+    # Default faculty — test in EB226
     ("TEST 000", "IAMS Test Class (24/7)",             0, "BSCPE", [0, 1, 2, 3, 4, 5, 6], time(0, 0), time(23, 59), "EB226", "faculty@gmail.com"),
+    # Faculty EB226 — dedicated 24/7 test in EB226
+    ("TEST 226", "IAMS Test EB226 (24/7)",             0, "BSCPE", [0, 1, 2, 3, 4, 5, 6], time(0, 0), time(23, 59), "EB226", "faculty.eb226@gmail.com"),
+    # Faculty EB227 — dedicated 24/7 test in EB227
+    ("TEST 227", "IAMS Test EB227 (24/7)",             0, "BSCPE", [0, 1, 2, 3, 4, 5, 6], time(0, 0), time(23, 59), "EB227", "faculty.eb227@gmail.com"),
 
     # ── Elumba ─────────────────────────────────────────────────────────
     # CpE 121 / CpE 121L — WEB Technologies (EB227, TTH)
@@ -145,29 +153,13 @@ def seed():
             User.email == "faculty@gmail.com"
         ).first()
 
-        if existing_faculty:
+        # Check what already exists — only create what's missing
+        has_rooms = db.query(Room).count() > 0
+        has_schedules = db.query(Schedule).count() > 0
+
+        if existing_faculty and has_rooms and has_schedules:
             print("\nSeed data already exists. Skipping...")
             print(f"  Faculty: {existing_faculty.email} (ID: {existing_faculty.id})")
-
-            # Ensure admin account exists
-            existing_admin = db.query(User).filter(User.email == "admin@admin.com").first()
-            if not existing_admin:
-                print("\n  Admin account missing — creating now...")
-                admin = User(
-                    email="admin@admin.com",
-                    password_hash=hash_password("admin123"),
-                    role=UserRole.ADMIN,
-                    first_name="System",
-                    last_name="Admin",
-                    is_active=True,
-                    email_verified=True,
-                )
-                db.add(admin)
-                db.commit()
-                print(f"  Created: admin@admin.com (ID: {admin.id})")
-            else:
-                print(f"  Admin: {existing_admin.email} (ID: {existing_admin.id})")
-
             room_count = db.query(Room).count()
             schedule_count = db.query(Schedule).count()
             faculty_count = db.query(User).filter(User.role == UserRole.FACULTY).count()
@@ -185,22 +177,31 @@ def seed():
 
         faculty_map: dict[str, User] = {}  # email → User
         for email, first_name, last_name in FACULTY_DEFS:
-            user = _create_faculty_user(db, email, first_name, last_name, common_hash)
-            faculty_map[email] = user
+            existing = db.query(User).filter(User.email == email).first()
+            if existing:
+                faculty_map[email] = existing
+                print(f"  Exists: {first_name} {last_name} ({email}, ID: {existing.id})")
+            else:
+                user = _create_faculty_user(db, email, first_name, last_name, common_hash)
+                faculty_map[email] = user
 
-        # Create Admin User
-        admin = User(
-            email="admin@admin.com",
-            password_hash=hash_password("admin123"),
-            role=UserRole.ADMIN,
-            first_name="System",
-            last_name="Admin",
-            is_active=True,
-            email_verified=True,
-        )
-        db.add(admin)
-        db.flush()
-        print(f"  Created: {admin.first_name} {admin.last_name} ({admin.email}, ID: {admin.id})")
+        # Create Admin User (if not exists)
+        admin = db.query(User).filter(User.email == "admin@admin.com").first()
+        if not admin:
+            admin = User(
+                email="admin@admin.com",
+                password_hash=hash_password("admin123"),
+                role=UserRole.ADMIN,
+                first_name="System",
+                last_name="Admin",
+                is_active=True,
+                email_verified=True,
+            )
+            db.add(admin)
+            db.flush()
+            print(f"  Created: {admin.first_name} {admin.last_name} ({admin.email}, ID: {admin.id})")
+        else:
+            print(f"  Exists: {admin.first_name} {admin.last_name} ({admin.email}, ID: {admin.id})")
 
         # ------------------------------------------------------------------
         # 2. Create Rooms
@@ -208,18 +209,23 @@ def seed():
         print("\n[2/3] Creating rooms...")
         room_map: dict[str, Room] = {}
         for name, building, capacity, camera_endpoint, stream_key in ROOM_DEFS:
-            room = Room(
-                name=name,
-                building=building,
-                capacity=capacity,
-                camera_endpoint=camera_endpoint or None,
-                stream_key=stream_key or None,
-                is_active=True,
-            )
-            db.add(room)
-            db.flush()
-            room_map[name] = room
-            print(f"  Created: {name} in {building} (capacity: {capacity}, ID: {room.id})")
+            existing = db.query(Room).filter(Room.name == name).first()
+            if existing:
+                room_map[name] = existing
+                print(f"  Exists: {name} (ID: {existing.id})")
+            else:
+                room = Room(
+                    name=name,
+                    building=building,
+                    capacity=capacity,
+                    camera_endpoint=camera_endpoint or None,
+                    stream_key=stream_key or None,
+                    is_active=True,
+                )
+                db.add(room)
+                db.flush()
+                room_map[name] = room
+                print(f"  Created: {name} in {building} (capacity: {capacity}, ID: {room.id})")
 
         # ------------------------------------------------------------------
         # 3. Create Schedules (assigned to correct instructor)
