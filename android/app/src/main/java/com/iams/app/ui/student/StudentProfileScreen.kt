@@ -20,14 +20,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -66,6 +67,7 @@ import com.iams.app.ui.theme.Border
 import com.iams.app.ui.theme.IAMSThemeTokens
 import com.iams.app.ui.theme.Primary
 import com.iams.app.ui.theme.Secondary
+import com.iams.app.ui.theme.TextPrimary
 import com.iams.app.ui.theme.TextSecondary
 import com.iams.app.ui.theme.TextTertiary
 
@@ -127,6 +129,20 @@ fun StudentProfileScreen(
             .fillMaxSize()
             .background(Background)
     ) {
+        IAMSHeader(
+            title = "Profile",
+            trailing = {
+                IconButton(onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) }) {
+                    Icon(
+                        Icons.Outlined.Notifications,
+                        contentDescription = "Notifications",
+                        modifier = Modifier.size(24.dp),
+                        tint = TextPrimary,
+                    )
+                }
+            },
+        )
+
         when {
             uiState.isLoading && uiState.user == null -> {
                 Box(
@@ -276,11 +292,6 @@ fun StudentProfileScreen(
                                 icon = Icons.Default.CameraAlt,
                                 label = "Re-register Face",
                                 onClick = { navController.navigate(Routes.studentFaceRegister("reregister")) }
-                            )
-                            ActionItem(
-                                icon = Icons.Default.Notifications,
-                                label = "Notifications",
-                                onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) }
                             )
                             ActionItem(
                                 icon = Icons.Default.Settings,

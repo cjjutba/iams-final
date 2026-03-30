@@ -84,7 +84,10 @@ fun StudentAnalyticsScreen(
             .fillMaxSize()
             .background(Background)
     ) {
-        IAMSHeader(title = "My Analytics")
+        IAMSHeader(
+            title = "My Analytics",
+            onBack = { navController.popBackStack() },
+        )
 
         // Loading state
         if (uiState.isLoading && !uiState.isRefreshing) {

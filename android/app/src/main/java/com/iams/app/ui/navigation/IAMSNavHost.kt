@@ -176,7 +176,9 @@ fun IAMSNavHost() {
                 route = Routes.REGISTER_FACE_FLOW
             ) {
                 composable(Routes.REGISTER_STEP3_INNER) {
-                    val parentEntry = navController.getBackStackEntry(Routes.REGISTER_FACE_FLOW)
+                    val parentEntry = remember(it) {
+                        navController.getBackStackEntry(Routes.REGISTER_FACE_FLOW)
+                    }
                     val sharedViewModel: RegistrationViewModel = hiltViewModel(parentEntry)
                     RegisterStep3Screen(
                         navController = navController,
@@ -185,7 +187,9 @@ fun IAMSNavHost() {
                 }
 
                 composable(Routes.REGISTER_REVIEW_INNER) {
-                    val parentEntry = navController.getBackStackEntry(Routes.REGISTER_FACE_FLOW)
+                    val parentEntry = remember(it) {
+                        navController.getBackStackEntry(Routes.REGISTER_FACE_FLOW)
+                    }
                     val sharedViewModel: RegistrationViewModel = hiltViewModel(parentEntry)
                     RegisterReviewScreen(
                         navController = navController,

@@ -3,7 +3,6 @@ package com.iams.app.ui.components
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -18,7 +17,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.iams.app.ui.theme.IAMSThemeTokens
 import com.iams.app.ui.theme.Primary
 
 @Composable
@@ -28,13 +26,10 @@ fun IAMSHeader(
     onBack: (() -> Unit)? = null,
     trailing: @Composable (() -> Unit)? = null,
 ) {
-    val layout = IAMSThemeTokens.layout
-
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .height(layout.headerHeight)
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (onBack != null) {
@@ -51,7 +46,7 @@ fun IAMSHeader(
 
         Text(
             text = title,
-            style = MaterialTheme.typography.headlineMedium,
+            style = MaterialTheme.typography.headlineLarge,
             fontWeight = FontWeight.Bold,
             color = Primary,
             modifier = Modifier.weight(1f),

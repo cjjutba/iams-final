@@ -18,13 +18,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -95,6 +96,20 @@ fun FacultyProfileScreen(
             .fillMaxSize()
             .background(Background)
     ) {
+        IAMSHeader(
+            title = "Profile",
+            trailing = {
+                IconButton(onClick = { navController.navigate(Routes.FACULTY_NOTIFICATIONS) }) {
+                    Icon(
+                        Icons.Outlined.Notifications,
+                        contentDescription = "Notifications",
+                        modifier = Modifier.size(24.dp),
+                        tint = TextPrimary,
+                    )
+                }
+            },
+        )
+
         when {
             uiState.isLoading && uiState.user == null -> {
                 Box(
@@ -229,11 +244,6 @@ fun FacultyProfileScreen(
                                 icon = Icons.Default.Person,
                                 label = "Edit Profile",
                                 onClick = { navController.navigate(Routes.FACULTY_EDIT_PROFILE) }
-                            )
-                            ProfileActionItem(
-                                icon = Icons.Default.Notifications,
-                                label = "Notifications",
-                                onClick = { navController.navigate(Routes.FACULTY_NOTIFICATIONS) }
                             )
                             ProfileActionItem(
                                 icon = Icons.Default.Settings,

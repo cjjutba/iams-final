@@ -39,7 +39,7 @@ webrtcAddress: :8889
 # ICE: Mac's LAN IP so mobile phones on IAMS-Net can reach WebRTC media
 # Auto-updated by scripts/dev-up.sh — or edit manually if IP changes
 webrtcAdditionalHosts:
-  - 192.168.88.254
+  - 192.168.88.13
 
 webrtcLocalUDPAddress: :8887
 
@@ -55,28 +55,28 @@ writeQueueSize: 512
 
 paths:
   # ── EB 226 (192.168.88.10) ──────────────────────────────────────────────
-  # HD stream for app live feed
+  # Sub stream for app live feed (640x480, low bitrate — smooth on phone)
   eb226:
-    source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.10:554/h264Preview_01_main
-    sourceOnDemand: yes
-    sourceProtocol: tcp
-
-  # Sub stream for backend face recognition
-  eb226-recognition:
     source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.10:554/h264Preview_01_sub
     sourceOnDemand: yes
     sourceProtocol: tcp
 
-  # ── EB 227 (192.168.88.11) ──────────────────────────────────────────────
-  # HD stream for app live feed
-  eb227:
-    source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.11:554/h264Preview_01_main
+  # Main stream for backend face recognition (2560x1920 — needs high res)
+  eb226-recognition:
+    source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.10:554/h264Preview_01_main
     sourceOnDemand: yes
     sourceProtocol: tcp
 
-  # Sub stream for backend face recognition
-  eb227-recognition:
+  # ── EB 227 (192.168.88.11) ──────────────────────────────────────────────
+  # Sub stream for app live feed (640x480, low bitrate — smooth on phone)
+  eb227:
     source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.11:554/h264Preview_01_sub
+    sourceOnDemand: yes
+    sourceProtocol: tcp
+
+  # Main stream for backend face recognition (2560x1920 — needs high res)
+  eb227-recognition:
+    source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.11:554/h264Preview_01_main
     sourceOnDemand: yes
     sourceProtocol: tcp
 
