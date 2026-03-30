@@ -18,13 +18,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import androidx.navigation.compose.currentBackStackEntryAsState
 import com.iams.app.ui.theme.Background
@@ -81,7 +84,7 @@ fun IAMSBottomBar(
                         label = "iconColor",
                     )
 
-                    Box(
+                    Column(
                         modifier = Modifier
                             .weight(1f)
                             .clickable(
@@ -97,13 +100,21 @@ fun IAMSBottomBar(
                                     }
                                 },
                             ),
-                        contentAlignment = Alignment.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
                     ) {
                         Icon(
                             imageVector = if (selected) tab.selectedIcon else tab.icon,
                             contentDescription = tab.label,
-                            modifier = Modifier.size(26.dp),
+                            modifier = Modifier.size(22.dp),
                             tint = iconColor,
+                        )
+                        Text(
+                            text = tab.label,
+                            fontSize = 10.sp,
+                            fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                            color = iconColor,
+                            modifier = Modifier.padding(top = 2.dp),
                         )
                     }
                 }
