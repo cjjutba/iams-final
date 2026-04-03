@@ -3,6 +3,7 @@ package com.iams.app.ui.faculty
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiService
+import com.iams.app.data.api.NotificationService
 import com.iams.app.data.api.TokenManager
 import com.iams.app.data.model.UserResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -23,7 +24,8 @@ data class FacultyProfileUiState(
 @HiltViewModel
 class FacultyProfileViewModel @Inject constructor(
     private val apiService: ApiService,
-    private val tokenManager: TokenManager
+    private val tokenManager: TokenManager,
+    val notificationService: NotificationService,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(FacultyProfileUiState())

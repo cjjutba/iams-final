@@ -11,9 +11,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -46,6 +47,7 @@ import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.components.NotificationBellButton
 import com.iams.app.ui.components.SkeletonBox
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.TextPrimary
@@ -96,14 +98,10 @@ fun StudentScheduleScreen(
             IAMSHeader(
                 title = "Schedule",
                 trailing = {
-                    IconButton(onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) }) {
-                        Icon(
-                            Icons.Outlined.Notifications,
-                            contentDescription = "Notifications",
-                            modifier = Modifier.size(24.dp),
-                            tint = TextPrimary,
-                        )
-                    }
+                    NotificationBellButton(
+                        notificationService = viewModel.notificationService,
+                        onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) },
+                    )
                 },
             )
 
@@ -152,44 +150,33 @@ fun StudentScheduleScreen(
         IAMSHeader(
                 title = "Schedule",
                 trailing = {
-                    IconButton(onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) }) {
-                        Icon(
-                            Icons.Outlined.Notifications,
-                            contentDescription = "Notifications",
-                            modifier = Modifier.size(24.dp),
-                            tint = TextPrimary,
-                        )
-                    }
+                    NotificationBellButton(
+                        notificationService = viewModel.notificationService,
+                        onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) },
+                    )
                 },
             )
 
         // Day selector
         val todayBackend = LocalDate.now().dayOfWeek.value - 1
 
-        Box(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .padding(horizontal = spacing.lg, vertical = spacing.lg),
+            horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
-            Column {
-                LazyRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = spacing.lg, vertical = spacing.lg),
-                    horizontalArrangement = Arrangement.spacedBy(spacing.sm)
-                ) {
-                    items(DAYS) { day ->
-                        DayPill(
-                            label = SHORT_DAY_NAMES[day],
-                            isSelected = day == uiState.selectedDay,
-                            isToday = day == todayBackend,
-                            onClick = { viewModel.selectDay(day) }
-                        )
-                    }
-                }
-
-                HorizontalDivider(thickness = 1.dp, color = Border)
+            DAYS.forEach { day ->
+                DayPill(
+                    label = SHORT_DAY_NAMES[day],
+                    isSelected = day == uiState.selectedDay,
+                    isToday = day == todayBackend,
+                    onClick = { viewModel.selectDay(day) }
+                )
             }
         }
+
+        HorizontalDivider(thickness = 1.dp, color = Border)
 
         // Schedule list with pull-to-refresh
         val daySchedules = viewModel.getSelectedDaySchedules()
@@ -247,36 +234,34 @@ private fun DayPill(
     isToday: Boolean,
     onClick: () -> Unit
 ) {
-    val bgColor = if (isSelected) Primary else Secondary
-    val textColor = if (isSelected) PrimaryForeground else TextSecondary
+    val pillWidth = 56.dp
+    val pillHeight = 40.dp
 
     Box(
+        contentAlignment = Alignment.Center,
         modifier = Modifier
-            .widthIn(min = 48.dp)
+            .width(pillWidth)
+            .height(pillHeight)
             .clip(RoundedCornerShape(9999.dp))
-            .background(bgColor)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center
+            .background(if (isSelected) Primary else Secondary)
+            .clickable(onClick = onClick),
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                color = textColor
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (isSelected) PrimaryForeground else TextSecondary,
+        )
+        // Today indicator dot at the bottom of the pill
+        if (isToday && !isSelected) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 4.dp)
+                    .size(4.dp)
+                    .clip(CircleShape)
+                    .background(Primary)
             )
-
-            // Today indicator dot (shown only when not selected)
-            if (isToday && !isSelected) {
-                Spacer(modifier = Modifier.height(2.dp))
-                Box(
-                    modifier = Modifier
-                        .size(4.dp)
-                        .clip(CircleShape)
-                        .background(Primary)
-                )
-            }
         }
     }
 }

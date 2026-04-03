@@ -3,6 +3,7 @@ package com.iams.app.ui.faculty
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiService
+import com.iams.app.data.api.NotificationService
 import com.iams.app.data.model.AnomalyItem
 import com.iams.app.data.model.AtRiskStudent
 import com.iams.app.data.model.ClassOverview
@@ -36,7 +37,8 @@ data class FacultyAnalyticsDashboardUiState(
 
 @HiltViewModel
 class FacultyAnalyticsDashboardViewModel @Inject constructor(
-    private val apiService: ApiService
+    private val apiService: ApiService,
+    val notificationService: NotificationService,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(FacultyAnalyticsDashboardUiState())

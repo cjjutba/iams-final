@@ -11,6 +11,9 @@ class ClassOverviewResponse(BaseModel):
     schedule_id: str
     subject_name: str
     subject_code: str | None = None
+    day_of_week: int  # 0=Monday .. 6=Sunday
+    start_time: str
+    end_time: str
     average_attendance_rate: float
     total_sessions: int
     total_enrolled: int

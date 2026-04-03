@@ -3,6 +3,7 @@ package com.iams.app.ui.student
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiService
+import com.iams.app.data.api.NotificationService
 import com.iams.app.data.model.ScheduleResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,7 +31,8 @@ private fun todayBackendDay(): Int {
 
 @HiltViewModel
 class StudentScheduleViewModel @Inject constructor(
-    private val apiService: ApiService
+    private val apiService: ApiService,
+    val notificationService: NotificationService,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(StudentScheduleUiState())

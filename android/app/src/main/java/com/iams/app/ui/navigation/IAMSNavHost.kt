@@ -96,10 +96,10 @@ fun IAMSNavHost() {
     )
 
     val facultyTabs = listOf(
-        BottomNavTab("Home", Icons.Outlined.Home, Icons.Filled.Home, Routes.FACULTY_HOME),
+        BottomNavTab("Home", Icons.Outlined.Home, Icons.Filled.Home, Routes.FACULTY_HOME, badgeCount = unreadCount),
         BottomNavTab("Schedule", Icons.Outlined.Schedule, Icons.Filled.Schedule, Routes.FACULTY_SCHEDULE),
         BottomNavTab("Analytics", Icons.Outlined.Assessment, Icons.Filled.Assessment, Routes.FACULTY_ANALYTICS_DASHBOARD),
-        BottomNavTab("Alerts", Icons.Outlined.ReportProblem, Icons.Filled.ReportProblem, Routes.FACULTY_ALERTS, badgeCount = unreadCount),
+        BottomNavTab("Alerts", Icons.Outlined.ReportProblem, Icons.Filled.ReportProblem, Routes.FACULTY_ALERTS),
         BottomNavTab("Profile", Icons.Outlined.Person, Icons.Filled.Person, Routes.FACULTY_PROFILE),
     )
 

@@ -57,6 +57,7 @@ import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.components.NotificationBellButton
 import com.iams.app.ui.components.SkeletonBox
 import com.iams.app.ui.components.LocalToastState
 import com.iams.app.ui.components.ToastType
@@ -132,14 +133,10 @@ fun StudentProfileScreen(
         IAMSHeader(
             title = "Profile",
             trailing = {
-                IconButton(onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) }) {
-                    Icon(
-                        Icons.Outlined.Notifications,
-                        contentDescription = "Notifications",
-                        modifier = Modifier.size(24.dp),
-                        tint = TextPrimary,
-                    )
-                }
+                NotificationBellButton(
+                    notificationService = viewModel.notificationService,
+                    onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) },
+                )
             },
         )
 

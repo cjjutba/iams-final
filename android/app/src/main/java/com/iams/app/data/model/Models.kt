@@ -388,12 +388,20 @@ data class ClassOverview(
     @SerializedName("schedule_id") val scheduleId: String,
     @SerializedName("subject_name") val subjectName: String,
     @SerializedName("subject_code") val subjectCode: String?,
+    @SerializedName("day_of_week") val dayOfWeek: Int = 0,
+    @SerializedName("start_time") val startTime: String? = null,
+    @SerializedName("end_time") val endTime: String? = null,
     @SerializedName("average_attendance_rate") val averageAttendanceRate: Float,
     @SerializedName("total_sessions") val totalSessions: Int,
     @SerializedName("total_enrolled") val totalEnrolled: Int,
     @SerializedName("early_leave_count") val earlyLeaveCount: Int,
     @SerializedName("anomaly_count") val anomalyCount: Int,
-)
+) {
+    val dayName: String get() = when (dayOfWeek) {
+        0 -> "Monday"; 1 -> "Tuesday"; 2 -> "Wednesday"; 3 -> "Thursday"
+        4 -> "Friday"; 5 -> "Saturday"; 6 -> "Sunday"; else -> ""
+    }
+}
 
 data class AtRiskStudent(
     @SerializedName("student_id") val studentId: String,

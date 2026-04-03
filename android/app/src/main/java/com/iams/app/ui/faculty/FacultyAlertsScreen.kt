@@ -2,8 +2,8 @@ package com.iams.app.ui.faculty
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
@@ -47,6 +46,7 @@ import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.components.NotificationBellButton
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.TextPrimary
 import com.iams.app.ui.theme.Border
@@ -75,14 +75,10 @@ fun FacultyAlertsScreen(
         IAMSHeader(
             title = "Alerts",
             trailing = {
-                IconButton(onClick = { navController.navigate(Routes.FACULTY_NOTIFICATIONS) }) {
-                    Icon(
-                        Icons.Outlined.Notifications,
-                        contentDescription = "Notifications",
-                        modifier = Modifier.size(24.dp),
-                        tint = TextPrimary,
-                    )
-                }
+                NotificationBellButton(
+                    notificationService = viewModel.notificationService,
+                    onClick = { navController.navigate(Routes.FACULTY_NOTIFICATIONS) },
+                )
             },
         )
 
@@ -163,19 +159,19 @@ private fun FilterBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
             .padding(horizontal = spacing.lg, vertical = spacing.lg),
         horizontalArrangement = Arrangement.spacedBy(spacing.sm),
     ) {
         AlertFilter.entries.forEach { filter ->
             val isSelected = filter == selectedFilter
-            Row(
+            Box(
+                contentAlignment = Alignment.Center,
                 modifier = Modifier
+                    .height(40.dp)
                     .clip(RoundedCornerShape(9999.dp))
                     .background(if (isSelected) Primary else Secondary)
                     .clickable { onFilterSelected(filter) }
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    .padding(horizontal = 16.dp),
             ) {
                 Text(
                     text = filter.label,

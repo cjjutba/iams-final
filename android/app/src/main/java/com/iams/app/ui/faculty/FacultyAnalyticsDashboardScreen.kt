@@ -48,6 +48,7 @@ import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.components.NotificationBellButton
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.TextPrimary
 import com.iams.app.ui.components.SkeletonBox
@@ -105,14 +106,10 @@ fun FacultyAnalyticsDashboardScreen(
         IAMSHeader(
             title = "Analytics",
             trailing = {
-                IconButton(onClick = { navController.navigate(Routes.FACULTY_NOTIFICATIONS) }) {
-                    Icon(
-                        Icons.Outlined.Notifications,
-                        contentDescription = "Notifications",
-                        modifier = Modifier.size(24.dp),
-                        tint = TextPrimary,
-                    )
-                }
+                NotificationBellButton(
+                    notificationService = viewModel.notificationService,
+                    onClick = { navController.navigate(Routes.FACULTY_NOTIFICATIONS) },
+                )
             },
         )
 
@@ -430,11 +427,24 @@ private fun ClassOverviewCard(overview: ClassOverview) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                overview.subjectCode?.let { code ->
+                val subtitle = buildString {
+                    overview.subjectCode?.let { append(it) }
+                    if (overview.dayName.isNotEmpty()) {
+                        if (isNotEmpty()) append(" \u00B7 ")
+                        append(overview.dayName)
+                    }
+                    if (overview.startTime != null && overview.endTime != null) {
+                        if (isNotEmpty()) append(" \u00B7 ")
+                        append("${overview.startTime} - ${overview.endTime}")
+                    }
+                }
+                if (subtitle.isNotEmpty()) {
                     Text(
-                        text = code,
+                        text = subtitle,
                         style = MaterialTheme.typography.labelSmall,
-                        color = TextTertiary
+                        color = TextTertiary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }

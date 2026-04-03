@@ -1,6 +1,7 @@
 package com.iams.app.ui.faculty
 
 import com.iams.app.ui.components.LocalToastState
+import com.iams.app.ui.components.NotificationBellButton
 import com.iams.app.ui.components.ToastType
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -96,7 +97,8 @@ fun FacultyHomeScreen(
     // Show session messages as toasts
     LaunchedEffect(uiState.sessionMessage) {
         uiState.sessionMessage?.let { msg ->
-            toastState.showToast(msg, ToastType.INFO)
+            val type = if (msg.startsWith("Failed")) ToastType.ERROR else ToastType.SUCCESS
+            toastState.showToast(msg, type)
             viewModel.clearSessionMessage()
         }
     }
@@ -173,31 +175,10 @@ fun FacultyHomeScreen(
                             color = Primary,
                             modifier = Modifier.weight(1f)
                         )
-                        IconButton(onClick = { navController.navigate(Routes.FACULTY_NOTIFICATIONS) }) {
-                            BadgedBox(
-                                badge = {
-                                    val count = notifUnreadCount
-                                    if (count > 0) {
-                                        Badge(
-                                            containerColor = Color(0xFFDC2626),
-                                            contentColor = Color.White
-                                        ) {
-                                            Text(
-                                                text = if (count > 99) "99+" else count.toString(),
-                                                style = MaterialTheme.typography.labelSmall
-                                            )
-                                        }
-                                    }
-                                }
-                            ) {
-                                Icon(
-                                    Icons.Outlined.Notifications,
-                                    contentDescription = "Notifications",
-                                    modifier = Modifier.size(24.dp),
-                                    tint = TextPrimary
-                                )
-                            }
-                        }
+                        NotificationBellButton(
+                            notificationService = viewModel.notificationService,
+                            onClick = { navController.navigate(Routes.FACULTY_NOTIFICATIONS) },
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(spacing.sm))

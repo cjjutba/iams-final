@@ -1,5 +1,6 @@
 package com.iams.app.ui.student
 
+import com.iams.app.ui.components.NotificationBellButton
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -170,31 +171,10 @@ fun StudentHomeScreen(
                         color = Primary,
                         modifier = Modifier.weight(1f)
                     )
-                    IconButton(onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) }) {
-                        BadgedBox(
-                            badge = {
-                                val count = notifUnreadCount
-                                if (count > 0) {
-                                    Badge(
-                                        containerColor = Color(0xFFDC2626),
-                                        contentColor = Color.White
-                                    ) {
-                                        Text(
-                                            text = if (count > 99) "99+" else count.toString(),
-                                            style = MaterialTheme.typography.labelSmall
-                                        )
-                                    }
-                                }
-                            }
-                        ) {
-                            Icon(
-                                Icons.Outlined.Notifications,
-                                contentDescription = "Notifications",
-                                modifier = Modifier.size(24.dp),
-                                tint = TextPrimary
-                            )
-                        }
-                    }
+                    NotificationBellButton(
+                        notificationService = viewModel.notificationService,
+                        onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) },
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(spacing.sm))

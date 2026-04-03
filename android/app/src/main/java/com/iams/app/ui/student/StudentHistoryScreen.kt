@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -51,6 +50,7 @@ import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.components.NotificationBellButton
 import com.iams.app.ui.components.SkeletonBox
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.TextPrimary
@@ -105,14 +105,10 @@ fun StudentHistoryScreen(
             IAMSHeader(
                 title = "History",
                 trailing = {
-                    IconButton(onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) }) {
-                        Icon(
-                            Icons.Outlined.Notifications,
-                            contentDescription = "Notifications",
-                            modifier = Modifier.size(24.dp),
-                            tint = TextPrimary,
-                        )
-                    }
+                    NotificationBellButton(
+                        notificationService = viewModel.notificationService,
+                        onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) },
+                    )
                 },
             )
 
@@ -161,14 +157,10 @@ fun StudentHistoryScreen(
         IAMSHeader(
                 title = "History",
                 trailing = {
-                    IconButton(onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) }) {
-                        Icon(
-                            Icons.Outlined.Notifications,
-                            contentDescription = "Notifications",
-                            modifier = Modifier.size(24.dp),
-                            tint = TextPrimary,
-                        )
-                    }
+                    NotificationBellButton(
+                        notificationService = viewModel.notificationService,
+                        onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) },
+                    )
                 },
             )
 
@@ -222,13 +214,13 @@ fun StudentHistoryScreen(
             }
 
             // Status filter pills
-            LazyRow(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = spacing.lg),
                 horizontalArrangement = Arrangement.spacedBy(spacing.sm)
             ) {
-                items(FILTERS) { filter ->
+                FILTERS.forEach { filter ->
                     FilterPill(
                         label = filter.label,
                         isSelected = filter.value == uiState.selectedFilter,
@@ -296,21 +288,20 @@ private fun FilterPill(
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
-    val bgColor = if (isSelected) Primary else Secondary
-    val textColor = if (isSelected) PrimaryForeground else TextSecondary
-
     Box(
+        contentAlignment = Alignment.Center,
         modifier = Modifier
+            .height(40.dp)
             .clip(RoundedCornerShape(9999.dp))
-            .background(bgColor)
+            .background(if (isSelected) Primary else Secondary)
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(horizontal = 16.dp),
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodySmall,
             fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-            color = textColor
+            color = if (isSelected) PrimaryForeground else TextSecondary,
         )
     }
 }
