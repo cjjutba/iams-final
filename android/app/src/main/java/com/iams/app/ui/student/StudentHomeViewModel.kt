@@ -3,6 +3,7 @@ package com.iams.app.ui.student
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiService
+import com.iams.app.data.api.NotificationService
 import com.iams.app.data.api.TokenManager
 import com.iams.app.data.model.AttendanceRecordResponse
 import com.iams.app.data.model.AttendanceSummaryResponse
@@ -41,7 +42,8 @@ data class StudentHomeUiState(
 @HiltViewModel
 class StudentHomeViewModel @Inject constructor(
     private val apiService: ApiService,
-    private val tokenManager: TokenManager
+    private val tokenManager: TokenManager,
+    val notificationService: NotificationService,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(StudentHomeUiState())
@@ -90,8 +92,8 @@ class StudentHomeViewModel @Inject constructor(
 
                 val unreadCountDeferred = async {
                     try {
-                        val response = apiService.getUnreadCount()
-                        if (response.isSuccessful) response.body()?.unreadCount ?: 0 else 0
+                        notificationService.fetchUnreadCount(apiService)
+                        notificationService.unreadCount.value
                     } catch (_: Exception) { 0 }
                 }
 
@@ -138,6 +140,7 @@ class StudentHomeViewModel @Inject constructor(
 
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
+                    isRefreshing = false,
                     user = user,
                     allSchedules = allSchedules,
                     todaySchedules = todaySchedules,
@@ -152,6 +155,7 @@ class StudentHomeViewModel @Inject constructor(
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
+                    isRefreshing = false,
                     error = "Failed to load data. Pull to refresh."
                 )
             }
@@ -159,11 +163,8 @@ class StudentHomeViewModel @Inject constructor(
     }
 
     fun refresh() {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isRefreshing = true, error = null)
-            loadData()
-            _uiState.value = _uiState.value.copy(isRefreshing = false)
-        }
+        _uiState.value = _uiState.value.copy(isRefreshing = true, error = null)
+        loadData()
     }
 
     fun clearError() {

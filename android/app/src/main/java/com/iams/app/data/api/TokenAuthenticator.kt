@@ -3,6 +3,8 @@ package com.iams.app.data.api
 import com.iams.app.BuildConfig
 import com.iams.app.data.model.RefreshRequest
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.Authenticator
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -17,68 +19,85 @@ import javax.inject.Singleton
  * OkHttp Authenticator that automatically refreshes expired JWT tokens.
  * Only called on 401 responses — retries the original request with the new token.
  * If refresh fails, clears tokens so the UI redirects to login.
+ *
+ * Uses a Mutex to serialize concurrent refresh attempts — when multiple requests
+ * get 401 simultaneously, only the first actually refreshes; the rest reuse
+ * the new token.
  */
 @Singleton
 class TokenAuthenticator @Inject constructor(
     private val tokenManager: TokenManager
 ) : Authenticator {
 
+    private val refreshMutex = Mutex()
+
     override fun authenticate(route: Route?, response: Response): Request? {
-        // Don't refresh during logout
-        if (tokenManager.isLoggingOut) return null
+        return runBlocking {
+            refreshMutex.withLock {
+                // Don't refresh during logout
+                if (tokenManager.isLoggingOut) return@runBlocking null
 
-        // Don't retry if we've already tried refreshing (prevent infinite loop)
-        if (response.request.header("X-Token-Refreshed") != null) {
-            runBlocking { tokenManager.clearTokens() }
-            return null
-        }
-
-        val refreshToken = tokenManager.refreshToken ?: run {
-            runBlocking { tokenManager.clearTokens() }
-            return null
-        }
-
-        // Use a separate Retrofit instance to avoid circular dependency
-        val freshTokens = runBlocking {
-            try {
-                val baseUrl = "http://${BuildConfig.BACKEND_HOST}:${BuildConfig.BACKEND_PORT}/api/v1/"
-                val tempApi = Retrofit.Builder()
-                    .baseUrl(baseUrl)
-                    .client(OkHttpClient.Builder().build())
-                    .addConverterFactory(GsonConverterFactory.create())
-                    .build()
-                    .create(ApiService::class.java)
-
-                val result = tempApi.refreshToken(RefreshRequest(refreshToken))
-                if (result.isSuccessful) result.body() else null
-            } catch (_: Exception) {
-                null
-            }
-        }
-
-        return try {
-            if (freshTokens?.accessToken != null && freshTokens.user != null) {
-                runBlocking {
-                    tokenManager.saveTokens(
-                        access = freshTokens.accessToken,
-                        refresh = freshTokens.refreshToken,
-                        role = freshTokens.user.role,
-                        userId = freshTokens.user.id
-                    )
+                // Don't retry if we've already tried refreshing (prevent infinite loop)
+                if (response.request.header("X-Token-Refreshed") != null) {
+                    tokenManager.clearTokens()
+                    return@runBlocking null
                 }
-                // Retry the original request with the new token
-                response.request.newBuilder()
-                    .header("Authorization", "Bearer ${freshTokens.accessToken}")
-                    .header("X-Token-Refreshed", "true")
-                    .build()
-            } else {
-                // Refresh failed — clear tokens so UI navigates to login
-                runBlocking { tokenManager.clearTokens() }
-                null
+
+                // Check if another thread already refreshed the token while we waited for the lock
+                val failedToken = response.request.header("Authorization")?.removePrefix("Bearer ")
+                val currentToken = tokenManager.accessToken
+                if (currentToken != null && currentToken != failedToken) {
+                    // Token was already refreshed by another thread — just retry with the new one
+                    return@runBlocking response.request.newBuilder()
+                        .header("Authorization", "Bearer $currentToken")
+                        .header("X-Token-Refreshed", "true")
+                        .build()
+                }
+
+                val refreshToken = tokenManager.refreshToken ?: run {
+                    tokenManager.clearTokens()
+                    return@runBlocking null
+                }
+
+                // Use a separate Retrofit instance to avoid circular dependency
+                val freshTokens = try {
+                    val baseUrl = "http://${BuildConfig.BACKEND_HOST}:${BuildConfig.BACKEND_PORT}/api/v1/"
+                    val tempApi = Retrofit.Builder()
+                        .baseUrl(baseUrl)
+                        .client(OkHttpClient.Builder().build())
+                        .addConverterFactory(GsonConverterFactory.create())
+                        .build()
+                        .create(ApiService::class.java)
+
+                    val result = tempApi.refreshToken(RefreshRequest(refreshToken))
+                    if (result.isSuccessful) result.body() else null
+                } catch (_: Exception) {
+                    null
+                }
+
+                try {
+                    if (freshTokens?.accessToken != null && freshTokens.user != null) {
+                        tokenManager.saveTokens(
+                            access = freshTokens.accessToken,
+                            refresh = freshTokens.refreshToken,
+                            role = freshTokens.user.role,
+                            userId = freshTokens.user.id
+                        )
+                        // Retry the original request with the new token
+                        response.request.newBuilder()
+                            .header("Authorization", "Bearer ${freshTokens.accessToken}")
+                            .header("X-Token-Refreshed", "true")
+                            .build()
+                    } else {
+                        // Refresh failed — clear tokens so UI navigates to login
+                        tokenManager.clearTokens()
+                        null
+                    }
+                } catch (_: Exception) {
+                    tokenManager.clearTokens()
+                    null
+                }
             }
-        } catch (_: Exception) {
-            runBlocking { tokenManager.clearTokens() }
-            null
         }
     }
 }

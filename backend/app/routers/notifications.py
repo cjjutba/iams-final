@@ -214,9 +214,11 @@ def broadcast_notification(
     else:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid target. Must be 'all', 'students', 'faculty', or 'admin'")
 
-    for user in users:
-        notif = Notification(user_id=user.id, type="broadcast", title=data.title, message=data.message)
-        db.add(notif)
+    notifications_list = [
+        Notification(user_id=user.id, type="broadcast", title=data.title, message=data.message)
+        for user in users
+    ]
+    db.add_all(notifications_list)
     db.commit()
 
     # Send email to users who have email_enabled

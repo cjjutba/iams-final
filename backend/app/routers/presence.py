@@ -114,6 +114,33 @@ async def start_session(
                     except Exception as fg_err:
                         logger.error(f"Failed to start FrameGrabber for room {room_id}: {fg_err}")
 
+            # Start real-time SessionPipeline for face detection → attendance
+            session_pipelines = getattr(http_request.app.state, "session_pipelines", None)
+            if session_pipelines is not None and body.schedule_id not in session_pipelines:
+                grabber = frame_grabbers.get(room_id) if frame_grabbers else None
+                if grabber:
+                    try:
+                        from app.services.ml.faiss_manager import faiss_manager
+
+                        if faiss_manager.index is None or faiss_manager.index.ntotal == 0:
+                            faiss_manager.load_or_create_index()
+                        if not faiss_manager.user_map:
+                            from app.services.face_service import FaceService
+                            FaceService.reconcile_faiss_index(db)
+
+                        from app.services.realtime_pipeline import SessionPipeline
+                        from app.database import SessionLocal
+                        pipeline = SessionPipeline(
+                            schedule_id=body.schedule_id,
+                            grabber=grabber,
+                            db_factory=SessionLocal,
+                        )
+                        await pipeline.start()
+                        session_pipelines[body.schedule_id] = pipeline
+                        logger.info(f"SessionPipeline started for schedule {body.schedule_id}")
+                    except Exception as pipe_err:
+                        logger.error(f"Failed to start SessionPipeline: {pipe_err}")
+
         return SessionStartResponse(
             schedule_id=session_state.schedule_id,
             started_at=session_state.start_time,
@@ -164,6 +191,16 @@ async def end_session(
 
         # End session
         await presence_service.end_session(schedule_id)
+
+        # Stop SessionPipeline if running
+        session_pipelines = getattr(http_request.app.state, "session_pipelines", None)
+        if session_pipelines is not None and schedule_id in session_pipelines:
+            try:
+                pipeline = session_pipelines.pop(schedule_id)
+                await pipeline.stop()
+                logger.info(f"SessionPipeline stopped for schedule {schedule_id}")
+            except Exception as pipe_err:
+                logger.error(f"Failed to stop SessionPipeline: {pipe_err}")
 
         # Stop FrameGrabber and clear identity cache for this room
         schedule = ScheduleRepository(db).get_by_id(schedule_id)
@@ -311,9 +348,13 @@ async def get_presence_logs(
                     status_code=status.HTTP_403_FORBIDDEN, detail="You can only view your own attendance logs"
                 )
         elif current_user.role == UserRole.FACULTY:
-            # Faculty can view logs for their classes
-            # TODO: Add check that current_user is faculty for this schedule
-            pass
+            # Faculty can only view logs for their own classes
+            schedule_repo = ScheduleRepository(db)
+            schedule = schedule_repo.get_by_id(str(attendance.schedule_id))
+            if schedule and str(schedule.faculty_id) != str(current_user.id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this schedule"
+                )
 
         # Get presence logs
         logs = attendance_repo.get_presence_logs(attendance_id)

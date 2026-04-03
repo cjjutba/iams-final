@@ -5,8 +5,12 @@ Exports all SQLAlchemy models for easy import.
 """
 
 from app.database import Base
+from app.models.audit_log import AuditLog
+from app.models.attendance_anomaly import AnomalyType, AttendanceAnomaly
+from app.models.attendance_prediction import AttendancePrediction, RiskLevel
 from app.models.attendance_record import AttendanceRecord, AttendanceStatus
 from app.models.early_leave_event import EarlyLeaveEvent
+from app.models.engagement_score import EngagementScore
 from app.models.enrollment import Enrollment
 from app.models.face_embedding import FaceEmbedding
 from app.models.face_registration import FaceRegistration
@@ -40,4 +44,10 @@ __all__ = [
     "FacultyRecord",
     "NotificationPreference",
     "SystemSetting",
+    "AttendanceAnomaly",
+    "AnomalyType",
+    "EngagementScore",
+    "AttendancePrediction",
+    "RiskLevel",
+    "AuditLog",
 ]

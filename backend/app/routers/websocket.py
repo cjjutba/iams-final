@@ -13,11 +13,13 @@ Message types:
 import asyncio
 import json
 import logging
+import os
 from collections import defaultdict
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.config import settings
+from app.utils.security import verify_token
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -54,7 +56,7 @@ class ConnectionManager:
     async def broadcast_attendance(self, schedule_id: str, data: dict):
         """Send data to all local clients for a schedule, then publish to Redis."""
         dead = []
-        for ws in self._attendance_clients.get(schedule_id, set()):
+        for ws in list(self._attendance_clients.get(schedule_id, set())):
             try:
                 await ws.send_json(data)
             except Exception:
@@ -67,7 +69,7 @@ class ConnectionManager:
 
     async def broadcast_alert(self, user_id: str, data: dict):
         dead = []
-        for ws in self._alert_clients.get(user_id, set()):
+        for ws in list(self._alert_clients.get(user_id, set())):
             try:
                 await ws.send_json(data)
             except Exception:
@@ -93,15 +95,16 @@ class ConnectionManager:
 
     async def _redis_publish(self, schedule_id: str, data: dict) -> None:
         """Publish message to Redis channel for other workers."""
+        channel = f"{settings.REDIS_WS_CHANNEL}:{schedule_id}"
         try:
             from app.redis_client import get_redis
 
             r = await get_redis()
-            channel = f"{settings.REDIS_WS_CHANNEL}:{schedule_id}"
-            payload = json.dumps(data, default=str)
+            enriched = {**data, "origin_pid": os.getpid()}
+            payload = json.dumps(enriched, default=str)
             await r.publish(channel, payload)
-        except Exception:
-            pass  # Redis unavailable — single-worker mode is fine
+        except Exception as e:
+            logger.warning("Redis publish failed for %s: %s", channel, e)
 
     async def start_redis_subscriber(self) -> None:
         """Start background task to forward Redis messages to local WS clients."""
@@ -134,9 +137,13 @@ class ConnectionManager:
                         schedule_id = channel.split(":")[-1]
                         data = json.loads(message["data"])
 
+                        # Skip messages originating from this worker (already delivered locally)
+                        if data.get("origin_pid") == os.getpid():
+                            continue
+
                         # Forward to local clients (skip re-publishing)
                         dead = []
-                        for ws in self._attendance_clients.get(schedule_id, set()):
+                        for ws in list(self._attendance_clients.get(schedule_id, set())):
                             try:
                                 await ws.send_json(data)
                             except Exception:
@@ -157,20 +164,24 @@ class ConnectionManager:
 ws_manager = ConnectionManager()
 
 
-@router.websocket("/attendance/{schedule_id}")
-async def attendance_websocket(websocket: WebSocket, schedule_id: str):
-    await ws_manager.add_attendance_client(schedule_id, websocket)
+@router.websocket("/{user_id}")
+async def general_websocket(websocket: WebSocket, user_id: str):
+    """General-purpose notification WebSocket for the admin portal."""
+    token = websocket.query_params.get("token")
+    if token is None:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
     try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_text("pong")
-    except WebSocketDisconnect:
-        ws_manager.remove_attendance_client(schedule_id, websocket)
+        payload = verify_token(token)
+    except Exception:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
 
+    token_user_id = payload.get("user_id")
+    if token_user_id != user_id:
+        await websocket.close(code=4003, reason="Forbidden")
+        return
 
-@router.websocket("/alerts/{user_id}")
-async def alerts_websocket(websocket: WebSocket, user_id: str):
     await ws_manager.add_alert_client(user_id, websocket)
     try:
         while True:
@@ -178,4 +189,68 @@ async def alerts_websocket(websocket: WebSocket, user_id: str):
             if data == "ping":
                 await websocket.send_text("pong")
     except WebSocketDisconnect:
+        pass
+    except Exception:
+        logger.warning("Unexpected error on general WS for user %s", user_id, exc_info=True)
+    finally:
+        ws_manager.remove_alert_client(user_id, websocket)
+
+
+@router.websocket("/attendance/{schedule_id}")
+async def attendance_websocket(websocket: WebSocket, schedule_id: str):
+    # ── JWT authentication ────────────────────────────────────────
+    token = websocket.query_params.get("token")
+    if token is None:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+    try:
+        verify_token(token)
+    except Exception:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+
+    await ws_manager.add_attendance_client(schedule_id, websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        logger.warning("Unexpected error on attendance WS for schedule %s", schedule_id, exc_info=True)
+    finally:
+        ws_manager.remove_attendance_client(schedule_id, websocket)
+
+
+@router.websocket("/alerts/{user_id}")
+async def alerts_websocket(websocket: WebSocket, user_id: str):
+    # ── JWT authentication ────────────────────────────────────────
+    token = websocket.query_params.get("token")
+    if token is None:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+    try:
+        payload = verify_token(token)
+    except Exception:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+
+    # Verify the token's user_id matches the path parameter
+    token_user_id = payload.get("user_id")
+    if token_user_id != user_id:
+        await websocket.close(code=4003, reason="Forbidden")
+        return
+
+    await ws_manager.add_alert_client(user_id, websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        logger.warning("Unexpected error on alert WS for user %s", user_id, exc_info=True)
+    finally:
         ws_manager.remove_alert_client(user_id, websocket)

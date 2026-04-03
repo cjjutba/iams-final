@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -52,6 +54,7 @@ import com.iams.app.ui.components.LocalToastState
 import com.iams.app.ui.components.ToastType
 import com.iams.app.ui.components.AttendanceStatus
 import com.iams.app.ui.components.CardSkeleton
+import com.iams.app.ui.components.SkeletonBox
 import com.iams.app.ui.components.IAMSBadge
 import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonSize
@@ -81,6 +84,7 @@ fun StudentHomeScreen(
     viewModel: StudentHomeViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val notifUnreadCount by viewModel.notificationService.unreadCount.collectAsState()
     val spacing = IAMSThemeTokens.spacing
     val toastState = LocalToastState.current
 
@@ -169,7 +173,7 @@ fun StudentHomeScreen(
                     IconButton(onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) }) {
                         BadgedBox(
                             badge = {
-                                val count = uiState.unreadNotificationCount
+                                val count = notifUnreadCount
                                 if (count > 0) {
                                     Badge(
                                         containerColor = Color(0xFFDC2626),
@@ -206,11 +210,41 @@ fun StudentHomeScreen(
 
             // ── Loading skeletons ──
             if (uiState.isLoading) {
+                // Stats row skeleton
                 item {
                     Spacer(modifier = Modifier.height(spacing.xxl))
-                    CardSkeleton()
-                    Spacer(modifier = Modifier.height(spacing.sm))
-                    CardSkeleton()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(IntrinsicSize.Min),
+                        horizontalArrangement = Arrangement.spacedBy(spacing.sm)
+                    ) {
+                        repeat(3) {
+                            IAMSCard(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                                SkeletonBox(width = 48.dp, height = 28.dp, cornerRadius = 4.dp)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                SkeletonBox(width = 64.dp, height = 12.dp)
+                            }
+                        }
+                    }
+                }
+                // Hero card skeleton
+                item {
+                    Spacer(modifier = Modifier.height(spacing.xxl))
+                    IAMSCard {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            SkeletonBox(width = 8.dp, height = 8.dp, cornerRadius = 4.dp)
+                            Spacer(modifier = Modifier.width(spacing.sm))
+                            SkeletonBox(width = 100.dp, height = 12.dp)
+                        }
+                        Spacer(modifier = Modifier.height(spacing.md))
+                        SkeletonBox(width = 200.dp, height = 22.dp)
+                        Spacer(modifier = Modifier.height(spacing.xs))
+                        SkeletonBox(width = 240.dp, height = 14.dp)
+                    }
+                }
+                // Schedule cards skeleton
+                items(2) {
                     Spacer(modifier = Modifier.height(spacing.sm))
                     CardSkeleton()
                 }
@@ -395,11 +429,13 @@ private fun AttendanceStatsRow(
     }
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min),
         horizontalArrangement = Arrangement.spacedBy(spacing.sm)
     ) {
         // Attendance rate
-        IAMSCard(modifier = Modifier.weight(1f)) {
+        IAMSCard(modifier = Modifier.weight(1f).fillMaxHeight()) {
             Text(
                 text = "${ratePercent}%",
                 style = MaterialTheme.typography.headlineLarge,
@@ -415,7 +451,7 @@ private fun AttendanceStatsRow(
         }
 
         // Present count
-        IAMSCard(modifier = Modifier.weight(1f)) {
+        IAMSCard(modifier = Modifier.weight(1f).fillMaxHeight()) {
             Text(
                 text = "$presentCount",
                 style = MaterialTheme.typography.headlineLarge,
@@ -431,7 +467,7 @@ private fun AttendanceStatsRow(
         }
 
         // Classes count
-        IAMSCard(modifier = Modifier.weight(1f)) {
+        IAMSCard(modifier = Modifier.weight(1f).fillMaxHeight()) {
             Text(
                 text = "$totalClasses",
                 style = MaterialTheme.typography.headlineLarge,

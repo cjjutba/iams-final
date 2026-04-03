@@ -64,6 +64,7 @@ import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSHeader
 import com.iams.app.ui.theme.Background
+import com.iams.app.ui.components.SkeletonBox
 import com.iams.app.ui.theme.Border
 import com.iams.app.ui.theme.IAMSThemeTokens
 import com.iams.app.ui.theme.InfoFg
@@ -157,13 +158,40 @@ fun FacultyNotificationsScreen(
             return@Column
         }
 
-        // Loading state
+        // Loading skeleton
         if (uiState.isLoading && uiState.notifications.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = spacing.screenPadding)
+                    .padding(top = spacing.md)
             ) {
-                CircularProgressIndicator(color = TextPrimary, strokeWidth = 2.dp)
+                // Section header skeleton
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = spacing.sm),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    SkeletonBox(width = 60.dp, height = 14.dp)
+                    SkeletonBox(width = 20.dp, height = 14.dp)
+                }
+                // 5 notification item skeletons
+                repeat(5) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = spacing.md),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        SkeletonBox(width = 36.dp, height = 36.dp, cornerRadius = 18.dp)
+                        Spacer(modifier = Modifier.width(spacing.md))
+                        Column(modifier = Modifier.weight(1f)) {
+                            SkeletonBox(width = 160.dp, height = 14.dp)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            SkeletonBox(height = 12.dp)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            SkeletonBox(width = 60.dp, height = 10.dp)
+                        }
+                    }
+                    HorizontalDivider(color = Border, thickness = 0.5.dp)
+                }
             }
             return@Column
         }

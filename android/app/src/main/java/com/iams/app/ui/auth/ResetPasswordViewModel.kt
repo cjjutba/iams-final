@@ -32,11 +32,10 @@ class ResetPasswordViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
 
             try {
-                // TODO: Call reset password API endpoint when available
-                // val response = apiService.resetPassword(ResetPasswordRequest(password))
+                // Not yet implemented — no backend endpoint available
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    success = true
+                    error = "Password reset is not yet available. Please contact your administrator."
                 )
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(

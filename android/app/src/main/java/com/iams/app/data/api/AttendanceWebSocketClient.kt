@@ -14,7 +14,6 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
-import java.util.concurrent.TimeUnit
 
 /**
  * WebSocket client for real-time attendance tracking.
@@ -24,8 +23,16 @@ import java.util.concurrent.TimeUnit
  * - attendance_summary:  Periodic attendance state (every 5-10s)
  *
  * Auto-reconnects with exponential backoff using coroutines.
+ *
+ * @param baseUrl       WebSocket base URL (e.g. ws://host:port/api/v1/ws)
+ * @param client        Shared OkHttpClient instance (do NOT shut down in destroy)
+ * @param tokenProvider Lambda returning the current JWT access token, or null
  */
-class AttendanceWebSocketClient(private val baseUrl: String) {
+class AttendanceWebSocketClient(
+    private val baseUrl: String,
+    private val client: OkHttpClient,
+    private val tokenProvider: () -> String?
+) {
 
     companion object {
         private const val TAG = "AttendanceWS"
@@ -34,10 +41,6 @@ class AttendanceWebSocketClient(private val baseUrl: String) {
     }
 
     private var webSocket: WebSocket? = null
-    private val client = OkHttpClient.Builder()
-        .readTimeout(0, TimeUnit.MILLISECONDS)
-        .pingInterval(30, TimeUnit.SECONDS)
-        .build()
     private val gson = Gson()
     private var targetScheduleId: String? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -63,12 +66,22 @@ class AttendanceWebSocketClient(private val baseUrl: String) {
         targetScheduleId = scheduleId
         reconnectJob?.cancel()
         reconnectDelay = INITIAL_RECONNECT_DELAY
+        // Close any existing socket before reconnecting
+        webSocket?.close(1000, "Reconnecting")
+        webSocket = null
         doConnect(scheduleId)
     }
 
     private fun doConnect(scheduleId: String) {
+        val token = tokenProvider.invoke()
+        val url = if (token != null) {
+            "$baseUrl/attendance/$scheduleId?token=$token"
+        } else {
+            "$baseUrl/attendance/$scheduleId"
+        }
+
         val request = Request.Builder()
-            .url("$baseUrl/attendance/$scheduleId")
+            .url(url)
             .build()
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
@@ -120,6 +133,8 @@ class AttendanceWebSocketClient(private val baseUrl: String) {
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
                 _isConnected.value = false
                 Log.i(TAG, "WebSocket closed: $reason")
+                // Reconnect after server-initiated graceful close
+                scheduleReconnect()
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {

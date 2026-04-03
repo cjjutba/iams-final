@@ -38,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -56,6 +57,7 @@ fun FaceCaptureView(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     var faceDetected by remember { mutableStateOf(false) }
     val previewView = remember { PreviewView(context) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
@@ -114,7 +116,7 @@ fun FaceCaptureView(
             try {
                 cameraProvider.unbindAll()
                 cameraProvider.bindToLifecycle(
-                    context as androidx.lifecycle.LifecycleOwner,
+                    lifecycleOwner,
                     cameraSelector,
                     preview,
                     imageAnalysis

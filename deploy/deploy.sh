@@ -72,16 +72,9 @@ ssh "${VPS_USER}@${VPS_IP}" << 'REMOTE'
     ufw allow 49152:49252/udp comment "coturn TURN relay range" 2>/dev/null || true
     ufw allow 9999/tcp comment "Dozzle log viewer" 2>/dev/null || true
 
-    # Build backend image
-    echo "Building Docker image..."
-    docker compose -f docker-compose.prod.yml build --no-cache
-
-    # Stop old containers (if running)
-    docker compose -f docker-compose.prod.yml down || true
-
-    # Start fresh
-    echo "Starting containers..."
-    docker compose -f docker-compose.prod.yml up -d
+    # Build and rolling restart (zero-downtime)
+    echo "Building and restarting containers..."
+    docker compose -f docker-compose.prod.yml up -d --build
 
     # Wait for health check
     echo "Waiting for backend to be healthy..."

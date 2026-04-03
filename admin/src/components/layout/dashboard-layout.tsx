@@ -13,53 +13,58 @@ export function DashboardLayout() {
   useEffect(() => { fetchUnreadCount() }, [fetchUnreadCount])
 
   useWebSocket((message) => {
-    const event = message.event
-    const data = message.data
+    // Backend sends flat payloads: { type: "notification", notification_type: "early_leave", title, message, ... }
+    const eventType = message.notification_type || message.type
 
-    switch (event) {
-      case 'notification':
-        useNotificationStore.getState().incrementUnreadCount()
-        toast.info(data?.title || 'New Notification', {
-          description: data?.message,
-        })
-        break
-
+    switch (eventType) {
       case 'early_leave':
         useNotificationStore.getState().incrementUnreadCount()
         toast.warning('Early Leave Detected', {
-          description: `${data?.student_name} left ${data?.subject_code} early`,
+          description: message.student_name
+            ? `${message.student_name} left ${message.subject_code} early`
+            : message.message,
           duration: 8000,
         })
         break
 
       case 'early_leave_return':
         toast.success('Student Returned', {
-          description: `${data?.student_name} returned to class`,
+          description: message.student_name
+            ? `${message.student_name} returned to class`
+            : message.message,
         })
         break
 
-      case 'attendance_update':
-        toast(`${data?.student_name} checked in`, {
-          description: `${data?.subject_code} \u2014 ${data?.status}`,
+      case 'check_in':
+        toast(`${message.student_name || 'Student'} checked in`, {
+          description: message.subject_code
+            ? `${message.subject_code} \u2014 ${message.status}`
+            : message.message,
         })
         break
 
       case 'session_start':
         toast.info('Session Started', {
-          description: `${data?.subject_code} \u2014 ${data?.subject_name}`,
+          description: message.subject_code
+            ? `${message.subject_code} \u2014 ${message.subject_name}`
+            : message.message,
         })
         break
 
       case 'session_end':
         toast.info('Session Ended', {
-          description: `${data?.subject_code} \u2014 ${data?.subject_name}`,
+          description: message.subject_code
+            ? `${message.subject_code} \u2014 ${message.subject_name}`
+            : message.message,
         })
         break
 
-      case 'anomaly_detected':
+      case 'anomaly_alert':
         useNotificationStore.getState().incrementUnreadCount()
         toast.error('Anomaly Detected', {
-          description: `${data?.anomaly_type}: ${data?.student_name} (${data?.severity})`,
+          description: message.anomaly_type
+            ? `${message.anomaly_type}: ${message.student_name} (${message.severity})`
+            : message.message,
           duration: 10000,
         })
         break
@@ -67,8 +72,19 @@ export function DashboardLayout() {
       case 'low_attendance_warning':
         useNotificationStore.getState().incrementUnreadCount()
         toast.warning('Low Attendance Warning', {
-          description: `${data?.subject_name}: ${data?.current_rate}% (threshold: ${data?.threshold}%)`,
+          description: message.subject_name
+            ? `${message.subject_name}: ${message.current_rate}% (threshold: ${message.threshold}%)`
+            : message.message,
         })
+        break
+
+      default:
+        if (message.type === 'notification') {
+          useNotificationStore.getState().incrementUnreadCount()
+          toast.info(message.title || 'New Notification', {
+            description: message.message,
+          })
+        }
         break
     }
   })

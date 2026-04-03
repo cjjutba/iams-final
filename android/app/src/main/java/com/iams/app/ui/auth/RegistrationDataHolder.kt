@@ -14,6 +14,7 @@ object RegistrationDataHolder {
     var studentId: String = ""
     var firstName: String = ""
     var lastName: String = ""
+    var birthdate: String = ""
 
     // Step 2 data
     var email: String = ""
@@ -23,6 +24,7 @@ object RegistrationDataHolder {
         studentId = ""
         firstName = ""
         lastName = ""
+        birthdate = ""
         email = ""
         password = ""
     }

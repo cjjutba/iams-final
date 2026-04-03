@@ -58,6 +58,7 @@ import com.iams.app.data.model.StudentAttendanceStatus
 import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
+import com.iams.app.ui.components.SkeletonBox
 import com.iams.app.ui.components.HybridFaceOverlay
 import com.iams.app.ui.components.NativeWebRtcVideoPlayer
 import com.iams.app.ui.components.IAMSHeader
@@ -142,21 +143,88 @@ fun FacultyLiveFeedScreen(
             return@Column
         }
 
-        // Loading state
+        // Loading state — skeleton matching the final layout
         if (uiState.isLoading) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Primary)
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = Primary)
-                    Spacer(modifier = Modifier.height(spacing.md))
-                    Text(
-                        text = "Connecting to camera feed...",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary,
-                        textAlign = TextAlign.Center
-                    )
+                // Connection status bar skeleton
+                SkeletonBox(height = 28.dp, cornerRadius = 0.dp)
+                // Session control bar skeleton
+                SkeletonBox(height = 36.dp, cornerRadius = 0.dp, modifier = Modifier.background(Secondary))
+                // Video area skeleton (55%)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(0.55f)
+                        .background(Color.Black),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(
+                            color = Color.White.copy(alpha = 0.5f),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.height(spacing.md))
+                        Text(
+                            text = "Connecting to camera feed...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White.copy(alpha = 0.6f),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+                // Bottom panel skeleton (45%)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(0.45f)
+                        .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                        .background(Background)
+                ) {
+                    // Drag handle
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = spacing.sm),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        SkeletonBox(width = 36.dp, height = 4.dp, cornerRadius = 2.dp)
+                    }
+                    // Tab bar skeleton
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = spacing.cardPadding, vertical = spacing.sm),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        SkeletonBox(width = 80.dp, height = 14.dp)
+                        SkeletonBox(width = 80.dp, height = 14.dp)
+                    }
+                    HorizontalDivider(color = Border, thickness = 1.dp)
+                    // List items skeleton
+                    Column(
+                        modifier = Modifier.padding(
+                            horizontal = spacing.cardPadding,
+                            vertical = spacing.md
+                        )
+                    ) {
+                        repeat(3) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = spacing.sm),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                SkeletonBox(width = 8.dp, height = 8.dp, cornerRadius = 4.dp)
+                                Spacer(modifier = Modifier.width(spacing.md))
+                                SkeletonBox(width = 140.dp, height = 14.dp)
+                            }
+                            HorizontalDivider(color = Border, thickness = 0.5.dp)
+                        }
+                    }
                 }
             }
             return@Column

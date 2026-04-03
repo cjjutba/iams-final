@@ -5,9 +5,10 @@ Provides password hashing, JWT token creation/verification,
 and utility functions for authentication.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-from jose import ExpiredSignatureError, JWTError, jwt
+import jwt
+from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
 from passlib.context import CryptContext
 
 from app.config import logger, settings
@@ -64,12 +65,13 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     to_encode = data.copy()
 
     # Set expiration
+    now = datetime.now(timezone.utc)
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = now + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
 
-    to_encode.update({"exp": expire, "iat": datetime.utcnow()})
+    to_encode.update({"exp": expire, "iat": now})
 
     # Encode token
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
@@ -87,8 +89,9 @@ def create_refresh_token(data: dict) -> str:
         Encoded JWT refresh token string
     """
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-    to_encode.update({"exp": expire, "iat": datetime.utcnow(), "type": "refresh"})
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    to_encode.update({"exp": expire, "iat": now, "type": "refresh"})
 
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
@@ -113,7 +116,7 @@ def verify_token(token: str) -> dict:
     except ExpiredSignatureError as e:
         logger.debug("JWT token expired")
         raise AuthenticationError("Token expired") from e
-    except JWTError as e:
+    except InvalidTokenError as e:
         logger.error(f"JWT verification failed: {e}")
         raise AuthenticationError(f"Invalid token: {e}") from e
 

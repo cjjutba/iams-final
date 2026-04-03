@@ -22,7 +22,6 @@ import androidx.compose.material.icons.outlined.LocalFireDepartment
 import androidx.compose.material.icons.outlined.Remove
 import androidx.compose.material.icons.outlined.TrendingDown
 import androidx.compose.material.icons.outlined.TrendingUp
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -48,6 +47,7 @@ import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.components.SkeletonBox
 import com.iams.app.ui.theme.AbsentBg
 import com.iams.app.ui.theme.AbsentBorder
 import com.iams.app.ui.theme.AbsentFg
@@ -89,13 +89,101 @@ fun StudentAnalyticsScreen(
             onBack = { navController.popBackStack() },
         )
 
-        // Loading state
+        // Loading skeleton
         if (uiState.isLoading && !uiState.isRefreshing) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(spacing.screenPadding)
+                    .padding(bottom = spacing.xxxl)
             ) {
-                CircularProgressIndicator(color = Primary)
+                // Hero card skeleton
+                IAMSCard(modifier = Modifier.padding(bottom = spacing.lg)) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = spacing.xxl)
+                    ) {
+                        SkeletonBox(width = 140.dp, height = 12.dp)
+                        Spacer(modifier = Modifier.height(spacing.md))
+                        SkeletonBox(width = 100.dp, height = 56.dp, cornerRadius = 8.dp)
+                        Spacer(modifier = Modifier.height(spacing.lg))
+                        SkeletonBox(height = 10.dp, cornerRadius = 9999.dp)
+                        Spacer(modifier = Modifier.height(spacing.md))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            SkeletonBox(width = 120.dp, height = 12.dp)
+                            SkeletonBox(width = 80.dp, height = 12.dp)
+                        }
+                    }
+                }
+
+                // Metrics row skeleton (3 cards)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = spacing.xxl),
+                    horizontalArrangement = Arrangement.spacedBy(spacing.md)
+                ) {
+                    repeat(3) {
+                        IAMSCard(modifier = Modifier.weight(1f)) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = spacing.lg)
+                            ) {
+                                SkeletonBox(width = 20.dp, height = 20.dp, cornerRadius = 10.dp)
+                                Spacer(modifier = Modifier.height(spacing.sm))
+                                SkeletonBox(width = 40.dp, height = 28.dp, cornerRadius = 4.dp)
+                                Spacer(modifier = Modifier.height(spacing.xs))
+                                SkeletonBox(width = 56.dp, height = 12.dp)
+                            }
+                        }
+                    }
+                }
+
+                // Subjects section title skeleton
+                SkeletonBox(
+                    width = 80.dp,
+                    height = 22.dp,
+                    modifier = Modifier.padding(bottom = spacing.md)
+                )
+
+                // Subject card skeletons
+                repeat(2) {
+                    IAMSCard(modifier = Modifier.padding(bottom = spacing.md)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = spacing.md),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                SkeletonBox(width = 140.dp, height = 14.dp)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                SkeletonBox(width = 80.dp, height = 12.dp)
+                            }
+                            SkeletonBox(width = 44.dp, height = 24.dp, cornerRadius = 4.dp)
+                        }
+                        SkeletonBox(
+                            height = 8.dp,
+                            cornerRadius = 9999.dp,
+                            modifier = Modifier.padding(bottom = spacing.sm)
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            SkeletonBox(width = 120.dp, height = 12.dp)
+                            SkeletonBox(width = 100.dp, height = 12.dp)
+                        }
+                    }
+                }
             }
             return@Column
         }

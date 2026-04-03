@@ -42,17 +42,20 @@ class FacultyProfileViewModel @Inject constructor(
                 if (response.isSuccessful) {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
+                        isRefreshing = false,
                         user = response.body()
                     )
                 } else {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
+                        isRefreshing = false,
                         error = "Failed to load profile"
                     )
                 }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
+                    isRefreshing = false,
                     error = "Network error. Please check your connection."
                 )
             }
@@ -60,11 +63,8 @@ class FacultyProfileViewModel @Inject constructor(
     }
 
     fun refresh() {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isRefreshing = true, error = null)
-            loadProfile()
-            _uiState.value = _uiState.value.copy(isRefreshing = false)
-        }
+        _uiState.value = _uiState.value.copy(isRefreshing = true, error = null)
+        loadProfile()
     }
 
     fun clearError() {

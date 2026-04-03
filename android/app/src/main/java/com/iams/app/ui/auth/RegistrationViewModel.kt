@@ -217,13 +217,20 @@ class RegistrationViewModel @Inject constructor(
     fun removeCapturedFace(index: Int) {
         val current = _uiState.value.capturedFaces.toMutableList()
         if (index in current.indices) {
-            current.removeAt(index)
+            val removed = current.removeAt(index)
+            if (!removed.isRecycled) removed.recycle()
             _uiState.value = _uiState.value.copy(capturedFaces = current)
         }
     }
 
     fun clearCapturedFaces() {
+        _uiState.value.capturedFaces.forEach { if (!it.isRecycled) it.recycle() }
         _uiState.value = _uiState.value.copy(capturedFaces = emptyList())
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        _uiState.value.capturedFaces.forEach { if (!it.isRecycled) it.recycle() }
     }
 
     fun uploadFaceImages(reregister: Boolean = false) {

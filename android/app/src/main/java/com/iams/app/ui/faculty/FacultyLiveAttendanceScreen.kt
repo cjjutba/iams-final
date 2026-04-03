@@ -26,7 +26,6 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -56,6 +55,7 @@ import com.iams.app.data.model.StudentAttendanceStatus
 import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
+import com.iams.app.ui.components.SkeletonBox
 import com.iams.app.ui.components.IAMSHeader
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.AbsentBg
@@ -133,7 +133,7 @@ fun FacultyLiveAttendanceScreen(
                     IconButton(
                         onClick = {
                             navController.navigate(
-                                Routes.facultyLiveFeed(scheduleId, "")
+                                Routes.facultyLiveFeed(scheduleId, uiState.roomId)
                             )
                         },
                         modifier = Modifier.size(40.dp)
@@ -192,11 +192,61 @@ fun FacultyLiveAttendanceScreen(
 
             // Loading state
             uiState.isLoading && uiState.liveAttendance == null -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(color = Primary)
+                Column(modifier = Modifier.fillMaxSize()) {
+                    // Connection bar skeleton
+                    SkeletonBox(height = 24.dp, cornerRadius = 0.dp)
+                    // Stats row skeleton (4 cards)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = spacing.screenPadding, vertical = spacing.lg),
+                        horizontalArrangement = Arrangement.spacedBy(spacing.sm)
+                    ) {
+                        repeat(4) {
+                            IAMSCard(modifier = Modifier.weight(1f)) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = spacing.md)
+                                ) {
+                                    SkeletonBox(width = 32.dp, height = 28.dp, cornerRadius = 4.dp)
+                                    Spacer(modifier = Modifier.height(spacing.xs))
+                                    SkeletonBox(width = 40.dp, height = 10.dp)
+                                }
+                            }
+                        }
+                    }
+                    // Search bar skeleton
+                    SkeletonBox(
+                        height = 44.dp,
+                        cornerRadius = 12.dp,
+                        modifier = Modifier
+                            .padding(horizontal = spacing.screenPadding)
+                            .padding(bottom = spacing.lg)
+                    )
+                    // Student card skeletons
+                    repeat(4) {
+                        IAMSCard(
+                            modifier = Modifier
+                                .padding(horizontal = spacing.screenPadding)
+                                .padding(bottom = spacing.sm)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                SkeletonBox(width = 40.dp, height = 40.dp, cornerRadius = 20.dp)
+                                Spacer(modifier = Modifier.width(spacing.md))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    SkeletonBox(width = 140.dp, height = 14.dp)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    SkeletonBox(width = 100.dp, height = 12.dp)
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    SkeletonBox(width = 80.dp, height = 10.dp)
+                                }
+                                Spacer(modifier = Modifier.width(spacing.md))
+                                SkeletonBox(width = 56.dp, height = 22.dp, cornerRadius = 12.dp)
+                            }
+                        }
+                    }
                 }
             }
 

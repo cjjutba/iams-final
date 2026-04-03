@@ -53,10 +53,11 @@ class StudentProfileViewModel @Inject constructor(
                     )
                 }
 
-                _uiState.value = _uiState.value.copy(isLoading = false)
+                _uiState.value = _uiState.value.copy(isLoading = false, isRefreshing = false)
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
+                    isRefreshing = false,
                     error = "Failed to load profile"
                 )
             }
@@ -64,11 +65,8 @@ class StudentProfileViewModel @Inject constructor(
     }
 
     fun refresh() {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isRefreshing = true, error = null)
-            loadProfile()
-            _uiState.value = _uiState.value.copy(isRefreshing = false)
-        }
+        _uiState.value = _uiState.value.copy(isRefreshing = true, error = null)
+        loadProfile()
     }
 
     fun clearError() {

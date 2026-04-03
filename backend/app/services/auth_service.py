@@ -250,7 +250,7 @@ class AuthService:
 
         if not user:
             logger.warning(f"Login failed: User not found for identifier {identifier}")
-            raise AuthenticationError("Invalid email/student ID or password")
+            raise AuthenticationError("Invalid email or password")
 
         if not user.is_active:
             logger.warning(f"Login failed: User {user.id} is inactive")
@@ -258,7 +258,7 @@ class AuthService:
 
         if not verify_password(password, user.password_hash):
             logger.warning(f"Login failed: Invalid password for user {user.id}")
-            raise AuthenticationError("Invalid email/student ID or password")
+            raise AuthenticationError("Invalid email or password")
 
         tokens = self._generate_tokens(user)
 

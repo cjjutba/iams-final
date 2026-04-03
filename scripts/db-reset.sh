@@ -1,17 +1,12 @@
 #!/bin/bash
-# Wipe all user data and reseed with JRMSU school data
+# Reset database and seed all IAMS data from scratch.
 #
 # Usage: ./scripts/db-reset.sh
-#        ./scripts/db-reset.sh --no-sim   # Skip simulation data
 
 set -e
 
-echo "Wiping user data..."
-docker compose exec -T api-gateway python -m scripts.wipe_user_data --confirm
+echo "Resetting and seeding IAMS database..."
+docker compose exec -T api-gateway python -m scripts.seed_data
 
 echo ""
-echo "Seeding JRMSU school data..."
-docker compose exec -T api-gateway python -m scripts.seed_all "$@"
-
-echo ""
-echo "Done. Database reset and reseeded with JRMSU data."
+echo "Done. Database reset and seeded with JRMSU data."

@@ -6,7 +6,7 @@ Represents class schedules (when and where classes meet).
 
 import uuid
 
-from sqlalchemy import Boolean, Column, ForeignKey, Index, Integer, String, Time
+from sqlalchemy import Boolean, CheckConstraint, Column, ForeignKey, Index, Integer, String, Time
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -63,15 +63,16 @@ class Schedule(Base):
     is_active = Column(Boolean, default=True, nullable=False)
 
     # Relationships
-    faculty = relationship("User", foreign_keys=[faculty_id], backref="teaching_schedules")
-    room = relationship("Room", backref="schedules")
-    # enrollments = relationship("Enrollment", back_populates="schedule")
-    # attendance_records = relationship("AttendanceRecord", back_populates="schedule")
+    faculty = relationship("User", foreign_keys=[faculty_id], back_populates="teaching_schedules")
+    room = relationship("Room", back_populates="schedules")
+    enrollments = relationship("Enrollment", back_populates="schedule")
+    attendance_records = relationship("AttendanceRecord", back_populates="schedule")
 
-    # Indexes
+    # Indexes and constraints
     __table_args__ = (
         Index("idx_schedule_day_time", "day_of_week", "start_time"),
         Index("idx_schedule_target", "target_course", "target_year_level"),
+        CheckConstraint("day_of_week >= 0 AND day_of_week <= 6", name="ck_day_of_week_range"),
     )
 
     def __repr__(self):

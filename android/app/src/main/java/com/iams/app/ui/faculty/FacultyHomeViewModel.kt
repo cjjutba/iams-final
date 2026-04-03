@@ -2,20 +2,23 @@ package com.iams.app.ui.faculty
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.iams.app.BuildConfig
 import com.iams.app.data.api.ApiService
+import com.iams.app.data.api.AttendanceWebSocketClient
+import com.iams.app.data.api.NotificationService
 import com.iams.app.data.api.TokenManager
 import com.iams.app.data.model.LiveAttendanceResponse
 import com.iams.app.data.model.ScheduleResponse
 import com.iams.app.data.model.SessionStartRequest
+import com.iams.app.data.model.StudentAttendanceStatus
 import com.iams.app.data.model.UserResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import okhttp3.OkHttpClient
 import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalTime
@@ -43,13 +46,17 @@ data class FacultyHomeUiState(
 @HiltViewModel
 class FacultyHomeViewModel @Inject constructor(
     private val apiService: ApiService,
-    private val tokenManager: TokenManager
+    private val tokenManager: TokenManager,
+    private val okHttpClient: OkHttpClient,
+    val notificationService: NotificationService,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(FacultyHomeUiState())
     val uiState: StateFlow<FacultyHomeUiState> = _uiState.asStateFlow()
 
     private var liveAttendanceJob: Job? = null
+    private var wsClient: AttendanceWebSocketClient? = null
+    private var wsObserverJob: Job? = null
 
     private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
     private val shortTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
@@ -102,15 +109,10 @@ class FacultyHomeViewModel @Inject constructor(
                     } catch (_: Exception) {}
                 }
 
-                // Fetch unread notification count
+                // Fetch unread notification count via centralized service
                 val unreadCountJob = viewModelScope.launch {
                     try {
-                        val response = apiService.getUnreadCount()
-                        if (response.isSuccessful) {
-                            _uiState.value = _uiState.value.copy(
-                                unreadNotificationCount = response.body()?.unreadCount ?: 0
-                            )
-                        }
+                        notificationService.fetchUnreadCount(apiService)
                     } catch (_: Exception) {}
                 }
 
@@ -205,22 +207,66 @@ class FacultyHomeViewModel @Inject constructor(
 
     fun startLiveAttendancePolling(scheduleId: String) {
         liveAttendanceJob?.cancel()
-        liveAttendanceJob = viewModelScope.launch {
-            while (isActive) {
-                try {
-                    val response = apiService.getLiveAttendance(scheduleId)
-                    if (response.isSuccessful) {
-                        _uiState.value = _uiState.value.copy(liveAttendance = response.body())
-                    }
-                } catch (_: Exception) {}
-                delay(15_000)
+        wsObserverJob?.cancel()
+
+        // Create WebSocket client if needed
+        if (wsClient == null) {
+            wsClient = AttendanceWebSocketClient(
+                "ws://${BuildConfig.BACKEND_HOST}:${BuildConfig.BACKEND_PORT}/api/v1/ws",
+                okHttpClient,
+                { tokenManager.accessToken }
+            )
+        }
+        wsClient?.connect(scheduleId)
+
+        // Observe attendance_summary from WebSocket for real-time updates
+        wsObserverJob = viewModelScope.launch {
+            wsClient?.attendanceSummary?.collect { msg ->
+                if (msg != null) {
+                    _uiState.value = _uiState.value.copy(
+                        liveAttendance = LiveAttendanceResponse(
+                            scheduleId = msg.scheduleId,
+                            totalEnrolled = msg.totalEnrolled,
+                            presentCount = msg.presentCount,
+                            lateCount = msg.late?.size ?: 0,
+                            absentCount = msg.totalEnrolled - msg.presentCount - (msg.earlyLeave?.size ?: 0),
+                            earlyLeaveCount = msg.earlyLeave?.size ?: 0,
+                            sessionActive = true,
+                            present = msg.present?.map {
+                                StudentAttendanceStatus(studentId = it.userId, studentName = it.name, status = "present")
+                            },
+                            absent = msg.absent?.map {
+                                StudentAttendanceStatus(studentId = it.userId, studentName = it.name, status = "absent")
+                            },
+                            late = msg.late?.map {
+                                StudentAttendanceStatus(studentId = it.userId, studentName = it.name, status = "late")
+                            },
+                            earlyLeave = msg.earlyLeave?.map {
+                                StudentAttendanceStatus(studentId = it.userId, studentName = it.name, status = "early_leave")
+                            }
+                        )
+                    )
+                }
             }
+        }
+
+        // One initial REST fetch so the UI isn't empty while waiting for the first WS message
+        liveAttendanceJob = viewModelScope.launch {
+            try {
+                val response = apiService.getLiveAttendance(scheduleId)
+                if (response.isSuccessful) {
+                    _uiState.value = _uiState.value.copy(liveAttendance = response.body())
+                }
+            } catch (_: Exception) {}
         }
     }
 
     fun stopLiveAttendancePolling() {
         liveAttendanceJob?.cancel()
         liveAttendanceJob = null
+        wsObserverJob?.cancel()
+        wsObserverJob = null
+        wsClient?.disconnect()
         _uiState.value = _uiState.value.copy(liveAttendance = null)
     }
 
@@ -296,6 +342,8 @@ class FacultyHomeViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         liveAttendanceJob?.cancel()
+        wsObserverJob?.cancel()
+        wsClient?.destroy()
     }
 
     fun logout() {

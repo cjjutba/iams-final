@@ -14,15 +14,30 @@ async def get_redis() -> redis.Redis:
 
     decode_responses=False: face embeddings are stored as raw bytes;
     callers handling text keys/channels must encode/decode explicitly.
+
+    Includes a health check on the cached pool — if the connection is
+    lost, the pool is torn down and recreated transparently.
     """
     global _redis_pool
-    if _redis_pool is None:
-        _redis_pool = redis.from_url(
-            settings.REDIS_URL,
-            decode_responses=False,
-            max_connections=20,
-        )
-        await _redis_pool.ping()  # Fail fast if Redis is unreachable
+
+    if _redis_pool is not None:
+        try:
+            await _redis_pool.ping()
+            return _redis_pool
+        except Exception:
+            logger.warning("Redis connection lost, reconnecting...")
+            try:
+                await _redis_pool.aclose()
+            except Exception:
+                pass
+            _redis_pool = None
+
+    _redis_pool = redis.from_url(
+        settings.REDIS_URL,
+        decode_responses=False,
+        max_connections=20,
+    )
+    await _redis_pool.ping()  # Fail fast if Redis is unreachable
     return _redis_pool
 
 
@@ -32,3 +47,13 @@ async def close_redis():
         await _redis_pool.aclose()
         _redis_pool = None
         logger.info("Redis connection closed")
+
+
+async def health_check() -> bool:
+    """Return True if Redis is reachable, False otherwise."""
+    try:
+        r = await get_redis()
+        await r.ping()
+        return True
+    except Exception:
+        return False

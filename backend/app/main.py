@@ -5,6 +5,9 @@ Main application file that initializes FastAPI, configures middleware,
 registers routers, and handles application lifecycle events.
 """
 
+import asyncio
+from contextlib import asynccontextmanager
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
@@ -18,14 +21,18 @@ from app.rate_limiter import limiter
 
 # Import routers
 from app.routers import (
+    analytics,
     attendance,
+    audit,
     auth,
+    edge_devices,
     face,
     health,
     notifications,
     presence,
     rooms,
     schedules,
+    settings_router,
     users,
     websocket,
 )
@@ -40,77 +47,37 @@ from app.utils.exceptions import (
 scheduler = AsyncIOScheduler()
 
 
-# ===== FastAPI Application =====
-
-app = FastAPI(
-    title=settings.APP_NAME,
-    description="Intelligent Attendance Monitoring System - Backend API",
-    version="1.0.0",
-    docs_url=f"{settings.API_PREFIX}/docs",
-    redoc_url=f"{settings.API_PREFIX}/redoc",
-    openapi_url=f"{settings.API_PREFIX}/openapi.json",
-    contact={
-        "name": "IAMS Development Team",
-        "email": "support@iams.jrmsu.edu.ph",
-    },
-    license_info={
-        "name": "MIT",
-    },
-)
-
-# Attach limiter to app state (required by slowapi)
-app.state.limiter = limiter
+# ===== Lifespan Context Manager =====
 
 
-# ===== CORS Middleware =====
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-# ===== Exception Handlers =====
-
-# Custom IAMS exceptions
-app.add_exception_handler(IAMSError, iams_exception_handler)
-
-# Pydantic validation errors
-app.add_exception_handler(RequestValidationError, validation_exception_handler)
-
-# Generic exception handler for unexpected errors
-app.add_exception_handler(Exception, generic_exception_handler)
-
-# Rate limit exceeded (429)
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-
-# ===== Startup and Shutdown Events =====
-
-
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     """
-    Application startup event handler.
+    Application lifespan context manager.
 
+    Startup (before yield):
     - Check database connection
     - Initialize Redis
     - Load InsightFace model + FAISS index
     - Start APScheduler (presence scans, FAISS health check)
+
+    Shutdown (after yield):
+    - Stop scheduler, pipelines, frame grabbers
+    - Close Redis connection
+    - Save FAISS index
     """
+    # ===================================================================
+    # STARTUP
+    # ===================================================================
     logger.info(f"Starting {settings.APP_NAME}...")
     logger.info(f"Debug mode: {settings.DEBUG}")
     logger.info(f"API prefix: {settings.API_PREFIX}")
 
     # ── Database ──────────────────────────────────────────────────
-    db_connected = check_db_connection()
+    db_connected = await asyncio.to_thread(check_db_connection)
     if not db_connected:
-        logger.error("Failed to connect to database. Application may not function correctly.")
-    else:
-        logger.info("Database connection established")
+        raise RuntimeError("Database connection failed. Cannot start application.")
+    logger.info("Database connection established")
 
     # ── Redis ─────────────────────────────────────────────────────
     try:
@@ -146,9 +113,9 @@ async def startup_event():
             logger.error(f"FAISS reconciliation failed: {e}")
 
         # Background listener for FAISS reload notifications (multi-worker sync)
-        import asyncio
-
-        asyncio.create_task(faiss_manager.subscribe_index_changes())
+        app.state.faiss_subscriber_task = asyncio.create_task(
+            faiss_manager.subscribe_index_changes()
+        )
 
         logger.info("Face recognition system initialized")
     except Exception as e:
@@ -217,120 +184,255 @@ async def startup_event():
             from app.services.frame_grabber import FrameGrabber
             from app.services.realtime_pipeline import SessionPipeline
 
-            db = SessionLocal()
+            # --- Sync helper: gather DB state for auto-start/end decisions ---
+            def _gather_lifecycle_state():
+                """Run all synchronous DB reads in a single call."""
+                from app.models.enrollment import Enrollment
+
+                db = SessionLocal()
+                try:
+                    now = datetime.now()
+                    current_day = now.weekday()
+                    current_time = now.time()
+
+                    schedule_repo = ScheduleRepository(db)
+                    presence_svc = PresenceService(db)
+                    PresenceService.cleanup_old_ended_sessions()
+                    active_session_ids = set(presence_svc.get_active_sessions())
+
+                    # Schedules that should be active right now
+                    should_be_active = schedule_repo.get_active_at_time(current_day, current_time)
+
+                    # Build list of schedules to start with their room info
+                    to_start = []
+                    pipeline_ids = set(app.state.session_pipelines.keys())
+                    all_active = active_session_ids | pipeline_ids
+                    for schedule in should_be_active:
+                        sid = str(schedule.id)
+                        if sid in all_active or PresenceService.was_session_ended_today(sid):
+                            continue
+                        room_id = str(schedule.room_id)
+                        room = db.query(Room).filter(Room.id == schedule.room_id).first()
+                        camera_url = room.camera_endpoint if room else None
+
+                        # Fetch faculty_id and enrolled student_ids for notifications
+                        faculty_id = str(schedule.faculty_id)
+                        student_ids = [
+                            str(e.student_id)
+                            for e in db.query(Enrollment.student_id)
+                            .filter(Enrollment.schedule_id == schedule.id)
+                            .all()
+                        ]
+
+                        to_start.append({
+                            "sid": sid,
+                            "room_id": room_id,
+                            "camera_url": camera_url,
+                            "subject_code": schedule.subject_code,
+                            "faculty_id": faculty_id,
+                            "student_ids": student_ids,
+                        })
+
+                    # Build list of sessions to end
+                    to_end = []
+                    for sid in list(all_active):
+                        session_state = presence_svc.get_session_state(sid)
+                        if not session_state:
+                            if sid in pipeline_ids:
+                                pass  # Let pipeline manage its own state
+                            continue
+                        schedule = session_state.schedule
+                        if current_time <= schedule.end_time:
+                            continue
+
+                        # Fetch faculty_id and enrolled student_ids for notifications
+                        faculty_id = str(schedule.faculty_id)
+                        student_ids = [
+                            str(e.student_id)
+                            for e in db.query(Enrollment.student_id)
+                            .filter(Enrollment.schedule_id == schedule.id)
+                            .all()
+                        ]
+
+                        to_end.append({
+                            "sid": sid,
+                            "room_id": str(schedule.room_id),
+                            "subject_code": schedule.subject_code,
+                            "faculty_id": faculty_id,
+                            "student_ids": student_ids,
+                        })
+
+                    return to_start, to_end
+                finally:
+                    db.close()
+
             try:
-                now = datetime.now()
-                current_day = now.weekday()
-                current_time = now.time()
-
-                schedule_repo = ScheduleRepository(db)
-
-                # Track which sessions the OLD PresenceService knows about
-                # (kept for backward compat during migration)
-                presence_svc = PresenceService(db)
-                PresenceService.cleanup_old_ended_sessions()
-                active_session_ids = set(presence_svc.get_active_sessions())
-                pipeline_ids = set(app.state.session_pipelines.keys())
-
-                # Merge both sets — a session is "active" if either system has it
-                all_active = active_session_ids | pipeline_ids
-
-                # === Auto-start ===
-                should_be_active = schedule_repo.get_active_at_time(current_day, current_time)
-                for schedule in should_be_active:
-                    sid = str(schedule.id)
-                    if sid in all_active or PresenceService.was_session_ended_today(sid):
-                        continue
-
-                    room_id = str(schedule.room_id)
-                    room = db.query(Room).filter(Room.id == schedule.room_id).first()
-                    camera_url = room.camera_endpoint if room else None
-
-                    try:
-                        # Start legacy session (keeps old code path working)
-                        await presence_svc.start_session(sid)
-
-                        # Create FrameGrabber if we have a camera
-                        if camera_url and room_id not in app.state.frame_grabbers:
-                            grabber = FrameGrabber(camera_url)
-                            app.state.frame_grabbers[room_id] = grabber
-                            logger.info(f"[lifecycle] Created FrameGrabber for room {room_id}")
-
-                        # Start real-time pipeline
-                        grabber = app.state.frame_grabbers.get(room_id)
-                        if grabber:
-                            # Self-heal FAISS before starting pipeline
-                            from app.services.ml.faiss_manager import faiss_manager
-
-                            if faiss_manager.index is None or faiss_manager.index.ntotal == 0:
-                                faiss_manager.load_or_create_index()
-                            if not faiss_manager.user_map:
-                                from app.services.face_service import FaceService
-                                FaceService.reconcile_faiss_index(db)
-
-                            pipeline = SessionPipeline(
-                                schedule_id=sid,
-                                grabber=grabber,
-                                db_factory=SessionLocal,
-                            )
-                            await pipeline.start()
-                            app.state.session_pipelines[sid] = pipeline
-                            logger.info(
-                                f"[lifecycle] Started pipeline for "
-                                f"{schedule.subject_code} ({sid})"
-                            )
-                        else:
-                            logger.warning(
-                                f"[lifecycle] No camera for {schedule.subject_code}, "
-                                f"session started without pipeline"
-                            )
-
-                    except Exception:
-                        logger.exception(f"[lifecycle] Failed to start session {sid}")
-
-                # === Auto-end ===
-                for sid in list(all_active):
-                    # Check legacy session state first
-                    session_state = presence_svc.get_session_state(sid)
-                    if not session_state:
-                        # Pipeline might be running without legacy session
-                        if sid in pipeline_ids:
-                            # Let it keep running — it manages its own state
-                            pass
-                        continue
-
-                    schedule = session_state.schedule
-                    if current_time <= schedule.end_time:
-                        continue
-
-                    room_id = str(schedule.room_id)
-                    subject_code = schedule.subject_code
-
-                    try:
-                        # Stop pipeline first
-                        pipeline = app.state.session_pipelines.pop(sid, None)
-                        if pipeline:
-                            await pipeline.stop()
-                            logger.info(f"[lifecycle] Stopped pipeline for {subject_code}")
-
-                        # End legacy session
-                        await presence_svc.end_session(sid)
-                        logger.info(f"[lifecycle] Ended session for {subject_code} ({sid})")
-
-                        # Stop FrameGrabber
-                        frame_grabbers = app.state.frame_grabbers
-                        if room_id in frame_grabbers:
-                            frame_grabbers[room_id].stop()
-                            del frame_grabbers[room_id]
-                            logger.info(f"[lifecycle] Stopped FrameGrabber for room {room_id}")
-
-                    except Exception:
-                        logger.exception(f"[lifecycle] Failed to end session {sid}")
-
+                to_start, to_end = await asyncio.to_thread(_gather_lifecycle_state)
             except Exception:
                 logger.exception("[lifecycle] Session lifecycle check failed")
-            finally:
-                db.close()
+                return
+
+            # --- Async phase: start/stop pipelines using gathered data ---
+
+            # === Auto-start ===
+            for info in to_start:
+                sid = info["sid"]
+                room_id = info["room_id"]
+                camera_url = info["camera_url"]
+                subject_code = info["subject_code"]
+                faculty_id = info.get("faculty_id")
+                student_ids = info.get("student_ids", [])
+
+                try:
+                    # Start legacy session (needs its own DB session)
+                    db = SessionLocal()
+                    try:
+                        presence_svc = PresenceService(db)
+                        await presence_svc.start_session(sid)
+                    finally:
+                        db.close()
+
+                    # Create FrameGrabber if we have a camera
+                    if camera_url and room_id not in app.state.frame_grabbers:
+                        grabber = FrameGrabber(camera_url)
+                        app.state.frame_grabbers[room_id] = grabber
+                        logger.info(f"[lifecycle] Created FrameGrabber for room {room_id}")
+
+                    # Start real-time pipeline
+                    grabber = app.state.frame_grabbers.get(room_id)
+                    if grabber:
+                        # Self-heal FAISS before starting pipeline
+                        from app.services.ml.faiss_manager import faiss_manager
+
+                        if faiss_manager.index is None or faiss_manager.index.ntotal == 0:
+                            faiss_manager.load_or_create_index()
+                        if not faiss_manager.user_map:
+                            from app.services.face_service import FaceService
+
+                            def _reconcile():
+                                _db = SessionLocal()
+                                try:
+                                    FaceService.reconcile_faiss_index(_db)
+                                finally:
+                                    _db.close()
+
+                            await asyncio.to_thread(_reconcile)
+
+                        pipeline = SessionPipeline(
+                            schedule_id=sid,
+                            grabber=grabber,
+                            db_factory=SessionLocal,
+                        )
+                        await pipeline.start()
+                        app.state.session_pipelines[sid] = pipeline
+                        logger.info(
+                            f"[lifecycle] Started pipeline for "
+                            f"{subject_code} ({sid})"
+                        )
+                    else:
+                        logger.warning(
+                            f"[lifecycle] No camera for {subject_code}, "
+                            f"session started without pipeline"
+                        )
+
+                    # Send session-start notifications (fire-and-forget)
+                    try:
+                        from app.services.notification_service import notify as _notify
+                        from app.services.notification_service import notify_many as _notify_many
+
+                        db = SessionLocal()
+                        try:
+                            if faculty_id:
+                                await _notify(
+                                    db, faculty_id,
+                                    "Session Started",
+                                    f"{subject_code} session has started.",
+                                    "session_start",
+                                    toast_type="info",
+                                )
+                            if student_ids:
+                                await _notify_many(
+                                    db, student_ids,
+                                    "Class Started",
+                                    f"{subject_code} is now in session.",
+                                    "session_start",
+                                    toast_type="info",
+                                )
+                        finally:
+                            db.close()
+                    except Exception:
+                        logger.warning(
+                            f"[lifecycle] Session start notifications failed for {subject_code}",
+                            exc_info=True,
+                        )
+
+                except Exception:
+                    logger.exception(f"[lifecycle] Failed to start session {sid}")
+
+            # === Auto-end ===
+            for info in to_end:
+                sid = info["sid"]
+                room_id = info["room_id"]
+                subject_code = info["subject_code"]
+                faculty_id = info.get("faculty_id")
+                student_ids = info.get("student_ids", [])
+
+                try:
+                    # Stop pipeline first
+                    pipeline = app.state.session_pipelines.pop(sid, None)
+                    if pipeline:
+                        await pipeline.stop()
+                        logger.info(f"[lifecycle] Stopped pipeline for {subject_code}")
+
+                    # End legacy session
+                    db = SessionLocal()
+                    try:
+                        presence_svc = PresenceService(db)
+                        await presence_svc.end_session(sid)
+                    finally:
+                        db.close()
+                    logger.info(f"[lifecycle] Ended session for {subject_code} ({sid})")
+
+                    # Stop FrameGrabber
+                    frame_grabbers = app.state.frame_grabbers
+                    if room_id in frame_grabbers:
+                        frame_grabbers[room_id].stop()
+                        del frame_grabbers[room_id]
+                        logger.info(f"[lifecycle] Stopped FrameGrabber for room {room_id}")
+
+                    # Send session-end notifications (fire-and-forget)
+                    try:
+                        from app.services.notification_service import notify as _notify
+                        from app.services.notification_service import notify_many as _notify_many
+
+                        db = SessionLocal()
+                        try:
+                            if faculty_id:
+                                await _notify(
+                                    db, faculty_id,
+                                    "Session Ended",
+                                    f"{subject_code} session has ended.",
+                                    "session_end",
+                                    toast_type="info",
+                                )
+                            if student_ids:
+                                await _notify_many(
+                                    db, student_ids,
+                                    "Class Ended",
+                                    f"{subject_code} session has ended.",
+                                    "session_end",
+                                    toast_type="info",
+                                )
+                        finally:
+                            db.close()
+                    except Exception:
+                        logger.warning(
+                            f"[lifecycle] Session end notifications failed for {subject_code}",
+                            exc_info=True,
+                        )
+
+                except Exception:
+                    logger.exception(f"[lifecycle] Failed to end session {sid}")
 
         scheduler.add_job(
             run_session_lifecycle_check,
@@ -343,10 +445,85 @@ async def startup_event():
             coalesce=True,
         )
 
+        # ── Notification background jobs ──────────────────────────
+        from app.services.notification_jobs import (
+            run_anomaly_detection,
+            run_daily_digest,
+            run_low_attendance_check,
+            run_notification_cleanup,
+            run_weekly_digest,
+        )
+
+        scheduler.add_job(
+            run_daily_digest,
+            "cron",
+            hour=settings.DAILY_DIGEST_HOUR,
+            minute=0,
+            id="daily_digest",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+            coalesce=True,
+        )
+
+        scheduler.add_job(
+            run_weekly_digest,
+            "cron",
+            day_of_week="sun",
+            hour=settings.WEEKLY_DIGEST_HOUR,
+            minute=0,
+            id="weekly_digest",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+            coalesce=True,
+        )
+
+        scheduler.add_job(
+            run_low_attendance_check,
+            "cron",
+            hour=19,
+            minute=15,
+            id="low_attendance_check",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+            coalesce=True,
+        )
+
+        scheduler.add_job(
+            run_anomaly_detection,
+            "cron",
+            hour=20,
+            minute=0,
+            id="anomaly_detection",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+            coalesce=True,
+        )
+
+        scheduler.add_job(
+            run_notification_cleanup,
+            "cron",
+            hour=3,
+            minute=0,
+            id="notification_cleanup",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+            coalesce=True,
+        )
+
         # Start the scheduler
         scheduler.start()
         logger.info(
-            "APScheduler started — session lifecycle every 30s, FAISS health every 30m"
+            "APScheduler started — session lifecycle every 30s, FAISS health every 30m, "
+            "daily digest at %02d:00, weekly digest Sun %02d:00, "
+            "low-attendance check at 19:15, anomaly detection at 20:00, "
+            "notification cleanup at 03:00",
+            settings.DAILY_DIGEST_HOUR,
+            settings.WEEKLY_DIGEST_HOUR,
         )
 
     except Exception as e:
@@ -354,15 +531,24 @@ async def startup_event():
 
     logger.info(f"{settings.APP_NAME} startup complete")
 
+    # ===================================================================
+    # YIELD — application serves requests
+    # ===================================================================
+    yield
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    """
-    Application shutdown event handler.
-
-    Stops all background services and cleans up resources.
-    """
+    # ===================================================================
+    # SHUTDOWN
+    # ===================================================================
     logger.info(f"Shutting down {settings.APP_NAME}...")
+
+    # Cancel FAISS subscriber task
+    if hasattr(app.state, "faiss_subscriber_task"):
+        app.state.faiss_subscriber_task.cancel()
+        try:
+            await app.state.faiss_subscriber_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("FAISS subscriber task cancelled")
 
     # Stop APScheduler
     try:
@@ -414,6 +600,55 @@ async def shutdown_event():
     logger.info(f"{settings.APP_NAME} shutdown complete")
 
 
+# ===== FastAPI Application =====
+
+app = FastAPI(
+    title=settings.APP_NAME,
+    description="Intelligent Attendance Monitoring System - Backend API",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url=f"{settings.API_PREFIX}/docs",
+    redoc_url=f"{settings.API_PREFIX}/redoc",
+    openapi_url=f"{settings.API_PREFIX}/openapi.json",
+    contact={
+        "name": "IAMS Development Team",
+        "email": "support@iams.jrmsu.edu.ph",
+    },
+    license_info={
+        "name": "MIT",
+    },
+)
+
+# Attach limiter to app state (required by slowapi)
+app.state.limiter = limiter
+
+
+# ===== CORS Middleware =====
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ===== Exception Handlers =====
+
+# Custom IAMS exceptions
+app.add_exception_handler(IAMSError, iams_exception_handler)
+
+# Pydantic validation errors
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+
+# Generic exception handler for unexpected errors
+app.add_exception_handler(Exception, generic_exception_handler)
+
+# Rate limit exceeded (429)
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
 # ===== Health Check =====
 
 # Deep health check is registered below via health.router at /api/v1/health
@@ -438,11 +673,15 @@ app.include_router(users.router, prefix=f"{API_PREFIX}/users", tags=["Users"])
 app.include_router(face.router, prefix=f"{API_PREFIX}/face", tags=["Face"])
 app.include_router(rooms.router, prefix=f"{API_PREFIX}/rooms", tags=["Rooms"])
 app.include_router(schedules.router, prefix=f"{API_PREFIX}/schedules", tags=["Schedules"])
+app.include_router(analytics.router, prefix=f"{API_PREFIX}/analytics", tags=["Analytics"])
 app.include_router(attendance.router, prefix=f"{API_PREFIX}/attendance", tags=["Attendance"])
 app.include_router(presence.router, prefix=f"{API_PREFIX}/presence", tags=["Presence"])
 app.include_router(notifications.router, prefix=f"{API_PREFIX}/notifications", tags=["Notifications"])
 app.include_router(websocket.router, prefix=f"{API_PREFIX}/ws", tags=["WebSocket"])
 app.include_router(health.router, prefix=f"{API_PREFIX}/health", tags=["Health"])
+app.include_router(audit.router, prefix=f"{API_PREFIX}/audit", tags=["Audit"])
+app.include_router(edge_devices.router, prefix=f"{API_PREFIX}/edge", tags=["Edge Devices"])
+app.include_router(settings_router.router, prefix=f"{API_PREFIX}/settings", tags=["Settings"])
 
 
 # ===== Development Server =====

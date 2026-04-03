@@ -2,6 +2,7 @@ package com.iams.app.ui.faculty
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,9 +22,11 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -33,6 +36,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -51,6 +57,7 @@ import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
 import com.iams.app.ui.components.LocalToastState
+import com.iams.app.ui.components.SkeletonBox
 import com.iams.app.ui.components.ToastType
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.AbsentFg
@@ -74,6 +81,29 @@ fun FacultyProfileScreen(
     val layout = IAMSThemeTokens.layout
     val context = LocalContext.current
     val toastState = LocalToastState.current
+    var showSignOutDialog by remember { mutableStateOf(false) }
+
+    // Sign out confirmation dialog
+    if (showSignOutDialog) {
+        AlertDialog(
+            onDismissRequest = { showSignOutDialog = false },
+            title = { Text("Sign Out") },
+            text = { Text("Are you sure you want to sign out?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showSignOutDialog = false
+                    viewModel.logout()
+                }) {
+                    Text("Sign Out")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSignOutDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     LaunchedEffect(uiState.error) {
         uiState.error?.let {
@@ -112,11 +142,50 @@ fun FacultyProfileScreen(
 
         when {
             uiState.isLoading && uiState.user == null -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = spacing.screenPadding, vertical = spacing.xxl),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    CircularProgressIndicator(color = Primary)
+                    // Avatar skeleton
+                    SkeletonBox(width = layout.avatarXl, height = layout.avatarXl, cornerRadius = 40.dp)
+                    Spacer(modifier = Modifier.height(spacing.lg))
+                    // Name
+                    SkeletonBox(width = 160.dp, height = 28.dp)
+                    Spacer(modifier = Modifier.height(spacing.sm))
+                    // Role
+                    SkeletonBox(width = 60.dp, height = 18.dp)
+                    Spacer(modifier = Modifier.height(spacing.xxl))
+                    // Info card
+                    IAMSCard {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            SkeletonBox(width = 50.dp, height = 14.dp)
+                            SkeletonBox(width = 160.dp, height = 14.dp)
+                        }
+                        Spacer(modifier = Modifier.height(spacing.md))
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            SkeletonBox(width = 80.dp, height = 14.dp)
+                            SkeletonBox(width = 80.dp, height = 14.dp)
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(spacing.xxl))
+                    HorizontalDivider(color = Border, thickness = 1.dp)
+                    Spacer(modifier = Modifier.height(spacing.xxl))
+                    // Action items skeleton
+                    repeat(2) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = spacing.lg),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            SkeletonBox(width = 20.dp, height = 20.dp, cornerRadius = 4.dp)
+                            Spacer(modifier = Modifier.width(spacing.md))
+                            SkeletonBox(width = 100.dp, height = 16.dp)
+                        }
+                        HorizontalDivider(color = Border, thickness = 1.dp)
+                    }
                 }
             }
 
@@ -262,7 +331,7 @@ fun FacultyProfileScreen(
                         // Sign Out button
                         IAMSButton(
                             text = "Sign Out",
-                            onClick = { viewModel.logout() },
+                            onClick = { showSignOutDialog = true },
                             variant = IAMSButtonVariant.OUTLINE,
                             size = IAMSButtonSize.LG,
                             fullWidth = true,

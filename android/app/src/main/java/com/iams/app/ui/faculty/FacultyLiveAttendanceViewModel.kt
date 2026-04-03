@@ -20,6 +20,7 @@ data class FacultyLiveAttendanceUiState(
     val isRefreshing: Boolean = false,
     val error: String? = null,
     val liveAttendance: LiveAttendanceResponse? = null,
+    val roomId: String = "",
     val searchQuery: String = "",
     val isSessionActive: Boolean = false,
     val isEndingSession: Boolean = false,
@@ -58,8 +59,22 @@ class FacultyLiveAttendanceViewModel @Inject constructor(
         if (currentScheduleId == scheduleId) return
         currentScheduleId = scheduleId
         loadData(scheduleId)
+        loadScheduleRoomId(scheduleId)
         checkSessionStatus(scheduleId)
         startPolling(scheduleId)
+    }
+
+    private fun loadScheduleRoomId(scheduleId: String) {
+        viewModelScope.launch {
+            try {
+                val response = apiService.getSchedule(scheduleId)
+                if (response.isSuccessful) {
+                    _uiState.value = _uiState.value.copy(
+                        roomId = response.body()?.roomId ?: ""
+                    )
+                }
+            } catch (_: Exception) { /* roomId stays empty — live feed will degrade gracefully */ }
+        }
     }
 
     fun loadData(scheduleId: String? = currentScheduleId) {

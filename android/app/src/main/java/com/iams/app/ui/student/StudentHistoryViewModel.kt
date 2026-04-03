@@ -54,17 +54,20 @@ class StudentHistoryViewModel @Inject constructor(
                     val records = response.body() ?: emptyList()
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
+                        isRefreshing = false,
                         records = records.sortedByDescending { it.date }
                     )
                 } else {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
+                        isRefreshing = false,
                         error = "Failed to load attendance history"
                     )
                 }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
+                    isRefreshing = false,
                     error = "Network error. Please check your connection."
                 )
             }
@@ -72,11 +75,8 @@ class StudentHistoryViewModel @Inject constructor(
     }
 
     fun refresh() {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isRefreshing = true, error = null)
-            loadHistory()
-            _uiState.value = _uiState.value.copy(isRefreshing = false)
-        }
+        _uiState.value = _uiState.value.copy(isRefreshing = true, error = null)
+        loadHistory()
     }
 
     fun previousMonth() {

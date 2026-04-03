@@ -177,6 +177,15 @@ SESSION_BUFFER_MINUTES = 5        # Buffer before/after class
 - [ ] Batch scan processing optimization
 - [ ] Track visualization for debugging
 
+## Audit Fixes (2026-03-30 Stream C)
+
+See [audit_stream_c_fixes.md](audit_stream_c_fixes.md) for details on five bugs fixed in presence_service.py:
+- C1: `_redis_clear_room` was receiving `schedule_id` instead of `room_id`
+- C2: `user_info.get("similarity")` should be `user_info.get("confidence")` (field mismatch)
+- C3: Python-level read-increment-write on scan counters replaced with SQL-level atomic updates
+- C4: Added batch `self.db.commit()` after per-student scan loop
+- C5: Added `cleanup_old_ended_sessions()` call in `run_scan_cycle()` to prevent unbounded `_ended_sessions` set growth
+
 ## References
 
 - [MOD-07 Documentation](docs/modules/MOD-07-presence-tracking-and-early-leave/)

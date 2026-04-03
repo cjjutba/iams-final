@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -24,6 +26,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -40,6 +43,7 @@ data class BottomNavTab(
     val icon: ImageVector,
     val selectedIcon: ImageVector = icon,
     val route: String,
+    val badgeCount: Int = 0,
 )
 
 @Composable
@@ -103,12 +107,35 @@ fun IAMSBottomBar(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
-                        Icon(
-                            imageVector = if (selected) tab.selectedIcon else tab.icon,
-                            contentDescription = tab.label,
-                            modifier = Modifier.size(22.dp),
-                            tint = iconColor,
-                        )
+                        if (tab.badgeCount > 0) {
+                            BadgedBox(
+                                badge = {
+                                    Badge(
+                                        containerColor = Color(0xFFDC2626),
+                                        contentColor = Color.White,
+                                    ) {
+                                        Text(
+                                            text = if (tab.badgeCount > 99) "99+" else tab.badgeCount.toString(),
+                                            fontSize = 9.sp,
+                                        )
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = if (selected) tab.selectedIcon else tab.icon,
+                                    contentDescription = tab.label,
+                                    modifier = Modifier.size(22.dp),
+                                    tint = iconColor,
+                                )
+                            }
+                        } else {
+                            Icon(
+                                imageVector = if (selected) tab.selectedIcon else tab.icon,
+                                contentDescription = tab.label,
+                                modifier = Modifier.size(22.dp),
+                                tint = iconColor,
+                            )
+                        }
                         Text(
                             text = tab.label,
                             fontSize = 10.sp,

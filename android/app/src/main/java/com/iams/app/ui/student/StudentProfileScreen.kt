@@ -24,7 +24,6 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -58,6 +57,7 @@ import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.components.SkeletonBox
 import com.iams.app.ui.components.LocalToastState
 import com.iams.app.ui.components.ToastType
 import com.iams.app.ui.navigation.Routes
@@ -145,11 +145,62 @@ fun StudentProfileScreen(
 
         when {
             uiState.isLoading && uiState.user == null -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = spacing.lg, vertical = spacing.xxl),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    CircularProgressIndicator(color = Primary)
+                    // Avatar skeleton
+                    SkeletonBox(
+                        width = layout.avatarXl,
+                        height = layout.avatarXl,
+                        cornerRadius = 40.dp
+                    )
+                    Spacer(modifier = Modifier.height(spacing.lg))
+                    // Name skeleton
+                    SkeletonBox(width = 160.dp, height = 28.dp)
+                    Spacer(modifier = Modifier.height(spacing.sm))
+                    // Student ID skeleton
+                    SkeletonBox(width = 120.dp, height = 18.dp)
+                    Spacer(modifier = Modifier.height(spacing.xxxl))
+                    // Info card skeleton
+                    IAMSCard {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                SkeletonBox(width = 50.dp, height = 14.dp)
+                                SkeletonBox(width = 160.dp, height = 14.dp)
+                            }
+                            Spacer(modifier = Modifier.height(spacing.md))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                SkeletonBox(width = 40.dp, height = 14.dp)
+                                SkeletonBox(width = 70.dp, height = 14.dp)
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(spacing.xxl))
+                    HorizontalDivider(thickness = 1.dp, color = Border)
+                    Spacer(modifier = Modifier.height(spacing.xxl))
+                    // Action items skeleton (3 rows)
+                    repeat(3) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = spacing.lg),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            SkeletonBox(width = 20.dp, height = 20.dp, cornerRadius = 4.dp)
+                            Spacer(modifier = Modifier.width(spacing.md))
+                            SkeletonBox(width = 120.dp, height = 16.dp)
+                        }
+                        HorizontalDivider(thickness = 1.dp, color = Border)
+                    }
                 }
             }
 

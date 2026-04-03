@@ -132,7 +132,7 @@ class StudentEditProfileViewModel @Inject constructor(
 
         // Validate
         val emailErr = InputValidation.validateEmail(state.email)
-        val phoneErr = InputValidation.validatePhone(state.phone)
+        val phoneErr = InputValidation.validatePhoneOptional(state.phone)
 
         if (emailErr != null || phoneErr != null) {
             _uiState.value = state.copy(emailError = emailErr, phoneError = phoneErr)

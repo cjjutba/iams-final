@@ -11,7 +11,7 @@ import io
 import time
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
 
 from sqlalchemy.orm import Session
 
@@ -39,6 +39,12 @@ from app.services.presence_service import PresenceService
 from app.utils.dependencies import get_current_student, get_current_user, get_optional_user
 
 router = APIRouter()
+
+
+async def verify_edge_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
+    """Validate the API key sent by edge devices (Raspberry Pi)."""
+    if x_api_key != settings.EDGE_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API key")
 
 
 @router.post("/register", response_model=FaceRegisterResponse, status_code=status.HTTP_201_CREATED)
@@ -224,7 +230,11 @@ async def validate_image(
 
 
 @router.post("/recognize", response_model=FaceRecognizeResponse, status_code=status.HTTP_200_OK)
-async def recognize_face(request: FaceRecognizeRequest, db: Session = Depends(get_db)):
+async def recognize_face(
+    request: FaceRecognizeRequest,
+    db: Session = Depends(get_db),
+    _api_key: None = Depends(verify_edge_api_key),
+):
     """
     **Recognize Single Face (Testing)**
 
@@ -237,7 +247,7 @@ async def recognize_face(request: FaceRecognizeRequest, db: Session = Depends(ge
     **Note:** This is a testing endpoint. Production face recognition
     is done via the Edge API (`/face/process`).
 
-    No authentication required (for testing).
+    Requires Edge API key (`X-API-Key` header).
     """
     face_service = FaceService(db)
 
@@ -294,7 +304,11 @@ def _is_duplicate_request(request_id: str, room_id: str, timestamp: datetime) ->
 
 
 @router.post("/process", response_model=EdgeProcessResponse, status_code=status.HTTP_200_OK)
-async def process_faces(request: EdgeProcessRequest, db: Session = Depends(get_db)):
+async def process_faces(
+    request: EdgeProcessRequest,
+    db: Session = Depends(get_db),
+    _api_key: None = Depends(verify_edge_api_key),
+):
     """
     **Edge API: Process Faces from Raspberry Pi**
 
@@ -347,8 +361,7 @@ async def process_faces(request: EdgeProcessRequest, db: Session = Depends(get_d
     ```
 
     **Authentication:**
-    - No authentication required (trusted network)
-    - In production: Use API key or service account token
+    - Requires Edge API key (`X-API-Key` header)
 
     **Rate Limiting:**
     - Recommended: 60-second intervals between scans
@@ -523,7 +536,11 @@ async def process_faces(request: EdgeProcessRequest, db: Session = Depends(get_d
 
 
 @router.post("/gone", status_code=200)
-async def face_gone(request: FaceGoneRequest, db: Session = Depends(get_db)):
+async def face_gone(
+    request: FaceGoneRequest,
+    db: Session = Depends(get_db),
+    _api_key: None = Depends(verify_edge_api_key),
+):
     """Receive face_gone events from RPi smart sampler."""
     if request.room_id and request.track_ids:
         presence_service = PresenceService(db)

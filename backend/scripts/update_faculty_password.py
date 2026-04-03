@@ -1,7 +1,7 @@
 """
 Update Faculty Password Script
 
-Updates the password for the seed faculty user (faculty@gmail.com) to the new password.
+Updates the password for all faculty users to the new password.
 
 Run from backend directory:
     python -m scripts.update_faculty_password
@@ -20,7 +20,7 @@ from app.config import logger
 
 
 def update_password():
-    """Update the password for faculty@gmail.com."""
+    """Update the password for faculty.eb226@gmail.com."""
     db = SessionLocal()
 
     try:
@@ -30,11 +30,11 @@ def update_password():
 
         # Find the faculty user
         faculty = db.query(User).filter(
-            User.email == "faculty@gmail.com"
+            User.email == "faculty.eb226@gmail.com"
         ).first()
 
         if not faculty:
-            print("\nERROR: Faculty user (faculty@gmail.com) not found in database.")
+            print("\nERROR: Faculty user (faculty.eb226@gmail.com) not found in database.")
             print("Please run the seed script first: python -m scripts.seed_data")
             return
 

@@ -7,6 +7,7 @@ Data access layer for User operations.
 import uuid as uuid_mod
 
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.user import User, UserRole
@@ -69,6 +70,9 @@ class UserRepository:
         """
         from app.models.enrollment import Enrollment
 
+        if isinstance(schedule_id, str):
+            schedule_id = uuid_mod.UUID(schedule_id)
+
         return (
             self.db.query(User)
             .join(Enrollment, Enrollment.student_id == User.id)
@@ -102,7 +106,11 @@ class UserRepository:
 
         user = User(**user_data)
         self.db.add(user)
-        self.db.commit()
+        try:
+            self.db.commit()
+        except IntegrityError:
+            self.db.rollback()
+            raise DuplicateError("User with this email or student ID already exists")
         self.db.refresh(user)
         return user
 
@@ -125,7 +133,7 @@ class UserRepository:
             raise NotFoundError(f"User not found: {user_id}")
 
         for key, value in update_data.items():
-            if hasattr(user, key) and value is not None:
+            if hasattr(user, key):
                 setattr(user, key, value)
 
         self.db.commit()

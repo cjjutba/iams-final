@@ -11,8 +11,6 @@ import asyncio
 import logging
 import time
 
-from sqlalchemy.orm import Session
-
 from app.config import settings
 from app.services.frame_grabber import FrameGrabber
 from app.services.realtime_tracker import RealtimeTracker
@@ -47,13 +45,25 @@ class SessionPipeline:
         self._last_summary: float = 0.0
         self._frame_count: int = 0
 
+        # Cached schedule metadata for notification context
+        self._faculty_id: str | None = None
+        self._subject_code: str | None = None
+        self._subject_name: str | None = None
+
     async def start(self) -> None:
         """Initialize services and start the processing loop."""
         db = self._db_factory()
         try:
-            # Initialize presence service
+            # Initialize presence service (short-lived session for setup)
             self._presence = TrackPresenceService(db, self.schedule_id)
             self._presence.start_session()
+
+            # Cache schedule metadata for notification context
+            schedule = self._presence._schedule
+            if schedule:
+                self._faculty_id = str(schedule.faculty_id)
+                self._subject_code = schedule.subject_code
+                self._subject_name = schedule.subject_name
 
             # Initialize tracker with enrolled user info
             from app.services.ml.faiss_manager import faiss_manager
@@ -87,15 +97,15 @@ class SessionPipeline:
             self._last_flush = time.monotonic()
             self._last_summary = time.monotonic()
 
-            # Start the async loop
-            self._task = asyncio.create_task(
-                self._run_loop(db), name=f"pipeline-{self.schedule_id[:8]}"
-            )
-            logger.info("SessionPipeline started for schedule %s", self.schedule_id)
-
-        except Exception:
+        finally:
+            # Close the setup session immediately — loop creates short-lived sessions
             db.close()
-            raise
+
+        # Start the async loop (no long-lived DB session)
+        self._task = asyncio.create_task(
+            self._run_loop(), name=f"pipeline-{self.schedule_id[:8]}"
+        )
+        logger.info("SessionPipeline started for schedule %s", self.schedule_id)
 
     async def stop(self) -> dict:
         """Stop the pipeline and return session summary."""
@@ -109,7 +119,12 @@ class SessionPipeline:
 
         summary = {}
         if self._presence is not None:
-            summary = self._presence.end_session()
+            db = self._db_factory()
+            try:
+                self._presence.rebind_db(db)
+                summary = self._presence.end_session()
+            finally:
+                db.close()
 
         if self._tracker is not None:
             self._tracker.reset()
@@ -121,8 +136,12 @@ class SessionPipeline:
     def is_running(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    async def _run_loop(self, db: Session) -> None:
-        """Main processing loop — runs at PROCESSING_FPS."""
+    async def _run_loop(self) -> None:
+        """Main processing loop — runs at PROCESSING_FPS.
+
+        DB sessions are created short-lived for flush/write operations only.
+        The main frame-processing loop stays lightweight with no held connections.
+        """
         frame_interval = 1.0 / settings.PROCESSING_FPS
         loop = asyncio.get_event_loop()
 
@@ -139,10 +158,16 @@ class SessionPipeline:
 
                     self._frame_count += 1
 
-                    # Update presence state
-                    events = self._presence.process_track_frame(
-                        track_frame, time.monotonic()
-                    )
+                    # Update presence state — use short-lived DB session for
+                    # any event-driven writes (check-in, early leave)
+                    db = self._db_factory()
+                    try:
+                        self._presence.rebind_db(db)
+                        events = self._presence.process_track_frame(
+                            track_frame, time.monotonic()
+                        )
+                    finally:
+                        db.close()
 
                     # Broadcast frame update via WebSocket
                     await self._broadcast_frame_update(track_frame)
@@ -161,10 +186,15 @@ class SessionPipeline:
                             len(track_frame.tracks),
                         )
 
-                # Periodic flush (every PRESENCE_FLUSH_INTERVAL)
+                # Periodic flush (every PRESENCE_FLUSH_INTERVAL) — short-lived DB session
                 now = time.monotonic()
                 if (now - self._last_flush) >= settings.PRESENCE_FLUSH_INTERVAL:
-                    self._presence.flush_presence_logs()
+                    db = self._db_factory()
+                    try:
+                        self._presence.rebind_db(db)
+                        self._presence.flush_presence_logs()
+                    finally:
+                        db.close()
                     self._last_flush = now
 
                 # Periodic attendance summary (every 5s)
@@ -182,8 +212,6 @@ class SessionPipeline:
             logger.info("Pipeline %s cancelled", self.schedule_id[:8])
         except Exception:
             logger.exception("Pipeline %s crashed", self.schedule_id[:8])
-        finally:
-            db.close()
 
     async def _broadcast_frame_update(self, track_frame) -> None:
         """Send frame_update message to WebSocket clients."""
@@ -245,9 +273,6 @@ class SessionPipeline:
                     **event,
                 })
 
-                # Also send to alert channel for faculty/student
-                # (handled by the old PresenceService notification system)
-
             elif event_type == "early_leave_return":
                 await ws_manager.broadcast_attendance(self.schedule_id, {
                     "type": "early_leave_return",
@@ -257,3 +282,129 @@ class SessionPipeline:
 
         except Exception:
             logger.debug("Event broadcast failed: %s", event_type, exc_info=True)
+
+        # Send in-app / email notifications (fire-and-forget, never breaks pipeline)
+        await self._send_event_notifications(event)
+
+    async def _send_event_notifications(self, event: dict) -> None:
+        """Send in-app and email notifications for pipeline events.
+
+        Opens a short-lived DB session, calls notification_service.notify(),
+        and always closes the session. Failures are logged but never propagated
+        so the pipeline keeps running.
+        """
+        event_type = event.get("event")
+        if not event_type:
+            return
+
+        db = self._db_factory()
+        try:
+            from app.services.notification_service import notify as _notify
+
+            subject_code = self._subject_code or "class"
+
+            if event_type == "check_in":
+                student_id = event.get("student_id")
+                if student_id:
+                    await _notify(
+                        db, student_id,
+                        "Attendance Confirmed",
+                        f"You are marked {event.get('status', 'present')} for {subject_code}.",
+                        "check_in",
+                        preference_key="attendance_confirmation",
+                        toast_type="success",
+                        send_email=True,
+                        email_template="check_in",
+                        email_context={
+                            "student_name": event.get("student_name", ""),
+                            "subject_code": subject_code,
+                            "subject_name": self._subject_name or "",
+                            "status": event.get("status", "present"),
+                            "check_in_time": event.get("check_in_time", ""),
+                        },
+                    )
+
+            elif event_type == "early_leave":
+                student_id = event.get("student_id")
+                student_name = event.get("student_name", "A student")
+                attendance_id = event.get("attendance_id")
+                absent_seconds = event.get("absent_seconds", 0)
+                consecutive_misses = max(
+                    1, int(absent_seconds / settings.SCAN_INTERVAL_SECONDS)
+                )
+
+                # Faculty notification
+                if self._faculty_id:
+                    await _notify(
+                        db, self._faculty_id,
+                        "Early Leave Detected",
+                        f"{student_name} left {subject_code} early.",
+                        "early_leave",
+                        preference_key="early_leave_alerts",
+                        toast_type="warning",
+                        send_email=True,
+                        email_template="early_leave",
+                        email_context={
+                            "student_name": student_name,
+                            "subject_code": subject_code,
+                            "consecutive_misses": consecutive_misses,
+                            "last_seen_at": event.get("check_in_time", "N/A"),
+                            "severity": "auto_detected",
+                        },
+                        reference_id=attendance_id,
+                        reference_type="early_leave",
+                    )
+
+                # Student notification
+                if student_id:
+                    await _notify(
+                        db, student_id,
+                        "Early Leave Recorded",
+                        f"You were marked as early leave from {subject_code}.",
+                        "early_leave",
+                        preference_key="early_leave_alerts",
+                        toast_type="warning",
+                        send_email=True,
+                        email_template="early_leave",
+                        email_context={
+                            "student_name": student_name,
+                            "subject_code": subject_code,
+                            "consecutive_misses": consecutive_misses,
+                            "last_seen_at": event.get("check_in_time", "N/A"),
+                            "severity": "auto_detected",
+                        },
+                        reference_id=attendance_id,
+                        reference_type="early_leave",
+                    )
+
+            elif event_type == "early_leave_return":
+                student_id = event.get("student_id")
+                student_name = event.get("student_name", "A student")
+
+                # Faculty notification (no email — low urgency)
+                if self._faculty_id:
+                    await _notify(
+                        db, self._faculty_id,
+                        "Student Returned",
+                        f"{student_name} has returned to {subject_code}.",
+                        "early_leave_return",
+                        toast_type="info",
+                    )
+
+                # Student notification (no email)
+                if student_id:
+                    await _notify(
+                        db, student_id,
+                        "Return Noted",
+                        f"Your return to {subject_code} has been recorded.",
+                        "early_leave_return",
+                        toast_type="info",
+                    )
+
+        except Exception:
+            logger.warning(
+                "Failed to send event notifications for %s (schedule %s)",
+                event_type, self.schedule_id[:8], exc_info=True,
+            )
+        finally:
+            db.close()

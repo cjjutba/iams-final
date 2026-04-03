@@ -15,7 +15,7 @@ export const useNotificationStore = create<NotificationState>((set) => ({
   fetchUnreadCount: async () => {
     try {
       const response = await notificationsService.unreadCount()
-      set({ unreadCount: response.count || 0 })
+      set({ unreadCount: response.unread_count || 0 })
     } catch {
       // Silently fail
     }

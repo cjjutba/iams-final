@@ -175,7 +175,7 @@ def list_users(
     else:
         users = user_service.get_all_users(skip, limit)
 
-    return [UserResponse.from_orm(user) for user in users]
+    return [UserResponse.model_validate(user) for user in users]
 
 
 @router.get("/statistics", status_code=status.HTTP_200_OK)
@@ -218,7 +218,7 @@ def get_user(user_id: str, current_user: User = Depends(get_current_user), db: S
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Students can only view their own profile")
 
     user = user_service.get_user(user_id)
-    return UserResponse.from_orm(user)
+    return UserResponse.model_validate(user)
 
 
 @router.patch("/{user_id}", response_model=UserResponse, status_code=status.HTTP_200_OK)
@@ -247,10 +247,10 @@ def update_user(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Students can only update their own profile")
 
     # Filter out None values
-    update_dict = {k: v for k, v in update_data.dict().items() if v is not None}
+    update_dict = {k: v for k, v in update_data.model_dump().items() if v is not None}
 
     user = user_service.update_user(user_id, update_dict)
-    return UserResponse.from_orm(user)
+    return UserResponse.model_validate(user)
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_200_OK)
@@ -286,4 +286,4 @@ def reactivate_user(user_id: str, current_user: User = Depends(get_current_admin
     user_service = UserService(db)
     user = user_service.reactivate_user(user_id)
 
-    return {"success": True, "message": "User reactivated successfully", "user": UserResponse.from_orm(user)}
+    return {"success": True, "message": "User reactivated successfully", "user": UserResponse.model_validate(user)}

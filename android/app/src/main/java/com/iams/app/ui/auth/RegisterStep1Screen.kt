@@ -62,6 +62,7 @@ fun RegisterStep1Screen(
     LaunchedEffect(uiState.studentVerified) {
         if (uiState.studentVerified) {
             toastState.showToast("Student ID verified", ToastType.SUCCESS)
+            RegistrationDataHolder.birthdate = formatBirthdateForApi(birthdate)
             navController.navigate(
                 Routes.registerStep2(
                     studentId = uiState.studentId,

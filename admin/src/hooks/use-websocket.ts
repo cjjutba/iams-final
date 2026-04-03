@@ -15,7 +15,8 @@ function connectShared(userId: string) {
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = import.meta.env.VITE_WS_URL || `${protocol}//${window.location.host}`
-  const ws = new WebSocket(`${host}/api/v1/ws/${userId}`)
+  const token = localStorage.getItem('access_token')
+  const ws = new WebSocket(`${host}/api/v1/ws/${userId}${token ? `?token=${token}` : ''}`)
 
   ws.onopen = () => {
     console.log('[WS] Connected')

@@ -6,6 +6,8 @@ Includes JWT, Face Recognition, and Presence Tracking settings.
 """
 
 import logging
+import os
+import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -33,7 +35,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_ENABLED: bool = True
 
     # CORS
-    CORS_ORIGINS: list[str] = ["*"]  # In production, specify exact origins
+    CORS_ORIGINS: list[str] = []  # Must be explicitly set per environment
 
     # ONNX Runtime (thread control for multi-worker CPU efficiency)
     ONNX_INTRA_OP_THREADS: int = 2  # threads within a single op (per worker)
@@ -62,8 +64,8 @@ class Settings(BaseSettings):
 
     # Adaptive Threshold
     ADAPTIVE_THRESHOLD_ENABLED: bool = True
-    ADAPTIVE_THRESHOLD_FLOOR: float = 0.35  # Minimum allowed threshold
-    ADAPTIVE_THRESHOLD_CEILING: float = 0.30  # Solo-match ceiling (cross-domain selfie→CCTV yields 0.3-0.5)
+    ADAPTIVE_THRESHOLD_FLOOR: float = 0.30  # Minimum allowed threshold
+    ADAPTIVE_THRESHOLD_CEILING: float = 0.45  # Solo-match ceiling (cross-domain selfie→CCTV yields 0.3-0.5)
     ADAPTIVE_THRESHOLD_MIN_SAMPLES: int = 50  # Min samples before adapting
     ADAPTIVE_THRESHOLD_WINDOW: int = 500  # Rolling window size
 
@@ -148,6 +150,13 @@ class Settings(BaseSettings):
     RESEND_FROM_EMAIL: str = "IAMS <noreply@iams.jrmsu.edu.ph>"
     EMAIL_ENABLED: bool = False  # Master kill switch — set True when Resend API key is configured
 
+    # Notification Jobs
+    DAILY_DIGEST_HOUR: int = 18  # Hour (0-23) to send daily digest
+    WEEKLY_DIGEST_HOUR: int = 19  # Hour (0-23) to send weekly digest (Sundays)
+    NOTIFICATION_RETENTION_DAYS: int = 90  # Days to keep read notifications
+    LOW_ATTENDANCE_CHECK_WINDOW_DAYS: int = 30  # Rolling window for low attendance check
+    LOW_ATTENDANCE_RENOTIFY_DAYS: int = 7  # Min days between re-notification for low attendance
+
     # Logging
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "logs/app.log"
@@ -162,6 +171,15 @@ class Settings(BaseSettings):
 
 # Initialize settings
 settings = Settings()
+
+# --- Startup validation: catch dangerous defaults in production ---
+# Only enforce in explicit production mode (DEBUG=False AND not in test runner)
+_is_testing = "pytest" in sys.modules or os.getenv("TESTING", "").lower() in ("1", "true")
+if not settings.DEBUG and not _is_testing:
+    if settings.SECRET_KEY == "dev-secret-key-change-in-production":
+        raise RuntimeError("SECRET_KEY must be changed in production")
+    if settings.EDGE_API_KEY == "edge-secret-key-change-in-production":
+        raise RuntimeError("EDGE_API_KEY must be changed in production")
 
 
 class _HLSAccessFilter(logging.Filter):

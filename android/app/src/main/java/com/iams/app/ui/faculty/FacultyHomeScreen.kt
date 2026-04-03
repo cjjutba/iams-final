@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -58,6 +60,7 @@ import androidx.navigation.NavController
 import com.iams.app.data.model.LiveAttendanceResponse
 import com.iams.app.data.model.ScheduleResponse
 import com.iams.app.ui.components.CardSkeleton
+import com.iams.app.ui.components.SkeletonBox
 import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
@@ -86,6 +89,7 @@ fun FacultyHomeScreen(
     viewModel: FacultyHomeViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val notifUnreadCount by viewModel.notificationService.unreadCount.collectAsState()
     val spacing = IAMSThemeTokens.spacing
     val toastState = LocalToastState.current
 
@@ -172,7 +176,7 @@ fun FacultyHomeScreen(
                         IconButton(onClick = { navController.navigate(Routes.FACULTY_NOTIFICATIONS) }) {
                             BadgedBox(
                                 badge = {
-                                    val count = uiState.unreadNotificationCount
+                                    val count = notifUnreadCount
                                     if (count > 0) {
                                         Badge(
                                             containerColor = Color(0xFFDC2626),
@@ -215,7 +219,19 @@ fun FacultyHomeScreen(
                 if (!uiState.initialLoadDone) {
                     item {
                         Spacer(modifier = Modifier.height(spacing.xxl))
-                        CardSkeleton(modifier = Modifier.padding(horizontal = spacing.screenPadding))
+                        IAMSCard(modifier = Modifier.padding(horizontal = spacing.screenPadding)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                SkeletonBox(width = 8.dp, height = 8.dp, cornerRadius = 4.dp)
+                                Spacer(modifier = Modifier.width(spacing.sm))
+                                SkeletonBox(width = 100.dp, height = 12.dp)
+                            }
+                            Spacer(modifier = Modifier.height(spacing.md))
+                            SkeletonBox(width = 200.dp, height = 22.dp)
+                            Spacer(modifier = Modifier.height(spacing.xs))
+                            SkeletonBox(width = 240.dp, height = 14.dp)
+                            Spacer(modifier = Modifier.height(spacing.lg))
+                            SkeletonBox(height = 40.dp, cornerRadius = 8.dp)
+                        }
                     }
                 }
 
@@ -679,11 +695,13 @@ private fun DaySummaryRow(
     val spacing = IAMSThemeTokens.spacing
 
     Row(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min),
         horizontalArrangement = Arrangement.spacedBy(spacing.sm)
     ) {
         // Total classes card
-        IAMSCard(modifier = Modifier.weight(1f)) {
+        IAMSCard(modifier = Modifier.weight(1f).fillMaxHeight()) {
             Text(
                 text = totalClasses.toString(),
                 style = MaterialTheme.typography.headlineLarge,
@@ -699,7 +717,7 @@ private fun DaySummaryRow(
         }
 
         // Next class or all done
-        IAMSCard(modifier = Modifier.weight(1f)) {
+        IAMSCard(modifier = Modifier.weight(1f).fillMaxHeight()) {
             if (nextUpcoming != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(

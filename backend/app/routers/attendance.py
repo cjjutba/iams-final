@@ -206,6 +206,19 @@ def get_today_attendance(
 
     Requires faculty authentication.
     """
+    # Faculty schedule ownership check (admins bypass)
+    if current_user.role == UserRole.FACULTY:
+        schedule_repo = ScheduleRepository(db)
+        schedule = schedule_repo.get_by_id(schedule_id)
+        if not schedule:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
+        if str(schedule.faculty_id) != str(current_user.id):
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this schedule's attendance")
+
     attendance_repo = AttendanceRepository(db)
     today = date.today()
 
@@ -229,6 +242,19 @@ def get_today_attendance_by_path(
 
     Requires faculty authentication.
     """
+    # Faculty schedule ownership check (admins bypass)
+    if current_user.role == UserRole.FACULTY:
+        schedule_repo = ScheduleRepository(db)
+        schedule = schedule_repo.get_by_id(schedule_id)
+        if not schedule:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
+        if str(schedule.faculty_id) != str(current_user.id):
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this schedule's attendance")
+
     attendance_repo = AttendanceRepository(db)
     today = date.today()
 

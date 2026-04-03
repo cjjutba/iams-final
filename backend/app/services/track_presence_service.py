@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.attendance_record import AttendanceStatus
+from app.models.early_leave_event import EarlyLeaveEvent
 from app.repositories.attendance_repository import AttendanceRepository
 from app.repositories.schedule_repository import ScheduleRepository
 from app.repositories.user_repository import UserRepository
@@ -67,6 +68,14 @@ class TrackPresenceService:
         self._name_map: dict[str, str] = {}  # user_id -> display name
         self._enrolled_ids: set[str] = set()
         self._pending_log_writes: list[dict] = []
+        self._schedule = None  # Cached schedule object
+
+    def rebind_db(self, db: Session) -> None:
+        """Swap the underlying DB session (for short-lived session pattern)."""
+        self.db = db
+        self.attendance_repo = AttendanceRepository(db)
+        self.schedule_repo = ScheduleRepository(db)
+        self.user_repo = UserRepository(db)
 
     @property
     def name_map(self) -> dict[str, str]:
@@ -78,8 +87,8 @@ class TrackPresenceService:
 
     def start_session(self) -> None:
         """Load all enrolled students and create attendance records in batch."""
-        schedule = self.schedule_repo.get_by_id(self.schedule_id)
-        if not schedule:
+        self._schedule = self.schedule_repo.get_by_id(self.schedule_id)
+        if not self._schedule:
             raise ValueError(f"Schedule not found: {self.schedule_id}")
 
         self._session_start = datetime.now()
@@ -133,8 +142,6 @@ class TrackPresenceService:
             if track.user_id and track.user_id in self._enrolled_ids:
                 present_user_ids.add(track.user_id)
 
-        schedule = self.schedule_repo.get_by_id(self.schedule_id)
-
         for sid, state in self._students.items():
             is_present = sid in present_user_ids
 
@@ -144,7 +151,7 @@ class TrackPresenceService:
                     # First detection → check in
                     now_dt = datetime.now()
                     grace_time = (
-                        datetime.combine(date.today(), schedule.start_time)
+                        datetime.combine(date.today(), self._schedule.start_time)
                         + timedelta(minutes=settings.GRACE_PERIOD_MINUTES)
                     ).time()
                     new_status = (
@@ -209,20 +216,40 @@ class TrackPresenceService:
                     elif (now_mono - state.absent_since) > settings.EARLY_LEAVE_TIMEOUT:
                         # Trigger early leave
                         state.early_leave_flagged = True
+                        absent_seconds = now_mono - state.absent_since
                         events.append({
                             "event": "early_leave",
                             "student_id": sid,
                             "student_name": state.name,
                             "attendance_id": state.attendance_id,
-                            "absent_seconds": now_mono - state.absent_since,
+                            "absent_seconds": absent_seconds,
                         })
                         self.attendance_repo.update(
                             state.attendance_id,
                             {"status": AttendanceStatus.EARLY_LEAVE},
                         )
+
+                        # Persist EarlyLeaveEvent to DB
+                        consecutive_misses = int(
+                            absent_seconds / settings.SCAN_INTERVAL_SECONDS
+                        )
+                        early_leave_event = EarlyLeaveEvent(
+                            attendance_id=state.attendance_id,
+                            detected_at=datetime.now(),
+                            last_seen_at=(
+                                state.check_in_time
+                                if state.check_in_time
+                                else datetime.now()
+                            ),
+                            consecutive_misses=max(1, consecutive_misses),
+                            context_severity="auto_detected",
+                        )
+                        self.db.add(early_leave_event)
+                        self.db.commit()
+
                         logger.warning(
                             "Early leave: student %s absent for %.0fs",
-                            sid, now_mono - state.absent_since,
+                            sid, absent_seconds,
                         )
 
         return events

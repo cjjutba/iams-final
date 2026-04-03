@@ -24,6 +24,13 @@ private const val TAG = "HybridFaceOverlay"
 private const val GRACE_PERIOD_MS = 3000L
 
 /**
+ * How long (ms) to wait before showing "Unknown" label on a newly-detected face.
+ * This prevents a single bad recognition frame from instantly labeling a registered
+ * student as "Unknown" while the backend retries recognition.
+ */
+private const val UNKNOWN_LABEL_DELAY_MS = 2000L
+
+/**
  * Hybrid overlay that combines ML Kit real-time face detection (15-30fps)
  * with backend identity labels from WebSocket.
  *
@@ -75,6 +82,7 @@ fun HybridFaceOverlay(
 
         // Update or create animated state for currently matched faces
         for (match in matched) {
+            val newStatus = match.track?.status ?: "pending"
             val existing = animatedFaces[match.faceKey]
             if (existing != null) {
                 coroutineScope.launch { existing.x1.animateTo(match.face.x1, tween(50)) }
@@ -83,7 +91,13 @@ fun HybridFaceOverlay(
                 coroutineScope.launch { existing.y2.animateTo(match.face.y2, tween(50)) }
                 existing.name = match.track?.name
                 existing.confidence = match.track?.confidence ?: 0f
-                existing.status = match.track?.status ?: "pending"
+                // Track when "unknown" status first appears; clear it on recognition
+                if (newStatus == "unknown" && existing.status != "unknown") {
+                    existing.unknownSince = now
+                } else if (newStatus == "recognized") {
+                    existing.unknownSince = 0L
+                }
+                existing.status = newStatus
                 existing.lastSeenTime = now
                 if (existing.alpha.value < 1f) {
                     coroutineScope.launch { existing.alpha.animateTo(1f, tween(200)) }
@@ -97,8 +111,9 @@ fun HybridFaceOverlay(
                     alpha = Animatable(0f),
                     name = match.track?.name,
                     confidence = match.track?.confidence ?: 0f,
-                    status = match.track?.status ?: "pending",
+                    status = newStatus,
                     lastSeenTime = now,
+                    unknownSince = if (newStatus == "unknown") now else 0L,
                 )
                 animatedFaces[match.faceKey] = state
                 coroutineScope.launch { state.alpha.animateTo(1f, tween(300)) }
@@ -149,6 +164,14 @@ fun HybridFaceOverlay(
             val baseAlpha = state.alpha.value
             if (baseAlpha < 0.01f) continue
 
+            // Only render classified faces — no white "pending" boxes.
+            // For "unknown" faces, wait until the label delay passes before showing.
+            val isUnknownReady = state.status == "unknown" &&
+                state.unknownSince > 0L &&
+                (now - state.unknownSince) >= UNKNOWN_LABEL_DELAY_MS
+            if (state.status == "pending") continue
+            if (state.status == "unknown" && !isUnknownReady) continue
+
             // Compute grace period fade: faces within grace period fade out gradually
             val elapsed = now - state.lastSeenTime
             val graceFade = if (elapsed > 0) {
@@ -169,12 +192,10 @@ fun HybridFaceOverlay(
 
             if (boxWidth < 2f || boxHeight < 2f) continue
 
-            // Skip pending/unmatched faces entirely — only draw recognized or confirmed unknown
-            if (state.status != "recognized" && state.status != "unknown") continue
-
+            // At this point, status is either "recognized" or "unknown" (delay passed).
             val boxColor = when (state.status) {
                 "recognized" -> Color(0xFF4CAF50)  // Green
-                else -> Color(0xFFFF9800)          // Yellow/Orange — confirmed unrecognized
+                else -> Color(0xFFFF9800)          // Orange — unknown
             }.copy(alpha = alpha)
 
             // Draw bounding box
@@ -186,7 +207,10 @@ fun HybridFaceOverlay(
             )
 
             // Draw name label
-            val label = state.name ?: if (state.status == "unknown") "Unknown" else ""
+            val label = when (state.status) {
+                "recognized" -> state.name ?: ""
+                else -> "Unknown"
+            }
             if (label.isNotEmpty()) {
                 drawNameLabel(
                     textMeasurer = textMeasurer,
@@ -321,4 +345,6 @@ private class AnimatedFaceState(
     var confidence: Float,
     var status: String,
     var lastSeenTime: Long,
+    /** Timestamp (ms) when status first became "unknown". 0 = never unknown. */
+    var unknownSince: Long = 0L,
 )

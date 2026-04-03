@@ -174,9 +174,10 @@ def delete_room(
     db: Session = Depends(get_db),
 ):
     """
-    **Delete Room** (Admin Only)
+    **Deactivate Room** (Admin Only)
 
-    Permanently delete a room from the system.
+    Soft-delete a room by marking it inactive.
+    The room data is preserved but it will no longer appear in active queries.
 
     Requires admin authentication.
     """
@@ -184,6 +185,6 @@ def delete_room(
     if not room:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Room not found")
 
-    db.delete(room)
+    room.is_active = False
     db.commit()
-    return {"success": True, "message": "Room deleted"}
+    return {"success": True, "message": "Room deactivated"}

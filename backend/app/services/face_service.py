@@ -128,8 +128,11 @@ class FaceService:
 
         # L2 normalize each embedding individually
         normed = []
-        for emb in embeddings:
-            n = emb / np.linalg.norm(emb)
+        for i, emb in enumerate(embeddings):
+            norm = np.linalg.norm(emb)
+            if norm < 1e-6:
+                raise FaceRecognitionError(f"Image {i + 1} produced a degenerate embedding (zero norm)")
+            n = emb / norm
             normed.append(n)
 
         # Cross-capture validation: warn if embeddings seem inconsistent,
@@ -202,10 +205,20 @@ class FaceService:
             # Rollback DB transaction
             self.db.rollback()
 
-            # Rollback FAISS additions since DB commit failed
+            # Rollback FAISS additions since DB commit failed.
+            # Note: faiss.remove() only removes from user_map, NOT from the
+            # underlying IndexFlatIP — orphaned vectors remain in the index.
             for fid in faiss_ids:
                 with contextlib.suppress(Exception):
                     self.faiss.remove(fid)
+
+            # Rebuild the FAISS index from DB to purge orphaned vectors and
+            # ensure full consistency between DB and index.
+            try:
+                await self.rebuild_faiss_index()
+            except Exception:
+                logger.error("Failed to rebuild FAISS after rollback", exc_info=True)
+
             logger.error(f"Failed to save face registration for user {user_id}: {e}")
             raise FaceRecognitionError("Failed to save face registration") from e
 
@@ -337,10 +350,15 @@ class FaceService:
             self.db.commit()
             logger.info(f"Deleted old face registration for user {user_id}")
 
-        # Register new face
-        faiss_id, message, quality_reports = await self.register_face(user_id, images)
-
+        # Rebuild FAISS BEFORE register_face so the index is clean and
+        # index.ntotal-based FAISS IDs assigned during registration match
+        # the final index state.  Without this, register_face assigns IDs
+        # based on a stale ntotal, then a post-register rebuild reassigns
+        # all IDs from scratch — leaving DB faiss_ids out of sync.
         await self.rebuild_faiss_index()
+
+        # Register new face (operates on the freshly rebuilt index)
+        faiss_id, message, quality_reports = await self.register_face(user_id, images)
 
         return faiss_id, "Face re-registered successfully", quality_reports
 

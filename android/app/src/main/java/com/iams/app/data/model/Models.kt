@@ -371,6 +371,18 @@ data class NotificationPreferenceUpdateRequest(
     @SerializedName("email_enabled") val emailEnabled: Boolean? = null,
 )
 
+// === Real-time Notification Event (from WebSocket /ws/alerts/{user_id}) ===
+data class NotificationEvent(
+    val type: String,
+    @SerializedName("toast_type") val toastType: String,
+    @SerializedName("notification_type") val notificationType: String,
+    val title: String,
+    val message: String,
+    @SerializedName("reference_id") val referenceId: String? = null,
+    @SerializedName("reference_type") val referenceType: String? = null,
+    val timestamp: String? = null,
+)
+
 // === Faculty Analytics ===
 data class ClassOverview(
     @SerializedName("schedule_id") val scheduleId: String,

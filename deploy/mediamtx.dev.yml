@@ -55,30 +55,19 @@ writeQueueSize: 512
 
 paths:
   # ── EB 226 (192.168.88.10) ──────────────────────────────────────────────
-  # Sub stream for app live feed (640x480, low bitrate — smooth on phone)
+  # Main stream: HD display for app + frame grabber for recognition
   eb226:
-    source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.10:554/h264Preview_01_sub
-    sourceOnDemand: yes
-    sourceProtocol: tcp
-
-  # Main stream for backend face recognition (2560x1920 — needs high res)
-  eb226-recognition:
     source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.10:554/h264Preview_01_main
     sourceOnDemand: yes
     sourceProtocol: tcp
 
   # ── EB 227 (192.168.88.11) ──────────────────────────────────────────────
-  # Sub stream for app live feed (640x480, low bitrate — smooth on phone)
+  # Main stream: HD display for app + frame grabber for recognition
   eb227:
-    source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.11:554/h264Preview_01_sub
-    sourceOnDemand: yes
-    sourceProtocol: tcp
-
-  # Main stream for backend face recognition (2560x1920 — needs high res)
-  eb227-recognition:
     source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.11:554/h264Preview_01_main
     sourceOnDemand: yes
     sourceProtocol: tcp
 
+  # Allow RPi push in local dev if needed
   all_others:
     overridePublisher: yes

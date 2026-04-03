@@ -41,12 +41,14 @@ COPY . .
 # Create required directories
 RUN mkdir -p data/faiss data/uploads/faces data/hls logs
 
+# Create non-root user and set ownership
+RUN adduser --disabled-password --gecos '' appuser && chown -R appuser:appuser /app
+
 # Expose port
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD curl -f http://localhost:8000/api/v1/health || exit 1
+# Run as non-root user
+USER appuser
 
 # Run with uvicorn (single worker, async concurrency handles load)
 # Avoids cross-worker state issues with _active_sessions, user_map, etc.

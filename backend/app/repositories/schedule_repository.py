@@ -172,7 +172,7 @@ class ScheduleRepository:
             raise NotFoundError(f"Schedule not found: {schedule_id}")
 
         for key, value in update_data.items():
-            if hasattr(schedule, key) and value is not None:
+            if hasattr(schedule, key):
                 setattr(schedule, key, value)
 
         self.db.commit()

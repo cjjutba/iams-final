@@ -48,14 +48,14 @@ class NotificationRepository:
         query = self.db.query(Notification).filter(Notification.user_id == _to_uuid(user_id))
 
         if unread_only:
-            query = query.filter(Notification.read == False)  # noqa: E712
+            query = query.filter(Notification.read.is_(False))
 
         return query.order_by(Notification.created_at.desc()).offset(skip).limit(limit).all()
 
     def get_unread_count(self, user_id: str) -> int:
         """Get count of unread notifications for a user"""
         return (
-            self.db.query(Notification).filter(Notification.user_id == _to_uuid(user_id), Notification.read == False).count()  # noqa: E712
+            self.db.query(Notification).filter(Notification.user_id == _to_uuid(user_id), Notification.read.is_(False)).count()
         )
 
     def create(self, notification_data: dict) -> Notification:
@@ -110,7 +110,7 @@ class NotificationRepository:
         now = datetime.utcnow()
         count = (
             self.db.query(Notification)
-            .filter(Notification.user_id == _to_uuid(user_id), Notification.read == False)  # noqa: E712
+            .filter(Notification.user_id == _to_uuid(user_id), Notification.read.is_(False))
             .update({"read": True, "read_at": now})
         )
         self.db.commit()

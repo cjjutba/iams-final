@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import com.iams.app.BuildConfig
 import com.iams.app.data.api.ApiService
 import com.iams.app.data.api.AttendanceWebSocketClient
+import com.iams.app.data.api.TokenManager
+import okhttp3.OkHttpClient
 import com.iams.app.data.model.AttendanceSummaryMessage
 import com.iams.app.data.model.FrameUpdateMessage
 import com.iams.app.data.model.RoomResponse
@@ -41,7 +43,9 @@ data class LiveFeedUiState(
 
 @HiltViewModel
 class FacultyLiveFeedViewModel @Inject constructor(
-    private val apiService: ApiService
+    private val apiService: ApiService,
+    private val okHttpClient: OkHttpClient,
+    private val tokenManager: TokenManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LiveFeedUiState())
@@ -49,7 +53,9 @@ class FacultyLiveFeedViewModel @Inject constructor(
 
     // Real-time tracks from WebSocket (replaces localFaces + recognitions)
     private val wsClient = AttendanceWebSocketClient(
-        "ws://${BuildConfig.BACKEND_HOST}:${BuildConfig.BACKEND_PORT}/api/v1/ws"
+        "ws://${BuildConfig.BACKEND_HOST}:${BuildConfig.BACKEND_PORT}/api/v1/ws",
+        okHttpClient,
+        { tokenManager.accessToken }
     )
     val tracks: StateFlow<List<TrackInfo>> = wsClient.tracks
     val wsConnected: StateFlow<Boolean> = wsClient.isConnected

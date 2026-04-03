@@ -58,15 +58,16 @@ class LoginViewModel @Inject constructor(
                         userId = body.user.id
                     )
 
-                    // Upload pending face images from registration (if any)
-                    uploadPendingFaceImages()
-
+                    // Navigate immediately — don't block on face upload
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
                         loginSuccess = true,
                         userRole = body.user.role,
                         successMessage = "Welcome back!"
                     )
+
+                    // Upload pending face images in the background (fire-and-forget)
+                    viewModelScope.launch { uploadPendingFaceImages() }
                 } else {
                     val errorBody = response.errorBody()?.string()
                     val message = when (response.code()) {

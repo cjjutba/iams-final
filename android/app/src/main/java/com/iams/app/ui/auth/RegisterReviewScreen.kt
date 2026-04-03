@@ -213,7 +213,7 @@ fun RegisterReviewScreen(
                     studentId = studentId,
                     firstName = firstName,
                     lastName = lastName,
-                    birthdate = "2000-01-01"  // Already validated in Step 1
+                    birthdate = regData.birthdate
                 )
             },
             enabled = !uiState.isLoading && isAgreed,

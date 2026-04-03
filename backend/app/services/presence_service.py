@@ -23,7 +23,7 @@ import redis as redis_lib
 from sqlalchemy.orm import Session
 
 from app.config import logger, settings
-from app.models.attendance_record import AttendanceStatus
+from app.models.attendance_record import AttendanceRecord, AttendanceStatus
 from app.models.schedule import Schedule
 from app.repositories.attendance_repository import AttendanceRepository
 from app.repositories.schedule_repository import ScheduleRepository
@@ -333,6 +333,7 @@ class PresenceService:
             }
 
             schedule = session.schedule
+            room_id = self._get_room_id(schedule)
 
             # Remove from active sessions
             del self.active_sessions[schedule_id]
@@ -343,9 +344,9 @@ class PresenceService:
             # Unregister from global session manager
             session_manager.unregister_session(schedule_id)
 
-        # Clear Redis presence state for this session
+        # Clear Redis presence state for this room (not schedule_id)
         try:
-            await self._redis_clear_room(schedule_id)
+            await self._redis_clear_room(room_id)
         except Exception as e:
             logger.error(f"Failed to clear Redis presence state for {schedule_id}: {e}")
 
@@ -380,6 +381,9 @@ class PresenceService:
                 AttendanceScanEngine. When provided, the engine results are used
                 instead of reading pipeline Redis state.
         """
+        # Periodically purge stale ended-session records from previous days
+        PresenceService.cleanup_old_ended_sessions()
+
         if not self.active_sessions:
             return
 
@@ -479,7 +483,7 @@ class PresenceService:
 
                     # Log initial presence
                     user_info = identified_users.get(student_id, {})
-                    confidence = user_info.get("similarity")
+                    confidence = user_info.get("confidence")
                     self.attendance_repo.log_presence(
                         attendance_id,
                         {
@@ -540,7 +544,7 @@ class PresenceService:
             if is_present:
                 # Get recognition similarity from fusion track
                 user_info = identified_users[student_id]
-                confidence = user_info.get("similarity")
+                confidence = user_info.get("confidence")
 
                 # Log presence
                 self.attendance_repo.log_presence(
@@ -553,15 +557,18 @@ class PresenceService:
                     },
                 )
 
-                # Update attendance metrics
-                scans_present = attendance.scans_present + 1
-                total_scans = attendance.total_scans + 1
-                presence_score = self.calculate_presence_score(total_scans, scans_present)
+                # Update attendance metrics with SQL-level increment (race-safe)
+                new_scans_present = attendance.scans_present + 1
+                new_total_scans = attendance.total_scans + 1
+                presence_score = self.calculate_presence_score(new_total_scans, new_scans_present)
 
-                self.attendance_repo.update(
-                    attendance_id,
-                    {"scans_present": scans_present, "total_scans": total_scans, "presence_score": presence_score},
-                )
+                self.db.query(AttendanceRecord).filter(
+                    AttendanceRecord.id == attendance.id
+                ).update({
+                    AttendanceRecord.scans_present: AttendanceRecord.scans_present + 1,
+                    AttendanceRecord.total_scans: AttendanceRecord.total_scans + 1,
+                    AttendanceRecord.presence_score: presence_score,
+                })
 
                 student_info = self._get_student_info(student_id)
                 present_students.append({
@@ -577,13 +584,16 @@ class PresenceService:
                     {"scan_number": scan_count, "scan_time": datetime.now(), "detected": False, "confidence": None},
                 )
 
-                # Update total scans
-                total_scans = attendance.total_scans + 1
-                presence_score = self.calculate_presence_score(total_scans, attendance.scans_present)
+                # Update total scans with SQL-level increment (race-safe)
+                new_total_scans = attendance.total_scans + 1
+                presence_score = self.calculate_presence_score(new_total_scans, attendance.scans_present)
 
-                self.attendance_repo.update(
-                    attendance_id, {"total_scans": total_scans, "presence_score": presence_score}
-                )
+                self.db.query(AttendanceRecord).filter(
+                    AttendanceRecord.id == attendance.id
+                ).update({
+                    AttendanceRecord.total_scans: AttendanceRecord.total_scans + 1,
+                    AttendanceRecord.presence_score: presence_score,
+                })
 
             # Update session state under lock after DB ops
             async with self._lock:
@@ -596,6 +606,10 @@ class PresenceService:
                         if consecutive_misses >= settings.EARLY_LEAVE_THRESHOLD:
                             early_leave_candidates.append((attendance_id, student_id, consecutive_misses))
                             self.active_sessions[schedule_id].student_states[student_id]["early_leave_flagged"] = True
+
+        # Batch commit all SQL-level updates from the scan loop
+        # (SQL .update() calls above are not auto-committed unlike repo methods)
+        self.db.commit()
 
         # Handle early leave flagging outside per-student loop
         for attendance_id, student_id, consecutive_misses in early_leave_candidates:

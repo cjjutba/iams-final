@@ -43,7 +43,7 @@ class StudentRecordRepository:
                 func.count(FaceRegistration.id).label("face_count"),
             )
             .outerjoin(User, User.student_id == StudentRecord.student_id)
-            .outerjoin(FaceRegistration, (FaceRegistration.user_id == User.id) & (FaceRegistration.is_active == True))
+            .outerjoin(FaceRegistration, (FaceRegistration.user_id == User.id) & (FaceRegistration.is_active.is_(True)))
             .group_by(StudentRecord.student_id, User.id)
             .order_by(StudentRecord.created_at.desc())
             .offset(skip)
@@ -79,7 +79,7 @@ class StudentRecordRepository:
         if not record:
             raise NotFoundError(f"Student record not found: {student_id}")
         for key, value in update_data.items():
-            if hasattr(record, key) and value is not None:
+            if hasattr(record, key):
                 setattr(record, key, value)
         self.db.flush()
         return record

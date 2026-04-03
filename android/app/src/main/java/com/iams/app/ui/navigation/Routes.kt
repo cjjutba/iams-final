@@ -1,5 +1,7 @@
 package com.iams.app.ui.navigation
 
+import android.net.Uri
+
 object Routes {
     // Onboarding & Welcome
     const val SPLASH = "splash"
@@ -65,28 +67,28 @@ object Routes {
     // ── Helper functions ────────────────────────────────────────────────
 
     fun facultyLiveFeed(scheduleId: String, roomId: String) =
-        "faculty/live-feed/$scheduleId/$roomId"
+        "faculty/live-feed/${Uri.encode(scheduleId)}/${Uri.encode(roomId)}"
 
     fun facultyClassDetail(scheduleId: String) =
-        "faculty/class-detail/$scheduleId"
+        "faculty/class-detail/${Uri.encode(scheduleId)}"
 
     fun facultyStudentDetail(studentId: String, scheduleId: String) =
-        "faculty/student-detail/$studentId/$scheduleId"
+        "faculty/student-detail/${Uri.encode(studentId)}/${Uri.encode(scheduleId)}"
 
     fun facultyLiveAttendance(scheduleId: String) =
-        "faculty/live-attendance/$scheduleId"
+        "faculty/live-attendance/${Uri.encode(scheduleId)}"
 
     fun facultyManualEntry(scheduleId: String) =
-        "faculty/manual-entry/$scheduleId"
+        "faculty/manual-entry/${Uri.encode(scheduleId)}"
 
     fun studentAttendanceDetail(attendanceId: String, scheduleId: String, date: String) =
-        "student/attendance-detail/$attendanceId/$scheduleId/$date"
+        "student/attendance-detail/${Uri.encode(attendanceId)}/${Uri.encode(scheduleId)}/${Uri.encode(date)}"
 
     fun studentFaceRegister(mode: String) =
-        "student/face-register/$mode"
+        "student/face-register/${Uri.encode(mode)}"
 
     fun registerStep2(studentId: String, firstName: String, lastName: String, email: String) =
-        "register/step2/$studentId/$firstName/$lastName/${email.ifBlank { "_" }}"
+        "register/step2/${Uri.encode(studentId)}/${Uri.encode(firstName)}/${Uri.encode(lastName)}/${Uri.encode(email.ifBlank { "_" })}"
 
 
 }

@@ -99,23 +99,15 @@ class InsightFaceModel:
             self.app = FaceAnalysis(name=self._model_name, providers=providers)
             self.app.prepare(ctx_id=0, det_size=self._det_size, det_thresh=settings.INSIGHTFACE_DET_THRESH)
 
-            # Configure thread counts on the already-created ORT sessions.
-            # InsightFace stores sub-models in self.app.models; each has a
-            # .session attribute (ort.InferenceSession). We patch their
-            # session options post-hoc for any sessions that didn't pick up
-            # the env vars (belt-and-suspenders).
-            patched = 0
-            for model in getattr(self.app, "models", []):
-                sess = getattr(model, "session", None)
-                if sess is not None and isinstance(sess, ort.InferenceSession):
-                    opts = sess.get_session_options()
-                    opts.intra_op_num_threads = settings.ONNX_INTRA_OP_THREADS
-                    opts.inter_op_num_threads = settings.ONNX_INTER_OP_THREADS
-                    patched += 1
+            # NOTE: ORT session thread counts are controlled via OMP_NUM_THREADS
+            # and MKL_NUM_THREADS environment variables set above, BEFORE
+            # InsightFace creates its sessions.  The previous code here called
+            # session.get_session_options() and set intra/inter_op_num_threads
+            # on the returned object, but get_session_options() returns a COPY
+            # — modifications have no effect on the live session.  Removed as
+            # dead code.
 
-            logger.info(
-                f"InsightFace '{self._model_name}' loaded successfully ({patched} ORT session(s) thread-configured)"
-            )
+            logger.info(f"InsightFace '{self._model_name}' loaded successfully")
 
         except ImportError:
             logger.error("insightface not installed. Run: pip install insightface onnxruntime")

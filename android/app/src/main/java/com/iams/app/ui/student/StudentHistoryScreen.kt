@@ -51,6 +51,7 @@ import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.components.SkeletonBox
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.TextPrimary
 import com.iams.app.ui.theme.Background
@@ -255,7 +256,24 @@ fun StudentHistoryScreen(
             ) {
                 item { Spacer(modifier = Modifier.height(spacing.lg)) }
 
-                if (filteredRecords.isNotEmpty()) {
+                if (uiState.isLoading && filteredRecords.isEmpty()) {
+                    items(4) {
+                        IAMSCard {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                SkeletonBox(width = 140.dp, height = 12.dp)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                SkeletonBox(width = 160.dp, height = 14.dp)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    SkeletonBox(width = 70.dp, height = 24.dp, cornerRadius = 12.dp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    SkeletonBox(width = 100.dp, height = 14.dp)
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(spacing.md))
+                    }
+                } else if (filteredRecords.isNotEmpty()) {
                     items(filteredRecords, key = { it.id }) { record ->
                         HistoryRecordCard(record = record)
                         Spacer(modifier = Modifier.height(spacing.md))

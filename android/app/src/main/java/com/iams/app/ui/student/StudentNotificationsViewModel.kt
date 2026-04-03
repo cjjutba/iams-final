@@ -3,6 +3,7 @@ package com.iams.app.ui.student
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiService
+import com.iams.app.data.api.NotificationService
 import com.iams.app.data.model.NotificationResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,7 +25,8 @@ data class NotificationsUiState(
 
 @HiltViewModel
 class StudentNotificationsViewModel @Inject constructor(
-    private val apiService: ApiService
+    private val apiService: ApiService,
+    private val notificationService: NotificationService,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(NotificationsUiState())
@@ -56,6 +58,8 @@ class StudentNotificationsViewModel @Inject constructor(
                         isRefreshing = false,
                         notifications = response.body() ?: emptyList()
                     )
+                    // Reconcile centralized unread count with REST API
+                    notificationService.fetchUnreadCount(apiService)
                 } else {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
@@ -93,8 +97,10 @@ class StudentNotificationsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val response = apiService.markNotificationRead(notificationId)
-                if (!response.isSuccessful) {
-                    // Revert
+                if (response.isSuccessful) {
+                    notificationService.decrementUnreadCount()
+                } else {
+                    // Revert optimistic update
                     _uiState.value = _uiState.value.copy(
                         notifications = _uiState.value.notifications.map {
                             if (it.id == notificationId) it.copy(read = false) else it
@@ -125,7 +131,9 @@ class StudentNotificationsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val response = apiService.markAllNotificationsRead()
-                if (!response.isSuccessful) {
+                if (response.isSuccessful) {
+                    notificationService.setUnreadCount(0)
+                } else {
                     loadNotifications(silent = true)
                 }
             } catch (_: Exception) {
@@ -139,6 +147,7 @@ class StudentNotificationsViewModel @Inject constructor(
     fun deleteNotification(notificationId: String) {
         // Optimistic removal
         val removed = _uiState.value.notifications.find { it.id == notificationId } ?: return
+        val wasUnread = !removed.read
         _uiState.value = _uiState.value.copy(
             deletingIds = _uiState.value.deletingIds + notificationId,
             notifications = _uiState.value.notifications.filter { it.id != notificationId }
@@ -147,8 +156,10 @@ class StudentNotificationsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val response = apiService.deleteNotification(notificationId)
-                if (!response.isSuccessful) {
-                    // Revert — re-insert at original position
+                if (response.isSuccessful) {
+                    if (wasUnread) notificationService.decrementUnreadCount()
+                } else {
+                    // Revert -- re-insert at original position
                     _uiState.value = _uiState.value.copy(
                         notifications = (_uiState.value.notifications + removed)
                             .sortedByDescending { it.createdAt }
@@ -178,7 +189,9 @@ class StudentNotificationsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val response = apiService.deleteAllNotifications()
-                if (!response.isSuccessful) {
+                if (response.isSuccessful) {
+                    notificationService.setUnreadCount(0)
+                } else {
                     _uiState.value = _uiState.value.copy(notifications = backup)
                 }
             } catch (_: Exception) {

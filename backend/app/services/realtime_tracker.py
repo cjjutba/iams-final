@@ -182,13 +182,19 @@ class RealtimeTracker:
             identity.last_seen = now
             identity.frames_seen += 1
 
-            # Recognize if: new track, or re-verify interval elapsed
+            # Recognize if: new track, re-verify interval elapsed, or quick-retry
+            # for recently-first-seen "unknown" tracks (retry every 1s for 10s).
+            # This prevents a single bad frame from locking a face as "Unknown"
+            # for the full REVERIFY_INTERVAL when the student is already registered.
+            is_quick_retry = (
+                identity.recognition_status == "unknown"
+                and (now - identity.first_seen) < 10.0
+                and (now - identity.last_verified) > 1.0
+            )
             needs_recognition = (
                 identity.recognition_status == "pending"
-                or (
-                    identity.recognition_status != "pending"
-                    and (now - identity.last_verified) > settings.REVERIFY_INTERVAL
-                )
+                or is_quick_retry
+                or (now - identity.last_verified) > settings.REVERIFY_INTERVAL
             )
 
             if needs_recognition and embedding is not None:

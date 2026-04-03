@@ -20,7 +20,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -54,6 +53,7 @@ import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
+import com.iams.app.ui.components.SkeletonBox
 import com.iams.app.ui.components.IAMSHeader
 import com.iams.app.ui.theme.AbsentFg
 import com.iams.app.ui.theme.Background
@@ -102,11 +102,41 @@ fun FacultyReportsScreen(
         ) {
             when {
                 uiState.isLoading && uiState.schedules.isEmpty() -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = spacing.screenPadding)
+                            .padding(top = spacing.lg, bottom = spacing.xxxl),
+                        verticalArrangement = Arrangement.spacedBy(spacing.lg)
                     ) {
-                        CircularProgressIndicator(color = Primary)
+                        // Generate Report card skeleton
+                        IAMSCard {
+                            SkeletonBox(width = 140.dp, height = 22.dp)
+                            Spacer(modifier = Modifier.height(spacing.lg))
+                            // Dropdown skeleton
+                            SkeletonBox(width = 80.dp, height = 14.dp)
+                            Spacer(modifier = Modifier.height(6.dp))
+                            SkeletonBox(height = 48.dp, cornerRadius = 12.dp)
+                            Spacer(modifier = Modifier.height(spacing.md))
+                            // Report type skeleton
+                            SkeletonBox(width = 80.dp, height = 14.dp)
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(spacing.sm)) {
+                                SkeletonBox(width = 120.dp, height = 40.dp, cornerRadius = 8.dp, modifier = Modifier.weight(1f))
+                                SkeletonBox(width = 120.dp, height = 40.dp, cornerRadius = 8.dp, modifier = Modifier.weight(1f))
+                            }
+                            Spacer(modifier = Modifier.height(spacing.lg))
+                            SkeletonBox(height = 44.dp, cornerRadius = 8.dp)
+                        }
+                        // Export Options card skeleton
+                        IAMSCard {
+                            SkeletonBox(width = 120.dp, height = 22.dp)
+                            Spacer(modifier = Modifier.height(spacing.lg))
+                            SkeletonBox(height = 44.dp, cornerRadius = 8.dp)
+                            Spacer(modifier = Modifier.height(spacing.md))
+                            SkeletonBox(height = 44.dp, cornerRadius = 8.dp)
+                        }
                     }
                 }
 

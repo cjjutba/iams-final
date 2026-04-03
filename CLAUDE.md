@@ -71,6 +71,22 @@ pip install -r requirements.txt
 python run.py                  # Start dev server on port 8000
 ```
 
+### Database Reset & Seed
+```bash
+# THE single command to wipe and reseed everything:
+docker compose exec -T api-gateway python -m scripts.seed_data
+
+# Or from project root:
+./scripts/db-reset.sh
+```
+
+When asked to "seed the data" or "reset the database", run:
+`docker compose exec -T api-gateway python -m scripts.seed_data`
+
+This wipes ALL data and reseeds from scratch: ~160 student records, 2 faculty accounts
+(`faculty.eb226@gmail.com`, `faculty.eb227@gmail.com`, password: `password123`),
+admin (`admin@admin.com` / `123`), rooms, schedules, and system settings.
+
 ### Testing
 ```bash
 cd backend

@@ -12,11 +12,11 @@
 ## Connection Notes
 - See [supabase-connection.md](supabase-connection.md) for detailed connection troubleshooting notes
 
-## Schema State (Updated 2026-03-01)
-- **Migration chain:** e49171084f7c -> 86d63351d3e9 -> 64622432db30 -> 53db1ce6f3d0 -> 7bf7e45a61d8 -> a1b2c3d4e5f6 [head]
+## Schema State (Updated 2026-03-30)
+- **Migration chain:** e49171084f7c -> 86d63351d3e9 -> 64622432db30 -> 53db1ce6f3d0 -> 7bf7e45a61d8 -> a1b2c3d4e5f6 [head] (PENDING: new migration needed for audit fixes)
 - **DB stamped at:** a1b2c3d4e5f6 (ALL 6 MIGRATIONS APPLIED, verified 2026-03-01)
-- **Tables (11+1):** users, face_registrations, rooms, schedules, enrollments, attendance_records, presence_logs, early_leave_events, notifications, student_records, faculty_records, alembic_version
-- **Enums:** userrole (STUDENT, FACULTY, ADMIN), attendancestatus (PRESENT, LATE, ABSENT, EARLY_LEAVE)
+- **Model tables (18):** users, face_registrations, face_embeddings, rooms, schedules, enrollments, attendance_records, presence_logs, early_leave_events, notifications, notification_preferences, student_records, faculty_records, refresh_tokens, system_settings, attendance_anomalies, engagement_scores, attendance_predictions + alembic_version
+- **Enums:** userrole (STUDENT, FACULTY, ADMIN), attendancestatus (PRESENT, LATE, ABSENT, EARLY_LEAVE, EXCUSED), anomalytype (6 values), risklevel (LOW, MODERATE, HIGH, CRITICAL)
 - All tables use UUID primary keys (no default gen_random_uuid -- UUIDs must be generated app-side)
 - presence_logs uses BIGSERIAL for id (auto-incrementing, high-volume table)
 - student_records PK is student_id (VARCHAR), faculty_records PK is faculty_id (VARCHAR) -- NOT FK'd to users
@@ -37,14 +37,30 @@
 - student_records: PK on student_id (unique email too)
 - faculty_records: PK on faculty_id (unique email too)
 
-## Foreign Key Relationships
-- face_registrations.user_id -> users.id
+## Foreign Key Relationships (CASCADE audit applied 2026-03-30)
+- face_registrations.user_id -> users.id (CASCADE)
 - schedules.faculty_id -> users.id, schedules.room_id -> rooms.id
-- enrollments.student_id -> users.id, enrollments.schedule_id -> schedules.id
+- enrollments.student_id -> users.id (CASCADE), enrollments.schedule_id -> schedules.id (CASCADE)
 - attendance_records.student_id -> users.id, attendance_records.schedule_id -> schedules.id
-- early_leave_events.attendance_id -> attendance_records.id
-- presence_logs.attendance_id -> attendance_records.id
-- notifications.user_id -> users.id
+- early_leave_events.attendance_id -> attendance_records.id (CASCADE)
+- presence_logs.attendance_id -> attendance_records.id (CASCADE)
+- notifications.user_id -> users.id (CASCADE)
+- engagement_scores.attendance_id -> attendance_records.id (CASCADE)
+- attendance_anomalies.student_id -> users.id (CASCADE), schedule_id -> schedules.id (SET NULL)
+- attendance_predictions.student_id -> users.id (CASCADE), schedule_id -> schedules.id (CASCADE)
+
+## Constraints (added 2026-03-30)
+- rooms: UniqueConstraint("name", "building", name="uq_room_name_building")
+- schedules: CheckConstraint("day_of_week >= 0 AND day_of_week <= 6")
+- attendance_records: CheckConstraint("presence_score >= 0 AND presence_score <= 100")
+
+## Relationship Pattern (updated 2026-03-30)
+- All models now use `back_populates=` (not `backref=`) for bidirectional relationships
+- User model has explicit relationships: face_registration, teaching_schedules, enrollments, attendance_records, notifications
+- AttendanceRecord has: presence_logs, early_leave_events (both uncommented)
+- Schedule has: enrollments, attendance_records (both uncommented)
+- Room has: schedules (uncommented)
+- Exception: FaceEmbedding still uses `backref=` with cascade on FaceRegistration (intentional for delete-orphan)
 
 ## Alembic Notes
 - Autogenerate works from sandbox via pooler connection (IPv4)

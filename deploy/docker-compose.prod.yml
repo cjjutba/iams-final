@@ -61,6 +61,11 @@ services:
         condition: service_started
       redis:
         condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
       interval: 30s
@@ -91,7 +96,7 @@ services:
           memory: 128M
 
   mediamtx:
-    image: bluenviron/mediamtx:latest
+    image: bluenviron/mediamtx:1.11.3
     container_name: iams-mediamtx
     restart: unless-stopped
     volumes:
@@ -106,7 +111,7 @@ services:
           memory: 256M
 
   coturn:
-    image: coturn/coturn:latest
+    image: coturn/coturn:4.6.2-r1
     container_name: iams-coturn
     restart: unless-stopped
     command: >

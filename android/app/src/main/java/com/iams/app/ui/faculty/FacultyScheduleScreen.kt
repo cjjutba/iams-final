@@ -2,7 +2,6 @@ package com.iams.app.ui.faculty
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,7 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -43,6 +41,7 @@ import androidx.navigation.NavController
 import com.iams.app.data.model.ScheduleResponse
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.components.SkeletonBox
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.TextPrimary
 import com.iams.app.ui.theme.Border
@@ -85,9 +84,8 @@ fun FacultyScheduleScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
                 .padding(horizontal = spacing.lg, vertical = spacing.lg),
-            horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+            horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
             DAY_LABELS.forEachIndexed { index, label ->
                 DayButton(
@@ -112,7 +110,19 @@ fun FacultyScheduleScreen(
                 verticalArrangement = Arrangement.spacedBy(spacing.sm),
                 modifier = Modifier.fillMaxSize(),
             ) {
-                if (filteredSchedules.isEmpty() && !uiState.isLoading) {
+                if (uiState.isLoading && filteredSchedules.isEmpty()) {
+                    items(3) {
+                        IAMSCard {
+                            SkeletonBox(width = 180.dp, height = 20.dp)
+                            Spacer(modifier = Modifier.height(spacing.xs))
+                            SkeletonBox(width = 100.dp, height = 12.dp)
+                            Spacer(modifier = Modifier.height(spacing.sm))
+                            SkeletonBox(width = 140.dp, height = 12.dp)
+                            Spacer(modifier = Modifier.height(spacing.xs))
+                            SkeletonBox(width = 80.dp, height = 12.dp)
+                        }
+                    }
+                } else if (filteredSchedules.isEmpty() && !uiState.isLoading) {
                     item {
                         ScheduleEmptyState(
                             dayName = getDayName(uiState.selectedDay)
@@ -142,31 +152,34 @@ private fun DayButton(
     isToday: Boolean,
     onClick: () -> Unit,
 ) {
+    val pillHeight = 40.dp
+    val pillWidth = 56.dp
+
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
+            .width(pillWidth)
+            .height(pillHeight)
             .clip(RoundedCornerShape(9999.dp))
             .background(if (isSelected) Primary else Secondary)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .width(24.dp),
+            .clickable(onClick = onClick),
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (isSelected) PrimaryForeground else TextSecondary,
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (isSelected) PrimaryForeground else TextSecondary,
+        )
+        // Today indicator dot at the bottom of the pill
+        if (isToday && !isSelected) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 4.dp)
+                    .size(4.dp)
+                    .clip(CircleShape)
+                    .background(Primary)
             )
-            if (isToday && !isSelected) {
-                Spacer(modifier = Modifier.height(2.dp))
-                Box(
-                    modifier = Modifier
-                        .size(4.dp)
-                        .clip(CircleShape)
-                        .background(Primary)
-                )
-            }
         }
     }
 }

@@ -19,6 +19,8 @@ import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -47,6 +49,7 @@ import com.iams.app.ui.components.IAMSBottomBar
 import com.iams.app.ui.components.IAMSToastHost
 import com.iams.app.ui.components.LocalToastState
 import com.iams.app.ui.components.ToastState
+import com.iams.app.ui.components.ToastType
 import com.iams.app.ui.common.SettingsScreen
 import com.iams.app.ui.faculty.FacultyAlertsScreen
 import com.iams.app.ui.faculty.FacultyAnalyticsDashboardScreen
@@ -82,8 +85,11 @@ fun IAMSNavHost() {
     // Always start at splash — it checks auth state and routes accordingly
     val startDestination = Routes.SPLASH
 
+    // Collect centralized unread notification count for badges
+    val unreadCount by navViewModel.notificationService.unreadCount.collectAsState()
+
     val studentTabs = listOf(
-        BottomNavTab("Home", Icons.Outlined.Home, Icons.Filled.Home, Routes.STUDENT_HOME),
+        BottomNavTab("Home", Icons.Outlined.Home, Icons.Filled.Home, Routes.STUDENT_HOME, badgeCount = unreadCount),
         BottomNavTab("Schedule", Icons.Outlined.Schedule, Icons.Filled.Schedule, Routes.STUDENT_SCHEDULE),
         BottomNavTab("History", Icons.Outlined.History, Icons.Filled.History, Routes.STUDENT_HISTORY),
         BottomNavTab("Profile", Icons.Outlined.Person, Icons.Filled.Person, Routes.STUDENT_PROFILE),
@@ -93,13 +99,27 @@ fun IAMSNavHost() {
         BottomNavTab("Home", Icons.Outlined.Home, Icons.Filled.Home, Routes.FACULTY_HOME),
         BottomNavTab("Schedule", Icons.Outlined.Schedule, Icons.Filled.Schedule, Routes.FACULTY_SCHEDULE),
         BottomNavTab("Analytics", Icons.Outlined.Assessment, Icons.Filled.Assessment, Routes.FACULTY_ANALYTICS_DASHBOARD),
-        BottomNavTab("Alerts", Icons.Outlined.ReportProblem, Icons.Filled.ReportProblem, Routes.FACULTY_ALERTS),
+        BottomNavTab("Alerts", Icons.Outlined.ReportProblem, Icons.Filled.ReportProblem, Routes.FACULTY_ALERTS, badgeCount = unreadCount),
         BottomNavTab("Profile", Icons.Outlined.Person, Icons.Filled.Person, Routes.FACULTY_PROFILE),
     )
 
     val isStudentSection = currentRoute in studentTabs.map { it.route }
     val isFacultySection = currentRoute in facultyTabs.map { it.route }
     val showBottomBar = isStudentSection || isFacultySection
+
+    // Observe notification WebSocket events and show toasts
+    LaunchedEffect(navViewModel.notificationService) {
+        navViewModel.notificationService.events?.collect { event ->
+            val toastType = when (event.toastType) {
+                "success" -> ToastType.SUCCESS
+                "warning" -> ToastType.WARNING
+                "error" -> ToastType.ERROR
+                else -> ToastType.INFO
+            }
+            toastState.showToast(event.title, toastType)
+            navViewModel.notificationService.incrementUnreadCount()
+        }
+    }
 
     CompositionLocalProvider(LocalToastState provides toastState) {
         Box {

@@ -22,6 +22,20 @@
 - `ScheduleRepository.get_current_schedule(room_id, day_of_week, current_time)` - requires 3 args, NOT just room_id
 - Called from `face.py` Edge API `/process` endpoint using `request.timestamp.weekday()` and `request.timestamp.time()`
 
+### Lifespan Pattern (main.py)
+- Uses `@asynccontextmanager` lifespan instead of deprecated `@app.on_event("startup"/"shutdown")`
+- DB check raises `RuntimeError` on failure (hard fail); `check_db_connection()` is sync, wrapped in `asyncio.to_thread()`
+- FAISS subscriber task stored on `app.state.faiss_subscriber_task`, cancelled+awaited on shutdown
+- `run_session_lifecycle_check`: sync DB reads extracted to `_gather_lifecycle_state()` run via `asyncio.to_thread()`, async pipeline ops in separate phase
+
+### Redis Client Pattern
+- `get_redis()` pings cached pool before returning; reconnects transparently on failure
+- `health_check()` async function returns bool for health endpoint integration
+
+### PresenceService Method Types
+- **Async**: `start_session(sid)`, `end_session(sid)`
+- **Sync**: `get_active_sessions()`, `get_session_state(sid)`, `cleanup_old_ended_sessions()`, `was_session_ended_today(sid)`
+
 ### Import Organization
 - `import io` should be at module top level in `face.py`, not inside loop bodies
 - Face router uses: `io.BytesIO()` for PIL image -> bytes conversion in both `/recognize` and `/process`
@@ -47,6 +61,24 @@
 - Repository: `backend/app/repositories/notification_repository.py`
 - Router: `backend/app/routers/notifications.py`
 - Mounted at `/api/v1/notifications` in main.py
+- **Pipeline integration**: `realtime_pipeline.py` `_send_event_notifications()` calls `notify()` for check_in, early_leave, early_leave_return events
+- **Session lifecycle**: `main.py` auto-start/end blocks send session_start/session_end notifications to faculty + enrolled students
+- **Background jobs**: `notification_jobs.py` has 5 APScheduler cron jobs (daily_digest, weekly_digest, low_attendance_check, anomaly_detection, notification_cleanup)
+
+### APScheduler Jobs (main.py)
+- FAISS health check: interval 30min
+- Session lifecycle check: interval 30s
+- Daily digest: cron at DAILY_DIGEST_HOUR (default 18:00)
+- Weekly digest: cron Sun at WEEKLY_DIGEST_HOUR (default 19:00)
+- Low attendance check: cron daily 19:15
+- Anomaly detection: cron daily 20:00
+- Notification cleanup: cron daily 03:00
+- All notification jobs: max_instances=1, misfire_grace_time=3600, coalesce=True
+
+### TrackPresenceService Schedule Access
+- `self._schedule` is loaded in `start_session()` via `self.schedule_repo.get_by_id()`
+- Accessed from SessionPipeline as `self._presence._schedule` (private but stable)
+- Has: `faculty_id`, `subject_code`, `subject_name`, `room_id`, `start_time`, `end_time`
 
 ### Auth Service Methods
 - `forgot_password(email)` - MVP stub, always returns success (prevents email enumeration)

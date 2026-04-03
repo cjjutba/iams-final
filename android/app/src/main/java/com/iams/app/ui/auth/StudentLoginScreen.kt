@@ -148,22 +148,6 @@ fun StudentLoginScreen(
             )
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Forgot Password link
-        Text(
-            text = "Forgot password?",
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = Primary,
-            textAlign = TextAlign.End,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(enabled = !uiState.isLoading) {
-                    navController.navigate(Routes.FORGOT_PASSWORD)
-                }
-        )
-
         Spacer(modifier = Modifier.height(24.dp))
 
         // Login button

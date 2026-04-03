@@ -8,7 +8,7 @@ import enum
 import uuid
 from datetime import date
 
-from sqlalchemy import Column, Date, DateTime, Float, ForeignKey, Integer, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, Column, Date, DateTime, Float, ForeignKey, Integer, Text, UniqueConstraint
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -76,13 +76,16 @@ class AttendanceRecord(Base):
     remarks = Column(Text, nullable=True)
 
     # Relationships
-    student = relationship("User", foreign_keys=[student_id], backref="attendance_records")
-    schedule = relationship("Schedule", backref="attendance_records")
-    # presence_logs = relationship("PresenceLog", back_populates="attendance_record")
-    # early_leave_events = relationship("EarlyLeaveEvent", back_populates="attendance_record")
+    student = relationship("User", foreign_keys=[student_id], back_populates="attendance_records")
+    schedule = relationship("Schedule", back_populates="attendance_records")
+    presence_logs = relationship("PresenceLog", back_populates="attendance_record")
+    early_leave_events = relationship("EarlyLeaveEvent", back_populates="attendance_record")
 
     # Unique constraint (one record per student per schedule per date)
-    __table_args__ = (UniqueConstraint("student_id", "schedule_id", "date", name="uq_student_schedule_date"),)
+    __table_args__ = (
+        UniqueConstraint("student_id", "schedule_id", "date", name="uq_student_schedule_date"),
+        CheckConstraint("presence_score >= 0 AND presence_score <= 100", name="ck_presence_score_range"),
+    )
 
     def __repr__(self):
         return f"<AttendanceRecord(id={self.id}, student_id={self.student_id}, date={self.date}, status={self.status})>"

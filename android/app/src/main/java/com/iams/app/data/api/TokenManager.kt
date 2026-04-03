@@ -5,9 +5,12 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -24,21 +27,36 @@ class TokenManager @Inject constructor(@ApplicationContext private val context: 
     @Volatile
     var isLoggingOut: Boolean = false
 
-    val accessToken get() = runBlocking {
-        context.dataStore.data.map { it[ACCESS_TOKEN] }.first()
+    @Volatile
+    private var _accessToken: String? = null
+    @Volatile
+    private var _refreshToken: String? = null
+    @Volatile
+    private var _userRole: String? = null
+    @Volatile
+    private var _userId: String? = null
+
+    init {
+        CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
+            val prefs = context.dataStore.data.first()
+            _accessToken = prefs[ACCESS_TOKEN]
+            _refreshToken = prefs[REFRESH_TOKEN]
+            _userRole = prefs[USER_ROLE]
+            _userId = prefs[USER_ID]
+        }
     }
-    val refreshToken get() = runBlocking {
-        context.dataStore.data.map { it[REFRESH_TOKEN] }.first()
-    }
-    val userRole get() = runBlocking {
-        context.dataStore.data.map { it[USER_ROLE] }.first()
-    }
-    val userId get() = runBlocking {
-        context.dataStore.data.map { it[USER_ID] }.first()
-    }
+
+    val accessToken: String? get() = _accessToken
+    val refreshToken: String? get() = _refreshToken
+    val userRole: String? get() = _userRole
+    val userId: String? get() = _userId
 
     suspend fun saveTokens(access: String, refresh: String, role: String, userId: String) {
         isLoggingOut = false
+        _accessToken = access
+        _refreshToken = refresh
+        _userRole = role
+        _userId = userId
         context.dataStore.edit {
             it[ACCESS_TOKEN] = access
             it[REFRESH_TOKEN] = refresh
@@ -48,6 +66,10 @@ class TokenManager @Inject constructor(@ApplicationContext private val context: 
     }
 
     suspend fun clearTokens() {
+        _accessToken = null
+        _refreshToken = null
+        _userRole = null
+        _userId = null
         context.dataStore.edit { it.clear() }
     }
 }

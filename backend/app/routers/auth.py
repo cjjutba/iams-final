@@ -170,7 +170,9 @@ def login(
 
 
 @router.post("/refresh", status_code=status.HTTP_200_OK)
+@limiter.limit(settings.RATE_LIMIT_AUTH)
 def refresh_token(
+    request: Request,
     body: RefreshRequest,
     db: Session = Depends(get_db),
 ):
@@ -178,6 +180,7 @@ def refresh_token(
     **Refresh Access Token**
 
     Generate a new access token using a refresh token.
+    Rate limited to 10 requests/minute.
     """
     auth_service = AuthService(db)
     return auth_service.refresh_access_token(body.refresh_token)
@@ -229,7 +232,9 @@ def forgot_password(
 
 
 @router.post("/change-password", status_code=status.HTTP_200_OK)
+@limiter.limit(settings.RATE_LIMIT_AUTH)
 def change_password(
+    request: Request,
     body: PasswordChange,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -238,6 +243,7 @@ def change_password(
     **Change Password**
 
     Change the current user's password.
+    Rate limited to 10 requests/minute.
     """
     auth_service = AuthService(db)
     auth_service.change_password(

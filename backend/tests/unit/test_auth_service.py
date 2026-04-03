@@ -215,7 +215,7 @@ class TestLogin:
         user = _make_user(password="CorrectPassword1")
         repo.get_by_identifier.return_value = user
 
-        with pytest.raises(AuthenticationError, match="Invalid email/student ID or password"):
+        with pytest.raises(AuthenticationError, match="Invalid email or password"):
             service.login("student@test.edu", "WrongPassword1")
 
     def test_login_user_not_found(self):
@@ -223,7 +223,7 @@ class TestLogin:
         service, repo = _make_auth_service()
         repo.get_by_identifier.return_value = None
 
-        with pytest.raises(AuthenticationError, match="Invalid email/student ID or password"):
+        with pytest.raises(AuthenticationError, match="Invalid email or password"):
             service.login("nobody@test.edu", "AnyPassword1")
 
     def test_login_inactive_user(self):
@@ -506,13 +506,13 @@ class TestLoginSupabaseUser:
     """Test login behavior for users who only have Supabase auth (no local password)."""
 
     def test_login_no_password_hash_raises(self):
-        """A user with password_hash=None should be rejected with helpful message."""
+        """A user with password_hash=None should be rejected."""
         service, repo = _make_auth_service()
         user = _make_user(password="TestPass123")
-        user.password_hash = None  # Supabase-managed account
+        user.password_hash = None
         repo.get_by_identifier.return_value = user
 
-        with pytest.raises(AuthenticationError, match="Supabase Auth"):
+        with pytest.raises(AuthenticationError, match="Invalid email or password"):
             service.login("student@test.edu", "AnyPassword1")
 
 

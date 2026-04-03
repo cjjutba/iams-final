@@ -6,8 +6,9 @@ Represents classrooms/rooms where attendance is monitored.
 
 import uuid
 
-from sqlalchemy import Boolean, Column, Integer, String
+from sqlalchemy import Boolean, Column, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
 
 from app.database import Base
 
@@ -43,7 +44,12 @@ class Room(Base):
     is_active = Column(Boolean, default=True, nullable=False)
 
     # Relationships
-    # schedules = relationship("Schedule", back_populates="room")
+    schedules = relationship("Schedule", back_populates="room")
+
+    # Constraints
+    __table_args__ = (
+        UniqueConstraint("name", "building", name="uq_room_name_building"),
+    )
 
     def __repr__(self):
         return f"<Room(id={self.id}, name={self.name}, building={self.building})>"

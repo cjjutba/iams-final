@@ -3,6 +3,7 @@ package com.iams.app.ui.faculty
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiService
+import com.iams.app.data.api.NotificationService
 import com.iams.app.data.model.NotificationResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,7 +25,8 @@ data class FacultyNotificationsUiState(
 
 @HiltViewModel
 class FacultyNotificationsViewModel @Inject constructor(
-    private val apiService: ApiService
+    private val apiService: ApiService,
+    private val notificationService: NotificationService,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(FacultyNotificationsUiState())
@@ -56,6 +58,8 @@ class FacultyNotificationsViewModel @Inject constructor(
                         isRefreshing = false,
                         error = null,
                     )
+                    // Reconcile centralized unread count with REST API
+                    notificationService.fetchUnreadCount(apiService)
                 } else {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
@@ -92,7 +96,10 @@ class FacultyNotificationsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val response = apiService.markNotificationRead(notificationId)
-                if (!response.isSuccessful) {
+                if (response.isSuccessful) {
+                    notificationService.decrementUnreadCount()
+                } else {
+                    // Revert optimistic update
                     _uiState.value = _uiState.value.copy(
                         notifications = _uiState.value.notifications.map { n ->
                             if (n.id == notificationId) n.copy(read = false) else n
@@ -123,7 +130,9 @@ class FacultyNotificationsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val response = apiService.markAllNotificationsRead()
-                if (!response.isSuccessful) {
+                if (response.isSuccessful) {
+                    notificationService.setUnreadCount(0)
+                } else {
                     loadNotifications(silent = true)
                 }
             } catch (_: Exception) {
@@ -136,6 +145,7 @@ class FacultyNotificationsViewModel @Inject constructor(
 
     fun deleteNotification(notificationId: String) {
         val removed = _uiState.value.notifications.find { it.id == notificationId } ?: return
+        val wasUnread = !removed.read
         _uiState.value = _uiState.value.copy(
             deletingIds = _uiState.value.deletingIds + notificationId,
             notifications = _uiState.value.notifications.filter { it.id != notificationId }
@@ -144,7 +154,9 @@ class FacultyNotificationsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val response = apiService.deleteNotification(notificationId)
-                if (!response.isSuccessful) {
+                if (response.isSuccessful) {
+                    if (wasUnread) notificationService.decrementUnreadCount()
+                } else {
                     _uiState.value = _uiState.value.copy(
                         notifications = (_uiState.value.notifications + removed)
                             .sortedByDescending { it.createdAt }
@@ -174,7 +186,9 @@ class FacultyNotificationsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val response = apiService.deleteAllNotifications()
-                if (!response.isSuccessful) {
+                if (response.isSuccessful) {
+                    notificationService.setUnreadCount(0)
+                } else {
                     _uiState.value = _uiState.value.copy(notifications = backup)
                 }
             } catch (_: Exception) {

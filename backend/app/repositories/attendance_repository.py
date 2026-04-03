@@ -7,7 +7,7 @@ Data access layer for Attendance, PresenceLog, and EarlyLeaveEvent operations.
 import uuid
 from datetime import date
 
-from sqlalchemy import and_
+from sqlalchemy import and_, case, func
 from sqlalchemy.orm import Session
 
 from app.models.attendance_record import AttendanceRecord, AttendanceStatus
@@ -144,7 +144,7 @@ class AttendanceRepository:
             raise NotFoundError(f"Attendance record not found: {attendance_id}")
 
         for key, value in update_data.items():
-            if hasattr(attendance, key) and value is not None:
+            if hasattr(attendance, key):
                 setattr(attendance, key, value)
 
         self.db.commit()
@@ -153,7 +153,7 @@ class AttendanceRepository:
 
     def get_summary(self, student_id: str, start_date: date, end_date: date) -> dict:
         """
-        Get attendance summary for a student
+        Get attendance summary for a student using SQL aggregation.
 
         Args:
             student_id: Student UUID
@@ -163,23 +163,25 @@ class AttendanceRepository:
         Returns:
             Dictionary with attendance statistics
         """
-        records = (
-            self.db.query(AttendanceRecord)
-            .filter(
-                and_(
-                    AttendanceRecord.student_id == uuid.UUID(student_id),
-                    AttendanceRecord.date >= start_date,
-                    AttendanceRecord.date <= end_date,
-                )
+        result = self.db.query(
+            func.count().label("total"),
+            func.count(case((AttendanceRecord.status == AttendanceStatus.PRESENT, 1))).label("present"),
+            func.count(case((AttendanceRecord.status == AttendanceStatus.LATE, 1))).label("late"),
+            func.count(case((AttendanceRecord.status == AttendanceStatus.ABSENT, 1))).label("absent"),
+            func.count(case((AttendanceRecord.status == AttendanceStatus.EARLY_LEAVE, 1))).label("early_leave"),
+        ).filter(
+            and_(
+                AttendanceRecord.student_id == uuid.UUID(student_id),
+                AttendanceRecord.date >= start_date,
+                AttendanceRecord.date <= end_date,
             )
-            .all()
-        )
+        ).first()
 
-        total = len(records)
-        present = sum(1 for r in records if r.status == AttendanceStatus.PRESENT)
-        late = sum(1 for r in records if r.status == AttendanceStatus.LATE)
-        absent = sum(1 for r in records if r.status == AttendanceStatus.ABSENT)
-        early_leave = sum(1 for r in records if r.status == AttendanceStatus.EARLY_LEAVE)
+        total = result.total
+        present = result.present
+        late = result.late
+        absent = result.absent
+        early_leave = result.early_leave
 
         return {
             "total_classes": total,
@@ -325,7 +327,7 @@ class AttendanceRepository:
             raise NotFoundError(f"Early leave event not found: {event_id}")
 
         for key, value in update_data.items():
-            if hasattr(event, key) and value is not None:
+            if hasattr(event, key):
                 setattr(event, key, value)
 
         self.db.commit()

@@ -51,17 +51,20 @@ class StudentScheduleViewModel @Inject constructor(
                     val schedules = response.body() ?: emptyList()
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
+                        isRefreshing = false,
                         allSchedules = schedules
                     )
                 } else {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
+                        isRefreshing = false,
                         error = "Failed to load schedules"
                     )
                 }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
+                    isRefreshing = false,
                     error = "Network error. Please check your connection."
                 )
             }
@@ -69,11 +72,8 @@ class StudentScheduleViewModel @Inject constructor(
     }
 
     fun refresh() {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isRefreshing = true, error = null)
-            loadSchedules()
-            _uiState.value = _uiState.value.copy(isRefreshing = false)
-        }
+        _uiState.value = _uiState.value.copy(isRefreshing = true, error = null)
+        loadSchedules()
     }
 
     fun selectDay(day: Int) {

@@ -3,6 +3,7 @@
 ## Project Auth Architecture
 - **Auth pattern**: Custom JWT for all users (students + faculty), NOT Supabase Auth for students yet
 - **Password hashing**: bcrypt via `passlib.context.CryptContext` in `backend/app/utils/security.py`
+- **JWT library**: PyJWT (migrated from python-jose on 2026-03-30)
 - **JWT**: HS256, access + refresh tokens via `create_access_token` / `create_refresh_token` in security.py
 - **Token refresh**: `verify_token()` checks `type: "refresh"` claim, generates new access token only
 - **RBAC roles**: student, faculty, admin (enum in `app/models/user.py::UserRole`)
@@ -24,17 +25,22 @@
 
 ## Security Audit (2026-03-30)
 - [security_audit_2026_03_30.md](security_audit_2026_03_30.md) - Full audit: 5 Critical, 8 High, 10 Medium, 6 Low findings
-- Top priorities: WebSocket auth, Edge API auth, rate limiting on login/register/refresh, refresh token rotation, CORS lockdown
+- [audit_stream_a_2026_03_30.md](audit_stream_a_2026_03_30.md) - Stream A fixes: config validation, PyJWT migration, rate limiting, threshold fix
+- Top priorities remaining: WebSocket auth, Edge API auth, refresh token rotation
 - RefreshToken DB model exists but is UNUSED - refresh only checks JWT signature
 - Logout is a client-side no-op (stateless JWT, no server revocation)
-- EDGE_API_KEY config exists but is never enforced
+- EDGE_API_KEY config exists but is never enforced at middleware level
 - Faculty can update any user / deregister any face (privilege escalation)
+- `/login` and `/register` endpoints lack `@limiter.limit` decorators (have Request param but no decorator)
 
 ## Security Notes
 - Login error messages are generic ("Invalid email/student ID or password") - no user enumeration
 - No auth tests exist yet (`backend/tests/test_auth*.py` missing)
+- `backend/tests/unit/test_security.py` still imports from jose - needs PyJWT migration
 - Faculty accounts are pre-seeded only (no self-registration in MVP)
 - `from_attributes = True` used on UserResponse Config (Pydantic v2 style)
+- CORS_ORIGINS default is now `[]` (was `["*"]`) - must be explicitly set per environment
+- Startup validation blocks default SECRET_KEY and EDGE_API_KEY when DEBUG=False
 
 ## JRMSU Student ID Format
 - Example: `21-A-02177` (XX-X-XXXXX pattern)

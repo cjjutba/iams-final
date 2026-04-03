@@ -46,9 +46,13 @@ class FacultyAnalyticsDashboardViewModel @Inject constructor(
         loadData()
     }
 
-    fun loadData() {
+    fun loadData(isRefresh: Boolean = false) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+            _uiState.value = _uiState.value.copy(
+                isLoading = !isRefresh,
+                isRefreshing = isRefresh,
+                error = null,
+            )
 
             try {
                 // Fetch schedules first
@@ -59,7 +63,7 @@ class FacultyAnalyticsDashboardViewModel @Inject constructor(
                     emptyList()
                 }
 
-                // Fetch at-risk students and anomalies in parallel
+                // Fetch at-risk students, anomalies, and class overviews all in parallel
                 val atRiskDeferred = async {
                     try {
                         val response = apiService.getAtRiskStudents()
@@ -83,25 +87,29 @@ class FacultyAnalyticsDashboardViewModel @Inject constructor(
                     }
                 }
 
-                // Fetch class overviews for each schedule
-                val overviews = schedules.mapNotNull { schedule ->
-                    try {
-                        val response = apiService.getClassOverview(schedule.id)
-                        if (response.isSuccessful) response.body() else null
-                    } catch (_: Exception) {
-                        null
+                // Fetch class overviews in parallel (one coroutine per schedule)
+                val overviewDeferreds = schedules.map { schedule ->
+                    async {
+                        try {
+                            val response = apiService.getClassOverview(schedule.id)
+                            if (response.isSuccessful) response.body() else null
+                        } catch (_: Exception) {
+                            null
+                        }
                     }
                 }
 
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    classOverviews = overviews,
+                    isRefreshing = false,
+                    classOverviews = overviewDeferreds.mapNotNull { it.await() },
                     atRiskStudents = atRiskDeferred.await(),
                     anomalies = anomaliesDeferred.await(),
                 )
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
+                    isRefreshing = false,
                     error = "Failed to load analytics data."
                 )
             }
@@ -109,10 +117,6 @@ class FacultyAnalyticsDashboardViewModel @Inject constructor(
     }
 
     fun refresh() {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isRefreshing = true)
-            loadData()
-            _uiState.value = _uiState.value.copy(isRefreshing = false)
-        }
+        loadData(isRefresh = true)
     }
 }

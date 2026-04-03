@@ -46,6 +46,7 @@ import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.components.SkeletonBox
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.TextPrimary
 import com.iams.app.ui.components.LocalToastState
@@ -205,7 +206,24 @@ fun StudentScheduleScreen(
             ) {
                 item { Spacer(modifier = Modifier.height(spacing.lg)) }
 
-                if (daySchedules.isNotEmpty()) {
+                if (uiState.isLoading && daySchedules.isEmpty()) {
+                    items(3) {
+                        IAMSCard {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                SkeletonBox(width = 80.dp, height = 14.dp)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                SkeletonBox(width = 200.dp, height = 18.dp)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                SkeletonBox(width = 100.dp, height = 12.dp)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                SkeletonBox(width = 180.dp, height = 14.dp)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                SkeletonBox(width = 120.dp, height = 12.dp)
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(spacing.sm))
+                    }
+                } else if (daySchedules.isNotEmpty()) {
                     items(daySchedules, key = { it.id }) { schedule ->
                         ScheduleCard(schedule = schedule)
                         Spacer(modifier = Modifier.height(spacing.sm))
