@@ -2,6 +2,7 @@ package com.iams.app.data.api
 
 import com.iams.app.data.model.*
 import okhttp3.MultipartBody
+import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.*
 
@@ -84,6 +85,22 @@ interface ApiService {
 
     @GET("attendance/{id}/presence-logs")
     suspend fun getPresenceLogs(@Path("id") id: String): Response<List<PresenceLogResponse>>
+
+    @GET("attendance")
+    suspend fun getAttendanceRecords(
+        @Query("schedule_id") scheduleId: String? = null,
+        @Query("start_date") startDate: String? = null,
+        @Query("end_date") endDate: String? = null,
+        @Query("limit") limit: Int? = null,
+    ): Response<List<AttendanceRecordResponse>>
+
+    @Streaming
+    @GET("attendance/export/pdf")
+    suspend fun exportAttendancePdf(
+        @Query("schedule_ids") scheduleIds: String,
+        @Query("start_date") startDate: String,
+        @Query("end_date") endDate: String,
+    ): Response<ResponseBody>
 
     @GET("attendance/alerts")
     suspend fun getAlerts(

@@ -68,9 +68,6 @@ fun FacultyAlertsScreen(
     navController: NavController,
     viewModel: FacultyAlertsViewModel = hiltViewModel()
 ) {
-    val uiState by viewModel.uiState.collectAsState()
-    val spacing = IAMSThemeTokens.spacing
-
     Column(modifier = Modifier.fillMaxSize()) {
         IAMSHeader(
             title = "Alerts",
@@ -82,9 +79,26 @@ fun FacultyAlertsScreen(
             },
         )
 
+        FacultyAlertsContent(navController = navController, viewModel = viewModel)
+    }
+}
+
+/**
+ * Alerts content body (filter bar + list) without the IAMSHeader/Scaffold wrapper.
+ * Reused inside FacultyHistoryScreen's "Alerts" tab.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FacultyAlertsContent(
+    navController: NavController,
+    viewModel: FacultyAlertsViewModel = hiltViewModel()
+) {
+    val uiState by viewModel.uiState.collectAsState()
+    val spacing = IAMSThemeTokens.spacing
+
+    Column(modifier = Modifier.fillMaxSize()) {
         // Error state (no data)
         if (uiState.error != null && !uiState.isRefreshing && uiState.alerts.isEmpty()) {
-            // Still show filter bar
             FilterBar(
                 selectedFilter = uiState.selectedFilter,
                 onFilterSelected = { viewModel.selectFilter(it) },

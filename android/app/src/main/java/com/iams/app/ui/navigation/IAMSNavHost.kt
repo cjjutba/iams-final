@@ -7,9 +7,11 @@ import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.automirrored.filled.Assignment
 import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.outlined.Assessment
+import androidx.compose.material.icons.automirrored.outlined.Assignment
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Person
@@ -52,6 +54,7 @@ import com.iams.app.ui.components.ToastState
 import com.iams.app.ui.components.ToastType
 import com.iams.app.ui.common.SettingsScreen
 import com.iams.app.ui.faculty.FacultyAlertsScreen
+import com.iams.app.ui.faculty.FacultyHistoryScreen
 import com.iams.app.ui.faculty.FacultyAnalyticsDashboardScreen
 import com.iams.app.ui.faculty.FacultyClassDetailScreen
 import com.iams.app.ui.faculty.FacultyEditProfileScreen
@@ -96,7 +99,7 @@ fun IAMSNavHost() {
         BottomNavTab("Home", Icons.Outlined.Home, Icons.Filled.Home, Routes.FACULTY_HOME),
         BottomNavTab("Schedule", Icons.Outlined.Schedule, Icons.Filled.Schedule, Routes.FACULTY_SCHEDULE),
         BottomNavTab("Analytics", Icons.Outlined.Assessment, Icons.Filled.Assessment, Routes.FACULTY_ANALYTICS_DASHBOARD),
-        BottomNavTab("Alerts", Icons.Outlined.ReportProblem, Icons.Filled.ReportProblem, Routes.FACULTY_ALERTS),
+        BottomNavTab("History", Icons.AutoMirrored.Outlined.Assignment, Icons.AutoMirrored.Filled.Assignment, Routes.FACULTY_HISTORY),
         BottomNavTab("Profile", Icons.Outlined.Person, Icons.Filled.Person, Routes.FACULTY_PROFILE),
     )
 
@@ -286,6 +289,10 @@ fun IAMSNavHost() {
 
             composable(Routes.FACULTY_ALERTS) {
                 FacultyAlertsScreen(navController = navController)
+            }
+
+            composable(Routes.FACULTY_HISTORY) {
+                FacultyHistoryScreen(navController = navController)
             }
 
             composable(Routes.FACULTY_PROFILE) {

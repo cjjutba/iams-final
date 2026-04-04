@@ -49,6 +49,7 @@ object Routes {
     const val FACULTY_SCHEDULE = "faculty/schedule"
     const val FACULTY_ANALYTICS_DASHBOARD = "faculty/analytics"
     const val FACULTY_ALERTS = "faculty/alerts"
+    const val FACULTY_HISTORY = "faculty/history"
     const val FACULTY_PROFILE = "faculty/profile"
 
     // Faculty (secondary / stack screens)
