@@ -760,6 +760,144 @@ def export_attendance(
         }
 
 
+@router.get("/export/pdf", status_code=status.HTTP_200_OK)
+def export_attendance_pdf(
+    schedule_ids: str = Query(..., description="Comma-separated schedule UUIDs, or 'all'"),
+    start_date: date = Query(..., description="Start date (YYYY-MM-DD)"),
+    end_date: date = Query(..., description="End date (YYYY-MM-DD)"),
+    current_user: User = Depends(get_current_faculty),
+    db: Session = Depends(get_db),
+):
+    """
+    **Export Attendance Report as PDF** (Faculty/Admin)
+
+    Generates a detailed PDF attendance report for the specified schedules
+    and date range.
+
+    - **schedule_ids**: Comma-separated schedule UUIDs, or "all" for all faculty schedules
+    - **start_date**: Start date (inclusive)
+    - **end_date**: End date (inclusive)
+
+    Returns a PDF file as a streaming response.
+
+    Requires faculty or admin authentication.
+    """
+    import uuid as _uuid
+
+    from fastapi import HTTPException
+    from fastapi.responses import StreamingResponse
+    from sqlalchemy.orm import joinedload
+
+    from app.models.attendance_record import AttendanceRecord as AR
+    from app.models.attendance_record import AttendanceStatus as AStatus
+    from app.services.pdf_service import generate_attendance_pdf
+
+    schedule_repo = ScheduleRepository(db)
+    attendance_repo = AttendanceRepository(db)
+
+    # Resolve schedules
+    if schedule_ids.strip().lower() == "all":
+        if current_user.role == UserRole.ADMIN:
+            schedules = schedule_repo.get_all()
+        else:
+            schedules = schedule_repo.get_by_faculty(str(current_user.id))
+    else:
+        raw_ids = [sid.strip() for sid in schedule_ids.split(",") if sid.strip()]
+        schedules = []
+        for sid in raw_ids:
+            try:
+                _uuid.UUID(sid)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid schedule UUID: {sid}",
+                )
+            schedule = schedule_repo.get_by_id(sid)
+            if not schedule:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Schedule not found: {sid}",
+                )
+            # Faculty can only export their own schedules
+            if current_user.role == UserRole.FACULTY and str(schedule.faculty_id) != str(current_user.id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Not authorized to export schedule: {sid}",
+                )
+            schedules.append(schedule)
+
+    if not schedules:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No schedules found",
+        )
+
+    # Build class sections data for the PDF
+    class_sections = []
+    for schedule in schedules:
+        records = attendance_repo.get_by_schedule_date_range(
+            str(schedule.id), start_date, end_date
+        )
+
+        # Compute summary
+        total_records = len(records)
+        present_count = sum(1 for r in records if r.status == AStatus.PRESENT)
+        late_count = sum(1 for r in records if r.status == AStatus.LATE)
+        absent_count = sum(1 for r in records if r.status == AStatus.ABSENT)
+        early_leave_count = sum(1 for r in records if r.status == AStatus.EARLY_LEAVE)
+        attendance_rate = 0.0
+        if total_records > 0:
+            attendance_rate = ((present_count + late_count) / total_records) * 100
+
+        # Build record dicts
+        record_dicts = []
+        for r in records:
+            student_name = f"{r.student.first_name} {r.student.last_name}" if r.student else "Unknown"
+            student_number = r.student.student_id if r.student else "N/A"
+            record_dicts.append(
+                {
+                    "date": r.date,
+                    "student_name": student_name,
+                    "student_number": student_number,
+                    "status": r.status,
+                    "check_in_time": r.check_in_time,
+                    "presence_score": r.presence_score,
+                }
+            )
+
+        room_name = schedule.room.name if schedule.room else "N/A"
+
+        class_sections.append(
+            {
+                "subject_code": schedule.subject_code,
+                "subject_name": schedule.subject_name,
+                "room_name": room_name,
+                "summary": {
+                    "total_records": total_records,
+                    "present_count": present_count,
+                    "late_count": late_count,
+                    "absent_count": absent_count,
+                    "early_leave_count": early_leave_count,
+                    "attendance_rate": round(attendance_rate, 2),
+                },
+                "records": record_dicts,
+            }
+        )
+
+    # Generate PDF
+    faculty_name = f"{current_user.first_name} {current_user.last_name}"
+    pdf_bytes = generate_attendance_pdf(faculty_name, start_date, end_date, class_sections)
+
+    date_suffix = f"_{start_date}_{end_date}"
+    filename = f"attendance_report{date_suffix}.pdf"
+
+    return StreamingResponse(
+        iter([pdf_bytes]),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 @router.get("/early-leaves", response_model=list[AlertResponse], status_code=status.HTTP_200_OK)
 def get_early_leave_events(
     schedule_id: str | None = Query(None, description="Filter by schedule"),
