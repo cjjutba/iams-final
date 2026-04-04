@@ -182,14 +182,16 @@ class RealtimeTracker:
             identity.last_seen = now
             identity.frames_seen += 1
 
-            # Recognize if: new track, or unknown track (retry every 2s until
-            # recognized), or re-verify interval elapsed for recognized tracks.
-            # Unknown tracks retry continuously — a better camera angle or
-            # lighting can turn a miss into a match at any moment.
-            is_unknown_retry = (
-                identity.recognition_status == "unknown"
-                and (now - identity.last_verified) > 2.0
-            )
+            # Recognize if: new/unknown track or re-verify interval elapsed.
+            # Unknown tracks: retry every frame for first 5s (aggressive),
+            # then every 2s after that (each frame is a new angle chance).
+            if identity.recognition_status == "unknown":
+                age = now - identity.first_seen
+                retry_interval = 0.0 if age < 5.0 else 2.0
+                is_unknown_retry = (now - identity.last_verified) > retry_interval
+            else:
+                is_unknown_retry = False
+
             needs_recognition = (
                 identity.recognition_status == "pending"
                 or is_unknown_retry
@@ -328,15 +330,17 @@ class RealtimeTracker:
             identity.confidence = confidence
             identity.name = self._resolve_name(user_id)
             identity.recognition_status = "recognized"
-
-            if confidence > 0.3:
-                logger.info(
-                    "Track %d recognized: %s (%.3f)",
-                    identity.track_id, identity.name, confidence,
-                )
+            logger.info(
+                "Track %d recognized: %s (%.3f)",
+                identity.track_id, identity.name, confidence,
+            )
         else:
             identity.recognition_status = "unknown"
             identity.confidence = confidence
+            logger.debug(
+                "Track %d unknown (score=%.3f, user=%s, ambiguous=%s)",
+                identity.track_id, confidence, user_id, is_ambiguous,
+            )
 
         identity.last_verified = now
 
