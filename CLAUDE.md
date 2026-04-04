@@ -9,7 +9,8 @@ IAMS (Intelligent Attendance Monitoring System) is a CCTV-based facial recogniti
 - mediamtx for RTSP ingestion and WebRTC serving
 - FastAPI backend for face recognition (InsightFace ArcFace + FAISS) and attendance tracking
 - Kotlin Android app with ExoPlayer (video), ML Kit (on-device face detection), CameraX (face registration)
-- Supabase for database (PostgreSQL) and authentication
+- PostgreSQL database (runs on VPS via Docker)
+- React + Vite admin portal
 
 ## Architecture
 
@@ -28,7 +29,7 @@ mediamtx on VPS (RTSP ingest + WebRTC)
        │                    │
        │               Draws real-time bounding boxes
        │
-       └──> Backend FrameGrabber (grabs 1 frame every 15s)
+       └──> Backend FrameGrabber (grabs frames at 10fps)
                  │
                  v
             SCRFD + ArcFace → FAISS match → DB
@@ -40,60 +41,63 @@ mediamtx on VPS (RTSP ingest + WebRTC)
 **Three independent systems:**
 1. **Video delivery** — mediamtx → WebRTC → phone (always smooth, no backend processing)
 2. **Face detection** — ML Kit on phone (real-time, 30fps, no network needed)
-3. **Attendance** — Backend grabs 1 frame/15s → SCRFD+ArcFace → DB → WebSocket
+3. **Attendance** — Backend grabs frames at 10fps → SCRFD+ArcFace+ByteTrack → DB → WebSocket
 
-## Development Commands
+## Development Workflow — VPS-First
 
-### Local Docker Development (Recommended)
+All development targets the DigitalOcean VPS at `167.71.217.44`. Local Docker Desktop is NOT used.
+
+### Deploy Backend Changes
 ```bash
-# Start full stack
-docker compose up -d
+bash deploy/deploy.sh
+```
+This rsyncs code, rebuilds the Docker image, and restarts the api-gateway on the VPS.
+Backend auto-restarts on code sync (uvicorn watchfiles).
 
-# View logs
-docker compose logs -f api-gateway
+### View VPS Logs
+```bash
+# Live logs
+ssh root@167.71.217.44 "docker logs -f iams-api-gateway"
 
-# Stop
-docker compose down
+# Recent logs (last 5 minutes)
+ssh root@167.71.217.44 "docker logs --since 5m iams-api-gateway"
 
-# Rebuild after requirements.txt change
-docker compose build --no-cache
+# Web UI (Dozzle)
+# http://167.71.217.44:9999
 ```
 
-Docker dev stack: `api-gateway` + `redis` + `mediamtx` (3 services)
-
-**Hot reload:** Backend code is volume-mounted — edit Python files and uvicorn/watchfiles auto-restart.
-
-### Backend (without Docker)
+### Run Commands on VPS
 ```bash
-cd backend
-source venv/bin/activate
-pip install -r requirements.txt
-python run.py                  # Start dev server on port 8000
+# Run a Python command inside the backend container
+ssh root@167.71.217.44 "docker exec iams-api-gateway python -c 'print(1)'"
+
+# Run tests
+ssh root@167.71.217.44 "docker exec iams-api-gateway python -m pytest tests/ -q"
+
+# Django-style shell
+ssh root@167.71.217.44 "docker exec -it iams-api-gateway python"
 ```
 
 ### Database Reset & Seed
 ```bash
-# THE single command to wipe and reseed everything:
-docker compose exec -T api-gateway python -m scripts.seed_data
-
-# Or from project root:
-./scripts/db-reset.sh
+ssh root@167.71.217.44 "docker exec iams-api-gateway python -m scripts.seed_data"
 ```
 
-When asked to "seed the data" or "reset the database", run:
-`docker compose exec -T api-gateway python -m scripts.seed_data`
+When asked to "seed the data" or "reset the database", run the command above.
 
 This wipes ALL data and reseeds from scratch: ~160 student records, 2 faculty accounts
 (`faculty.eb226@gmail.com`, `faculty.eb227@gmail.com`, password: `password123`),
 admin (`admin@admin.com` / `123`), rooms, schedules, and system settings.
 
+### Database Queries (Direct SQL)
+```bash
+ssh root@167.71.217.44 "docker exec iams-postgres psql -U iams -d iams -c 'SELECT count(*) FROM users;'"
+```
+
 ### Testing
 ```bash
-cd backend
-pytest                                    # Run all tests
-pytest tests/test_auth.py                 # Single test file
-pytest -v                                 # Verbose output
-pytest --cov=app                          # With coverage
+ssh root@167.71.217.44 "docker exec iams-api-gateway python -m pytest tests/ -q"
+ssh root@167.71.217.44 "docker exec iams-api-gateway python -m pytest tests/ -q -k 'faiss or tracker'"
 ```
 
 ### Edge Device (Raspberry Pi)
@@ -136,8 +140,8 @@ ffmpeg -stream_loop -1 -re -i test_video.mp4 -c:v libx264 -f rtsp rtsp://localho
 - Backend recognition results (names) are matched to ML Kit boxes via IoU
 
 ### Continuous Presence Tracking
-- Backend scans every 15 seconds during active sessions
-- 3 consecutive missed scans triggers early-leave alert
+- Backend runs real-time pipeline at 10fps during active sessions
+- Configurable early-leave timeout per schedule (default from settings)
 - Presence score = (total_present / total_scans) × 100%
 
 ### FAISS Index
@@ -149,7 +153,7 @@ ffmpeg -stream_loop -1 -re -i test_video.mp4 -c:v libx264 -f rtsp rtsp://localho
 
 ```
 backend/app/
-├── main.py           # FastAPI entry + APScheduler (attendance scan every 15s)
+├── main.py           # FastAPI entry + APScheduler + on-demand pipeline startup
 ├── config.py         # Settings
 ├── database.py       # PostgreSQL connection
 ├── redis_client.py   # Redis for identity cache
@@ -159,9 +163,12 @@ backend/app/
 ├── services/
 │   ├── auth_service.py
 │   ├── face_service.py          # SCRFD + ArcFace + FAISS (register + recognize)
-│   ├── attendance_engine.py     # Grab frame → detect → recognize → ScanResult
+│   ├── realtime_tracker.py      # ByteTrack + cached ArcFace recognition (10fps)
+│   ├── realtime_pipeline.py     # Session pipeline orchestrator (frame → track → broadcast)
+│   ├── track_presence_service.py # Presence tracking, early-leave detection
+│   ├── attendance_engine.py     # Legacy single-frame scanner
 │   ├── frame_grabber.py         # Persistent RTSP frame source (FFmpeg subprocess)
-│   ├── presence_service.py      # Miss counters, early-leave detection, DB writes
+│   ├── presence_service.py      # Session lifecycle, presence logging
 │   ├── identity_cache.py        # Redis identity cache
 │   └── ml/
 │       ├── insightface_model.py # SCRFD + ArcFace wrapper
@@ -201,6 +208,22 @@ android/app/src/main/java/com/iams/app/
 ```
 
 **Tech Stack:** Kotlin + Jetpack Compose + Material 3, ExoPlayer (Media3), ML Kit Face Detection, CameraX, Retrofit + OkHttp, Hilt, Navigation Compose, DataStore
+
+## Admin Portal Structure
+
+```
+admin/
+├── src/
+│   ├── components/        # Reusable UI components (Radix UI + Tailwind)
+│   ├── pages/             # Route pages (Dashboard, Users, Schedules, etc.)
+│   ├── services/          # API client (Axios)
+│   ├── stores/            # Zustand state management
+│   └── hooks/             # Custom React hooks
+├── .env                   # VITE_API_URL, VITE_WS_URL (points to VPS)
+└── vite.config.ts         # Dev server proxy config
+```
+
+**Tech Stack:** React 19 + Vite + TypeScript, Radix UI + Tailwind CSS, TanStack Query, Zustand, Recharts
 
 ## Database Schema (core tables)
 
@@ -247,31 +270,45 @@ Bbox coordinates are normalized (0-1). The Kotlin app matches them to ML Kit det
 
 ## Environment Variables
 
+Backend env vars are in `backend/.env` (local) and VPS `/opt/iams/deploy/.env` (production).
+Key variables:
 ```
-SUPABASE_URL=https://xxxxx.supabase.co
-SUPABASE_ANON_KEY=xxxxx...
-DATABASE_URL=postgresql://user:pass@host/db
+DATABASE_URL=postgresql://iams:password@postgres:5432/iams
 JWT_SECRET_KEY=xxxxx...
-REDIS_URL=redis://localhost:6379/0
+REDIS_URL=redis://:iams-redis-dev@redis:6379/0
+RESEND_API_KEY=xxxxx...     # Email service
 ```
 
-## Production Deployment (DigitalOcean VPS)
+## VPS Infrastructure (DigitalOcean)
 
-The backend runs on a DigitalOcean droplet at `167.71.217.44`.
+**IP:** `167.71.217.44` — all services run here.
 
-### Deploy command
+### Production stack (Docker Compose)
+| Container | Image | Purpose |
+|-----------|-------|---------|
+| `iams-api-gateway` | Custom (Python 3.11) | FastAPI + attendance engine |
+| `iams-postgres` | postgres:16-alpine | PostgreSQL database |
+| `iams-redis` | redis:7-alpine | Identity cache (128MB) |
+| `iams-mediamtx` | bluenviron/mediamtx:1.11.3 | RTSP ingest + WebRTC relay |
+| `iams-nginx` | nginx:alpine | Reverse proxy + SSL |
+| `iams-coturn` | coturn/coturn | TURN server for WebRTC NAT traversal |
+| `iams-dozzle` | amir20/dozzle | Log viewer (port 9999) |
+
+### URLs
+- **Admin Portal:** http://167.71.217.44/admin
+- **API:** http://167.71.217.44/api/v1
+- **API Docs:** http://167.71.217.44/api/v1/docs
+- **Health:** http://167.71.217.44/api/v1/health
+- **Logs:** http://167.71.217.44:9999
+
+### Deploy
 ```bash
 bash deploy/deploy.sh
 ```
 
-### Production stack
-- `api-gateway` — FastAPI + attendance engine (1.5GB, 1 CPU)
-- `redis` — identity cache (128MB)
-- `mediamtx` — RTSP/WebRTC relay
-- `nginx` — reverse proxy + SSL
-
-### What triggers a deploy prompt
+### What triggers a deploy
 Any change to files under `backend/` should prompt: "Do you want to deploy this to the VPS?"
+Always deploy after making backend changes — there is no local environment.
 
 ## Plan Mode: Lesson Capture
 
