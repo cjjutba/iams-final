@@ -5,10 +5,10 @@ Generates attendance report PDFs using ReportLab platypus.
 """
 
 import io
-from datetime import date, datetime
+from datetime import date, datetime, timezone, timedelta
 
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch, mm
 from reportlab.platypus import (
@@ -18,6 +18,9 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+
+# Philippine Time (UTC+8)
+PHT = timezone(timedelta(hours=8))
 
 
 def generate_attendance_pdf(
@@ -46,7 +49,7 @@ def generate_attendance_pdf(
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf,
-        pagesize=landscape(A4),
+        pagesize=A4,
         topMargin=20 * mm,
         bottomMargin=20 * mm,
         leftMargin=15 * mm,
@@ -59,34 +62,42 @@ def generate_attendance_pdf(
     title_style = ParagraphStyle(
         "ReportTitle",
         parent=styles["Title"],
-        fontSize=18,
+        fontSize=16,
         spaceAfter=4,
     )
     subtitle_style = ParagraphStyle(
         "ReportSubtitle",
         parent=styles["Normal"],
-        fontSize=10,
+        fontSize=9,
         textColor=colors.HexColor("#555555"),
         spaceAfter=2,
     )
     section_title_style = ParagraphStyle(
         "SectionTitle",
         parent=styles["Heading2"],
-        fontSize=13,
-        spaceBefore=16,
-        spaceAfter=6,
+        fontSize=11,
+        spaceBefore=14,
+        spaceAfter=4,
         textColor=colors.HexColor("#1a1a1a"),
     )
     cell_style = ParagraphStyle(
         "CellStyle",
         parent=styles["Normal"],
-        fontSize=8,
-        leading=10,
+        fontSize=7,
+        leading=9,
+    )
+    cell_style_white = ParagraphStyle(
+        "CellStyleWhite",
+        parent=styles["Normal"],
+        fontSize=7,
+        leading=9,
+        textColor=colors.white,
     )
 
     elements: list = []
 
     # --- Header ---
+    now_pht = datetime.now(PHT)
     elements.append(Paragraph("Attendance Report", title_style))
     elements.append(Paragraph(f"Faculty: {faculty_name}", subtitle_style))
     elements.append(
@@ -97,16 +108,19 @@ def generate_attendance_pdf(
     )
     elements.append(
         Paragraph(
-            f"Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}",
+            f"Generated: {now_pht.strftime('%B %d, %Y at %I:%M %p')} (PHT)",
             subtitle_style,
         )
     )
-    elements.append(Spacer(1, 12))
+    elements.append(Spacer(1, 10))
 
-    if not class_sections:
+    # Filter to only classes that have records
+    sections_with_data = [s for s in class_sections if s.get("records")]
+
+    if not sections_with_data:
         elements.append(Paragraph("No attendance records found for the selected period.", styles["Normal"]))
     else:
-        for section in class_sections:
+        for section in sections_with_data:
             subject_code = section.get("subject_code", "N/A")
             subject_name = section.get("subject_name", "N/A")
             room_name = section.get("room_name", "N/A")
@@ -123,7 +137,7 @@ def generate_attendance_pdf(
 
             # --- Summary table ---
             summary_data = [
-                ["Total Records", "Present", "Late", "Absent", "Early Leave", "Attendance Rate"],
+                ["Total Records", "Present", "Late", "Absent", "Early Leave", "Rate"],
                 [
                     str(summary.get("total_records", 0)),
                     str(summary.get("present_count", 0)),
@@ -138,114 +152,105 @@ def generate_attendance_pdf(
             summary_table.setStyle(
                 TableStyle(
                     [
-                        # Header row
                         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
                         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                        ("FONTSIZE", (0, 0), (-1, 0), 9),
-                        # Data row
-                        ("FONTSIZE", (0, 1), (-1, 1), 9),
+                        ("FONTSIZE", (0, 0), (-1, 0), 8),
+                        ("FONTSIZE", (0, 1), (-1, 1), 8),
                         ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#ecf0f1")),
-                        # Grid
                         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#bdc3c7")),
                         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
                         ("TOPPADDING", (0, 0), (-1, -1), 4),
                         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                        ("LEFTPADDING", (0, 0), (-1, -1), 8),
-                        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
                     ]
                 )
             )
             elements.append(summary_table)
-            elements.append(Spacer(1, 8))
+            elements.append(Spacer(1, 6))
 
             # --- Detailed records table ---
-            if records:
-                # Sort records by date then student name
-                sorted_records = sorted(records, key=lambda r: (r.get("date", ""), r.get("student_name", "")))
+            sorted_records = sorted(records, key=lambda r: (r.get("date", ""), r.get("student_name", "")))
 
-                # Available width for landscape A4 minus margins
-                available_width = landscape(A4)[0] - 30 * mm
-                col_widths = [
-                    available_width * 0.12,  # Date
-                    available_width * 0.28,  # Student Name
-                    available_width * 0.14,  # Student No.
-                    available_width * 0.12,  # Status
-                    available_width * 0.18,  # Check-in
-                    available_width * 0.16,  # Presence Score
-                ]
+            # A4 portrait width minus margins
+            available_width = A4[0] - 30 * mm
+            col_widths = [
+                available_width * 0.14,  # Date
+                available_width * 0.28,  # Student Name
+                available_width * 0.15,  # Student No.
+                available_width * 0.13,  # Status
+                available_width * 0.15,  # Check-in
+                available_width * 0.15,  # Presence Score
+            ]
 
-                header_row = [
-                    Paragraph("<b>Date</b>", cell_style),
-                    Paragraph("<b>Student Name</b>", cell_style),
-                    Paragraph("<b>Student No.</b>", cell_style),
-                    Paragraph("<b>Status</b>", cell_style),
-                    Paragraph("<b>Check-in</b>", cell_style),
-                    Paragraph("<b>Presence Score</b>", cell_style),
-                ]
-                table_data = [header_row]
+            header_row = [
+                Paragraph("<b>Date</b>", cell_style_white),
+                Paragraph("<b>Student Name</b>", cell_style_white),
+                Paragraph("<b>Student No.</b>", cell_style_white),
+                Paragraph("<b>Status</b>", cell_style_white),
+                Paragraph("<b>Check-in</b>", cell_style_white),
+                Paragraph("<b>Presence Score</b>", cell_style_white),
+            ]
+            table_data = [header_row]
 
-                for rec in sorted_records:
-                    rec_date = rec.get("date", "")
-                    if isinstance(rec_date, date):
-                        rec_date = rec_date.strftime("%Y-%m-%d")
+            for rec in sorted_records:
+                rec_date = rec.get("date", "")
+                if isinstance(rec_date, date):
+                    rec_date = rec_date.strftime("%Y-%m-%d")
 
-                    check_in = rec.get("check_in_time", "")
-                    if isinstance(check_in, datetime):
-                        check_in = check_in.strftime("%I:%M:%S %p")
-                    elif check_in is None:
-                        check_in = "—"
+                check_in = rec.get("check_in_time", "")
+                if isinstance(check_in, datetime):
+                    check_in = check_in.strftime("%I:%M:%S %p")
+                elif check_in is None:
+                    check_in = "—"
 
-                    presence = rec.get("presence_score", 0)
-                    if presence is None:
-                        presence = 0
-                    presence_str = f"{presence:.1f}%"
+                presence = rec.get("presence_score", 0)
+                if presence is None:
+                    presence = 0
+                presence_str = f"{presence:.1f}%"
 
-                    status_val = rec.get("status", "unknown")
-                    if hasattr(status_val, "value"):
-                        status_val = status_val.value
-                    status_display = str(status_val).replace("_", " ").title()
+                status_val = rec.get("status", "unknown")
+                if hasattr(status_val, "value"):
+                    status_val = status_val.value
+                status_display = str(status_val).replace("_", " ").title()
 
-                    table_data.append(
-                        [
-                            Paragraph(str(rec_date), cell_style),
-                            Paragraph(str(rec.get("student_name", "Unknown")), cell_style),
-                            Paragraph(str(rec.get("student_number", "N/A")), cell_style),
-                            Paragraph(status_display, cell_style),
-                            Paragraph(str(check_in), cell_style),
-                            Paragraph(presence_str, cell_style),
-                        ]
-                    )
+                table_data.append(
+                    [
+                        Paragraph(str(rec_date), cell_style),
+                        Paragraph(str(rec.get("student_name", "Unknown")), cell_style),
+                        Paragraph(str(rec.get("student_number", "N/A")), cell_style),
+                        Paragraph(status_display, cell_style),
+                        Paragraph(str(check_in), cell_style),
+                        Paragraph(presence_str, cell_style),
+                    ]
+                )
 
-                records_table = Table(table_data, colWidths=col_widths, repeatRows=1, hAlign="LEFT")
+            records_table = Table(table_data, colWidths=col_widths, repeatRows=1, hAlign="LEFT")
 
-                # Build style commands
-                style_cmds = [
-                    # Header
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                    # Grid
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#bdc3c7")),
-                    ("TOPPADDING", (0, 0), (-1, -1), 3),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 4),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ]
+            style_cmds = [
+                # Header row
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                # Grid
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#bdc3c7")),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ]
 
-                # Alternating row colors
-                for i in range(1, len(table_data)):
-                    if i % 2 == 0:
-                        style_cmds.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#f5f6fa")))
-                    else:
-                        style_cmds.append(("BACKGROUND", (0, i), (-1, i), colors.white))
+            # Alternating row colors
+            for i in range(1, len(table_data)):
+                if i % 2 == 0:
+                    style_cmds.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#f5f6fa")))
+                else:
+                    style_cmds.append(("BACKGROUND", (0, i), (-1, i), colors.white))
 
-                records_table.setStyle(TableStyle(style_cmds))
-                elements.append(records_table)
-            else:
-                elements.append(Paragraph("No records for this class in the selected period.", styles["Normal"]))
-
-            elements.append(Spacer(1, 12))
+            records_table.setStyle(TableStyle(style_cmds))
+            elements.append(records_table)
+            elements.append(Spacer(1, 10))
 
     # Build PDF with page numbers
     def _add_page_number(canvas, doc):
@@ -254,7 +259,7 @@ def generate_attendance_pdf(
         canvas.setFillColor(colors.HexColor("#888888"))
         page_num = canvas.getPageNumber()
         canvas.drawCentredString(
-            landscape(A4)[0] / 2,
+            A4[0] / 2,
             0.3 * inch,
             f"Page {page_num}",
         )
