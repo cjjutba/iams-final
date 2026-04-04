@@ -4,7 +4,7 @@ Schedules Router
 API endpoints for class schedule management.
 """
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import logger
@@ -12,7 +12,13 @@ from app.database import get_db
 from app.models.schedule import Schedule
 from app.models.user import User, UserRole
 from app.repositories.schedule_repository import ScheduleRepository
-from app.schemas.schedule import ScheduleCreate, ScheduleResponse, ScheduleUpdate, ScheduleWithStudents
+from app.schemas.schedule import (
+    ScheduleConfigUpdate,
+    ScheduleCreate,
+    ScheduleResponse,
+    ScheduleUpdate,
+    ScheduleWithStudents,
+)
 from app.utils.dependencies import get_current_user, require_role
 
 router = APIRouter()
@@ -112,8 +118,6 @@ def get_schedule(schedule_id: str, current_user: User = Depends(get_current_user
     schedule = schedule_repo.get_by_id(schedule_id)
 
     if not schedule:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
 
     return ScheduleResponse.model_validate(schedule)
@@ -140,8 +144,6 @@ def get_enrolled_students(
     schedule = schedule_repo.get_by_id(schedule_id)
 
     if not schedule:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
 
     students = schedule_repo.get_enrolled_students(schedule_id)
@@ -233,3 +235,49 @@ def delete_schedule(
     logger.info(f"Schedule deleted: {schedule_id} by admin {current_user.email}")
 
     return {"success": True, "message": "Schedule deleted successfully"}
+
+
+@router.patch("/{schedule_id}/config", response_model=ScheduleResponse, status_code=status.HTTP_200_OK)
+def update_schedule_config(
+    schedule_id: str,
+    config_data: ScheduleConfigUpdate,
+    http_request: Request,
+    current_user: User = Depends(require_role(UserRole.FACULTY, UserRole.ADMIN)),
+    db: Session = Depends(get_db),
+):
+    """
+    **Update Schedule Config** (Faculty/Admin)
+
+    Faculty can update attendance settings for their own schedules.
+    Takes effect immediately on running sessions.
+
+    - **schedule_id**: Schedule UUID
+    - **early_leave_timeout_minutes**: 1-15 minutes
+    """
+    schedule_repo = ScheduleRepository(db)
+    schedule = schedule_repo.get_by_id(schedule_id)
+
+    if not schedule:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
+
+    # Faculty can only update their own schedules
+    if current_user.role == UserRole.FACULTY and str(schedule.faculty_id) != str(current_user.id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot modify another faculty's schedule")
+
+    # Persist to DB
+    updated = schedule_repo.update(schedule_id, config_data.model_dump())
+
+    # Update running pipeline if session is active (mid-session change)
+    pipelines = getattr(http_request.app.state, "session_pipelines", {})
+    pipeline = pipelines.get(schedule_id)
+    if pipeline and pipeline.is_running:
+        timeout_seconds = config_data.early_leave_timeout_minutes * 60.0
+        pipeline.update_early_leave_timeout(timeout_seconds)
+
+    logger.info(
+        f"Schedule config updated: {schedule_id} "
+        f"early_leave_timeout={config_data.early_leave_timeout_minutes}min "
+        f"by {current_user.email}"
+    )
+
+    return ScheduleResponse.model_validate(updated)

@@ -57,6 +57,12 @@ interface ApiService {
     @GET("schedules/{id}")
     suspend fun getSchedule(@Path("id") id: String): Response<ScheduleResponse>
 
+    @PATCH("schedules/{id}/config")
+    suspend fun updateScheduleConfig(
+        @Path("id") scheduleId: String,
+        @Body request: ScheduleConfigUpdateRequest,
+    ): Response<ScheduleResponse>
+
     // Attendance
     @GET("attendance/me")
     suspend fun getMyAttendance(

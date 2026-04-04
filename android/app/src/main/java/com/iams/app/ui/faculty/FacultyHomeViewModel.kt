@@ -9,6 +9,7 @@ import com.iams.app.data.api.NotificationService
 import com.iams.app.data.api.TokenManager
 import com.iams.app.data.model.LiveAttendanceResponse
 import com.iams.app.data.model.ScheduleResponse
+import com.iams.app.data.model.ScheduleConfigUpdateRequest
 import com.iams.app.data.model.SessionStartRequest
 import com.iams.app.data.model.StudentAttendanceStatus
 import com.iams.app.data.model.UserResponse
@@ -41,6 +42,7 @@ data class FacultyHomeUiState(
     val sessionMessage: String? = null,
     val unreadNotificationCount: Int = 0,
     val liveAttendance: LiveAttendanceResponse? = null,
+    val configSaving: Boolean = false,
 )
 
 @HiltViewModel
@@ -326,6 +328,36 @@ class FacultyHomeViewModel @Inject constructor(
                     sessionLoading = false,
                     sessionMessage = "Failed to end session"
                 )
+            }
+        }
+    }
+
+    fun updateEarlyLeaveTimeout(scheduleId: String, minutes: Int) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(configSaving = true)
+            try {
+                val response = apiService.updateScheduleConfig(
+                    scheduleId,
+                    ScheduleConfigUpdateRequest(minutes)
+                )
+                if (response.isSuccessful) {
+                    // Update the schedule in local state so the UI reflects the new value
+                    val updatedSchedules = _uiState.value.todaySchedules.map {
+                        if (it.id == scheduleId) response.body() ?: it else it
+                    }
+                    val updatedAll = _uiState.value.allSchedules.map {
+                        if (it.id == scheduleId) response.body() ?: it else it
+                    }
+                    _uiState.value = _uiState.value.copy(
+                        configSaving = false,
+                        todaySchedules = updatedSchedules,
+                        allSchedules = updatedAll,
+                    )
+                } else {
+                    _uiState.value = _uiState.value.copy(configSaving = false)
+                }
+            } catch (_: Exception) {
+                _uiState.value = _uiState.value.copy(configSaving = false)
             }
         }
     }

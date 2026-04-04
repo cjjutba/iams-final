@@ -59,6 +59,9 @@ class Schedule(Base):
     target_course = Column(String(100), nullable=True, index=True)  # e.g., "BSCPE"
     target_year_level = Column(Integer, nullable=True)  # e.g., 4
 
+    # Faculty-configurable settings (NULL = use system default)
+    early_leave_timeout_minutes = Column(Integer, nullable=True)  # 1-15 min, default 5
+
     # Status
     is_active = Column(Boolean, default=True, nullable=False)
 

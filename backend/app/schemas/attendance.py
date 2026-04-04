@@ -213,6 +213,9 @@ class AlertResponse(BaseModel):
     consecutive_misses: int
     notified: bool
     date: date
+    returned: bool = False
+    returned_at: datetime | None = None
+    absence_duration_seconds: int | None = None
 
     @field_validator("id", "attendance_id", "student_id", "schedule_id", mode="before")
     @classmethod

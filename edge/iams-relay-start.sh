@@ -4,15 +4,15 @@
 #
 # Includes:
 # - Automatic reconnection on FFmpeg exit
-# - Watchdog that kills FFmpeg if the VPS stream goes stale
+# - Watchdog that kills FFmpeg if network TX stops (stream died silently)
 set -uo pipefail
 
 SOURCE="${CAMERA_RTSP_URL}"
 TARGET="${VPS_RTSP_URL}/${ROOM_ID}"
 MODE="${RELAY_MODE:-copy}"
 RETRY_DELAY=5
-WATCHDOG_INTERVAL=30    # Check stream health every 30 seconds
-WATCHDOG_TIMEOUT=10     # ffprobe timeout for health check
+WATCHDOG_INTERVAL=30    # Check every 30 seconds
+MIN_TX_BYTES=10000      # Minimum TX bytes per interval (stream should do ~50KB+/s)
 
 FFMPEG_PID=""
 
@@ -23,6 +23,10 @@ cleanup() {
     fi
 }
 trap cleanup EXIT
+
+get_tx_bytes() {
+    cat /sys/class/net/wlan0/statistics/tx_bytes 2>/dev/null || echo "0"
+}
 
 run_ffmpeg() {
     if [ "${MODE}" = "transcode" ]; then
@@ -80,33 +84,30 @@ run_ffmpeg() {
     FFMPEG_PID=$!
 }
 
-# Check if the stream is actually reachable at VPS mediamtx
-check_stream_health() {
-    # Use ffprobe to verify the stream exists at the target URL
-    timeout "${WATCHDOG_TIMEOUT}" ffprobe -v quiet -i "${TARGET}" -show_entries format=duration -of csv=p=0 >/dev/null 2>&1
-    return $?
-}
-
 # Main loop
 while true; do
     run_ffmpeg
     echo "IAMS Relay: FFmpeg started (PID ${FFMPEG_PID})"
 
-    # Wait for FFmpeg to connect and publish (give it time to probe + start)
-    sleep 15
+    # Give FFmpeg time to connect to camera + VPS before watchdog starts
+    sleep 20
 
-    # Watchdog loop — runs while FFmpeg is alive
+    PREV_TX=$(get_tx_bytes)
+
+    # Watchdog loop — monitors TX bytes to detect silent stream death
     while kill -0 "${FFMPEG_PID}" 2>/dev/null; do
         sleep "${WATCHDOG_INTERVAL}"
 
-        # Skip check if FFmpeg already died
         if ! kill -0 "${FFMPEG_PID}" 2>/dev/null; then
             break
         fi
 
-        # Check if stream is actually arriving at VPS
-        if ! check_stream_health; then
-            echo "IAMS Relay: Watchdog — stream not reachable at VPS, killing FFmpeg"
+        CURR_TX=$(get_tx_bytes)
+        TX_DIFF=$((CURR_TX - PREV_TX))
+        PREV_TX=${CURR_TX}
+
+        if [ "${TX_DIFF}" -lt "${MIN_TX_BYTES}" ]; then
+            echo "IAMS Relay: Watchdog — TX stalled (${TX_DIFF} bytes in ${WATCHDOG_INTERVAL}s), restarting"
             kill "${FFMPEG_PID}" 2>/dev/null
             wait "${FFMPEG_PID}" 2>/dev/null
             break

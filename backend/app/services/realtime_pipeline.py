@@ -136,6 +136,15 @@ class SessionPipeline:
     def is_running(self) -> bool:
         return self._task is not None and not self._task.done()
 
+    def update_early_leave_timeout(self, timeout_seconds: float) -> None:
+        """Update the early leave timeout on the running presence service."""
+        if self._presence is not None:
+            self._presence.set_early_leave_timeout(timeout_seconds)
+            logger.info(
+                "Early leave timeout updated to %.0fs for schedule %s",
+                timeout_seconds, self.schedule_id[:8],
+            )
+
     async def _run_loop(self) -> None:
         """Main processing loop — runs at PROCESSING_FPS.
 

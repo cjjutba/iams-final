@@ -7,6 +7,7 @@ Orchestrates InsightFace (ArcFace) model, FAISS search, and database operations.
 
 import contextlib
 import io
+import time
 
 import numpy as np
 from fastapi import UploadFile
@@ -80,6 +81,7 @@ class FaceService:
         face_crops = []  # Collected for anti-spoof check
         quality_reports: list[QualityReport] = []
         for i, image_file in enumerate(images):
+            _img_start = time.monotonic()
             try:
                 # Read image bytes
                 image_bytes = await image_file.read()
@@ -113,7 +115,7 @@ class FaceService:
 
                 embeddings.append(embedding)
 
-                logger.debug(f"Generated embedding for image {i + 1}/{len(images)}")
+                logger.info(f"Image {i + 1}/{len(images)}: embedding generated in {time.monotonic() - _img_start:.2f}s")
 
             except ValidationError:
                 raise

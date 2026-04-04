@@ -28,6 +28,9 @@ class ScheduleBase(BaseModel):
     target_year_level: int | None = Field(
         None, ge=0, le=6, description="Target year level for auto-enrollment (0=any), e.g., 4"
     )
+    early_leave_timeout_minutes: int | None = Field(
+        None, ge=1, le=15, description="Early leave timeout in minutes (1-15). NULL = system default (5 min)."
+    )
 
 
 class ScheduleCreate(ScheduleBase):
@@ -51,6 +54,7 @@ class ScheduleUpdate(BaseModel):
     academic_year: str | None = Field(None, max_length=20)
     target_course: str | None = Field(None, max_length=100)
     target_year_level: int | None = Field(None, ge=0, le=6)
+    early_leave_timeout_minutes: int | None = Field(None, ge=1, le=15)
     is_active: bool | None = None
 
 
@@ -127,3 +131,9 @@ class ScheduleWithStudents(ScheduleResponse):
     """Schedule with enrolled students list"""
 
     enrolled_students: list[StudentInfo] = []
+
+
+class ScheduleConfigUpdate(BaseModel):
+    """Faculty-facing config update for a schedule (subset of fields)."""
+
+    early_leave_timeout_minutes: int = Field(..., ge=1, le=15)

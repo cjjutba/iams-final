@@ -81,6 +81,7 @@ data class ScheduleResponse(
     @SerializedName("room_id") val roomId: String?,
     @SerializedName("faculty_name") val facultyName: String?,
     @SerializedName("is_active") val isActive: Boolean = true,
+    @SerializedName("early_leave_timeout_minutes") val earlyLeaveTimeoutMinutes: Int? = null,
 ) {
     /** Normalise day_of_week to Int (0=Monday) regardless of backend format. */
     val dayOfWeekInt: Int get() = when (dayOfWeek) {
@@ -101,6 +102,10 @@ data class ScheduleResponse(
         else -> 0
     }
 }
+
+data class ScheduleConfigUpdateRequest(
+    @SerializedName("early_leave_timeout_minutes") val earlyLeaveTimeoutMinutes: Int
+)
 
 // === Attendance ===
 data class AttendanceRecordResponse(
@@ -171,6 +176,9 @@ data class AlertResponse(
     @SerializedName("last_seen_at") val lastSeenAt: String? = null,
     @SerializedName("consecutive_misses") val consecutiveMisses: Int = 0,
     val notified: Boolean = false,
+    val returned: Boolean = false,
+    @SerializedName("returned_at") val returnedAt: String? = null,
+    @SerializedName("absence_duration_seconds") val absenceDurationSeconds: Int? = null,
     @SerializedName("created_at") val createdAt: String? = null,
 )
 
@@ -243,7 +251,8 @@ data class AttendanceSummaryMessage(
     val present: List<AttendanceSummaryStudent>?,
     val absent: List<AttendanceSummaryStudent>?,
     val late: List<AttendanceSummaryStudent>?,
-    @SerializedName("early_leave") val earlyLeave: List<AttendanceSummaryStudent>?
+    @SerializedName("early_leave") val earlyLeave: List<AttendanceSummaryStudent>?,
+    @SerializedName("early_leave_returned") val earlyLeaveReturned: List<AttendanceSummaryStudent>?,
 )
 
 data class AttendanceSummaryStudent(

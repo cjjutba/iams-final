@@ -27,7 +27,9 @@ case "${ROOM}" in
         RPI_USER="iams-eb226"
         RPI_HOST="${RPI_USER}@192.168.88.12"
         RPI_PASS='123'
-        CAMERA_RTSP_URL="rtsp://admin:%40Iams2026THESIS%21@192.168.88.10:554/h264Preview_01_main"
+        # P340 sub stream (896x512, ~25fps) — main stream (2304x1296) exceeds
+        # the WiFi upload bandwidth (~0.9 Mbps) causing constant stream breaks.
+        CAMERA_RTSP_URL="rtsp://admin:%40Iams2026THESIS%21@192.168.88.10:554/h264Preview_01_sub"
         ROOM_ID="eb226"
         RELAY_MODE="copy"
         ;;

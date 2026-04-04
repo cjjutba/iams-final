@@ -10,6 +10,7 @@ import okhttp3.OkHttpClient
 import com.iams.app.data.model.AttendanceSummaryMessage
 import com.iams.app.data.model.FrameUpdateMessage
 import com.iams.app.data.model.RoomResponse
+import com.iams.app.data.model.ScheduleConfigUpdateRequest
 import com.iams.app.data.model.ScheduleResponse
 import com.iams.app.data.model.SessionStartRequest
 import com.iams.app.data.model.StudentAttendanceStatus
@@ -33,12 +34,15 @@ data class LiveFeedUiState(
     val absentStudents: List<StudentAttendanceStatus> = emptyList(),
     val lateStudents: List<StudentAttendanceStatus> = emptyList(),
     val earlyLeaveStudents: List<StudentAttendanceStatus> = emptyList(),
+    val earlyLeaveReturnedStudents: List<StudentAttendanceStatus> = emptyList(),
     val presentCount: Int = 0,
     val totalEnrolled: Int = 0,
     val fps: Float = 0f,
     val processingMs: Float = 0f,
     val sessionActive: Boolean = false,
     val sessionLoading: Boolean = false,
+    val earlyLeaveTimeoutMinutes: Int = 5,
+    val configSaving: Boolean = false,
 )
 
 @HiltViewModel
@@ -127,7 +131,11 @@ class FacultyLiveFeedViewModel @Inject constructor(
             try {
                 val response = apiService.getSchedule(scheduleId)
                 if (response.isSuccessful) {
-                    _uiState.value = _uiState.value.copy(schedule = response.body())
+                    val schedule = response.body()
+                    _uiState.value = _uiState.value.copy(
+                        schedule = schedule,
+                        earlyLeaveTimeoutMinutes = schedule?.earlyLeaveTimeoutMinutes ?: 5,
+                    )
                 }
             } catch (_: Exception) {}
         }
@@ -184,12 +192,14 @@ class FacultyLiveFeedViewModel @Inject constructor(
         val absent = summary.absent?.map { toStudentStatus(it.userId, it.name, "absent") } ?: emptyList()
         val late = summary.late?.map { toStudentStatus(it.userId, it.name, "late") } ?: emptyList()
         val earlyLeave = summary.earlyLeave?.map { toStudentStatus(it.userId, it.name, "early_leave") } ?: emptyList()
+        val earlyLeaveReturned = summary.earlyLeaveReturned?.map { toStudentStatus(it.userId, it.name, "early_leave") } ?: emptyList()
 
         _uiState.value = _uiState.value.copy(
             presentStudents = present,
             absentStudents = absent,
             lateStudents = late,
             earlyLeaveStudents = earlyLeave,
+            earlyLeaveReturnedStudents = earlyLeaveReturned,
             presentCount = summary.presentCount,
             totalEnrolled = summary.totalEnrolled,
         )
@@ -244,6 +254,29 @@ class FacultyLiveFeedViewModel @Inject constructor(
                 }
             } catch (_: Exception) {
                 _uiState.value = _uiState.value.copy(sessionLoading = false)
+            }
+        }
+    }
+
+    fun updateEarlyLeaveTimeout(minutes: Int) {
+        if (currentScheduleId.isEmpty()) return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(configSaving = true)
+            try {
+                val response = apiService.updateScheduleConfig(
+                    currentScheduleId,
+                    ScheduleConfigUpdateRequest(minutes)
+                )
+                if (response.isSuccessful) {
+                    _uiState.value = _uiState.value.copy(
+                        earlyLeaveTimeoutMinutes = minutes,
+                        configSaving = false,
+                    )
+                } else {
+                    _uiState.value = _uiState.value.copy(configSaving = false)
+                }
+            } catch (_: Exception) {
+                _uiState.value = _uiState.value.copy(configSaving = false)
             }
         }
     }

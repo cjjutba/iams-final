@@ -96,7 +96,7 @@ fun NativeWebRtcVideoPlayer(
                     // allowing Compose Canvas overlays (bounding boxes) to draw on top.
                     // Do NOT set setZOrderMediaOverlay(true) — it would cover the overlay.
                     setEnableHardwareScaler(false)
-                    setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+                    setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
                     init(client.eglBase.eglBaseContext, null)
                     rendererRef.value = this
 

@@ -19,6 +19,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
+from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -69,6 +70,7 @@ class TrackPresenceService:
         self._enrolled_ids: set[str] = set()
         self._pending_log_writes: list[dict] = []
         self._schedule = None  # Cached schedule object
+        self._early_leave_timeout: float = settings.EARLY_LEAVE_TIMEOUT  # per-schedule override
 
     def rebind_db(self, db: Session) -> None:
         """Swap the underlying DB session (for short-lived session pattern)."""
@@ -85,11 +87,19 @@ class TrackPresenceService:
     def enrolled_ids(self) -> set[str]:
         return self._enrolled_ids
 
+    def set_early_leave_timeout(self, seconds: float) -> None:
+        """Update the early leave timeout (GIL-safe for mid-session changes)."""
+        self._early_leave_timeout = seconds
+
     def start_session(self) -> None:
         """Load all enrolled students and create attendance records in batch."""
         self._schedule = self.schedule_repo.get_by_id(self.schedule_id)
         if not self._schedule:
             raise ValueError(f"Schedule not found: {self.schedule_id}")
+
+        # Load per-schedule early leave timeout (fall back to global default)
+        if getattr(self._schedule, "early_leave_timeout_minutes", None) is not None:
+            self._early_leave_timeout = self._schedule.early_leave_timeout_minutes * 60.0
 
         self._session_start = datetime.now()
         students = self.schedule_repo.get_enrolled_students(self.schedule_id)
@@ -182,27 +192,40 @@ class TrackPresenceService:
                     logger.info("Student %s checked in: %s", sid, new_status.value)
 
                 elif state.early_leave_flagged and not state.early_leave_returned:
-                    # Returned after early leave — restore status
+                    # Returned after early leave — restore status but keep flag for logging
                     state.early_leave_returned = True
                     state.absent_since = None
                     state.last_presence_start = now_mono
 
-                    # state.status still holds the original PRESENT/LATE
-                    # (in-memory was never changed to EARLY_LEAVE), so use it directly
+                    # Restore attendance record to original status (PRESENT/LATE)
                     restored_status = state.status
                     self.attendance_repo.update(state.attendance_id, {
                         "status": restored_status,
                     })
 
-                    # Reset flags so the student can be re-flagged if they leave again
-                    state.early_leave_flagged = False
-                    state.early_leave_returned = False
+                    # Persist return to EarlyLeaveEvent record
+                    early_event = (
+                        self.db.query(EarlyLeaveEvent)
+                        .filter(
+                            EarlyLeaveEvent.attendance_id == state.attendance_id,
+                            EarlyLeaveEvent.returned == False,
+                        )
+                        .order_by(desc(EarlyLeaveEvent.detected_at))
+                        .first()
+                    )
+                    if early_event:
+                        early_event.returned = True
+                        early_event.returned_at = datetime.now()
+                        if state.absent_since is not None:
+                            early_event.absence_duration_seconds = int(now_mono - state.absent_since)
+                        self.db.commit()
 
                     events.append({
                         "event": "early_leave_return",
                         "student_id": sid,
                         "student_name": state.name,
                         "restored_status": restored_status.value,
+                        "returned_at": datetime.now().isoformat(),
                     })
                     logger.info("Student %s returned after early leave, restored to %s", sid, restored_status.value)
 
@@ -222,13 +245,14 @@ class TrackPresenceService:
                     state.total_present_seconds += elapsed
                     state.last_presence_start = None
 
-                if state.status != AttendanceStatus.ABSENT and not state.early_leave_flagged:
+                if state.status != AttendanceStatus.ABSENT and (not state.early_leave_flagged or state.early_leave_returned):
                     # Track absence duration
                     if state.absent_since is None:
                         state.absent_since = now_mono
-                    elif (now_mono - state.absent_since) > settings.EARLY_LEAVE_TIMEOUT:
+                    elif (now_mono - state.absent_since) > self._early_leave_timeout:
                         # Trigger early leave
                         state.early_leave_flagged = True
+                        state.early_leave_returned = False  # Reset return flag for new absence
                         absent_seconds = now_mono - state.absent_since
                         events.append({
                             "event": "early_leave",
@@ -358,11 +382,22 @@ class TrackPresenceService:
         absent = []
         late = []
         early_leave = []
+        early_leave_returned = []
 
         for sid, state in self._students.items():
             info = {"user_id": sid, "name": state.name}
+
             if state.early_leave_flagged and not state.early_leave_returned:
+                # Still absent after early leave
                 early_leave.append(info)
+            elif state.early_leave_flagged and state.early_leave_returned:
+                # Returned after early leave — show in both present/late AND early_leave_returned
+                early_leave_returned.append(info)
+                if state.status == AttendanceStatus.LATE:
+                    late.append(info)
+                    present.append(info)
+                elif state.status == AttendanceStatus.PRESENT:
+                    present.append(info)
             elif state.status == AttendanceStatus.ABSENT:
                 absent.append(info)
             elif state.status == AttendanceStatus.LATE:
@@ -380,4 +415,5 @@ class TrackPresenceService:
             "absent": absent,
             "late": late,
             "early_leave": early_leave,
+            "early_leave_returned": early_leave_returned,
         }

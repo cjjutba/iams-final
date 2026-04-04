@@ -606,9 +606,14 @@ def get_early_leave_alerts(
                 consecutive_misses=event.consecutive_misses,
                 notified=event.notified,
                 date=attendance.date,
+                returned=event.returned,
+                returned_at=event.returned_at,
+                absence_duration_seconds=event.absence_duration_seconds,
             )
         )
 
+    # Sort: still-absent first (more urgent), then by detected_at descending
+    alerts.sort(key=lambda a: (a.returned, -(a.detected_at.timestamp() if a.detected_at else 0)))
     return alerts
 
 

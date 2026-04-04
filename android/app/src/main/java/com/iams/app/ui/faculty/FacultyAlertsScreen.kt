@@ -50,9 +50,13 @@ import com.iams.app.ui.components.NotificationBellButton
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.TextPrimary
 import com.iams.app.ui.theme.Border
+import com.iams.app.ui.theme.AbsentBg
+import com.iams.app.ui.theme.AbsentFg
 import com.iams.app.ui.theme.EarlyLeaveBg
 import com.iams.app.ui.theme.EarlyLeaveFg
 import com.iams.app.ui.theme.IAMSThemeTokens
+import com.iams.app.ui.theme.PresentBg
+import com.iams.app.ui.theme.PresentFg
 import com.iams.app.ui.theme.Primary
 import com.iams.app.ui.theme.PrimaryForeground
 import com.iams.app.ui.theme.Secondary
@@ -223,14 +227,45 @@ private fun AlertCard(
             Spacer(modifier = Modifier.width(spacing.md))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = alert.studentName ?: "Unknown Student",
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = alert.studentName ?: "Unknown Student",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (alert.returned) {
+                        Text(
+                            text = "✓ Returned",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = PresentFg,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(PresentBg)
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    } else {
+                        Text(
+                            text = "Still Absent",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AbsentFg,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(AbsentBg)
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
                 Spacer(modifier = Modifier.height(spacing.xs))
+                val displayMessage = if (alert.returned && alert.returnedAt != null) {
+                    "Left early · Returned at ${formatAlertTime(alert.returnedAt)}"
+                } else {
+                    alert.message ?: "Early leave detected"
+                }
                 Text(
-                    text = alert.message ?: "Early leave detected",
+                    text = displayMessage,
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary,
                 )
@@ -341,6 +376,22 @@ private fun formatTimeAgo(timestamp: String): String {
                 duration.toDays() < 7 -> "${duration.toDays()}d ago"
                 else -> parsed.format(DateTimeFormatter.ofPattern("MMM d, yyyy"))
             }
+        } catch (_: Exception) {
+            timestamp
+        }
+    }
+}
+
+/** Format an ISO timestamp to display time only (e.g., "3:15 PM"). */
+private fun formatAlertTime(timestamp: String): String {
+    if (timestamp.isBlank()) return ""
+    return try {
+        val parsed = ZonedDateTime.parse(timestamp)
+        parsed.format(DateTimeFormatter.ofPattern("h:mm a"))
+    } catch (_: Exception) {
+        try {
+            val parsed = java.time.LocalDateTime.parse(timestamp.replace(" ", "T"))
+            parsed.format(DateTimeFormatter.ofPattern("h:mm a"))
         } catch (_: Exception) {
             timestamp
         }

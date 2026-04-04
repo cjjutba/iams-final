@@ -27,6 +27,7 @@ import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.ui.graphics.Color
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.outlined.CalendarMonth
@@ -36,6 +37,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -70,6 +73,7 @@ import com.iams.app.ui.components.IAMSHeader
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.AbsentFg
 import com.iams.app.ui.theme.Background
+import com.iams.app.ui.theme.Border
 import com.iams.app.ui.theme.IAMSThemeTokens
 import com.iams.app.ui.theme.LateFg
 import com.iams.app.ui.theme.PresentBorder
@@ -108,6 +112,7 @@ fun FacultyHomeScreen(
     val otherSchedules = uiState.todaySchedules.filter { it.id != currentClass?.id }
 
     var showEndDialog by remember { mutableStateOf(false) }
+    var showEarlyLeaveConfig by remember { mutableStateOf(false) }
 
     // Manage polling lifecycle from the composable
     LaunchedEffect(sessionActive, currentClass?.id) {
@@ -135,6 +140,18 @@ fun FacultyHomeScreen(
                 TextButton(onClick = { showEndDialog = false }) {
                     Text("Cancel")
                 }
+            }
+        )
+    }
+
+    if (showEarlyLeaveConfig && currentClass != null) {
+        EarlyLeaveTimeoutDialog(
+            currentMinutes = currentClass.earlyLeaveTimeoutMinutes ?: 5,
+            isSaving = uiState.configSaving,
+            onDismiss = { showEarlyLeaveConfig = false },
+            onConfirm = { minutes ->
+                viewModel.updateEarlyLeaveTimeout(currentClass.id, minutes)
+                showEarlyLeaveConfig = false
             }
         )
     }
@@ -227,6 +244,7 @@ fun FacultyHomeScreen(
                                 elapsedMinutes = viewModel.getElapsedMinutes(currentClass),
                                 sessionLoading = uiState.sessionLoading,
                                 onEndSession = { showEndDialog = true },
+                                onSettings = { showEarlyLeaveConfig = true },
                                 onViewCameraFeed = {
                                     val roomId = currentClass.roomId ?: return@ActiveSessionHeroCard
                                     navController.navigate(
@@ -342,6 +360,7 @@ private fun ActiveSessionHeroCard(
     elapsedMinutes: Long,
     sessionLoading: Boolean,
     onEndSession: () -> Unit,
+    onSettings: () -> Unit,
     onViewCameraFeed: () -> Unit,
     formatTime: (String) -> String,
     modifier: Modifier = Modifier
@@ -439,10 +458,11 @@ private fun ActiveSessionHeroCard(
 
             Spacer(modifier = Modifier.height(spacing.lg))
 
-            // Action buttons: Camera Feed (primary) + End Class (secondary)
+            // Action buttons: Camera Feed (primary) + End Class (secondary) + Settings gear
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(spacing.sm)
+                horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 IAMSButton(
                     text = "Open Camera Feed",
@@ -477,6 +497,13 @@ private fun ActiveSessionHeroCard(
                         )
                     }
                 )
+                IconButton(onClick = onSettings) {
+                    Icon(
+                        Icons.Default.Settings,
+                        contentDescription = "Session settings",
+                        tint = TextSecondary
+                    )
+                }
             }
         }
     }
@@ -799,4 +826,76 @@ private fun EmptyScheduleState(
             modifier = Modifier.padding(horizontal = spacing.lg)
         )
     }
+}
+
+@Composable
+private fun EarlyLeaveTimeoutDialog(
+    currentMinutes: Int,
+    isSaving: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (Int) -> Unit,
+) {
+    var sliderValue by remember { mutableStateOf(currentMinutes.toFloat()) }
+    val displayMinutes = Math.round(sliderValue)
+    val spacing = IAMSThemeTokens.spacing
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Early Leave Timeout",
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    text = "How long a student can be absent before being flagged as early leave.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+                Spacer(modifier = Modifier.height(spacing.lg))
+                Text(
+                    text = "$displayMinutes minute${if (displayMinutes != 1) "s" else ""}",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(spacing.sm))
+                Slider(
+                    value = sliderValue,
+                    onValueChange = { sliderValue = it },
+                    valueRange = 1f..15f,
+                    steps = 13,
+                    colors = SliderDefaults.colors(
+                        thumbColor = Primary,
+                        activeTrackColor = Primary,
+                        inactiveTrackColor = Border,
+                    )
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("1 min", style = MaterialTheme.typography.labelSmall, color = TextTertiary)
+                    Text("15 min", style = MaterialTheme.typography.labelSmall, color = TextTertiary)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(Math.round(sliderValue)) },
+                enabled = !isSaving
+            ) {
+                Text(if (isSaving) "Saving..." else "Save", color = Primary)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = TextSecondary)
+            }
+        }
+    )
 }

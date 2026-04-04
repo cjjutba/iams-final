@@ -233,6 +233,32 @@ class RegistrationViewModel @Inject constructor(
         _uiState.value.capturedFaces.forEach { if (!it.isRecycled) it.recycle() }
     }
 
+    /**
+     * Downscale a bitmap so its longest edge is at most [maxSize] pixels.
+     * Preserves aspect ratio. Returns the original if already small enough.
+     */
+    private fun downscaleBitmap(bitmap: Bitmap, maxSize: Int = 800): Bitmap {
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w <= maxSize && h <= maxSize) return bitmap
+        val scale = maxSize.toFloat() / maxOf(w, h)
+        return Bitmap.createScaledBitmap(
+            bitmap,
+            (w * scale).toInt(),
+            (h * scale).toInt(),
+            true
+        )
+    }
+
+    private fun bitmapToJpegPart(bitmap: Bitmap, index: Int): MultipartBody.Part {
+        val scaled = downscaleBitmap(bitmap)
+        val stream = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, 85, stream)
+        val bytes = stream.toByteArray()
+        val requestBody = bytes.toRequestBody("image/jpeg".toMediaTypeOrNull())
+        return MultipartBody.Part.createFormData("images", "face_$index.jpg", requestBody)
+    }
+
     fun uploadFaceImages(reregister: Boolean = false) {
         val faces = _uiState.value.capturedFaces
         if (faces.isEmpty()) return
@@ -245,15 +271,7 @@ class RegistrationViewModel @Inject constructor(
 
             try {
                 val parts = faces.mapIndexed { index, bitmap ->
-                    val stream = ByteArrayOutputStream()
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 90, stream)
-                    val bytes = stream.toByteArray()
-                    val requestBody = bytes.toRequestBody("image/jpeg".toMediaTypeOrNull())
-                    MultipartBody.Part.createFormData(
-                        "images",
-                        "face_$index.jpg",
-                        requestBody
-                    )
+                    bitmapToJpegPart(bitmap, index)
                 }
 
                 val response = if (reregister) {
@@ -302,9 +320,10 @@ class RegistrationViewModel @Inject constructor(
             faces.forEachIndexed { index, bitmap ->
                 try {
                     if (!bitmap.isRecycled) {
+                        val scaled = downscaleBitmap(bitmap)
                         val file = java.io.File(dir, "face_$index.jpg")
                         file.outputStream().use { out ->
-                            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                            scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
                         }
                         savedCount++
                     }
