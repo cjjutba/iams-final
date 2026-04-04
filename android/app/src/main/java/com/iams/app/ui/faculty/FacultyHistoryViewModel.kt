@@ -38,6 +38,7 @@ data class OverallSummary(
     val totalPresent: Int = 0,
     val totalLate: Int = 0,
     val totalAbsent: Int = 0,
+    val totalEarlyLeave: Int = 0,
     val attendanceRate: Float = 0f,
 )
 
@@ -204,7 +205,8 @@ class FacultyHistoryViewModel @Inject constructor(
                 val totalPresent = sessions.sumOf { it.presentCount }
                 val totalLate = sessions.sumOf { it.lateCount }
                 val totalAbsent = sessions.sumOf { it.absentCount }
-                val totalStudentRecords = totalPresent + totalLate + totalAbsent + sessions.sumOf { it.earlyLeaveCount }
+                val totalEarlyLeave = sessions.sumOf { it.earlyLeaveCount }
+                val totalStudentRecords = totalPresent + totalLate + totalAbsent + totalEarlyLeave
                 val rate = if (totalStudentRecords > 0) {
                     (totalPresent + totalLate).toFloat() / totalStudentRecords.toFloat()
                 } else 0f
@@ -218,6 +220,7 @@ class FacultyHistoryViewModel @Inject constructor(
                         totalPresent = totalPresent,
                         totalLate = totalLate,
                         totalAbsent = totalAbsent,
+                        totalEarlyLeave = totalEarlyLeave,
                         attendanceRate = rate,
                     ),
                 )
@@ -248,7 +251,8 @@ class FacultyHistoryViewModel @Inject constructor(
                 )
 
                 if (response.isSuccessful && response.body() != null) {
-                    val fileName = "attendance_report_${startStr}_${endStr}.pdf"
+                    val timestamp = System.currentTimeMillis()
+                    val fileName = "attendance_report_${startStr}_${endStr}_${timestamp}.pdf"
                     val file = File(context.cacheDir, fileName)
                     response.body()!!.byteStream().use { inputStream ->
                         file.outputStream().use { outputStream ->
