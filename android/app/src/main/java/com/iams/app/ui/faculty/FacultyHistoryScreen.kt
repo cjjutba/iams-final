@@ -26,6 +26,8 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -112,6 +114,8 @@ fun FacultyHistoryScreen(
         }
     }
 
+    val context = LocalContext.current
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -120,10 +124,32 @@ fun FacultyHistoryScreen(
         IAMSHeader(
             title = "History",
             trailing = {
-                NotificationBellButton(
-                    notificationService = viewModel.notificationService,
-                    onClick = { navController.navigate(Routes.FACULTY_NOTIFICATIONS) },
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (uiState.hasLoaded && uiState.sessions.isNotEmpty()) {
+                        IconButton(
+                            onClick = { viewModel.exportPdf(context) },
+                            enabled = !uiState.isExporting,
+                        ) {
+                            if (uiState.isExporting) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                    color = Primary,
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Default.Download,
+                                    contentDescription = "Export PDF",
+                                    tint = Primary,
+                                )
+                            }
+                        }
+                    }
+                    NotificationBellButton(
+                        notificationService = viewModel.notificationService,
+                        onClick = { navController.navigate(Routes.FACULTY_NOTIFICATIONS) },
+                    )
+                }
             },
         )
 
@@ -179,7 +205,6 @@ private fun AttendanceHistoryTab(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val spacing = IAMSThemeTokens.spacing
-    val context = LocalContext.current
 
     var classPickerExpanded by remember { mutableStateOf(false) }
     var showStartDatePicker by remember { mutableStateOf(false) }
@@ -539,27 +564,6 @@ private fun AttendanceHistoryTab(
             }
         }
 
-        // Export PDF button
-        if (uiState.hasLoaded && uiState.sessions.isNotEmpty()) {
-            item {
-                Spacer(modifier = Modifier.height(spacing.sm))
-                IAMSButton(
-                    text = "Export PDF",
-                    onClick = { viewModel.exportPdf(context) },
-                    variant = IAMSButtonVariant.OUTLINE,
-                    isLoading = uiState.isExporting,
-                    loadingText = "Exporting...",
-                    leadingIcon = {
-                        Icon(
-                            Icons.Default.Download,
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp),
-                            tint = Primary,
-                        )
-                    },
-                )
-            }
-        }
     }
 }
 
