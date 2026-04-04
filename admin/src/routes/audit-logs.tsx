@@ -1,6 +1,6 @@
 import { useMemo, useState, useTransition } from 'react'
 import { type ColumnDef } from '@tanstack/react-table'
-import { format, parseISO } from 'date-fns'
+import { safeFormat } from '@/lib/utils'
 import { usePageTitle } from '@/hooks/use-page-title'
 
 import { DataTable } from '@/components/data-tables'
@@ -29,17 +29,11 @@ const columns: ColumnDef<AuditLog>[] = [
   {
     accessorKey: 'created_at',
     header: 'Timestamp',
-    cell: ({ row }) => {
-      try {
-        return (
-          <span className="text-sm whitespace-nowrap">
-            {format(parseISO(row.original.created_at), 'MMM d, yyyy h:mm a')}
-          </span>
-        )
-      } catch {
-        return <span className="text-sm">{row.original.created_at}</span>
-      }
-    },
+    cell: ({ row }) => (
+      <span className="text-sm whitespace-nowrap">
+        {safeFormat(row.original.created_at, 'MMM d, yyyy h:mm a')}
+      </span>
+    ),
   },
   {
     accessorKey: 'action',

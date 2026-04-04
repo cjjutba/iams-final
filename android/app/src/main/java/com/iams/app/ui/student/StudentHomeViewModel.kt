@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiService
 import com.iams.app.data.api.NotificationService
+import com.iams.app.data.api.PendingFaceUploadManager
 import com.iams.app.data.api.TokenManager
 import com.iams.app.data.model.AttendanceRecordResponse
 import com.iams.app.data.model.AttendanceSummaryResponse
@@ -33,6 +34,7 @@ data class StudentHomeUiState(
     val currentClass: ScheduleResponse? = null,
     val nextClass: ScheduleResponse? = null,
     val faceRegistered: Boolean? = null, // null = loading
+    val faceUploading: Boolean = false,
     val recentActivity: List<AttendanceRecordResponse> = emptyList(),
     val todayAttendanceMap: Map<String, AttendanceRecordResponse> = emptyMap(),
     val unreadNotificationCount: Int = 0,
@@ -44,6 +46,7 @@ class StudentHomeViewModel @Inject constructor(
     private val apiService: ApiService,
     private val tokenManager: TokenManager,
     val notificationService: NotificationService,
+    private val pendingFaceUploadManager: PendingFaceUploadManager,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(StudentHomeUiState())
@@ -106,10 +109,24 @@ class StudentHomeViewModel @Inject constructor(
 
                 val user = userDeferred.await()
                 val allSchedules = schedulesDeferred.await()
-                val faceRegistered = faceDeferred.await()
+                var faceRegistered = faceDeferred.await()
                 val recentActivity = activityDeferred.await()
                 val unreadCount = unreadCountDeferred.await()
                 val summary = summaryDeferred.await()
+
+                // If face not registered but there are pending uploads from registration,
+                // upload them first, then re-check status
+                if (faceRegistered != true && pendingFaceUploadManager.hasPendingFaces()) {
+                    _uiState.value = _uiState.value.copy(faceUploading = true)
+                    val uploaded = pendingFaceUploadManager.uploadPendingFaces()
+                    if (uploaded) {
+                        // Re-check face status after successful upload
+                        faceRegistered = try {
+                            val response = apiService.getFaceStatus()
+                            if (response.isSuccessful) response.body()?.faceRegistered else faceRegistered
+                        } catch (_: Exception) { faceRegistered }
+                    }
+                }
 
                 // Filter today's schedules (backend: 0=Monday)
                 val todayBackendDay = todayBackendDayOfWeek()
@@ -147,6 +164,7 @@ class StudentHomeViewModel @Inject constructor(
                     currentClass = currentClass,
                     nextClass = nextClass,
                     faceRegistered = faceRegistered,
+                    faceUploading = false,
                     recentActivity = recentActivity,
                     todayAttendanceMap = todayAttMap,
                     unreadNotificationCount = unreadCount,

@@ -84,3 +84,4 @@ temp/
 backend/bin/mediamtx
 backend/bin/mediamtx.exe
 .worktrees/
+.vercel

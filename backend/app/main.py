@@ -16,7 +16,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from app.config import logger, settings
-from app.database import check_db_connection
+from app.database import check_db_connection, init_db
 from app.rate_limiter import limiter
 
 # Import routers
@@ -77,6 +77,9 @@ async def lifespan(app: FastAPI):
     db_connected = await asyncio.to_thread(check_db_connection)
     if not db_connected:
         raise RuntimeError("Database connection failed. Cannot start application.")
+
+    # Ensure all tables exist (creates any missing tables)
+    await asyncio.to_thread(init_db)
     logger.info("Database connection established")
 
     # ── Redis ─────────────────────────────────────────────────────

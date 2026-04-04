@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -230,8 +231,13 @@ fun StudentHomeScreen(
                 }
             }
 
-            // ── Face NOT registered warning (only when not registered) ──
-            if (!uiState.isLoading && uiState.faceRegistered == false) {
+            // ── Face uploading / not registered warning ──
+            if (!uiState.isLoading && uiState.faceUploading) {
+                item {
+                    Spacer(modifier = Modifier.height(spacing.xxl))
+                    FaceUploadingCard()
+                }
+            } else if (!uiState.isLoading && uiState.faceRegistered == false) {
                 item {
                     Spacer(modifier = Modifier.height(spacing.xxl))
                     FaceNotRegisteredCard(
@@ -349,6 +355,40 @@ fun StudentHomeScreen(
             // Bottom spacing
             item {
                 Spacer(modifier = Modifier.height(spacing.xxl))
+            }
+        }
+    }
+}
+
+// ── Face Uploading Card (shown while pending face images are being uploaded) ──
+
+@Composable
+private fun FaceUploadingCard() {
+    val spacing = IAMSThemeTokens.spacing
+
+    IAMSCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                strokeWidth = 2.dp,
+                color = Primary
+            )
+            Spacer(modifier = Modifier.width(spacing.md))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Registering Your Face...",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Primary
+                )
+                Text(
+                    text = "Uploading face data captured during registration",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
             }
         }
     }

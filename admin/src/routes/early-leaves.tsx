@@ -1,7 +1,7 @@
 import { useMemo, useState, useTransition } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
-import { format } from 'date-fns'
+import { safeFormat } from '@/lib/utils'
 import { CalendarIcon } from 'lucide-react'
 import { usePageTitle } from '@/hooks/use-page-title'
 
@@ -43,35 +43,17 @@ const columns: ColumnDef<EarlyLeaveAlert>[] = [
   {
     accessorKey: 'date',
     header: 'Date',
-    cell: ({ row }) => {
-      try {
-        return <span className="text-sm">{format(new Date(row.original.date), 'MMM d, yyyy')}</span>
-      } catch {
-        return <span className="text-sm">{row.original.date}</span>
-      }
-    },
+    cell: ({ row }) => <span className="text-sm">{safeFormat(row.original.date, 'MMM d, yyyy')}</span>,
   },
   {
     accessorKey: 'detected_at',
     header: 'Detected At',
-    cell: ({ row }) => {
-      try {
-        return <span className="text-sm">{format(new Date(row.original.detected_at), 'h:mm a')}</span>
-      } catch {
-        return <span className="text-sm">{row.original.detected_at}</span>
-      }
-    },
+    cell: ({ row }) => <span className="text-sm">{safeFormat(row.original.detected_at, 'h:mm a')}</span>,
   },
   {
     accessorKey: 'last_seen_at',
     header: 'Last Seen',
-    cell: ({ row }) => {
-      try {
-        return <span className="text-sm">{format(new Date(row.original.last_seen_at), 'h:mm a')}</span>
-      } catch {
-        return <span className="text-sm">{row.original.last_seen_at}</span>
-      }
-    },
+    cell: ({ row }) => <span className="text-sm">{safeFormat(row.original.last_seen_at, 'h:mm a')}</span>,
   },
   {
     accessorKey: 'consecutive_misses',

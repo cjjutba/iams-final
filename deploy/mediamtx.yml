@@ -41,6 +41,12 @@ apiAddress: :9997
 rtsp: yes
 rtspAddress: :8554
 
+# Increase timeouts for RPi connections over potentially unstable internet.
+# Default 10s is too aggressive — bursty cameras (CX810) and WiFi drops
+# cause frequent reconnections. 30s gives headroom.
+readTimeout: 30s
+writeTimeout: 30s
+
 # WebRTC (WHEP) — FastAPI proxies WHEP offers here.
 # Mobile clients negotiate via POST /api/v1/webrtc/{schedule_id}/offer
 # which forwards to http://mediamtx:8889/{room_id}/whep.

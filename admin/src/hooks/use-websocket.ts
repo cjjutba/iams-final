@@ -8,25 +8,35 @@ let sharedWs: WebSocket | null = null
 let sharedUserId: string | null = null
 const messageHandlers = new Set<MessageHandler>()
 let reconnectTimeout: ReturnType<typeof setTimeout> | undefined
+let reconnectAttempts = 0
+const MAX_RECONNECT_ATTEMPTS = 3
 
 function connectShared(userId: string) {
   // Don't open a new connection if one is already active or connecting
   if (sharedWs && sharedWs.readyState <= WebSocket.OPEN) return
 
+  const wsUrl = String(import.meta.env.VITE_WS_URL ?? '').trim()
+
+  // If no explicit WS URL and we're on HTTPS (e.g. Vercel), skip WebSocket
+  // Vercel can't proxy WebSocket connections
+  if (!wsUrl && window.location.protocol === 'https:') return
+
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const host = import.meta.env.VITE_WS_URL || `${protocol}//${window.location.host}`
+  const host = wsUrl || `${protocol}//${window.location.host}`
   const token = localStorage.getItem('access_token')
   const ws = new WebSocket(`${host}/api/v1/ws/${userId}${token ? `?token=${token}` : ''}`)
 
   ws.onopen = () => {
     console.log('[WS] Connected')
+    reconnectAttempts = 0
   }
 
   ws.onclose = () => {
     // Only reconnect if we still want to be connected (user still set)
     if (sharedWs === ws) {
       sharedWs = null
-      if (sharedUserId) {
+      if (sharedUserId && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+        reconnectAttempts++
         clearTimeout(reconnectTimeout)
         reconnectTimeout = setTimeout(() => connectShared(userId), 5000)
       }

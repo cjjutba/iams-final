@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sqlalchemy import text
 
 from app.config import logger, settings
-from app.database import SessionLocal
+from app.database import SessionLocal, init_db
 from app.models import (
     FacultyRecord,
     Notification,
@@ -638,6 +638,9 @@ def seed():
         print("=" * 60)
         print("IAMS - Full Database Reset & Seed")
         print("=" * 60)
+
+        # Ensure all tables exist (creates missing ones like audit_logs, attendance_anomalies)
+        init_db()
 
         _wipe_all(db)
         _clear_faiss_and_faces()

@@ -85,18 +85,15 @@ fun IAMSNavHost() {
     // Always start at splash — it checks auth state and routes accordingly
     val startDestination = Routes.SPLASH
 
-    // Collect centralized unread notification count for badges
-    val unreadCount by navViewModel.notificationService.unreadCount.collectAsState()
-
     val studentTabs = listOf(
-        BottomNavTab("Home", Icons.Outlined.Home, Icons.Filled.Home, Routes.STUDENT_HOME, badgeCount = unreadCount),
+        BottomNavTab("Home", Icons.Outlined.Home, Icons.Filled.Home, Routes.STUDENT_HOME),
         BottomNavTab("Schedule", Icons.Outlined.Schedule, Icons.Filled.Schedule, Routes.STUDENT_SCHEDULE),
         BottomNavTab("History", Icons.Outlined.History, Icons.Filled.History, Routes.STUDENT_HISTORY),
         BottomNavTab("Profile", Icons.Outlined.Person, Icons.Filled.Person, Routes.STUDENT_PROFILE),
     )
 
     val facultyTabs = listOf(
-        BottomNavTab("Home", Icons.Outlined.Home, Icons.Filled.Home, Routes.FACULTY_HOME, badgeCount = unreadCount),
+        BottomNavTab("Home", Icons.Outlined.Home, Icons.Filled.Home, Routes.FACULTY_HOME),
         BottomNavTab("Schedule", Icons.Outlined.Schedule, Icons.Filled.Schedule, Routes.FACULTY_SCHEDULE),
         BottomNavTab("Analytics", Icons.Outlined.Assessment, Icons.Filled.Assessment, Routes.FACULTY_ANALYTICS_DASHBOARD),
         BottomNavTab("Alerts", Icons.Outlined.ReportProblem, Icons.Filled.ReportProblem, Routes.FACULTY_ALERTS),
@@ -116,7 +113,7 @@ fun IAMSNavHost() {
                 "error" -> ToastType.ERROR
                 else -> ToastType.INFO
             }
-            toastState.showToast(event.title, toastType)
+            toastState.showToast(event.title, toastType, subtitle = event.message)
             navViewModel.notificationService.incrementUnreadCount()
         }
     }

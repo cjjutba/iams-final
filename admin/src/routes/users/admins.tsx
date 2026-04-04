@@ -1,7 +1,7 @@
 import { useMemo, useState, useTransition } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
-import { format } from 'date-fns'
+import { safeFormat } from '@/lib/utils'
 import { CheckCircle2, XCircle, Plus } from 'lucide-react'
 import { usePageTitle } from '@/hooks/use-page-title'
 
@@ -67,7 +67,7 @@ const columns: ColumnDef<UserResponse>[] = [
     header: 'Added',
     cell: ({ row }) => (
       <span className="text-sm">
-        {format(new Date(row.original.created_at), 'MMM d, yyyy')}
+        {safeFormat(row.original.created_at, 'MMM d, yyyy')}
       </span>
     ),
   },

@@ -37,7 +37,8 @@ const AnomaliesPage = lazy(() => import('@/routes/analytics/anomalies'))
 const FaceRegistrationsPage = lazy(() => import('@/routes/face-registrations'))
 const EarlyLeavesPage = lazy(() => import('@/routes/early-leaves'))
 const NotificationsPage = lazy(() => import('@/routes/notifications'))
-const EdgeDevicesPage = lazy(() => import('@/routes/edge-devices'))
+const EdgeDevicesPage = lazy(() => import('@/routes/edge-devices/index'))
+const EdgeDeviceDetailPage = lazy(() => import('@/routes/edge-devices/[id]'))
 const AuditLogsPage = lazy(() => import('@/routes/audit-logs'))
 const SettingsPage = lazy(() => import('@/routes/settings'))
 
@@ -90,6 +91,7 @@ export default function App() {
               <Route path="early-leaves" element={<EarlyLeavesPage />} />
               <Route path="notifications" element={<NotificationsPage />} />
               <Route path="edge-devices" element={<EdgeDevicesPage />} />
+              <Route path="edge-devices/:id" element={<EdgeDeviceDetailPage />} />
               <Route path="audit-logs" element={<AuditLogsPage />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>

@@ -20,7 +20,7 @@ from app.stream_relay import StreamRelay
 
 
 def main():
-    target = f"{VPS_RTSP_URL}/{ROOM_ID}/raw"
+    target = f"{VPS_RTSP_URL}/{ROOM_ID}"
     relay = StreamRelay(
         RTSP_MAIN,
         target,

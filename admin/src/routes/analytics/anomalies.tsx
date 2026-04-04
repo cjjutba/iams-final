@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
-import { format } from 'date-fns'
+import { safeFormat } from '@/lib/utils'
 import { ArrowLeft, CheckCircle, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { usePageTitle } from '@/hooks/use-page-title'
@@ -123,13 +123,7 @@ export default function AnomaliesPage() {
     {
       accessorKey: 'detected_at',
       header: 'Detected',
-      cell: ({ row }) => {
-        try {
-          return format(new Date(row.original.detected_at), 'MMM d, yyyy')
-        } catch {
-          return row.original.detected_at
-        }
-      },
+      cell: ({ row }) => safeFormat(row.original.detected_at, 'MMM d, yyyy'),
     },
     {
       accessorKey: 'resolved',

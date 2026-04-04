@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { type ColumnDef } from '@tanstack/react-table'
-import { format } from 'date-fns'
+import { safeFormat } from '@/lib/utils'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -191,13 +191,7 @@ export default function NotificationsPage() {
     {
       accessorKey: 'created_at',
       header: 'Created At',
-      cell: ({ row }) => {
-        try {
-          return format(new Date(row.original.created_at), 'MMM d, yyyy h:mm a')
-        } catch {
-          return row.original.created_at
-        }
-      },
+      cell: ({ row }) => safeFormat(row.original.created_at, 'MMM d, yyyy h:mm a'),
     },
     {
       id: 'actions',

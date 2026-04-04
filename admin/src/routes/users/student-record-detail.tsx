@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useBreadcrumbStore } from '@/stores/breadcrumb.store'
 import { type ColumnDef } from '@tanstack/react-table'
-import { format } from 'date-fns'
+import { safeFormat } from '@/lib/utils'
 import { toast } from 'sonner'
 import {
   ArrowLeft,
@@ -192,7 +192,7 @@ export default function StudentRecordDetailPage() {
       header: 'Date',
       cell: ({ row }) => (
         <span className="text-sm">
-          {format(new Date(row.original.date), 'MMM d, yyyy')}
+          {safeFormat(row.original.date, 'MMM d, yyyy')}
         </span>
       ),
     },
@@ -217,9 +217,7 @@ export default function StudentRecordDetailPage() {
       header: 'Check-in Time',
       cell: ({ row }) => (
         <span className="text-sm">
-          {row.original.check_in_time
-            ? format(new Date(row.original.check_in_time), 'h:mm a')
-            : '\u2014'}
+          {safeFormat(row.original.check_in_time, 'h:mm a')}
         </span>
       ),
     },
@@ -398,7 +396,7 @@ export default function StudentRecordDetailPage() {
               <div>
                 <p className="text-sm text-muted-foreground">Birthdate</p>
                 <p className="text-sm font-medium">
-                  {student.birthdate ? format(new Date(student.birthdate), 'MMM d, yyyy') : '\u2014'}
+                  {safeFormat(student.birthdate, 'MMM d, yyyy')}
                 </p>
               </div>
             </div>
@@ -407,7 +405,7 @@ export default function StudentRecordDetailPage() {
               <div>
                 <p className="text-sm text-muted-foreground">Added to Registry</p>
                 <p className="text-sm font-medium">
-                  {format(new Date(student.created_at), 'MMM d, yyyy')}
+                  {safeFormat(student.created_at, 'MMM d, yyyy')}
                 </p>
               </div>
             </div>

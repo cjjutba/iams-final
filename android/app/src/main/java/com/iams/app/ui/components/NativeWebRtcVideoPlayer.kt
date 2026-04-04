@@ -92,7 +92,9 @@ fun NativeWebRtcVideoPlayer(
         AndroidView(
             factory = { ctx ->
                 SurfaceViewRenderer(ctx).apply {
-                    setZOrderMediaOverlay(true)
+                    // Default z-order: SurfaceView renders behind the View hierarchy,
+                    // allowing Compose Canvas overlays (bounding boxes) to draw on top.
+                    // Do NOT set setZOrderMediaOverlay(true) — it would cover the overlay.
                     setEnableHardwareScaler(false)
                     setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
                     init(client.eglBase.eglBaseContext, null)

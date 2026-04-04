@@ -1,6 +1,6 @@
 import { useMemo, useState, useTransition } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
-import { format } from 'date-fns'
 import { usePageTitle } from '@/hooks/use-page-title'
 
 import { DataTable } from '@/components/data-tables'
@@ -20,18 +20,22 @@ interface EdgeDevice {
   name: string
   building: string
   camera_endpoint: string
+  stream_key: string
   is_active: boolean
+  capacity: number | null
   status: 'scanning' | 'idle'
+  schedule_count: number
   session: {
-    started_at: string | null
-    scan_count: number
-    last_scan_at: string | null
+    schedule_id: string
+    subject: string
+    started_at: string
+    ends_at: string
   } | null
 }
 
 interface EdgeStatusResponse {
   total_devices: number
-  connected_devices: number
+  scanning_devices: number
   idle_devices: number
   devices: EdgeDevice[]
 }
@@ -59,6 +63,13 @@ const columns: ColumnDef<EdgeDevice>[] = [
     ),
   },
   {
+    accessorKey: 'stream_key',
+    header: 'Stream Key',
+    cell: ({ row }) => (
+      <span className="text-sm font-mono">{row.original.stream_key ?? '\u2014'}</span>
+    ),
+  },
+  {
     accessorKey: 'status',
     header: 'Status',
     cell: ({ row }) =>
@@ -70,27 +81,23 @@ const columns: ColumnDef<EdgeDevice>[] = [
   },
   {
     accessorKey: 'session',
-    header: 'Session',
+    header: 'Current Session',
     cell: ({ row }) => {
       const session = row.original.session
       if (!session) return <span className="text-sm text-muted-foreground">{'\u2014'}</span>
       return (
         <div>
-          <div className="text-sm">{session.scan_count} scan{session.scan_count !== 1 ? 's' : ''}</div>
-          {session.last_scan_at && (
-            <div className="text-sm text-muted-foreground">
-              Last: {(() => {
-                try {
-                  return format(new Date(session.last_scan_at), 'h:mm a')
-                } catch {
-                  return session.last_scan_at
-                }
-              })()}
-            </div>
-          )}
+          <div className="text-sm font-medium">{session.subject}</div>
         </div>
       )
     },
+  },
+  {
+    accessorKey: 'schedule_count',
+    header: 'Schedules',
+    cell: ({ row }) => (
+      <span className="text-sm">{row.original.schedule_count}</span>
+    ),
   },
   {
     accessorKey: 'is_active',
@@ -106,6 +113,7 @@ const columns: ColumnDef<EdgeDevice>[] = [
 
 export default function EdgeDevicesPage() {
   usePageTitle('Edge Devices')
+  const navigate = useNavigate()
   const { data: rawData, isLoading } = useEdgeStatus()
   const statusData = rawData as EdgeStatusResponse | null | undefined
   const devices: EdgeDevice[] = statusData?.devices ?? []
@@ -167,7 +175,7 @@ export default function EdgeDevicesPage() {
                 ? 'No edge devices configured'
                 : hasFilters
                   ? `${filtered.length} of ${devices.length} devices`
-                  : `${devices.length} device${devices.length !== 1 ? 's' : ''} \u00B7 ${statusData?.connected_devices ?? 0} scanning`}
+                  : `${devices.length} device${devices.length !== 1 ? 's' : ''} \u00B7 ${statusData?.scanning_devices ?? 0} scanning`}
           </p>
         </div>
       </div>
@@ -179,6 +187,7 @@ export default function EdgeDevicesPage() {
         searchColumn="name"
         searchPlaceholder="Search rooms..."
         toolbar={filterToolbar}
+        onRowClick={(row) => navigate(`/edge-devices/${row.id}`)}
       />
     </div>
   )

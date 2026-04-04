@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { type ColumnDef } from '@tanstack/react-table'
-import { format } from 'date-fns'
+import { safeFormat } from '@/lib/utils'
 import {
   CheckCircle2,
   Loader2,
@@ -276,7 +276,7 @@ export default function UsersPage() {
       header: 'Created',
       cell: ({ row }) => (
         <span className="text-sm">
-          {format(new Date(row.original.created_at), 'MMM d, yyyy')}
+          {safeFormat(row.original.created_at, 'MMM d, yyyy')}
         </span>
       ),
     },

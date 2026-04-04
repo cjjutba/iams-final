@@ -107,6 +107,7 @@ services:
       - ./docs/data:/docs/data:ro
       - faiss_data:/app/data/faiss
       - face_uploads:/app/data/uploads/faces
+      - insightface_models:/root/.insightface/models
     ports:
       - "8000:8000"
     command: >
@@ -147,3 +148,4 @@ volumes:
   postgres_data:
   faiss_data:
   face_uploads:
+  insightface_models:

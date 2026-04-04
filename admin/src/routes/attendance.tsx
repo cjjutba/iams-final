@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
-import { format } from 'date-fns'
+import { safeFormat } from '@/lib/utils'
 import { CalendarIcon, Download, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { usePageTitle } from '@/hooks/use-page-title'
@@ -49,13 +49,7 @@ const columns: ColumnDef<AttendanceRecord>[] = [
   {
     accessorKey: 'date',
     header: 'Date',
-    cell: ({ row }) => {
-      try {
-        return format(new Date(row.original.date), 'MMM d, yyyy')
-      } catch {
-        return row.original.date
-      }
-    },
+    cell: ({ row }) => safeFormat(row.original.date, 'MMM d, yyyy'),
   },
   {
     accessorKey: 'status',
@@ -69,15 +63,7 @@ const columns: ColumnDef<AttendanceRecord>[] = [
   {
     accessorKey: 'check_in_time',
     header: 'Check-in',
-    cell: ({ row }) => {
-      const t = row.original.check_in_time
-      if (!t) return '\u2014'
-      try {
-        return format(new Date(t), 'h:mm a')
-      } catch {
-        return t
-      }
-    },
+    cell: ({ row }) => safeFormat(row.original.check_in_time, 'h:mm a'),
   },
   {
     accessorKey: 'presence_score',

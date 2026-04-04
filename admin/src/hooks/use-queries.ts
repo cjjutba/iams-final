@@ -65,6 +65,7 @@ export const queryKeys = {
   edge: {
     all: ['edge'] as const,
     status: ['edge', 'status'] as const,
+    detail: (id: string) => ['edge', 'detail', id] as const,
   },
   notifications: {
     all: ['notifications'] as const,
@@ -420,6 +421,14 @@ export function useEdgeStatus() {
     queryFn: () => edgeService.getStatus(),
     refetchInterval: 30_000,
     retry: false,
+  })
+}
+
+export function useEdgeDevice(id: string) {
+  return useQuery({
+    queryKey: queryKeys.edge.detail(id),
+    queryFn: () => edgeService.getDevice(id),
+    enabled: !!id,
   })
 }
 

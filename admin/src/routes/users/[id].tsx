@@ -3,7 +3,7 @@ import { useNavigate, useParams, useLocation } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useBreadcrumbStore } from '@/stores/breadcrumb.store'
 import { type ColumnDef } from '@tanstack/react-table'
-import { format } from 'date-fns'
+import { safeFormat } from '@/lib/utils'
 import {
   ArrowLeft,
   CheckCircle2,
@@ -146,7 +146,7 @@ export default function UserDetailPage() {
       header: 'Date',
       cell: ({ row }) => (
         <span className="text-sm">
-          {format(new Date(row.original.date), 'MMM d, yyyy')}
+          {safeFormat(row.original.date, 'MMM d, yyyy')}
         </span>
       ),
     },
@@ -171,9 +171,7 @@ export default function UserDetailPage() {
       header: 'Check-in Time',
       cell: ({ row }) => (
         <span className="text-sm">
-          {row.original.check_in_time
-            ? format(new Date(row.original.check_in_time), 'h:mm a')
-            : '\u2014'}
+          {safeFormat(row.original.check_in_time, 'h:mm a')}
         </span>
       ),
     },
@@ -381,7 +379,7 @@ export default function UserDetailPage() {
               <div>
                 <p className="text-sm text-muted-foreground">Created</p>
                 <p className="text-sm font-medium">
-                  {format(new Date(user.created_at), 'MMM d, yyyy')}
+                  {safeFormat(user.created_at, 'MMM d, yyyy')}
                 </p>
               </div>
             </div>
