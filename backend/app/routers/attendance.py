@@ -786,6 +786,7 @@ def export_attendance_pdf(
 
     from fastapi import HTTPException
     from fastapi.responses import StreamingResponse
+    from sqlalchemy import and_
     from sqlalchemy.orm import joinedload
 
     from app.models.attendance_record import AttendanceRecord as AR
@@ -795,10 +796,26 @@ def export_attendance_pdf(
     schedule_repo = ScheduleRepository(db)
     attendance_repo = AttendanceRepository(db)
 
+    def _get_records_with_students(schedule_id: str, sd: date, ed: date) -> list:
+        """Fetch attendance records with eager-loaded student relationships."""
+        return (
+            db.query(AR)
+            .options(joinedload(AR.student))
+            .filter(
+                and_(
+                    AR.schedule_id == _uuid.UUID(schedule_id),
+                    AR.date >= sd,
+                    AR.date <= ed,
+                )
+            )
+            .order_by(AR.date.desc())
+            .all()
+        )
+
     # Resolve schedules
     if schedule_ids.strip().lower() == "all":
         if current_user.role == UserRole.ADMIN:
-            schedules = schedule_repo.get_all()
+            schedules = schedule_repo.get_all(limit=10000)
         else:
             schedules = schedule_repo.get_by_faculty(str(current_user.id))
     else:
@@ -835,9 +852,7 @@ def export_attendance_pdf(
     # Build class sections data for the PDF
     class_sections = []
     for schedule in schedules:
-        records = attendance_repo.get_by_schedule_date_range(
-            str(schedule.id), start_date, end_date
-        )
+        records = _get_records_with_students(str(schedule.id), start_date, end_date)
 
         # Compute summary
         total_records = len(records)

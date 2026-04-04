@@ -10,7 +10,7 @@ from datetime import date, datetime
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.lib.units import inch
+from reportlab.lib.units import inch, mm
 from reportlab.platypus import (
     Paragraph,
     SimpleDocTemplate,
@@ -47,10 +47,10 @@ def generate_attendance_pdf(
     doc = SimpleDocTemplate(
         buf,
         pagesize=landscape(A4),
-        topMargin=0.5 * inch,
-        bottomMargin=0.6 * inch,
-        leftMargin=0.5 * inch,
-        rightMargin=0.5 * inch,
+        topMargin=20 * mm,
+        bottomMargin=20 * mm,
+        leftMargin=15 * mm,
+        rightMargin=15 * mm,
     )
 
     styles = getSampleStyleSheet()
@@ -165,7 +165,7 @@ def generate_attendance_pdf(
                 sorted_records = sorted(records, key=lambda r: (r.get("date", ""), r.get("student_name", "")))
 
                 # Available width for landscape A4 minus margins
-                available_width = landscape(A4)[0] - 1.0 * inch
+                available_width = landscape(A4)[0] - 30 * mm
                 col_widths = [
                     available_width * 0.12,  # Date
                     available_width * 0.28,  # Student Name
