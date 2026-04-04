@@ -10,7 +10,7 @@ coordinates three delivery channels:
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -95,7 +95,7 @@ async def notify(
             "message": message,
             "reference_id": reference_id,
             "reference_type": reference_type,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         })
     except Exception:
         logger.exception(f"Failed to push WS toast for user {user_id}")

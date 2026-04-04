@@ -595,32 +595,32 @@ private fun getNotificationIcon(type: String): NotificationIconInfo {
 private fun notificationTimeAgo(timestamp: String): String {
     if (timestamp.isBlank()) return ""
     return try {
-        val parsed = ZonedDateTime.parse(timestamp)
-        val now = ZonedDateTime.now()
-        val duration = Duration.between(parsed, now)
+        // Parse to Instant (handles both timezone-aware and naive timestamps)
+        val instant = try {
+            java.time.Instant.parse(timestamp)
+        } catch (_: Exception) {
+            try {
+                ZonedDateTime.parse(timestamp).toInstant()
+            } catch (_: Exception) {
+                // Naive timestamp (no timezone) — treat as UTC (backend stores UTC)
+                java.time.LocalDateTime.parse(timestamp.replace(" ", "T"))
+                    .atZone(java.time.ZoneId.of("UTC"))
+                    .toInstant()
+            }
+        }
+
+        val now = java.time.Instant.now()
+        val duration = Duration.between(instant, now)
 
         when {
             duration.toMinutes() < 1 -> "Just now"
             duration.toMinutes() < 60 -> "${duration.toMinutes()}m ago"
             duration.toHours() < 24 -> "${duration.toHours()}h ago"
             duration.toDays() < 7 -> "${duration.toDays()}d ago"
-            else -> parsed.format(DateTimeFormatter.ofPattern("MMM d, yyyy"))
+            else -> instant.atZone(java.time.ZoneId.systemDefault())
+                .format(DateTimeFormatter.ofPattern("MMM d, yyyy"))
         }
     } catch (_: Exception) {
-        try {
-            val parsed = java.time.LocalDateTime.parse(timestamp.replace(" ", "T"))
-            val now = java.time.LocalDateTime.now()
-            val duration = Duration.between(parsed, now)
-
-            when {
-                duration.toMinutes() < 1 -> "Just now"
-                duration.toMinutes() < 60 -> "${duration.toMinutes()}m ago"
-                duration.toHours() < 24 -> "${duration.toHours()}h ago"
-                duration.toDays() < 7 -> "${duration.toDays()}d ago"
-                else -> parsed.format(DateTimeFormatter.ofPattern("MMM d, yyyy"))
-            }
-        } catch (_: Exception) {
-            timestamp
-        }
+        timestamp
     }
 }

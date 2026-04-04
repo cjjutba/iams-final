@@ -7,8 +7,6 @@ import { format } from 'date-fns'
 import { toast } from 'sonner'
 import {
   ArrowLeft,
-  CheckCircle2,
-  XCircle,
   Pencil,
   Phone,
   Mail,

@@ -110,8 +110,8 @@ export default function FacultyPage() {
   const hasFilters = statusFilter !== 'all' || emailFilter !== 'all'
 
   function handleFilterChange<T>(setter: (v: T) => void) {
-    return (value: T) => {
-      startTransition(() => setter(value))
+    return (value: string) => {
+      startTransition(() => setter(value as T))
     }
   }
 

@@ -172,8 +172,8 @@ export default function SchedulesPage() {
   const hasFilters = statusFilter !== 'all' || dayFilter !== 'all'
 
   function handleFilterChange<T>(setter: (v: T) => void) {
-    return (value: T) => {
-      startTransition(() => setter(value))
+    return (value: string) => {
+      startTransition(() => setter(value as T))
     }
   }
 

@@ -1,6 +1,11 @@
 """
-Stream Relay -- FFmpeg RTSP sub-stream relay to VPS mediamtx.
-Remux only (no transcode), minimal CPU usage.
+Stream Relay -- FFmpeg RTSP relay to VPS mediamtx.
+
+Supports two modes:
+  - "copy":      Remux only (no transcode), minimal CPU. Best for cameras
+                 that produce clean, predictable H.264 streams (e.g. P340).
+  - "transcode": Re-encode to a normalized H.264 Baseline stream. Needed for
+                 cameras like the CX810 that produce bursty/problematic output.
 """
 import logging
 import subprocess
@@ -13,34 +18,87 @@ logger = logging.getLogger(__name__)
 class StreamRelay:
     """Relay an RTSP source stream to a target RTSP URL via FFmpeg."""
 
-    def __init__(self, source_url: str, target_url: str):
+    def __init__(
+        self,
+        source_url: str,
+        target_url: str,
+        mode: str = "copy",
+        resolution: str = "1280x720",
+        bitrate: str = "2500k",
+        max_bitrate: str = "3000k",
+        fps: str = "20",
+    ):
         self.source_url = source_url
         self.target_url = target_url
+        self.mode = mode
+        self.resolution = resolution
+        self.bitrate = bitrate
+        self.max_bitrate = max_bitrate
+        self.fps = fps
         self.process = None
         self._thread = None
         self._stop_event = threading.Event()
 
-    def start(self):
-        """Start FFmpeg RTSP relay in a background thread."""
-        self._stop_event.clear()
+    def _build_cmd(self) -> list[str]:
+        """Build the FFmpeg command based on relay mode."""
+        # Common input flags for low-latency RTSP ingestion
         cmd = [
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "warning",
-            # Low-latency input flags
             "-fflags", "nobuffer",
             "-flags", "low_delay",
             "-probesize", "500000",
             "-analyzeduration", "500000",
             "-rtsp_transport", "tcp",
             "-i", self.source_url,
-            "-c", "copy",
+        ]
+
+        if self.mode == "transcode":
+            # Re-encode to a clean, predictable H.264 Baseline stream.
+            # ultrafast preset keeps RPi CPU usage reasonable (~40-60% on Pi 4).
+            cmd += [
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-tune", "zerolatency",
+                "-profile:v", "baseline",
+                "-b:v", self.bitrate,
+                "-maxrate", self.max_bitrate,
+                "-bufsize", "1500k",
+                "-s", self.resolution,
+                "-r", self.fps,
+                "-g", str(int(self.fps) * 2),  # Keyframe every 2 seconds
+                "-an",  # Drop audio
+            ]
+        else:
+            # Copy mode: passthrough, no transcoding
+            cmd += [
+                "-c", "copy",
+                "-an",
+            ]
+
+        # Common output flags
+        cmd += [
             "-f", "rtsp",
             "-rtsp_transport", "tcp",
             "-muxdelay", "0",
             self.target_url,
         ]
-        logger.info(f"Starting RTSP relay: {self.source_url} -> {self.target_url}")
+        return cmd
+
+    def start(self):
+        """Start FFmpeg RTSP relay in a background thread."""
+        self._stop_event.clear()
+        cmd = self._build_cmd()
+        logger.info(
+            f"Starting RTSP relay ({self.mode} mode): "
+            f"{self.source_url} -> {self.target_url}"
+        )
+        if self.mode == "transcode":
+            logger.info(
+                f"Transcode settings: {self.resolution} @ {self.bitrate} "
+                f"(max {self.max_bitrate}), {self.fps}fps"
+            )
         self._thread = threading.Thread(target=self._run, args=(cmd,), daemon=True)
         self._thread.start()
 

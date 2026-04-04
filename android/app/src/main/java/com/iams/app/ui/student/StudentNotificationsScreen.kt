@@ -619,7 +619,14 @@ private fun formatTimeAgo(timestamp: String): String {
         val instant = try {
             Instant.parse(timestamp)
         } catch (_: Exception) {
-            ZonedDateTime.parse(timestamp, DateTimeFormatter.ISO_ZONED_DATE_TIME).toInstant()
+            try {
+                ZonedDateTime.parse(timestamp, DateTimeFormatter.ISO_ZONED_DATE_TIME).toInstant()
+            } catch (_: Exception) {
+                // Naive timestamp (no timezone) — treat as UTC (backend stores UTC)
+                java.time.LocalDateTime.parse(timestamp.replace(" ", "T"))
+                    .atZone(java.time.ZoneId.of("UTC"))
+                    .toInstant()
+            }
         }
 
         val now = Instant.now()

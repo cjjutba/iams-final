@@ -146,8 +146,8 @@ export default function StudentsPage() {
   const hasFilters = appFilter !== 'all' || faceFilter !== 'all' || statusFilter !== 'all'
 
   function handleFilterChange<T>(setter: (v: T) => void) {
-    return (value: T) => {
-      startTransition(() => setter(value))
+    return (value: string) => {
+      startTransition(() => setter(value as T))
     }
   }
 

@@ -94,9 +94,9 @@ FACULTY_USERS = [
 
 ROOM_DEFS = [
     ("EB226", "Engineering Building", 50,
-     "rtsp://host.docker.internal:8554/eb226", "eb226"),
+     "rtsp://mediamtx:8554/eb226", "eb226"),
     ("EB227", "Engineering Building", 50,
-     "rtsp://host.docker.internal:8554/eb227", "eb227"),
+     "rtsp://mediamtx:8554/eb227", "eb227"),
 ]
 
 # ─── Schedule Definitions ────────────────────────────────────────────────────

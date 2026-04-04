@@ -146,13 +146,28 @@ class PresenceService:
             logger.error(f"Failed to broadcast attendance event: {e}")
 
     async def _publish_alert(self, alert: dict):
-        """Broadcast an alert to connected WebSocket clients."""
+        """Broadcast an alert to connected WebSocket clients, respecting preferences."""
         try:
             from app.routers.websocket import ws_manager
+            from app.models.notification_preference import NotificationPreference
 
-            # Send to each user in the notify list
             notify_user_ids = alert.get("notify_user_ids", [])
+            alert_type = alert.get("type", "")
+            preference_key = {
+                "early_leave": "early_leave_alerts",
+                "early_leave_return": "early_leave_alerts",
+            }.get(alert_type)
+
             for user_id in notify_user_ids:
+                # Check preference before sending WS alert
+                if preference_key:
+                    pref = (
+                        self.db.query(NotificationPreference)
+                        .filter(NotificationPreference.user_id == user_id)
+                        .first()
+                    )
+                    if pref and not getattr(pref, preference_key, True):
+                        continue
                 await ws_manager.broadcast_alert(user_id, alert)
         except Exception as e:
             logger.error(f"Failed to broadcast alert: {e}")
@@ -746,7 +761,34 @@ class PresenceService:
         event.returned = True
         event.returned_at = now
         event.absence_duration_seconds = int((now - event.detected_at).total_seconds())
+
+        # Restore attendance status from EARLY_LEAVE back to PRESENT/LATE
+        attendance = self.attendance_repo.get_by_id(attendance_id)
+        if attendance and attendance.status == AttendanceStatus.EARLY_LEAVE:
+            schedule = attendance.schedule
+            if schedule and attendance.check_in_time:
+                grace_time = (
+                    datetime.combine(date.today(), schedule.start_time)
+                    + timedelta(minutes=settings.GRACE_PERIOD_MINUTES)
+                ).time()
+                restored_status = (
+                    AttendanceStatus.LATE
+                    if attendance.check_in_time.time() > grace_time
+                    else AttendanceStatus.PRESENT
+                )
+            else:
+                restored_status = AttendanceStatus.PRESENT
+            self.attendance_repo.update(attendance_id, {"status": restored_status})
+
         self.db.commit()
+
+        # Reset early_leave_flagged so the student is tracked normally again
+        async with self._lock:
+            if schedule_id in self.active_sessions:
+                session = self.active_sessions[schedule_id]
+                if student_id in session.student_states:
+                    session.student_states[student_id]["early_leave_flagged"] = False
+                    session.student_states[student_id]["consecutive_misses"] = 0
 
         logger.info(
             f"Student {student_id} returned after early leave "

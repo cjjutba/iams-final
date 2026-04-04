@@ -23,13 +23,14 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Runtime dependencies (OpenCV, image libs, FFmpeg for video pipeline)
+# Runtime dependencies (OpenCV, image libs, FFmpeg for video pipeline, gosu for entrypoint)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
     libgomp1 \
     curl \
     ffmpeg \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed Python packages from builder
@@ -38,25 +39,18 @@ COPY --from=builder /install /usr/local
 # Copy application code
 COPY . .
 
-# Create required directories
-RUN mkdir -p data/faiss data/uploads/faces data/hls logs
+# Create non-root user
+RUN adduser --disabled-password --gecos '' appuser
 
-# Create non-root user and set ownership
-RUN adduser --disabled-password --gecos '' appuser && chown -R appuser:appuser /app
+# Create required directories with correct ownership
+RUN mkdir -p data/faiss data/uploads/faces data/hls logs \
+    && chown -R appuser:appuser /app
+
+# Make entrypoint executable
+RUN chmod +x entrypoint.sh
 
 # Expose port
 EXPOSE 8000
 
-# Run as non-root user
-USER appuser
-
-# Run with uvicorn (single worker, async concurrency handles load)
-# Avoids cross-worker state issues with _active_sessions, user_map, etc.
-# Redis batch processor + async IO are sufficient for 2-room JRMSU scale.
-CMD ["uvicorn", "app.main:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8000", \
-     "--workers", "1", \
-     "--proxy-headers", \
-     "--forwarded-allow-ips", "*", \
-     "--log-level", "info"]
+# Entrypoint fixes volume ownership then runs uvicorn as appuser
+ENTRYPOINT ["/app/entrypoint.sh"]

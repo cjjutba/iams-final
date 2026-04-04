@@ -106,8 +106,8 @@ export default function AuditLogsPage() {
   const hasFilters = actionFilter !== 'all' || targetTypeFilter !== 'all'
 
   function handleFilterChange<T>(setter: (v: T) => void) {
-    return (value: T) => {
-      startTransition(() => setter(value))
+    return (value: string) => {
+      startTransition(() => setter(value as T))
     }
   }
 

@@ -34,6 +34,7 @@ class NotificationWebSocketClient(
     private val client: OkHttpClient,
     private val tokenProvider: () -> String?,
     private val userIdProvider: () -> String?,
+    private val onConnected: (() -> Unit)? = null,
 ) {
 
     companion object {
@@ -90,6 +91,8 @@ class NotificationWebSocketClient(
                 _isConnected.value = true
                 reconnectDelay = INITIAL_RECONNECT_DELAY
                 Log.i(TAG, "Connected to alerts for user $userId")
+                // Sync state on every connect/reconnect
+                onConnected?.invoke()
             }
 
             override fun onMessage(ws: WebSocket, text: String) {

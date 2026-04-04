@@ -321,8 +321,8 @@ export default function RoomsPage() {
   const hasFilters = statusFilter !== 'all' || cameraFilter !== 'all'
 
   function handleFilterChange<T>(setter: (v: T) => void) {
-    return (value: T) => {
-      startTransition(() => setter(value))
+    return (value: string) => {
+      startTransition(() => setter(value as T))
     }
   }
 

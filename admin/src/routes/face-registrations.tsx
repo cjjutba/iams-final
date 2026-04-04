@@ -138,8 +138,8 @@ export default function FaceRegistrationsPage() {
   const hasFilters = statusFilter !== 'all'
 
   function handleFilterChange<T>(setter: (v: T) => void) {
-    return (value: T) => {
-      startTransition(() => setter(value))
+    return (value: string) => {
+      startTransition(() => setter(value as T))
     }
   }
 

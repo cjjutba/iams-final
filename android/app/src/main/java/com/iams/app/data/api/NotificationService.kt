@@ -3,6 +3,7 @@ package com.iams.app.data.api
 import android.util.Log
 import com.iams.app.BuildConfig
 import com.iams.app.data.model.NotificationEvent
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,12 +25,14 @@ import javax.inject.Singleton
 class NotificationService @Inject constructor(
     private val tokenManager: TokenManager,
     private val okHttpClient: OkHttpClient,
+    private val apiService: ApiService,
 ) {
     companion object {
         private const val TAG = "NotificationService"
     }
 
     private var wsClient: NotificationWebSocketClient? = null
+    private val syncScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _unreadCount = MutableStateFlow(0)
     val unreadCount: StateFlow<Int> = _unreadCount.asStateFlow()
@@ -62,6 +65,10 @@ class NotificationService @Inject constructor(
             client = okHttpClient,
             tokenProvider = { tokenManager.accessToken },
             userIdProvider = { tokenManager.userId },
+            onConnected = {
+                // Sync unread count from REST API on every connect/reconnect
+                syncScope.launch { fetchUnreadCount(apiService) }
+            },
         )
         wsClient?.connect()
 
@@ -83,7 +90,7 @@ class NotificationService @Inject constructor(
     /**
      * Fetch the current unread count from the REST API and update the centralized state.
      */
-    suspend fun fetchUnreadCount(apiService: ApiService) {
+    suspend fun fetchUnreadCount(apiService: ApiService = this.apiService) {
         try {
             val response = apiService.getUnreadCount()
             if (response.isSuccessful) {

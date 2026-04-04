@@ -182,16 +182,29 @@ class TrackPresenceService:
                     logger.info("Student %s checked in: %s", sid, new_status.value)
 
                 elif state.early_leave_flagged and not state.early_leave_returned:
-                    # Returned after early leave
+                    # Returned after early leave — restore status
                     state.early_leave_returned = True
                     state.absent_since = None
                     state.last_presence_start = now_mono
+
+                    # state.status still holds the original PRESENT/LATE
+                    # (in-memory was never changed to EARLY_LEAVE), so use it directly
+                    restored_status = state.status
+                    self.attendance_repo.update(state.attendance_id, {
+                        "status": restored_status,
+                    })
+
+                    # Reset flags so the student can be re-flagged if they leave again
+                    state.early_leave_flagged = False
+                    state.early_leave_returned = False
+
                     events.append({
                         "event": "early_leave_return",
                         "student_id": sid,
                         "student_name": state.name,
+                        "restored_status": restored_status.value,
                     })
-                    logger.info("Student %s returned after early leave", sid)
+                    logger.info("Student %s returned after early leave, restored to %s", sid, restored_status.value)
 
                 else:
                     # Already present — accumulate time
@@ -348,7 +361,7 @@ class TrackPresenceService:
 
         for sid, state in self._students.items():
             info = {"user_id": sid, "name": state.name}
-            if state.early_leave_flagged:
+            if state.early_leave_flagged and not state.early_leave_returned:
                 early_leave.append(info)
             elif state.status == AttendanceStatus.ABSENT:
                 absent.append(info)

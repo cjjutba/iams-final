@@ -2,78 +2,155 @@
 # =============================================================================
 # Deploy IAMS FFmpeg Relay on Raspberry Pi
 #
-# Replaces the old Python/MediaPipe edge service with a pure FFmpeg relay.
-# The RPi just copies the Reolink RTSP stream to the VPS mediamtx — no
-# face detection, no Python, minimal CPU/memory.
+# Supports two relay modes:
+#   - copy:      Passthrough (no transcoding). For cameras with clean H.264
+#                output like the Reolink P340.
+#   - transcode: Re-encode to normalized H.264 Baseline on the RPi. For cameras
+#                with problematic output like the Reolink CX810.
 #
-# Run from your MacBook:
-#   bash edge/scripts/deploy-relay.sh
+# Usage:
+#   bash edge/scripts/deploy-relay.sh eb226    # P340 — copy mode
+#   bash edge/scripts/deploy-relay.sh eb227    # CX810 — transcode mode
 # =============================================================================
 
 set -euo pipefail
 
-RPI_HOST="pi@192.168.1.19"
-RPI_PASS='@Iams2026THESIS!'
+ROOM="${1:-}"
 PROJECT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-
-# Camera: Reolink main stream (1080p+, more keyframes, better for distant faces)
-CAMERA_RTSP_URL="rtsp://admin:Iams2026THESIS@192.168.1.100:554/h264Preview_01_main"
 
 # VPS mediamtx RTSP ingest
 VPS_RTSP_URL="rtsp://167.71.217.44:8554"
 
-# Room ID (must match the schedule's room in the database)
-ROOM_ID="36168673-34de-4c64-8ace-c6b72cbaba3f"
+# ---- Per-room configuration ----
+case "${ROOM}" in
+    eb226)
+        RPI_USER="iams-eb226"
+        RPI_HOST="${RPI_USER}@192.168.88.12"
+        RPI_PASS='123'
+        CAMERA_RTSP_URL="rtsp://admin:%40Iams2026THESIS%21@192.168.88.10:554/h264Preview_01_main"
+        ROOM_ID="eb226"
+        RELAY_MODE="copy"
+        ;;
+    eb227)
+        RPI_USER="iams-eb227"
+        RPI_HOST="${RPI_USER}@192.168.88.15"
+        RPI_PASS='123'
+        # CX810 main stream (2304x1296) has severe RTSP sequence errors that
+        # crash both transcode and copy modes. The sub stream (640x360, 15fps)
+        # is stable and sufficient for attendance recognition.
+        CAMERA_RTSP_URL="rtsp://admin:%40Iams2026THESIS%21@192.168.88.11:554/h264Preview_01_sub"
+        ROOM_ID="eb227"
+        RELAY_MODE="copy"
+        ;;
+    *)
+        echo "Usage: $0 <eb226|eb227>"
+        echo ""
+        echo "  eb226  — Reolink P340 (copy mode, no transcode)"
+        echo "  eb227  — Reolink CX810 (transcode mode, re-encode on RPi)"
+        exit 1
+        ;;
+esac
+
+# Derive home directory from username
+RPI_HOME="/home/${RPI_USER}"
 
 echo "=========================================="
-echo "  IAMS Relay Deploy → RPi"
+echo "  IAMS Relay Deploy → RPi (${ROOM})"
+echo "  Mode: ${RELAY_MODE}"
 echo "=========================================="
 
-# Step 1: Stop old edge service (if running)
-echo "[1/5] Stopping old iams-edge service..."
-sshpass -p "${RPI_PASS}" ssh -o StrictHostKeyChecking=no "${RPI_HOST}" \
-    "sudo systemctl stop iams-edge 2>/dev/null || true; \
+# Step 1: Stop old services
+echo "[1/6] Stopping old services..."
+sshpass -p "${RPI_PASS}" ssh -o StrictHostKeyChecking=no -o PubkeyAuthentication=no "${RPI_HOST}" \
+    "sudo systemctl stop iams-relay 2>/dev/null || true; \
+     sudo systemctl stop iams-edge 2>/dev/null || true; \
      sudo systemctl disable iams-edge 2>/dev/null || true" \
     2>/dev/null || true
 
 # Step 2: Ensure FFmpeg is installed
-echo "[2/5] Ensuring FFmpeg is installed..."
-sshpass -p "${RPI_PASS}" ssh -o StrictHostKeyChecking=no "${RPI_HOST}" \
+echo "[2/6] Ensuring FFmpeg is installed..."
+sshpass -p "${RPI_PASS}" ssh -o StrictHostKeyChecking=no -o PubkeyAuthentication=no "${RPI_HOST}" \
     "which ffmpeg >/dev/null 2>&1 || sudo apt-get install -y ffmpeg"
 
 # Step 3: Create environment file
-echo "[3/5] Creating relay environment file..."
-sshpass -p "${RPI_PASS}" ssh -o StrictHostKeyChecking=no "${RPI_HOST}" \
-    "cat > /home/pi/iams-relay.env << 'EOF'
-CAMERA_RTSP_URL=${CAMERA_RTSP_URL}
+echo "[3/6] Creating relay environment file..."
+ENV_CONTENT="CAMERA_RTSP_URL=${CAMERA_RTSP_URL}
 VPS_RTSP_URL=${VPS_RTSP_URL}
 ROOM_ID=${ROOM_ID}
-EOF"
+RELAY_MODE=${RELAY_MODE}"
 
-# Step 4: Deploy systemd service
-echo "[4/5] Installing systemd service..."
-sshpass -p "${RPI_PASS}" scp -o StrictHostKeyChecking=no \
-    "${PROJECT_DIR}/edge/iams-relay.service" \
-    "${RPI_HOST}:/tmp/iams-relay.service"
+if [ "${RELAY_MODE}" = "transcode" ]; then
+    ENV_CONTENT="${ENV_CONTENT}
+TRANSCODE_RESOLUTION=${TRANSCODE_RESOLUTION}
+TRANSCODE_BITRATE=${TRANSCODE_BITRATE}
+TRANSCODE_MAX_BITRATE=${TRANSCODE_MAX_BITRATE}
+TRANSCODE_FPS=${TRANSCODE_FPS}"
+fi
 
-sshpass -p "${RPI_PASS}" ssh -o StrictHostKeyChecking=no "${RPI_HOST}" \
-    "sudo cp /tmp/iams-relay.service /etc/systemd/system/iams-relay.service && \
+sshpass -p "${RPI_PASS}" ssh -o StrictHostKeyChecking=no -o PubkeyAuthentication=no "${RPI_HOST}" \
+    "cat > ${RPI_HOME}/iams-relay.env << 'ENVEOF'
+${ENV_CONTENT}
+ENVEOF"
+
+# Step 4: Deploy startup script
+echo "[4/6] Deploying startup script..."
+sshpass -p "${RPI_PASS}" scp -o StrictHostKeyChecking=no -o PubkeyAuthentication=no \
+    "${PROJECT_DIR}/edge/iams-relay-start.sh" \
+    "${RPI_HOST}:${RPI_HOME}/iams-relay-start.sh"
+
+sshpass -p "${RPI_PASS}" ssh -o StrictHostKeyChecking=no -o PubkeyAuthentication=no "${RPI_HOST}" \
+    "chmod +x ${RPI_HOME}/iams-relay-start.sh"
+
+# Step 5: Deploy systemd service (templated for this user/home)
+echo "[5/6] Installing systemd service..."
+sshpass -p "${RPI_PASS}" ssh -o StrictHostKeyChecking=no -o PubkeyAuthentication=no "${RPI_HOST}" \
+    "cat > /tmp/iams-relay.service << 'SVCEOF'
+[Unit]
+Description=IAMS RTSP Relay (Reolink → VPS mediamtx)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${RPI_USER}
+Group=${RPI_USER}
+EnvironmentFile=${RPI_HOME}/iams-relay.env
+ExecStart=${RPI_HOME}/iams-relay-start.sh
+
+# Restart aggressively — relay must stay up
+Restart=always
+RestartSec=3
+StartLimitInterval=120
+StartLimitBurst=20
+
+# Resource limits
+MemoryLimit=256M
+CPUQuota=80%
+
+# Logging
+StandardOutput=append:${RPI_HOME}/iams-relay.log
+StandardError=append:${RPI_HOME}/iams-relay.log
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+sudo cp /tmp/iams-relay.service /etc/systemd/system/iams-relay.service && \
      sudo systemctl daemon-reload && \
      sudo systemctl enable iams-relay && \
      sudo systemctl restart iams-relay"
 
-# Step 5: Verify
-echo "[5/5] Verifying relay..."
+# Step 6: Verify
+echo "[6/6] Verifying relay..."
 sleep 3
-sshpass -p "${RPI_PASS}" ssh -o StrictHostKeyChecking=no "${RPI_HOST}" \
+sshpass -p "${RPI_PASS}" ssh -o StrictHostKeyChecking=no -o PubkeyAuthentication=no "${RPI_HOST}" \
     "systemctl is-active iams-relay && echo 'Relay is running!' || echo 'WARNING: Relay failed to start'; \
      echo ''; \
      echo '--- Last 10 log lines ---'; \
-     tail -10 /home/pi/iams-relay.log 2>/dev/null || echo 'No logs yet'"
+     tail -10 ${RPI_HOME}/iams-relay.log 2>/dev/null || echo 'No logs yet'"
 
 echo ""
 echo "=========================================="
-echo "  Relay deployed!"
+echo "  Relay deployed! (${ROOM} — ${RELAY_MODE} mode)"
 echo "  Stream: ${CAMERA_RTSP_URL}"
 echo "     → ${VPS_RTSP_URL}/${ROOM_ID}"
 echo "=========================================="
