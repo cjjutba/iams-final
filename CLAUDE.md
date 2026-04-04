@@ -295,7 +295,7 @@ RESEND_API_KEY=xxxxx...     # Email service
 | `iams-dozzle` | amir20/dozzle | Log viewer (port 9999) |
 
 ### URLs
-- **Admin Portal:** http://167.71.217.44/admin
+- **Admin Portal:** https://iams-thesis.vercel.app (deployed on Vercel)
 - **API:** http://167.71.217.44/api/v1
 - **API Docs:** http://167.71.217.44/api/v1/docs
 - **Health:** http://167.71.217.44/api/v1/health
