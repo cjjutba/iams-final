@@ -182,18 +182,17 @@ class RealtimeTracker:
             identity.last_seen = now
             identity.frames_seen += 1
 
-            # Recognize if: new track, re-verify interval elapsed, or quick-retry
-            # for recently-first-seen "unknown" tracks (retry every 1s for 10s).
-            # This prevents a single bad frame from locking a face as "Unknown"
-            # for the full REVERIFY_INTERVAL when the student is already registered.
-            is_quick_retry = (
+            # Recognize if: new track, or unknown track (retry every 2s until
+            # recognized), or re-verify interval elapsed for recognized tracks.
+            # Unknown tracks retry continuously — a better camera angle or
+            # lighting can turn a miss into a match at any moment.
+            is_unknown_retry = (
                 identity.recognition_status == "unknown"
-                and (now - identity.first_seen) < 10.0
-                and (now - identity.last_verified) > 1.0
+                and (now - identity.last_verified) > 2.0
             )
             needs_recognition = (
                 identity.recognition_status == "pending"
-                or is_quick_retry
+                or is_unknown_retry
                 or (now - identity.last_verified) > settings.REVERIFY_INTERVAL
             )
 
@@ -231,6 +230,24 @@ class RealtimeTracker:
                 seen_users[r.user_id] = len(deduped_results)
             deduped_results.append(r)
         results = deduped_results
+
+        # 6b. Deduplicate unknown tracks by bbox IoU — same face can get
+        # multiple track IDs from ByteTrack when detection is noisy.
+        unknown_tracks = [r for r in results if r.user_id is None]
+        known_tracks = [r for r in results if r.user_id is not None]
+        deduped_unknown: list[TrackResult] = []
+        for track in unknown_tracks:
+            is_dup = False
+            for j, existing in enumerate(deduped_unknown):
+                iou = self._compute_iou_norm(track.bbox, existing.bbox)
+                if iou > 0.3:
+                    if track.confidence > existing.confidence:
+                        deduped_unknown[j] = track
+                    is_dup = True
+                    break
+            if not is_dup:
+                deduped_unknown.append(track)
+        results = known_tracks + deduped_unknown
 
         # 7. Expire lost tracks
         self._expire_lost_tracks(now, active_track_ids)
@@ -372,6 +389,19 @@ class RealtimeTracker:
         union = area_a + area_b - inter
 
         return float(inter / union) if union > 0 else 0.0
+
+    @staticmethod
+    def _compute_iou_norm(box_a: list[float], box_b: list[float]) -> float:
+        """Compute IoU between two normalized [x1, y1, x2, y2] bboxes."""
+        x1 = max(box_a[0], box_b[0])
+        y1 = max(box_a[1], box_b[1])
+        x2 = min(box_a[2], box_b[2])
+        y2 = min(box_a[3], box_b[3])
+        inter = max(0, x2 - x1) * max(0, y2 - y1)
+        area_a = (box_a[2] - box_a[0]) * (box_a[3] - box_a[1])
+        area_b = (box_b[2] - box_b[0]) * (box_b[3] - box_b[1])
+        union = area_a + area_b - inter
+        return inter / union if union > 0 else 0.0
 
     @staticmethod
     def _nms_faces(bboxes, confidences, embeddings, iou_threshold=0.5):

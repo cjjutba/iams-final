@@ -16,7 +16,7 @@ import logging
 import os
 from collections import defaultdict
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 
 from app.config import settings
 from app.utils.security import verify_token
@@ -213,6 +213,13 @@ async def attendance_websocket(websocket: WebSocket, schedule_id: str):
         return
 
     await ws_manager.add_attendance_client(schedule_id, websocket)
+
+    # Trigger on-demand pipeline startup so bounding boxes appear immediately
+    # instead of waiting up to 30s for the next scheduler tick.
+    ensure_fn = getattr(websocket.app.state, "ensure_pipeline_running", None)
+    if ensure_fn is not None:
+        asyncio.ensure_future(ensure_fn(schedule_id))
+
     try:
         while True:
             data = await websocket.receive_text()

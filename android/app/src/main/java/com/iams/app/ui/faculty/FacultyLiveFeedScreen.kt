@@ -8,6 +8,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,16 +26,22 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material.icons.outlined.Assignment
 import androidx.compose.material.icons.outlined.VideocamOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -98,6 +105,20 @@ fun FacultyLiveFeedScreen(
     val spacing = IAMSThemeTokens.spacing
 
     var activeTab by remember { mutableStateOf(PanelTab.DETECTED) }
+    var showEarlyLeaveDialog by remember { mutableStateOf(false) }
+
+    // Early leave timeout config dialog
+    if (showEarlyLeaveDialog) {
+        EarlyLeaveTimeoutDialog(
+            currentMinutes = uiState.earlyLeaveTimeoutMinutes,
+            isSaving = uiState.configSaving,
+            onDismiss = { showEarlyLeaveDialog = false },
+            onConfirm = { minutes ->
+                viewModel.updateEarlyLeaveTimeout(minutes)
+                showEarlyLeaveDialog = false
+            }
+        )
+    }
 
     LaunchedEffect(scheduleId, roomId) {
         viewModel.initialize(scheduleId, roomId)
@@ -240,7 +261,7 @@ fun FacultyLiveFeedScreen(
             ConnectionStatusBar(
                 isConnected = wsConnected,
                 isWaitingForCamera = uiState.videoUrl.isEmpty(),
-                detectedCount = tracks.size
+                detectedCount = tracks.count { it.status == "recognized" || it.status == "unknown" }
             )
 
             // Session control bar
@@ -248,26 +269,34 @@ fun FacultyLiveFeedScreen(
                 sessionActive = uiState.sessionActive,
                 onStartSession = { viewModel.startSession() },
                 onEndSession = { viewModel.endSession() },
+                onSettingsClick = { showEarlyLeaveDialog = true },
                 sessionLoading = uiState.sessionLoading
             )
 
-            // Video feed area (~55%)
+            // ML Kit frame sink — hoisted so frameSize drives the Box aspect ratio
+            val mlKitSink = remember { MlKitFrameSink() }
+            val mlKitFaces by mlKitSink.faces.collectAsState()
+            val frameSize by mlKitSink.frameSize.collectAsState()
+
+            DisposableEffect(Unit) {
+                onDispose { mlKitSink.close() }
+            }
+
+            // Dynamic aspect ratio from actual video frame; default 16:9 until first frame arrives
+            val videoAspect = if (frameSize.first > 0 && frameSize.second > 0) {
+                frameSize.first.toFloat() / frameSize.second.toFloat()
+            } else {
+                16f / 9f
+            }
+
+            // Video feed area — matches camera's native aspect ratio
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(0.55f)
+                    .aspectRatio(videoAspect)
                     .background(Color.Black)
             ) {
                 if (uiState.videoUrl.isNotEmpty()) {
-                    // ML Kit frame sink for real-time on-device face detection
-                    val mlKitSink = remember { MlKitFrameSink() }
-                    val mlKitFaces by mlKitSink.faces.collectAsState()
-                    val frameSize by mlKitSink.frameSize.collectAsState()
-
-                    DisposableEffect(Unit) {
-                        onDispose { mlKitSink.close() }
-                    }
-
                     NativeWebRtcVideoPlayer(
                         whepUrl = uiState.videoUrl,
                         modifier = Modifier.fillMaxSize(),
@@ -352,11 +381,11 @@ fun FacultyLiveFeedScreen(
                 }
             }
 
-            // Bottom panel (~45%)
+            // Bottom panel — fills remaining space below video
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(0.45f)
+                    .weight(1f)
                     .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                     .background(Background)
             ) {
@@ -445,7 +474,7 @@ fun FacultyLiveFeedScreen(
                                 )
                             }
                             Text(
-                                text = "${tracks.count { it.status == "recognized" }} recognized / ${tracks.size} detected",
+                                text = "${tracks.count { it.status == "recognized" }} recognized / ${tracks.count { it.status == "recognized" || it.status == "unknown" }} detected",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextSecondary
                             )
@@ -504,7 +533,7 @@ fun FacultyLiveFeedScreen(
                         PanelTab.DETECTED -> {
                             // Show currently tracked faces from real-time data
                             val recognized = tracks.filter { it.status == "recognized" && it.name != null }
-                            val unknown = tracks.filter { it.status != "recognized" }
+                            val unknown = tracks.filter { it.status == "unknown" }
 
                             if (recognized.isNotEmpty()) {
                                 item { AttendanceSectionLabel("Recognized (${recognized.size})", PresentFg) }
@@ -537,10 +566,18 @@ fun FacultyLiveFeedScreen(
                                     HorizontalDivider(color = Border, thickness = 0.5.dp)
                                 }
                             }
-                            if (uiState.earlyLeaveStudents.isNotEmpty()) {
-                                item { AttendanceSectionLabel("Early Leave (${uiState.earlyLeaveStudents.size})", com.iams.app.ui.theme.EarlyLeaveFg) }
+                            // Early Leave — combine still-absent and returned
+                            val allEarlyLeave = uiState.earlyLeaveStudents + uiState.earlyLeaveReturnedStudents
+                            if (allEarlyLeave.isNotEmpty()) {
+                                item { AttendanceSectionLabel("Early Leave (${allEarlyLeave.size})", com.iams.app.ui.theme.EarlyLeaveFg) }
+                                // Still absent
                                 items(uiState.earlyLeaveStudents) { student ->
                                     StudentRow(student = student, dotColor = com.iams.app.ui.theme.EarlyLeaveFg)
+                                    HorizontalDivider(color = Border, thickness = 0.5.dp)
+                                }
+                                // Returned (with badge)
+                                items(uiState.earlyLeaveReturnedStudents) { student ->
+                                    EarlyLeaveReturnedRow(student = student)
                                     HorizontalDivider(color = Border, thickness = 0.5.dp)
                                 }
                             }
@@ -679,6 +716,7 @@ private fun SessionControlBar(
     sessionActive: Boolean,
     onStartSession: () -> Unit,
     onEndSession: () -> Unit,
+    onSettingsClick: () -> Unit,
     sessionLoading: Boolean
 ) {
     val spacing = IAMSThemeTokens.spacing
@@ -707,6 +745,20 @@ private fun SessionControlBar(
                     color = PresentFg
                 )
             }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(
+                    onClick = onSettingsClick,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Settings,
+                        contentDescription = "Session Settings",
+                        modifier = Modifier.size(16.dp),
+                        tint = TextSecondary
+                    )
+                }
+                Spacer(modifier = Modifier.width(spacing.xs))
 
             Row(
                 modifier = Modifier
@@ -738,6 +790,7 @@ private fun SessionControlBar(
                     )
                 }
             }
+            } // close settings + end-session row
         } else {
             Text(
                 text = "SESSION INACTIVE",
@@ -905,4 +958,121 @@ private fun StudentRow(
             )
         }
     }
+}
+
+@Composable
+private fun EarlyLeaveReturnedRow(student: StudentAttendanceStatus) {
+    val spacing = IAMSThemeTokens.spacing
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = spacing.sm),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(com.iams.app.ui.theme.EarlyLeaveFg.copy(alpha = 0.4f))
+        )
+        Spacer(modifier = Modifier.width(spacing.md))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = student.studentName,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = TextPrimary,
+                maxLines = 1
+            )
+            val displayId = student.studentNumber ?: student.studentId.take(8)
+            Text(
+                text = displayId,
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary
+            )
+        }
+        Text(
+            text = "↩ Returned",
+            style = MaterialTheme.typography.labelSmall,
+            color = PresentFg,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .background(PresentBg)
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+        )
+    }
+}
+
+@Composable
+private fun EarlyLeaveTimeoutDialog(
+    currentMinutes: Int,
+    isSaving: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (Int) -> Unit,
+) {
+    var sliderValue by remember { mutableStateOf(currentMinutes.toFloat()) }
+    val displayMinutes = Math.round(sliderValue)
+    val spacing = IAMSThemeTokens.spacing
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Early Leave Timeout",
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    text = "How long a student can be absent before being flagged as early leave.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+                Spacer(modifier = Modifier.height(spacing.lg))
+                Text(
+                    text = "$displayMinutes minute${if (displayMinutes != 1) "s" else ""}",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(spacing.sm))
+                Slider(
+                    value = sliderValue,
+                    onValueChange = { sliderValue = it },
+                    valueRange = 1f..15f,
+                    steps = 13,
+                    colors = SliderDefaults.colors(
+                        thumbColor = Primary,
+                        activeTrackColor = Primary,
+                        inactiveTrackColor = Border,
+                    )
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("1 min", style = MaterialTheme.typography.labelSmall, color = TextTertiary)
+                    Text("15 min", style = MaterialTheme.typography.labelSmall, color = TextTertiary)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(Math.round(sliderValue)) },
+                enabled = !isSaving
+            ) {
+                Text(if (isSaving) "Saving..." else "Save", color = Primary)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = TextSecondary)
+            }
+        }
+    )
 }

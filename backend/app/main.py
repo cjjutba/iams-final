@@ -101,6 +101,7 @@ async def lifespan(app: FastAPI):
 
         logger.info("Loading FAISS index...")
         faiss_manager.load_or_create_index()
+        faiss_manager.rebuild_user_map_from_db()
 
         # Reconcile FAISS index with database
         try:
@@ -309,17 +310,9 @@ async def lifespan(app: FastAPI):
 
                         if faiss_manager.index is None or faiss_manager.index.ntotal == 0:
                             faiss_manager.load_or_create_index()
+                            faiss_manager.rebuild_user_map_from_db()
                         if not faiss_manager.user_map:
-                            from app.services.face_service import FaceService
-
-                            def _reconcile():
-                                _db = SessionLocal()
-                                try:
-                                    FaceService.reconcile_faiss_index(_db)
-                                finally:
-                                    _db.close()
-
-                            await asyncio.to_thread(_reconcile)
+                            faiss_manager.rebuild_user_map_from_db()
 
                         pipeline = SessionPipeline(
                             schedule_id=sid,
@@ -533,6 +526,126 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to initialize APScheduler: {e}")
 
     logger.info(f"{settings.APP_NAME} startup complete")
+
+    # ===================================================================
+    # On-demand pipeline startup (called from WebSocket handler)
+    # ===================================================================
+
+    async def ensure_pipeline_running(schedule_id: str) -> bool:
+        """Start pipeline for a schedule if it should be active but isn't running.
+
+        Called on WebSocket connect so faculty see bounding boxes immediately
+        instead of waiting up to 30s for the next scheduler tick.
+
+        Returns True if pipeline is running (already or just started).
+        """
+        from datetime import datetime
+
+        from app.models.enrollment import Enrollment
+        from app.models.room import Room
+        from app.repositories.schedule_repository import ScheduleRepository
+        from app.services.frame_grabber import FrameGrabber
+        from app.services.realtime_pipeline import SessionPipeline
+
+        # Already running?
+        if schedule_id in app.state.session_pipelines:
+            pipeline = app.state.session_pipelines[schedule_id]
+            if pipeline.is_running:
+                return True
+
+        # Check if schedule should be active right now
+        def _check_and_gather():
+            db = SessionLocal()
+            try:
+                now = datetime.now()
+                schedule_repo = ScheduleRepository(db)
+                schedule = schedule_repo.get_by_id(schedule_id)
+                if not schedule:
+                    return None
+
+                # Check day and time
+                current_day = now.weekday()
+                current_time = now.time()
+                if current_day not in (schedule.days_of_week or []):
+                    return None
+                if not (schedule.start_time <= current_time <= schedule.end_time):
+                    return None
+
+                # Already ended today?
+                if PresenceService.was_session_ended_today(schedule_id):
+                    return None
+
+                room = db.query(Room).filter(Room.id == schedule.room_id).first()
+                camera_url = room.camera_endpoint if room else None
+                room_id = str(schedule.room_id)
+
+                return {
+                    "sid": schedule_id,
+                    "room_id": room_id,
+                    "camera_url": camera_url,
+                    "subject_code": schedule.subject_code,
+                }
+            finally:
+                db.close()
+
+        try:
+            info = await asyncio.to_thread(_check_and_gather)
+        except Exception:
+            logger.exception("[on-demand] Failed to check schedule %s", schedule_id)
+            return False
+
+        if info is None:
+            return False
+
+        sid = info["sid"]
+        room_id = info["room_id"]
+        camera_url = info["camera_url"]
+        subject_code = info["subject_code"]
+
+        try:
+            # Start legacy session
+            db = SessionLocal()
+            try:
+                presence_svc = PresenceService(db)
+                await presence_svc.start_session(sid)
+            finally:
+                db.close()
+
+            # Create FrameGrabber if needed
+            if camera_url and room_id not in app.state.frame_grabbers:
+                grabber = FrameGrabber(camera_url)
+                app.state.frame_grabbers[room_id] = grabber
+                logger.info("[on-demand] Created FrameGrabber for room %s", room_id)
+
+            grabber = app.state.frame_grabbers.get(room_id)
+            if grabber:
+                from app.services.ml.faiss_manager import faiss_manager
+
+                if faiss_manager.index is None or faiss_manager.index.ntotal == 0:
+                    faiss_manager.load_or_create_index()
+                    faiss_manager.rebuild_user_map_from_db()
+                if not faiss_manager.user_map:
+                    faiss_manager.rebuild_user_map_from_db()
+
+                pipeline = SessionPipeline(
+                    schedule_id=sid,
+                    grabber=grabber,
+                    db_factory=SessionLocal,
+                )
+                await pipeline.start()
+                app.state.session_pipelines[sid] = pipeline
+                logger.info("[on-demand] Started pipeline for %s (%s)", subject_code, sid)
+                return True
+            else:
+                logger.warning("[on-demand] No camera for %s", subject_code)
+                return False
+
+        except Exception:
+            logger.exception("[on-demand] Failed to start pipeline for %s", schedule_id)
+            return False
+
+    # Expose to other modules via app.state
+    app.state.ensure_pipeline_running = ensure_pipeline_running
 
     # ===================================================================
     # YIELD — application serves requests

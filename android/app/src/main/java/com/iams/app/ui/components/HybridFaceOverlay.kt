@@ -21,7 +21,7 @@ import kotlin.math.sqrt
 /**
  * How long (ms) to wait before showing "Unknown" label on a newly-detected face.
  */
-private const val UNKNOWN_LABEL_DELAY_MS = 2000L
+private const val UNKNOWN_LABEL_DELAY_MS = 0L
 
 /** Offset to keep backend trackId keys separate from ML Kit faceId keys. */
 private const val BACKEND_KEY_OFFSET = 100_000
@@ -145,9 +145,6 @@ fun HybridFaceOverlay(
             val alpha = state.alpha.value
             if (alpha < 0.01f) continue
             if (state.status == "pending") continue
-            if (state.status == "unknown") {
-                if (state.unknownSince <= 0L || (now - state.unknownSince) < UNKNOWN_LABEL_DELAY_MS) continue
-            }
 
             val left = state.x1.value * renderW - cropOffsetX
             val top = state.y1.value * renderH - cropOffsetY

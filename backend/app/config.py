@@ -38,8 +38,8 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = []  # Must be explicitly set per environment
 
     # ONNX Runtime (thread control for multi-worker CPU efficiency)
-    ONNX_INTRA_OP_THREADS: int = 2  # threads within a single op (per worker)
-    ONNX_INTER_OP_THREADS: int = 1  # threads between ops (per worker)
+    ONNX_INTRA_OP_THREADS: int = 4  # threads within a single op (1 worker × 4 = 4 vCPUs)
+    ONNX_INTER_OP_THREADS: int = 2  # threads between ops (allows pipelining det + rec)
 
     # Face Recognition
     INSIGHTFACE_MODEL: str = "buffalo_l"
@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     # Adaptive Threshold
     ADAPTIVE_THRESHOLD_ENABLED: bool = True
     ADAPTIVE_THRESHOLD_FLOOR: float = 0.30  # Minimum allowed threshold
-    ADAPTIVE_THRESHOLD_CEILING: float = 0.45  # Solo-match ceiling (cross-domain selfie→CCTV yields 0.3-0.5)
+    ADAPTIVE_THRESHOLD_CEILING: float = 0.30  # Solo-match ceiling (matches floor — with few users, 0.30+ is safe)
     ADAPTIVE_THRESHOLD_MIN_SAMPLES: int = 50  # Min samples before adapting
     ADAPTIVE_THRESHOLD_WINDOW: int = 500  # Rolling window size
 
@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     TRACK_CONFIRM_FRAMES: int = 1  # Recognize immediately on first detection
 
     # Track-Based Presence
-    EARLY_LEAVE_TIMEOUT: float = 60.0  # Seconds absent before early-leave alert (must exceed TRACK_LOST_TIMEOUT)
+    EARLY_LEAVE_TIMEOUT: float = 300.0  # Fallback: 5 min absent before early-leave alert (per-schedule override in DB)
     PRESENCE_FLUSH_INTERVAL: float = 10.0  # Seconds between DB presence flushes
 
     # Frame Grabber

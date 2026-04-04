@@ -124,9 +124,9 @@ async def start_session(
 
                         if faiss_manager.index is None or faiss_manager.index.ntotal == 0:
                             faiss_manager.load_or_create_index()
+                            faiss_manager.rebuild_user_map_from_db()
                         if not faiss_manager.user_map:
-                            from app.services.face_service import FaceService
-                            FaceService.reconcile_faiss_index(db)
+                            faiss_manager.rebuild_user_map_from_db()
 
                         from app.services.realtime_pipeline import SessionPipeline
                         from app.database import SessionLocal
