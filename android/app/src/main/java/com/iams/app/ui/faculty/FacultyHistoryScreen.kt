@@ -491,6 +491,7 @@ private fun AttendanceHistoryTab(
                         SummaryStatItem("Present", "${summary.totalPresent}", PresentFg)
                         SummaryStatItem("Late", "${summary.totalLate}", LateFg)
                         SummaryStatItem("Absent", "${summary.totalAbsent}", AbsentFg)
+                        SummaryStatItem("Early Leave", "${summary.totalEarlyLeave}", EarlyLeaveFg)
                     }
 
                     Spacer(modifier = Modifier.height(spacing.md))
@@ -635,11 +636,11 @@ private fun SessionCard(session: SessionSummary) {
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(spacing.md),
         ) {
-            StatusChip("P: ${session.presentCount}", PresentFg)
-            StatusChip("L: ${session.lateCount}", LateFg)
-            StatusChip("A: ${session.absentCount}", AbsentFg)
+            StatusChip("Present: ${session.presentCount}", PresentFg)
+            StatusChip("Late: ${session.lateCount}", LateFg)
+            StatusChip("Absent: ${session.absentCount}", AbsentFg)
             if (session.earlyLeaveCount > 0) {
-                StatusChip("EL: ${session.earlyLeaveCount}", EarlyLeaveFg)
+                StatusChip("Early Leave: ${session.earlyLeaveCount}", EarlyLeaveFg)
             }
         }
 
