@@ -89,7 +89,7 @@ class Settings(BaseSettings):
 
     # ByteTrack / Track Lifecycle
     TRACK_LOST_TIMEOUT: float = 5.0  # Seconds before removing lost track
-    REVERIFY_INTERVAL: float = 15.0  # Re-run ArcFace on existing tracks (seconds)
+    REVERIFY_INTERVAL: float = 5.0  # Re-run ArcFace on existing tracks (seconds)
     TRACK_CONFIRM_FRAMES: int = 1  # Recognize immediately on first detection
 
     # Track-Based Presence

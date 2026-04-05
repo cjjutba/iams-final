@@ -40,6 +40,7 @@ class TrackIdentity:
     last_seen: float = 0.0
     recognition_status: str = "pending"  # "pending" | "recognized" | "unknown"
     frames_seen: int = 0
+    last_embedding: np.ndarray | None = None  # Detect track ID swaps
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +183,31 @@ class RealtimeTracker:
             identity.last_seen = now
             identity.frames_seen += 1
 
+            # Detect track ID swaps: if the face embedding suddenly changes
+            # (cosine similarity < 0.5 vs cached embedding), ByteTrack likely
+            # swapped this track to a different person. Force re-recognition.
+            embedding_drifted = False
+            if (
+                embedding is not None
+                and identity.last_embedding is not None
+                and identity.recognition_status == "recognized"
+            ):
+                sim = float(np.dot(embedding, identity.last_embedding))
+                if sim < 0.5:
+                    logger.info(
+                        "Track %d embedding drift (sim=%.2f), forcing re-recognition",
+                        track_id, sim,
+                    )
+                    identity.recognition_status = "pending"
+                    identity.user_id = None
+                    identity.name = None
+                    identity.confidence = 0.0
+                    embedding_drifted = True
+
+            # Cache current embedding for drift detection
+            if embedding is not None:
+                identity.last_embedding = embedding
+
             # Recognize if: new/unknown track or re-verify interval elapsed.
             # Unknown tracks: retry every frame for first 5s (aggressive),
             # then every 2s after that (each frame is a new angle chance).
@@ -195,6 +221,7 @@ class RealtimeTracker:
             needs_recognition = (
                 identity.recognition_status == "pending"
                 or is_unknown_retry
+                or embedding_drifted
                 or (now - identity.last_verified) > settings.REVERIFY_INTERVAL
             )
 
