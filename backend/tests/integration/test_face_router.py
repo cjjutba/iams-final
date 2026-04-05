@@ -445,7 +445,7 @@ class TestEdgeProcess:
                 return results_per_call[idx]
             return {"user_id": None, "confidence": None, "is_ambiguous": False}
 
-        p_fn, p_faiss, p_spoof, _, mock_faiss = _patch_ml_singletons()
+        p_fn, p_faiss, p_spoof, _, mock_faiss, p_embed = _patch_ml_singletons()
         mock_faiss.search_with_margin = MagicMock(side_effect=_search_with_margin)
         with p_fn, p_faiss, p_spoof, p_embed:
             response = client.post(
@@ -502,7 +502,7 @@ class TestEdgeProcess:
         def _raise(*_a, **_kw):
             raise ValueError("Invalid Base64")
 
-        p_fn, p_faiss, p_spoof, mock_fn, _ = _patch_ml_singletons()
+        p_fn, p_faiss, p_spoof, mock_fn, _, p_embed = _patch_ml_singletons()
         mock_fn.decode_base64_image = MagicMock(side_effect=_raise)
         with p_fn, p_faiss, p_spoof, p_embed:
             response = client.post(f"{PREFIX}/process", headers=EDGE_HEADERS, json=self._payload())
