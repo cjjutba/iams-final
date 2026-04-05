@@ -23,6 +23,7 @@ interface ScreenLayoutProps {
   scrollable?: boolean;
   padded?: boolean;
   safeArea?: boolean;
+  safeAreaEdges?: ('top' | 'bottom' | 'left' | 'right')[];
   keyboardAvoiding?: boolean;
   backgroundColor?: keyof typeof theme.colors;
   refreshControl?: React.ReactElement<RefreshControlProps>;
@@ -33,6 +34,7 @@ export const ScreenLayout: React.FC<ScreenLayoutProps> = ({
   scrollable = false,
   padded = true,
   safeArea = true,
+  safeAreaEdges,
   keyboardAvoiding = false,
   backgroundColor = 'background',
   refreshControl,
@@ -45,6 +47,7 @@ export const ScreenLayout: React.FC<ScreenLayoutProps> = ({
     padded && styles.padded,
   ];
 
+  const containerProps = safeArea && safeAreaEdges ? { edges: safeAreaEdges } : {};
   const Container = safeArea ? SafeAreaView : View;
 
   const content = scrollable ? (
@@ -64,7 +67,7 @@ export const ScreenLayout: React.FC<ScreenLayoutProps> = ({
   return (
     <>
       <StatusBar barStyle="dark-content" backgroundColor={bgColor} />
-      <Container style={containerStyle}>
+      <Container style={containerStyle} {...containerProps}>
         {keyboardAvoiding ? (
           <KeyboardAvoidingView
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}

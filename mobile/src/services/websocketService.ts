@@ -30,6 +30,8 @@ const HEARTBEAT_INTERVAL = 30000;
 const HEARTBEAT_TIMEOUT = 5000;
 /** Max consecutive heartbeat failures before triggering reconnect */
 const MAX_HEARTBEAT_FAILURES = 2;
+/** Delay before resetting reconnect attempts and retrying (after exhaustion) */
+const BACKOFF_RESET_DELAY = 60000;
 
 class WebSocketService {
   private socket: WebSocket | null = null;
@@ -105,7 +107,7 @@ class WebSocketService {
     );
 
     try {
-      const wsUrl = `${config.WS_URL}/${userId}`;
+      const wsUrl = `${config.WS_URL}/alerts/${userId}`;
       this.socket = new WebSocket(wsUrl);
 
       this.socket.onopen = () => {
@@ -125,7 +127,7 @@ class WebSocketService {
       };
 
       this.socket.onerror = (error: Event) => {
-        console.error('[WebSocket] Error:', error);
+        console.warn('[WebSocket] Connection error:', error);
       };
 
       this.socket.onclose = (event: WebSocketCloseEvent) => {
@@ -138,8 +140,15 @@ class WebSocketService {
           if (this.reconnectAttempts < this.maxReconnectAttempts) {
             this.scheduleReconnect();
           } else {
-            console.error('[WebSocket] Max reconnection attempts reached');
+            console.warn('[WebSocket] Max reconnection attempts reached, will retry in 60s');
             this.setConnectionState('DISCONNECTED');
+            // Auto-retry after a longer delay instead of giving up permanently
+            this.reconnectTimeout = setTimeout(() => {
+              if (this.userId && !this.isIntentionalClose) {
+                this.reconnectAttempts = 0;
+                this.connect(this.userId);
+              }
+            }, BACKOFF_RESET_DELAY);
           }
         } else {
           this.setConnectionState('DISCONNECTED');
@@ -149,7 +158,7 @@ class WebSocketService {
       // Listen for app state changes to manage connection lifecycle
       this.setupAppStateListener();
     } catch (error) {
-      console.error('[WebSocket] Connection failed:', error);
+      console.warn('[WebSocket] Connection failed:', error);
       this.scheduleReconnect();
     }
   }
@@ -281,6 +290,27 @@ class WebSocketService {
   }
 
   /**
+   * Register callback for presence warnings
+   */
+  onPresenceWarning(callback: MessageCallback): () => void {
+    return this.on(WebSocketEventType.PRESENCE_WARNING, callback);
+  }
+
+  /**
+   * Register callback for presence score updates
+   */
+  onPresenceScore(callback: MessageCallback): () => void {
+    return this.on(WebSocketEventType.PRESENCE_SCORE, callback);
+  }
+
+  /**
+   * Register callback for student checked in events
+   */
+  onStudentCheckedIn(callback: MessageCallback): () => void {
+    return this.on(WebSocketEventType.STUDENT_CHECKED_IN, callback);
+  }
+
+  /**
    * Handle incoming WebSocket message
    * Backend sends: { "event": "attendance_update", "data": {...} }
    */
@@ -329,7 +359,7 @@ class WebSocketService {
     this.clearReconnectTimeout();
 
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error('[WebSocket] Max reconnection attempts reached');
+      console.warn('[WebSocket] Max reconnection attempts reached');
       this.setConnectionState('DISCONNECTED');
       return;
     }
@@ -389,7 +419,7 @@ class WebSocketService {
         );
 
         if (this.heartbeatFailures >= MAX_HEARTBEAT_FAILURES) {
-          console.error('[WebSocket] Heartbeat failed, reconnecting...');
+          console.warn('[WebSocket] Heartbeat failed, reconnecting...');
           // Force close to trigger reconnect
           if (this.socket) {
             this.socket.close();

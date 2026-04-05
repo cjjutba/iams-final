@@ -13,7 +13,6 @@ Quality checks:
 """
 
 from dataclasses import dataclass, field
-from typing import List, Tuple
 
 import cv2
 import numpy as np
@@ -30,7 +29,7 @@ class QualityReport:
     face_size_ratio: float  # Face bbox area / image area
     det_score: float  # SCRFD detection confidence
     passed: bool = True
-    rejection_reasons: List[str] = field(default_factory=list)
+    rejection_reasons: list[str] = field(default_factory=list)
 
 
 def compute_blur_score(image_bgr: np.ndarray) -> float:
@@ -65,8 +64,8 @@ def compute_brightness(image_bgr: np.ndarray) -> float:
 
 
 def compute_face_size_ratio(
-    bbox: Tuple[int, int, int, int],
-    image_shape: Tuple[int, ...],
+    bbox: tuple[int, int, int, int],
+    image_shape: tuple[int, ...],
 ) -> float:
     """
     Compute the ratio of face bounding box area to total image area.
@@ -89,8 +88,9 @@ def compute_face_size_ratio(
 def assess_quality(
     image_bgr: np.ndarray,
     det_score: float,
-    bbox: Tuple[int, int, int, int],
-    image_shape: Tuple[int, ...],
+    bbox: tuple[int, int, int, int],
+    image_shape: tuple[int, ...],
+    blur_threshold_override: float | None = None,
 ) -> QualityReport:
     """
     Run all quality checks and return a unified report.
@@ -108,33 +108,24 @@ def assess_quality(
     brightness = compute_brightness(image_bgr)
     size_ratio = compute_face_size_ratio(bbox, image_shape)
 
-    reasons: List[str] = []
+    reasons: list[str] = []
 
     if settings.QUALITY_GATE_ENABLED:
-        if blur < settings.QUALITY_BLUR_THRESHOLD:
-            reasons.append(
-                f"Image too blurry (score {blur:.1f}, min {settings.QUALITY_BLUR_THRESHOLD})"
-            )
+        blur_min = blur_threshold_override if blur_threshold_override is not None else settings.QUALITY_BLUR_THRESHOLD
+        if blur < blur_min:
+            reasons.append(f"Image too blurry (score {blur:.1f}, min {blur_min})")
 
         if brightness < settings.QUALITY_BRIGHTNESS_MIN:
-            reasons.append(
-                f"Image too dark (brightness {brightness:.1f}, min {settings.QUALITY_BRIGHTNESS_MIN})"
-            )
+            reasons.append(f"Image too dark (brightness {brightness:.1f}, min {settings.QUALITY_BRIGHTNESS_MIN})")
 
         if brightness > settings.QUALITY_BRIGHTNESS_MAX:
-            reasons.append(
-                f"Image too bright (brightness {brightness:.1f}, max {settings.QUALITY_BRIGHTNESS_MAX})"
-            )
+            reasons.append(f"Image too bright (brightness {brightness:.1f}, max {settings.QUALITY_BRIGHTNESS_MAX})")
 
         if size_ratio < settings.QUALITY_MIN_FACE_SIZE_RATIO:
-            reasons.append(
-                f"Face too small (ratio {size_ratio:.3f}, min {settings.QUALITY_MIN_FACE_SIZE_RATIO})"
-            )
+            reasons.append(f"Face too small (ratio {size_ratio:.3f}, min {settings.QUALITY_MIN_FACE_SIZE_RATIO})")
 
         if det_score < settings.QUALITY_MIN_DET_SCORE:
-            reasons.append(
-                f"Low detection confidence ({det_score:.2f}, min {settings.QUALITY_MIN_DET_SCORE})"
-            )
+            reasons.append(f"Low detection confidence ({det_score:.2f}, min {settings.QUALITY_MIN_DET_SCORE})")
 
     return QualityReport(
         blur_score=blur,

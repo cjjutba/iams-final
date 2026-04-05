@@ -1,0 +1,88 @@
+# mediamtx production configuration for IAMS (Docker on VPS)
+#
+# Receives RTSP push from RPi edge devices and serves WebRTC (WHEP) to
+# mobile clients. FastAPI proxies WHEP signaling; media flows directly
+# from mediamtx to phones via WebRTC UDP.
+
+logLevel: warn
+
+# Authentication: allow Docker-internal containers to use the API
+# and allow anyone to publish/read streams (RPi push + mobile WebRTC).
+authMethod: internal
+authInternalUsers:
+  # Allow any source to publish and read (RPi RTSP push, WebRTC viewers)
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+        path:
+      - action: read
+        path:
+      - action: playback
+        path:
+  # Allow Docker network + localhost to use the API
+  - user: any
+    pass:
+    ips: ['127.0.0.1', '::1', '172.16.0.0/12', '192.168.0.0/16', '10.0.0.0/8']
+    permissions:
+      - action: api
+      - action: metrics
+      - action: pprof
+
+# REST API — used by FastAPI backend container to manage paths
+# Listens on all interfaces so the backend container can reach it
+# via Docker network (http://mediamtx:9997).
+api: yes
+apiAddress: :9997
+
+# RTSP — receives push from RPi edge devices over the internet.
+# RPi runs: ffmpeg -i rtsp://camera/sub -c copy -f rtsp rtsp://VPS:8554/room-{id}
+rtsp: yes
+rtspAddress: :8554
+
+# Increase timeouts for RPi connections over potentially unstable internet.
+# Default 10s is too aggressive — bursty cameras (CX810) and WiFi drops
+# cause frequent reconnections. 30s gives headroom.
+readTimeout: 30s
+writeTimeout: 30s
+
+# WebRTC (WHEP) — FastAPI proxies WHEP offers here.
+# Mobile clients negotiate via POST /api/v1/webrtc/{schedule_id}/offer
+# which forwards to http://mediamtx:8889/{room_id}/whep.
+webrtc: yes
+webrtcAddress: :8889
+
+# ICE: tell clients to connect to the VPS public IP for media.
+# Without this, ICE candidates would use the container's private IP
+# which is unreachable from the internet.
+webrtcAdditionalHosts:
+  - 167.71.217.44
+
+# Explicit UDP port for WebRTC media (must match docker-compose port mapping).
+webrtcLocalUDPAddress: :8887
+
+# ICE servers advertised to clients in the SDP answer.
+# Includes our own TURN server for phones behind symmetric NAT.
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+  - url: turn:167.71.217.44:3478
+    username: iams
+    password: iams-turn-secret-2026
+
+# Disable unused protocols
+hls: no
+srt: no
+rtmp: no
+
+# Write queue size per reader. Default is 512 which adds buffering.
+# Too low (8) causes packet drops on bursty streams (e.g. CX810 camera).
+# 128 balances low latency with headroom for bitrate spikes.
+writeQueueSize: 128
+
+# Accept any path — RPi pushes RTSP dynamically.
+# "all_others" is mediamtx's catch-all for unconfigured paths.
+paths:
+  all_others:
+    # Allow reconnection without waiting for old session to time out
+    overridePublisher: yes

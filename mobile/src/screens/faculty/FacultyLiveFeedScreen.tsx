@@ -1,25 +1,21 @@
 /**
  * Faculty Live Feed Screen
  *
- * Displays a live camera feed using two independent layers:
+ * Displays a live camera feed via WebRTC. The backend burns bounding boxes
+ * and recognition labels directly into the video stream, so the mobile app
+ * simply plays the annotated WebRTC feed with no overlay rendering.
  *
- * 1. **Video Layer** — HLS stream via `expo-video` (hardware-decoded, 30 FPS)
- *    The backend runs FFmpeg to remux the RTSP H.264 stream into HLS segments.
- *    `expo-video`'s native `VideoView` plays HLS with hardware decoding.
- *
- * 2. **Recognition Layer** — WebSocket detection metadata (~200 bytes/msg)
- *    The backend samples frames at ~1.5 FPS, runs face detection + FaceNet
- *    recognition, and pushes only detection coordinates + names via WebSocket.
- *    A transparent `DetectionOverlay` renders bounding boxes on top of the video.
+ * A WebSocket connection provides lightweight metadata (detected student
+ * identities) for the bottom attendance panel.
  *
  * WebSocket endpoint: ws://<host>/api/v1/stream/{scheduleId}
  *
  * Features:
- * - 30 FPS smooth hardware-decoded video
- * - Real-time face recognition overlay (bounding boxes + names)
+ * - Low-latency WebRTC video with server-side annotations
  * - Connection status indicator
  * - Detected-students panel with confidence percentages
- * - Auto-reconnect with 3-second delay
+ * - Session start/end controls
+ * - Auto-reconnect with exponential backoff
  * - Navigation to the list-based LiveAttendance screen
  */
 
@@ -30,7 +26,6 @@ import {
   FlatList,
   SectionList,
   ActivityIndicator,
-  LayoutChangeEvent,
   Animated,
   TouchableOpacity,
   Alert,
@@ -38,19 +33,16 @@ import {
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
-import { useVideoPlayer, VideoView } from 'expo-video';
 import { RTCView } from 'react-native-webrtc';
-import { Wifi, WifiOff, Video, Users, RefreshCw, Play, Square, ClipboardList } from 'lucide-react-native';
+import { Wifi, WifiOff, VideoOff, Users, RefreshCw, Play, Square, ClipboardList } from 'lucide-react-native';
 import { theme, strings } from '../../constants';
 import { formatPercentage } from '../../utils/formatters';
 import type { FacultyStackParamList, StudentAttendanceStatus } from '../../types';
 import { AttendanceStatus } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
 import { Text, Card, Button } from '../../components/ui';
-import { DetectionOverlay } from '../../components/video/DetectionOverlay';
 import { useDetectionWebSocket } from '../../hooks/useDetectionWebSocket';
 import type { DetectedStudent } from '../../hooks/useDetectionWebSocket';
-import { useDetectionTracker } from '../../hooks/useDetectionTracker';
 import { useWebRTC } from '../../hooks/useWebRTC';
 import { useSession } from '../../hooks';
 import { attendanceService } from '../../services/attendanceService';
@@ -147,6 +139,7 @@ const StudentRow = React.memo(({ item }: { item: DetectedStudent }) => (
     </Text>
   </View>
 ));
+StudentRow.displayName = 'StudentRow';
 
 // ---------------------------------------------------------------------------
 // Component
@@ -174,22 +167,18 @@ export const FacultyLiveFeedScreen: React.FC = () => {
 
   const sessionActive = isSessionActive(scheduleId);
 
-  // Detection WebSocket (also extracts HLS URL from connected message)
+  // Detection WebSocket (metadata only -- video annotations are server-side)
   const {
-    detections,
     isConnected,
     isConnecting,
-    hlsUrl,
+    isWaitingForCamera,
     streamMode,
     studentMap,
+    detectedCount,
+    unknownCount,
     connectionError,
     reconnect,
-    detectionWidth,
-    detectionHeight,
   } = useDetectionWebSocket(scheduleId);
-
-  // Assign stable track IDs for smooth interpolation
-  const trackedDetections = useDetectionTracker(detections);
 
   // WebRTC video (enabled only in webrtc mode)
   const {
@@ -197,63 +186,6 @@ export const FacultyLiveFeedScreen: React.FC = () => {
     connectionState: rtcConnectionState,
     reconnect: rtcReconnect,
   } = useWebRTC(scheduleId, streamMode === 'webrtc');
-
-  // HLS video player — pass null when in WebRTC mode to avoid starting HLS connection.
-  // The setup callback runs immediately with the initial (null) hlsUrl, so p.play()
-  // would never execute there. Instead, a useEffect below calls play() once the URL
-  // arrives and streamMode is confirmed.
-  const player = useVideoPlayer(
-    streamMode === 'hls' || streamMode === 'legacy' ? hlsUrl : null,
-    (p) => {
-      p.loop = false;
-      // Minimise buffering so the live edge stays as close to real-time as
-      // possible.  ExoPlayer defaults are 20 s forward / 2.5 s start; iOS
-      // AVFoundation waits to minimise stalling by default.
-      p.bufferOptions = {
-        preferredForwardBufferDuration: 0.5,  // iOS: look-ahead 0.5 s (was 1 s)
-        minBufferForPlayback: 0.2,            // start after 200 ms buffered (was 500 ms)
-        waitsToMinimizeStalling: false,       // iOS: start immediately, tolerate micro-stalls
-      };
-    },
-  );
-
-  // Start playback as soon as the HLS URL is available.
-  useEffect(() => {
-    if ((streamMode === 'hls' || streamMode === 'legacy') && hlsUrl) {
-      player.play();
-    }
-  }, [hlsUrl, streamMode, player]);
-
-  // Auto-reload on player error.  A guard prevents multiple concurrent timers
-  // from being spawned if the player fires repeated error events.
-  // replaceAsync offloads asset loading off the main thread (avoids UI freeze).
-  const isRecovering = useRef(false);
-  useEffect(() => {
-    // Reset guard whenever the URL changes (new stream or WebSocket reconnect).
-    isRecovering.current = false;
-  }, [hlsUrl]);
-
-  useEffect(() => {
-    const subscription = player.addListener('statusChange', ({ status }) => {
-      if (streamMode !== 'hls' && streamMode !== 'legacy') return;
-      if (!hlsUrl) return;
-
-      if (status === 'readyToPlay') {
-        isRecovering.current = false;
-      } else if (status === 'error' && !isRecovering.current) {
-        isRecovering.current = true;
-        setTimeout(async () => {
-          try {
-            await player.replaceAsync(hlsUrl);
-            player.play();
-          } finally {
-            isRecovering.current = false;
-          }
-        }, 3_000);
-      }
-    });
-    return () => subscription.remove();
-  }, [player, hlsUrl, streamMode]);
 
   // Combined reconnect: resets both WS and WebRTC connections
   const handleReconnect = useCallback(() => {
@@ -316,14 +248,6 @@ export const FacultyLiveFeedScreen: React.FC = () => {
     }
   }, [activeTab, fetchAttendanceData]);
 
-  // Track container dimensions for overlay coordinate scaling
-  const [containerLayout, setContainerLayout] = useState({ width: 0, height: 0 });
-
-  const handleVideoLayout = useCallback((event: LayoutChangeEvent) => {
-    const { width, height } = event.nativeEvent.layout;
-    setContainerLayout({ width, height });
-  }, []);
-
   // --------------------------------------------------
   // Navigation helpers
   // --------------------------------------------------
@@ -354,12 +278,6 @@ export const FacultyLiveFeedScreen: React.FC = () => {
   const currentlyDetectedCount = useMemo(
     () => studentsList.filter((s) => s.currentlyDetected).length,
     [studentsList],
-  );
-
-  const detectedCount = useMemo(() => detections.length, [detections]);
-  const unknownCount = useMemo(
-    () => detections.filter(d => !d.user_id).length,
-    [detections],
   );
 
   // --------------------------------------------------
@@ -470,7 +388,7 @@ export const FacultyLiveFeedScreen: React.FC = () => {
             {item.student_name}
           </Text>
           <Text variant="caption" color={theme.colors.text.secondary}>
-            {item.student_id}
+            {item.student_number || item.student_id}
           </Text>
         </View>
         {item.presence_score != null && (
@@ -521,12 +439,10 @@ export const FacultyLiveFeedScreen: React.FC = () => {
   }
 
   // --------------------------------------------------
-  // Loading state (waiting for HLS URL)
+  // Loading state (waiting for WebRTC stream)
   // --------------------------------------------------
 
-  const isVideoReady =
-    (streamMode === 'webrtc' && remoteStream !== null) ||
-    ((streamMode === 'hls' || streamMode === 'legacy') && hlsUrl !== null);
+  const isVideoReady = streamMode === 'webrtc' && remoteStream !== null;
 
   if (isConnecting && !isVideoReady) {
     return (
@@ -562,14 +478,20 @@ export const FacultyLiveFeedScreen: React.FC = () => {
             styles.statusBar,
             {
               backgroundColor: isConnected
-                ? theme.colors.status.present.bg
+                ? isWaitingForCamera
+                  ? theme.colors.status.late.bg
+                  : theme.colors.status.present.bg
                 : theme.colors.status.absent.bg,
             },
           ]}
         >
           <View style={styles.statusLeft}>
             {isConnected ? (
-              <Wifi size={14} color={theme.colors.status.present.fg} />
+              isWaitingForCamera ? (
+                <VideoOff size={14} color={theme.colors.status.late.fg} />
+              ) : (
+                <Wifi size={14} color={theme.colors.status.present.fg} />
+              )
             ) : (
               <WifiOff size={14} color={theme.colors.status.absent.fg} />
             )}
@@ -578,12 +500,18 @@ export const FacultyLiveFeedScreen: React.FC = () => {
               weight="600"
               color={
                 isConnected
-                  ? theme.colors.status.present.fg
+                  ? isWaitingForCamera
+                    ? theme.colors.status.late.fg
+                    : theme.colors.status.present.fg
                   : theme.colors.status.absent.fg
               }
               style={styles.statusText}
             >
-              {isConnected ? 'Connected' : 'Reconnecting...'}
+              {isConnected
+                ? isWaitingForCamera
+                  ? 'Waiting for camera...'
+                  : 'Connected'
+                : 'Reconnecting...'}
             </Text>
           </View>
 
@@ -666,56 +594,85 @@ export const FacultyLiveFeedScreen: React.FC = () => {
           )}
         </View>
 
-        {/* Camera feed: WebRTC or HLS video + detection overlay */}
-        <View style={styles.feedContainer} onLayout={handleVideoLayout}>
-          {streamMode === 'webrtc' && remoteStream ? (
-            <>
-              <RTCView
-                streamURL={remoteStream.toURL()}
-                style={styles.video}
-                objectFit="contain"
-                mirror={false}
-                zOrder={0}
-              />
-              <DetectionOverlay
-                detections={trackedDetections}
-                videoWidth={detectionWidth}
-                videoHeight={detectionHeight}
-                containerWidth={containerLayout.width}
-                containerHeight={containerLayout.height}
-                resizeMode="contain"
-              />
-            </>
-          ) : (streamMode === 'hls' || streamMode === 'legacy') && hlsUrl ? (
-            <>
-              <VideoView
-                player={player}
-                style={styles.video}
-                contentFit="contain"
-                nativeControls={false}
-              />
-              <DetectionOverlay
-                detections={trackedDetections}
-                videoWidth={detectionWidth}
-                videoHeight={detectionHeight}
-                containerWidth={containerLayout.width}
-                containerHeight={containerLayout.height}
-                resizeMode="contain"
-              />
-            </>
+        {/* Camera feed: annotated WebRTC video (bboxes burned in by backend) */}
+        <View style={styles.feedContainer}>
+          {remoteStream ? (
+            <RTCView
+              streamURL={remoteStream.toURL()}
+              style={styles.video}
+              objectFit="contain"
+              mirror={false}
+              zOrder={0}
+            />
           ) : (
             <View style={styles.noFeedPlaceholder}>
-              <Video size={48} color={theme.colors.text.disabled} />
-              <Text
-                variant="bodySmall"
-                color={theme.colors.text.tertiary}
-                align="center"
-                style={styles.noFeedText}
-              >
-                {rtcConnectionState === 'failed'
-                  ? 'WebRTC connection failed — tap retry'
-                  : 'Connecting to camera...'}
-              </Text>
+              {isWaitingForCamera ? (
+                <>
+                  <VideoOff size={48} color={theme.colors.text.disabled} />
+                  <Text
+                    variant="body"
+                    weight="600"
+                    color={theme.colors.text.tertiary}
+                    align="center"
+                    style={styles.noFeedText}
+                  >
+                    Waiting for camera
+                  </Text>
+                  <Text
+                    variant="caption"
+                    color={theme.colors.text.disabled}
+                    align="center"
+                    style={styles.noFeedSubtext}
+                  >
+                    The edge device is not streaming yet.{'\n'}The feed will
+                    appear automatically once connected.
+                  </Text>
+                </>
+              ) : rtcConnectionState === 'failed' ? (
+                <>
+                  <RefreshCw size={48} color={theme.colors.text.disabled} />
+                  <Text
+                    variant="bodySmall"
+                    color={theme.colors.text.tertiary}
+                    align="center"
+                    style={styles.noFeedText}
+                  >
+                    WebRTC connection failed
+                  </Text>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onPress={handleReconnect}
+                    style={styles.noFeedRetryButton}
+                  >
+                    Retry
+                  </Button>
+                </>
+              ) : rtcConnectionState === 'disconnected' ? (
+                <>
+                  <ActivityIndicator size="large" color={theme.colors.text.tertiary} />
+                  <Text
+                    variant="bodySmall"
+                    color={theme.colors.text.tertiary}
+                    align="center"
+                    style={styles.noFeedText}
+                  >
+                    Reconnecting to camera...
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <ActivityIndicator size="large" color={theme.colors.text.tertiary} />
+                  <Text
+                    variant="bodySmall"
+                    color={theme.colors.text.tertiary}
+                    align="center"
+                    style={styles.noFeedText}
+                  >
+                    Connecting to camera...
+                  </Text>
+                </>
+              )}
             </View>
           )}
         </View>
@@ -927,6 +884,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   noFeedText: {
+    marginTop: theme.spacing[3],
+  },
+  noFeedSubtext: {
+    marginTop: theme.spacing[2],
+    paddingHorizontal: theme.spacing[6],
+  },
+  noFeedRetryButton: {
     marginTop: theme.spacing[3],
   },
 

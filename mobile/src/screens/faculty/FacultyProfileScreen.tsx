@@ -72,7 +72,7 @@ export const FacultyProfileScreen: React.FC = () => {
   if (!user) return null;
 
   return (
-    <ScreenLayout safeArea padded={false}>
+    <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
       <Header title={strings.faculty.profile} />
 
       <ScrollView
@@ -197,7 +197,7 @@ const styles = StyleSheet.create({
   },
   profileHeader: {
     alignItems: 'center',
-    marginBottom: theme.spacing[8],
+    marginBottom: theme.spacing[6],
   },
   avatar: {
     marginBottom: theme.spacing[4],

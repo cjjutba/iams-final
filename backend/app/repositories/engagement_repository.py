@@ -5,7 +5,7 @@ Data access layer for EngagementScore operations.
 """
 
 import uuid
-from typing import Optional, List
+
 from sqlalchemy.orm import Session
 
 from app.models.engagement_score import EngagementScore
@@ -17,11 +17,9 @@ class EngagementRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_by_attendance(self, attendance_id: str) -> Optional[EngagementScore]:
+    def get_by_attendance(self, attendance_id: str) -> EngagementScore | None:
         """Get engagement score for an attendance record."""
-        return self.db.query(EngagementScore).filter(
-            EngagementScore.attendance_id == uuid.UUID(attendance_id)
-        ).first()
+        return self.db.query(EngagementScore).filter(EngagementScore.attendance_id == uuid.UUID(attendance_id)).first()
 
     def create(self, attendance_id: str, **scores) -> EngagementScore:
         """Create engagement score record.
@@ -52,11 +50,10 @@ class EngagementRepository:
             return existing
         return self.create(attendance_id, **scores)
 
-    def get_by_student(
-        self, student_id: str, limit: int = 20
-    ) -> List[EngagementScore]:
+    def get_by_student(self, student_id: str, limit: int = 20) -> list[EngagementScore]:
         """Get recent engagement scores for a student (via attendance_records join)."""
         from app.models.attendance_record import AttendanceRecord
+
         return (
             self.db.query(EngagementScore)
             .join(AttendanceRecord, EngagementScore.attendance_id == AttendanceRecord.id)

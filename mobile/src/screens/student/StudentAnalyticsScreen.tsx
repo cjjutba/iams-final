@@ -29,7 +29,7 @@ import { analyticsService } from '../../services/analyticsService';
 import { theme } from '../../constants';
 import type { StudentAnalyticsDashboard, SubjectBreakdown } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
-import { Text, Card, Loader } from '../../components/ui';
+import { Text, Card, Skeleton } from '../../components/ui';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -79,6 +79,16 @@ const getTrendInfo = (trend: string) => {
       };
   }
 };
+
+// ---------------------------------------------------------------------------
+// Skeleton card wrapper (local, not exported)
+// ---------------------------------------------------------------------------
+
+const SkeletonCard: React.FC<{ children: React.ReactNode; style?: any }> = ({ children, style }) => (
+  <View style={[{ borderWidth: 1, borderColor: theme.colors.border, borderRadius: 12, padding: theme.spacing[3], backgroundColor: theme.colors.card }, style]}>
+    {children}
+  </View>
+);
 
 // ---------------------------------------------------------------------------
 // Component
@@ -134,15 +144,50 @@ export const StudentAnalyticsScreen: React.FC = () => {
     return (
       <ScreenLayout safeArea padded={false}>
         <Header title="My Analytics" />
-        <View style={styles.centerContainer}>
-          <Loader size="large" />
-          <Text
-            variant="body"
-            color={theme.colors.text.secondary}
-            style={styles.loadingText}
-          >
-            Loading your analytics...
-          </Text>
+        <View style={styles.scrollContent}>
+          <SkeletonCard style={styles.heroCard}>
+            <View style={{ alignItems: 'center' }}>
+              <Skeleton width={120} height={12} />
+              <View style={{ height: 12 }} />
+              <Skeleton width={100} height={56} borderRadius={10} />
+              <View style={{ height: 16 }} />
+              <Skeleton width="100%" height={10} borderRadius={9999} />
+              <View style={{ height: 12 }} />
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', width: '100%' }}>
+                <Skeleton width={100} height={12} />
+                <Skeleton width={70} height={12} />
+              </View>
+            </View>
+          </SkeletonCard>
+          <View style={styles.metricsRow}>
+            <SkeletonCard style={{ flex: 1 }}>
+              <View style={{ alignItems: 'center' }}>
+                <Skeleton width={20} height={20} borderRadius={6} />
+                <View style={{ height: 8 }} />
+                <Skeleton width={32} height={24} />
+                <View style={{ height: 4 }} />
+                <Skeleton width={56} height={12} />
+              </View>
+            </SkeletonCard>
+            <SkeletonCard style={{ flex: 1 }}>
+              <View style={{ alignItems: 'center' }}>
+                <Skeleton width={20} height={20} borderRadius={6} />
+                <View style={{ height: 8 }} />
+                <Skeleton width={32} height={24} />
+                <View style={{ height: 4 }} />
+                <Skeleton width={56} height={12} />
+              </View>
+            </SkeletonCard>
+            <SkeletonCard style={{ flex: 1 }}>
+              <View style={{ alignItems: 'center' }}>
+                <Skeleton width={20} height={20} borderRadius={6} />
+                <View style={{ height: 8 }} />
+                <Skeleton width={32} height={24} />
+                <View style={{ height: 4 }} />
+                <Skeleton width={56} height={12} />
+              </View>
+            </SkeletonCard>
+          </View>
         </View>
       </ScreenLayout>
     );

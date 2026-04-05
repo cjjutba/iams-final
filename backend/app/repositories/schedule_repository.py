@@ -4,8 +4,8 @@ Schedule Repository
 Data access layer for Schedule operations.
 """
 
-from typing import List, Optional
 from datetime import time
+
 from sqlalchemy.orm import Session
 
 from app.models.schedule import Schedule
@@ -19,30 +19,29 @@ class ScheduleRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_by_id(self, schedule_id: str) -> Optional[Schedule]:
+    def get_by_id(self, schedule_id: str) -> Schedule | None:
         """Get schedule by ID"""
         import uuid
+
         # Convert string to UUID for SQLite compatibility
         if isinstance(schedule_id, str):
             schedule_id = uuid.UUID(schedule_id)
         return self.db.query(Schedule).filter(Schedule.id == schedule_id).first()
 
-    def get_all(self, skip: int = 0, limit: int = 100) -> List[Schedule]:
+    def get_all(self, skip: int = 0, limit: int = 100) -> list[Schedule]:
         """Get all schedules with pagination"""
-        return self.db.query(Schedule).filter(Schedule.is_active == True).offset(skip).limit(limit).all()
+        return self.db.query(Schedule).filter(Schedule.is_active).offset(skip).limit(limit).all()
 
-    def get_by_faculty(self, faculty_id: str) -> List[Schedule]:
+    def get_by_faculty(self, faculty_id: str) -> list[Schedule]:
         """Get all schedules taught by a faculty member"""
         import uuid
+
         # Convert string to UUID for SQLite compatibility
         if isinstance(faculty_id, str):
             faculty_id = uuid.UUID(faculty_id)
-        return self.db.query(Schedule).filter(
-            Schedule.faculty_id == faculty_id,
-            Schedule.is_active == True
-        ).all()
+        return self.db.query(Schedule).filter(Schedule.faculty_id == faculty_id, Schedule.is_active).all()
 
-    def get_by_day(self, day_of_week: int) -> List[Schedule]:
+    def get_by_day(self, day_of_week: int) -> list[Schedule]:
         """
         Get all schedules for a specific day
 
@@ -52,12 +51,9 @@ class ScheduleRepository:
         Returns:
             List of schedules
         """
-        return self.db.query(Schedule).filter(
-            Schedule.day_of_week == day_of_week,
-            Schedule.is_active == True
-        ).all()
+        return self.db.query(Schedule).filter(Schedule.day_of_week == day_of_week, Schedule.is_active).all()
 
-    def get_active_at_time(self, day_of_week: int, current_time: time) -> List[Schedule]:
+    def get_active_at_time(self, day_of_week: int, current_time: time) -> list[Schedule]:
         """
         Get schedules that are active at a specific day and time
 
@@ -68,14 +64,18 @@ class ScheduleRepository:
         Returns:
             List of active schedules
         """
-        return self.db.query(Schedule).filter(
-            Schedule.day_of_week == day_of_week,
-            Schedule.start_time <= current_time,
-            Schedule.end_time >= current_time,
-            Schedule.is_active == True
-        ).all()
+        return (
+            self.db.query(Schedule)
+            .filter(
+                Schedule.day_of_week == day_of_week,
+                Schedule.start_time <= current_time,
+                Schedule.end_time >= current_time,
+                Schedule.is_active,
+            )
+            .all()
+        )
 
-    def get_current_schedule(self, room_id: str, day_of_week: int, current_time: time) -> Optional[Schedule]:
+    def get_current_schedule(self, room_id: str, day_of_week: int, current_time: time) -> Schedule | None:
         """
         Get the current schedule for a room at a specific time
 
@@ -93,15 +93,19 @@ class ScheduleRepository:
         if isinstance(room_id, str):
             room_id = uuid.UUID(room_id)
 
-        return self.db.query(Schedule).filter(
-            Schedule.room_id == room_id,
-            Schedule.day_of_week == day_of_week,
-            Schedule.start_time <= current_time,
-            Schedule.end_time >= current_time,
-            Schedule.is_active == True
-        ).first()
+        return (
+            self.db.query(Schedule)
+            .filter(
+                Schedule.room_id == room_id,
+                Schedule.day_of_week == day_of_week,
+                Schedule.start_time <= current_time,
+                Schedule.end_time >= current_time,
+                Schedule.is_active,
+            )
+            .first()
+        )
 
-    def get_enrolled_students(self, schedule_id: str) -> List[User]:
+    def get_enrolled_students(self, schedule_id: str) -> list[User]:
         """
         Get all students enrolled in a schedule
 
@@ -111,19 +115,21 @@ class ScheduleRepository:
         Returns:
             List of enrolled students
         """
+        import uuid
+
         from app.models.enrollment import Enrollment
         from app.models.user import User
-        import uuid
 
         # Convert string to UUID for SQLite compatibility
         if isinstance(schedule_id, str):
             schedule_id = uuid.UUID(schedule_id)
 
-        return self.db.query(User).join(
-            Enrollment, Enrollment.student_id == User.id
-        ).filter(
-            Enrollment.schedule_id == schedule_id
-        ).all()
+        return (
+            self.db.query(User)
+            .join(Enrollment, Enrollment.student_id == User.id)
+            .filter(Enrollment.schedule_id == schedule_id)
+            .all()
+        )
 
     def create(self, schedule_data: dict) -> Schedule:
         """
@@ -136,6 +142,7 @@ class ScheduleRepository:
             Created schedule
         """
         import uuid as uuid_mod
+
         # Convert string IDs to UUID for SQLite compatibility
         for key in ("faculty_id", "room_id"):
             if key in schedule_data and isinstance(schedule_data[key], str):
@@ -165,7 +172,7 @@ class ScheduleRepository:
             raise NotFoundError(f"Schedule not found: {schedule_id}")
 
         for key, value in update_data.items():
-            if hasattr(schedule, key) and value is not None:
+            if hasattr(schedule, key):
                 setattr(schedule, key, value)
 
         self.db.commit()
@@ -195,4 +202,4 @@ class ScheduleRepository:
 
     def count(self) -> int:
         """Get total schedule count"""
-        return self.db.query(Schedule).filter(Schedule.is_active == True).count()
+        return self.db.query(Schedule).filter(Schedule.is_active).count()

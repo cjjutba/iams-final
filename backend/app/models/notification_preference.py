@@ -4,8 +4,7 @@ Notification Preference Model
 Per-user notification preferences controlling which alerts they receive.
 """
 
-import uuid
-from sqlalchemy import Column, Float, Boolean, ForeignKey
+from sqlalchemy import Boolean, Column, Float, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -46,6 +45,9 @@ class NotificationPreference(Base):
     # Digest types
     daily_digest = Column(Boolean, default=False, nullable=False)
     weekly_digest = Column(Boolean, default=True, nullable=False)
+
+    # Email
+    email_enabled = Column(Boolean, default=False, nullable=False)
 
     # Thresholds
     low_attendance_threshold = Column(Float, default=75.0, nullable=False)

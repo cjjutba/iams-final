@@ -307,9 +307,11 @@ class TestFaceServiceRecognize:
     """Tests for FaceService.recognize_face"""
 
     @pytest.mark.asyncio
-    async def test_recognize_face_match(self, db_session):
+    @patch("app.services.face_service.embed_face", new_callable=AsyncMock)
+    async def test_recognize_face_match(self, mock_embed, db_session):
         """When FAISS returns a match, recognize_face should return (user_id, confidence)."""
         service, _, mock_faiss = _make_face_service(db_session)
+        mock_embed.return_value = _make_embedding()
         expected_uid = str(uuid.uuid4())
         mock_faiss.search.return_value = [(expected_uid, 0.85)]
 
@@ -319,9 +321,11 @@ class TestFaceServiceRecognize:
         assert confidence == 0.85
 
     @pytest.mark.asyncio
-    async def test_recognize_face_no_match(self, db_session):
+    @patch("app.services.face_service.embed_face", new_callable=AsyncMock)
+    async def test_recognize_face_no_match(self, mock_embed, db_session):
         """When FAISS returns empty results, recognize_face should return (None, None)."""
         service, _, mock_faiss = _make_face_service(db_session)
+        mock_embed.return_value = _make_embedding()
         mock_faiss.search.return_value = []
 
         user_id, confidence = await service.recognize_face(b"image_bytes")
@@ -330,9 +334,11 @@ class TestFaceServiceRecognize:
         assert confidence is None
 
     @pytest.mark.asyncio
-    async def test_recognize_face_custom_threshold(self, db_session):
+    @patch("app.services.face_service.embed_face", new_callable=AsyncMock)
+    async def test_recognize_face_custom_threshold(self, mock_embed, db_session):
         """Custom threshold should be forwarded to FAISS search."""
         service, _, mock_faiss = _make_face_service(db_session)
+        mock_embed.return_value = _make_embedding()
         mock_faiss.search.return_value = []
 
         await service.recognize_face(b"image_bytes", threshold=0.8)

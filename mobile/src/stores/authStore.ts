@@ -11,7 +11,7 @@ import { storage } from '../utils';
 import { extractApiError } from '../utils/api';
 import { getErrorMessage } from '../utils/helpers';
 import { config } from '../constants/config';
-import { authService } from '../services';
+import { authService, faceService } from '../services';
 import { getSupabaseClient } from '../services/supabase';
 import type {
   User,
@@ -179,6 +179,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           pendingVerificationEmail: authData.user.email,
         });
         return;
+      }
+
+      // Register pending face images from registration (if any)
+      const pendingImages = await storage.getPendingFaceImages();
+      if (pendingImages && pendingImages.length > 0) {
+        try {
+          await faceService.registerFace(pendingImages);
+          console.log('Pending face images registered successfully');
+        } catch (faceErr) {
+          console.error('Failed to register pending face images:', faceErr);
+          // Don't block login — user can re-register from profile
+        } finally {
+          await storage.clearPendingFaceImages();
+        }
       }
 
       set({

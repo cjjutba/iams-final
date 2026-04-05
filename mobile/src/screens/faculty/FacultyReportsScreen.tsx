@@ -8,7 +8,7 @@
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, StyleSheet, Alert, ActivityIndicator, ScrollView, RefreshControl } from 'react-native';
+import { View, StyleSheet, Alert, ScrollView, RefreshControl } from 'react-native';
 import { useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import { useForm } from 'react-hook-form';
@@ -24,7 +24,7 @@ import type {
   Schedule,
 } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
-import { Text, Button, Card } from '../../components/ui';
+import { Text, Button, Card, Skeleton } from '../../components/ui';
 import { FormSelect } from '../../components/forms';
 
 type ReportsRouteProp = RouteProp<FacultyStackParamList, 'Reports'>;
@@ -169,14 +169,8 @@ export const FacultyReportsScreen: React.FC = () => {
 
             {schedulesLoading ? (
               <View style={styles.loadingClasses}>
-                <ActivityIndicator size="small" color={theme.colors.primary} />
-                <Text
-                  variant="bodySmall"
-                  color={theme.colors.text.secondary}
-                  style={styles.loadingText}
-                >
-                  Loading classes...
-                </Text>
+                <Skeleton width={80} height={12} style={{ marginBottom: 8 }} />
+                <Skeleton width="100%" height={44} borderRadius={theme.borderRadius.md} />
               </View>
             ) : (
               <FormSelect
@@ -347,12 +341,7 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing[4],
   },
   loadingClasses: {
-    flexDirection: 'row',
-    alignItems: 'center',
     paddingVertical: theme.spacing[4],
-  },
-  loadingText: {
-    marginLeft: theme.spacing[3],
   },
   generateButton: {
     marginTop: theme.spacing[4],

@@ -5,14 +5,14 @@ Data access layer for Attendance, PresenceLog, and EarlyLeaveEvent operations.
 """
 
 import uuid
-from typing import List, Optional
-from datetime import date, datetime
+from datetime import date
+
+from sqlalchemy import and_, case, func
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, func
 
 from app.models.attendance_record import AttendanceRecord, AttendanceStatus
-from app.models.presence_log import PresenceLog
 from app.models.early_leave_event import EarlyLeaveEvent
+from app.models.presence_log import PresenceLog
 from app.utils.exceptions import NotFoundError
 
 
@@ -26,26 +26,25 @@ class AttendanceRepository:
 
     # ===== AttendanceRecord Operations =====
 
-    def get_by_id(self, attendance_id: str) -> Optional[AttendanceRecord]:
+    def get_by_id(self, attendance_id: str) -> AttendanceRecord | None:
         """Get attendance record by ID"""
         return self.db.query(AttendanceRecord).filter(AttendanceRecord.id == uuid.UUID(attendance_id)).first()
 
-    def get_by_student_date(self, student_id: str, schedule_id: str, attendance_date: date) -> Optional[AttendanceRecord]:
+    def get_by_student_date(self, student_id: str, schedule_id: str, attendance_date: date) -> AttendanceRecord | None:
         """Get attendance record for a student on a specific date"""
-        return self.db.query(AttendanceRecord).filter(
-            and_(
-                AttendanceRecord.student_id == uuid.UUID(student_id),
-                AttendanceRecord.schedule_id == uuid.UUID(schedule_id),
-                AttendanceRecord.date == attendance_date
+        return (
+            self.db.query(AttendanceRecord)
+            .filter(
+                and_(
+                    AttendanceRecord.student_id == uuid.UUID(student_id),
+                    AttendanceRecord.schedule_id == uuid.UUID(schedule_id),
+                    AttendanceRecord.date == attendance_date,
+                )
             )
-        ).first()
+            .first()
+        )
 
-    def get_by_schedule_date_range(
-        self,
-        schedule_id: str,
-        start_date: date,
-        end_date: date
-    ) -> List[AttendanceRecord]:
+    def get_by_schedule_date_range(self, schedule_id: str, start_date: date, end_date: date) -> list[AttendanceRecord]:
         """
         Get all attendance records for a schedule within a date range
 
@@ -57,29 +56,32 @@ class AttendanceRepository:
         Returns:
             List of attendance records sorted by date
         """
-        return self.db.query(AttendanceRecord).filter(
-            and_(
-                AttendanceRecord.schedule_id == uuid.UUID(schedule_id),
-                AttendanceRecord.date >= start_date,
-                AttendanceRecord.date <= end_date
+        return (
+            self.db.query(AttendanceRecord)
+            .filter(
+                and_(
+                    AttendanceRecord.schedule_id == uuid.UUID(schedule_id),
+                    AttendanceRecord.date >= start_date,
+                    AttendanceRecord.date <= end_date,
+                )
             )
-        ).order_by(AttendanceRecord.date.desc()).all()
+            .order_by(AttendanceRecord.date.desc())
+            .all()
+        )
 
-    def get_by_schedule_date(self, schedule_id: str, attendance_date: date) -> List[AttendanceRecord]:
+    def get_by_schedule_date(self, schedule_id: str, attendance_date: date) -> list[AttendanceRecord]:
         """Get all attendance records for a schedule on a specific date"""
-        return self.db.query(AttendanceRecord).filter(
-            and_(
-                AttendanceRecord.schedule_id == uuid.UUID(schedule_id),
-                AttendanceRecord.date == attendance_date
+        return (
+            self.db.query(AttendanceRecord)
+            .filter(
+                and_(AttendanceRecord.schedule_id == uuid.UUID(schedule_id), AttendanceRecord.date == attendance_date)
             )
-        ).all()
+            .all()
+        )
 
     def get_student_history(
-        self,
-        student_id: str,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None
-    ) -> List[AttendanceRecord]:
+        self, student_id: str, start_date: date | None = None, end_date: date | None = None
+    ) -> list[AttendanceRecord]:
         """
         Get attendance history for a student
 
@@ -142,7 +144,7 @@ class AttendanceRepository:
             raise NotFoundError(f"Attendance record not found: {attendance_id}")
 
         for key, value in update_data.items():
-            if hasattr(attendance, key) and value is not None:
+            if hasattr(attendance, key):
                 setattr(attendance, key, value)
 
         self.db.commit()
@@ -151,7 +153,7 @@ class AttendanceRepository:
 
     def get_summary(self, student_id: str, start_date: date, end_date: date) -> dict:
         """
-        Get attendance summary for a student
+        Get attendance summary for a student using SQL aggregation.
 
         Args:
             student_id: Student UUID
@@ -161,19 +163,29 @@ class AttendanceRepository:
         Returns:
             Dictionary with attendance statistics
         """
-        records = self.db.query(AttendanceRecord).filter(
-            and_(
-                AttendanceRecord.student_id == uuid.UUID(student_id),
-                AttendanceRecord.date >= start_date,
-                AttendanceRecord.date <= end_date
+        result = (
+            self.db.query(
+                func.count().label("total"),
+                func.count(case((AttendanceRecord.status == AttendanceStatus.PRESENT, 1))).label("present"),
+                func.count(case((AttendanceRecord.status == AttendanceStatus.LATE, 1))).label("late"),
+                func.count(case((AttendanceRecord.status == AttendanceStatus.ABSENT, 1))).label("absent"),
+                func.count(case((AttendanceRecord.status == AttendanceStatus.EARLY_LEAVE, 1))).label("early_leave"),
             )
-        ).all()
+            .filter(
+                and_(
+                    AttendanceRecord.student_id == uuid.UUID(student_id),
+                    AttendanceRecord.date >= start_date,
+                    AttendanceRecord.date <= end_date,
+                )
+            )
+            .first()
+        )
 
-        total = len(records)
-        present = sum(1 for r in records if r.status == AttendanceStatus.PRESENT)
-        late = sum(1 for r in records if r.status == AttendanceStatus.LATE)
-        absent = sum(1 for r in records if r.status == AttendanceStatus.ABSENT)
-        early_leave = sum(1 for r in records if r.status == AttendanceStatus.EARLY_LEAVE)
+        total = result.total
+        present = result.present
+        late = result.late
+        absent = result.absent
+        early_leave = result.early_leave
 
         return {
             "total_classes": total,
@@ -181,7 +193,7 @@ class AttendanceRepository:
             "late_count": late,
             "absent_count": absent,
             "early_leave_count": early_leave,
-            "attendance_rate": (present + late) / total * 100 if total > 0 else 0.0
+            "attendance_rate": (present + late) / total * 100 if total > 0 else 0.0,
         }
 
     # ===== PresenceLog Operations =====
@@ -203,13 +215,16 @@ class AttendanceRepository:
         self.db.refresh(log)
         return log
 
-    def get_presence_logs(self, attendance_id: str) -> List[PresenceLog]:
+    def get_presence_logs(self, attendance_id: str) -> list[PresenceLog]:
         """Get all presence logs for an attendance record"""
-        return self.db.query(PresenceLog).filter(
-            PresenceLog.attendance_id == uuid.UUID(attendance_id)
-        ).order_by(PresenceLog.scan_number).all()
+        return (
+            self.db.query(PresenceLog)
+            .filter(PresenceLog.attendance_id == uuid.UUID(attendance_id))
+            .order_by(PresenceLog.scan_number)
+            .all()
+        )
 
-    def get_recent_logs(self, attendance_id: str, limit: int = 3) -> List[PresenceLog]:
+    def get_recent_logs(self, attendance_id: str, limit: int = 3) -> list[PresenceLog]:
         """
         Get most recent presence logs
 
@@ -220,9 +235,13 @@ class AttendanceRepository:
         Returns:
             List of recent logs (most recent first)
         """
-        return self.db.query(PresenceLog).filter(
-            PresenceLog.attendance_id == uuid.UUID(attendance_id)
-        ).order_by(PresenceLog.scan_number.desc()).limit(limit).all()
+        return (
+            self.db.query(PresenceLog)
+            .filter(PresenceLog.attendance_id == uuid.UUID(attendance_id))
+            .order_by(PresenceLog.scan_number.desc())
+            .limit(limit)
+            .all()
+        )
 
     # ===== EarlyLeaveEvent Operations =====
 
@@ -248,11 +267,8 @@ class AttendanceRepository:
         return event
 
     def get_early_leave_events(
-        self,
-        schedule_id: Optional[str] = None,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None
-    ) -> List[EarlyLeaveEvent]:
+        self, schedule_id: str | None = None, start_date: date | None = None, end_date: date | None = None
+    ) -> list[EarlyLeaveEvent]:
         """
         Get early leave events with optional filters
 
@@ -279,7 +295,7 @@ class AttendanceRepository:
 
         return query.order_by(EarlyLeaveEvent.detected_at.desc()).all()
 
-    def get_early_leave_events_by_attendance(self, attendance_id: str) -> List[EarlyLeaveEvent]:
+    def get_early_leave_events_by_attendance(self, attendance_id: str) -> list[EarlyLeaveEvent]:
         """
         Get early leave events for a specific attendance record
 
@@ -289,9 +305,12 @@ class AttendanceRepository:
         Returns:
             List of early leave events for this attendance record
         """
-        return self.db.query(EarlyLeaveEvent).filter(
-            EarlyLeaveEvent.attendance_id == uuid.UUID(attendance_id)
-        ).order_by(EarlyLeaveEvent.detected_at.desc()).all()
+        return (
+            self.db.query(EarlyLeaveEvent)
+            .filter(EarlyLeaveEvent.attendance_id == uuid.UUID(attendance_id))
+            .order_by(EarlyLeaveEvent.detected_at.desc())
+            .all()
+        )
 
     def update_early_leave_event(self, event_id: str, update_data: dict) -> EarlyLeaveEvent:
         """
@@ -312,7 +331,7 @@ class AttendanceRepository:
             raise NotFoundError(f"Early leave event not found: {event_id}")
 
         for key, value in update_data.items():
-            if hasattr(event, key) and value is not None:
+            if hasattr(event, key):
                 setattr(event, key, value)
 
         self.db.commit()

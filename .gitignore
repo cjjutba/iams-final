@@ -42,6 +42,7 @@ backend/data/hls/
 # MediaPipe models (downloaded at runtime)
 edge/app/.models/
 edge/tools/.cache/
+backend/data/models/
 
 # Logs
 *.log
@@ -83,3 +84,4 @@ temp/
 backend/bin/mediamtx
 backend/bin/mediamtx.exe
 .worktrees/
+.vercel

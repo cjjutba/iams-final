@@ -80,6 +80,7 @@ export interface AttendanceSummary {
 // Live attendance student status (for faculty live view)
 export interface StudentAttendanceStatus {
   student_id: string;
+  student_number?: string; // School ID (e.g. "21-A-02177")
   student_name: string;
   status: AttendanceStatus;
   check_in_time?: string;

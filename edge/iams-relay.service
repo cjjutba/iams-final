@@ -1,0 +1,30 @@
+[Unit]
+Description=IAMS RTSP Relay (Reolink → VPS mediamtx)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+EnvironmentFile=/home/pi/iams-relay.env
+ExecStart=/home/pi/iams-relay-start.sh
+
+# Restart aggressively — relay must stay up
+Restart=always
+RestartSec=3
+StartLimitInterval=120
+StartLimitBurst=20
+
+# Resource limits — transcode mode uses more CPU than copy mode
+# Copy mode: ~5% CPU, ~50MB RAM
+# Transcode mode: ~40-60% CPU on Pi 4, ~200MB RAM
+MemoryLimit=256M
+CPUQuota=80%
+
+# Logging
+StandardOutput=append:/home/pi/iams-relay.log
+StandardError=append:/home/pi/iams-relay.log
+
+[Install]
+WantedBy=multi-user.target

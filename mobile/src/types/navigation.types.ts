@@ -145,9 +145,11 @@ export type RootStackParamList = {
   Faculty: NavigatorScreenParams<FacultyStackParamList>;
 };
 
-// Declare global types for navigation
+// Declare global types for navigation (React Navigation v7 type augmentation)
 declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace ReactNavigation {
+    // eslint-disable-next-line @typescript-eslint/no-empty-object-type
     interface RootParamList extends RootStackParamList {}
   }
 }

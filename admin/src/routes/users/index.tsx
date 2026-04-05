@@ -1,0 +1,325 @@
+import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { usePageTitle } from '@/hooks/use-page-title'
+import { type ColumnDef } from '@tanstack/react-table'
+import { safeFormat } from '@/lib/utils'
+import {
+  CheckCircle2,
+  Loader2,
+  MoreHorizontal,
+  XCircle,
+  Eye,
+  UserX,
+  UserCheck,
+  ScanFace,
+} from 'lucide-react'
+import { toast } from 'sonner'
+
+import { DataTable } from '@/components/data-tables'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  useUsers,
+  useDeactivateUser,
+  useReactivateUser,
+  useDeregisterFace,
+} from '@/hooks/use-queries'
+import type { UserResponse, UserRole } from '@/types'
+
+const roleBadgeVariant: Record<UserRole, 'default' | 'secondary' | 'outline'> = {
+  student: 'default',
+  faculty: 'secondary',
+  admin: 'outline',
+}
+
+function ActionsCell({ user }: { user: UserResponse }) {
+  const navigate = useNavigate()
+  const [deactivateOpen, setDeactivateOpen] = useState(false)
+  const [reactivateOpen, setReactivateOpen] = useState(false)
+  const [deregisterOpen, setDeregisterOpen] = useState(false)
+
+  const deactivateMutation = useDeactivateUser()
+  const reactivateMutation = useReactivateUser()
+  const deregisterMutation = useDeregisterFace()
+  const loading = deactivateMutation.isPending || reactivateMutation.isPending || deregisterMutation.isPending
+
+  const handleDeactivate = async () => {
+    try {
+      await deactivateMutation.mutateAsync(user.id)
+      toast.success(`${user.first_name} ${user.last_name} has been deactivated.`)
+    } catch {
+      toast.error('Failed to deactivate user.')
+    } finally {
+      setDeactivateOpen(false)
+    }
+  }
+
+  const handleReactivate = async () => {
+    try {
+      await reactivateMutation.mutateAsync(user.id)
+      toast.success(`${user.first_name} ${user.last_name} has been reactivated.`)
+    } catch {
+      toast.error('Failed to reactivate user.')
+    } finally {
+      setReactivateOpen(false)
+    }
+  }
+
+  const handleDeregister = async () => {
+    try {
+      await deregisterMutation.mutateAsync(user.id)
+      toast.success(`Face data for ${user.first_name} ${user.last_name} has been removed.`)
+    } catch {
+      toast.error('Failed to deregister face.')
+    } finally {
+      setDeregisterOpen(false)
+    }
+  }
+
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+            <MoreHorizontal className="h-4 w-4" />
+            <span className="sr-only">Open menu</span>
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onClick={() => navigate(`/users/${user.id}`)}>
+            <Eye className="mr-2 h-4 w-4" />
+            View Details
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {user.is_active ? (
+            <DropdownMenuItem onClick={() => setDeactivateOpen(true)}>
+              <UserX className="mr-2 h-4 w-4" />
+              Deactivate
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem onClick={() => setReactivateOpen(true)}>
+              <UserCheck className="mr-2 h-4 w-4" />
+              Reactivate
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuItem onClick={() => setDeregisterOpen(true)}>
+            <ScanFace className="mr-2 h-4 w-4" />
+            Deregister Face
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <AlertDialog open={deactivateOpen} onOpenChange={setDeactivateOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Deactivate User</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to deactivate {user.first_name} {user.last_name}?
+              They will no longer be able to access the system.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={loading}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                void handleDeactivate()
+              }}
+              disabled={loading}
+            >
+              {loading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Deactivating...</>) : 'Deactivate'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={reactivateOpen} onOpenChange={setReactivateOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reactivate User</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to reactivate {user.first_name} {user.last_name}?
+              They will regain access to the system.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={loading}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                void handleReactivate()
+              }}
+              disabled={loading}
+            >
+              {loading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Reactivating...</>) : 'Reactivate'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={deregisterOpen} onOpenChange={setDeregisterOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Deregister Face</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to remove face registration data for{' '}
+              {user.first_name} {user.last_name}? They will need to re-register
+              their face to use the attendance system.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={loading}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                void handleDeregister()
+              }}
+              disabled={loading}
+            >
+              {loading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Removing...</>) : 'Deregister'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  )
+}
+
+export default function UsersPage() {
+  usePageTitle('Users')
+  const navigate = useNavigate()
+  const [roleFilter, setRoleFilter] = useState<string>('all')
+
+  const queryParams = useMemo(
+    () => (roleFilter !== 'all' ? { role: roleFilter as UserRole } : undefined),
+    [roleFilter],
+  )
+  const { data: users = [], isLoading } = useUsers(queryParams)
+
+  const columns: ColumnDef<UserResponse>[] = [
+    {
+      accessorKey: 'first_name',
+      header: 'Name',
+      cell: ({ row }) => (
+        <div>
+          <div className="font-medium">
+            {row.original.first_name} {row.original.last_name}
+          </div>
+          <div className="text-sm text-muted-foreground">{row.original.email}</div>
+        </div>
+      ),
+    },
+    {
+      accessorKey: 'role',
+      header: 'Role',
+      cell: ({ row }) => (
+        <Badge variant={roleBadgeVariant[row.original.role]} className="capitalize">
+          {row.original.role}
+        </Badge>
+      ),
+    },
+    {
+      accessorKey: 'student_id',
+      header: 'Student ID',
+      cell: ({ row }) => (
+        <span className="text-sm">
+          {row.original.student_id ?? '\u2014'}
+        </span>
+      ),
+    },
+    {
+      accessorKey: 'is_active',
+      header: 'Status',
+      cell: ({ row }) =>
+        row.original.is_active ? (
+          <Badge variant="default">Active</Badge>
+        ) : (
+          <Badge variant="destructive">Inactive</Badge>
+        ),
+    },
+    {
+      accessorKey: 'email_verified',
+      header: 'Email Verified',
+      cell: ({ row }) =>
+        row.original.email_verified ? (
+          <CheckCircle2 className="h-4 w-4 text-green-600" />
+        ) : (
+          <XCircle className="h-4 w-4 text-red-500" />
+        ),
+    },
+    {
+      accessorKey: 'created_at',
+      header: 'Created',
+      cell: ({ row }) => (
+        <span className="text-sm">
+          {safeFormat(row.original.created_at, 'MMM d, yyyy')}
+        </span>
+      ),
+    },
+    {
+      id: 'actions',
+      header: '',
+      enableSorting: false,
+      cell: ({ row }) => (
+        <ActionsCell user={row.original} />
+      ),
+    },
+  ]
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold">User Management</h1>
+          <p className="text-muted-foreground mt-1">
+            {isLoading ? 'Loading users...' : `${users.length} user${users.length !== 1 ? 's' : ''} total`}
+          </p>
+        </div>
+        <Select value={roleFilter} onValueChange={setRoleFilter}>
+          <SelectTrigger className="w-[150px]">
+            <SelectValue placeholder="Filter by role" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Roles</SelectItem>
+            <SelectItem value="student">Student</SelectItem>
+            <SelectItem value="faculty">Faculty</SelectItem>
+            <SelectItem value="admin">Admin</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      <DataTable
+        columns={columns}
+        data={users}
+        isLoading={isLoading}
+        searchColumn="first_name"
+        searchPlaceholder="Search users..."
+        onRowClick={(row) => navigate(`/users/${row.id}`, { state: { role: row.role } })}
+      />
+    </div>
+  )
+}

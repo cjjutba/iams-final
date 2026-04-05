@@ -5,12 +5,12 @@ Data access layer for FaceRegistration and FaceEmbedding operations.
 """
 
 import uuid
-from typing import List, Optional
+
 from sqlalchemy.orm import Session
 
-from app.models.face_registration import FaceRegistration
 from app.models.face_embedding import FaceEmbedding
-from app.utils.exceptions import NotFoundError, DuplicateError
+from app.models.face_registration import FaceRegistration
+from app.utils.exceptions import DuplicateError, NotFoundError
 
 
 class FaceRepository:
@@ -19,11 +19,11 @@ class FaceRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_by_id(self, registration_id: str) -> Optional[FaceRegistration]:
+    def get_by_id(self, registration_id: str) -> FaceRegistration | None:
         """Get face registration by ID"""
         return self.db.query(FaceRegistration).filter(FaceRegistration.id == uuid.UUID(registration_id)).first()
 
-    def get_by_user(self, user_id: str) -> Optional[FaceRegistration]:
+    def get_by_user(self, user_id: str) -> FaceRegistration | None:
         """
         Get face registration for a user
 
@@ -33,12 +33,13 @@ class FaceRepository:
         Returns:
             FaceRegistration if found, None otherwise
         """
-        return self.db.query(FaceRegistration).filter(
-            FaceRegistration.user_id == uuid.UUID(user_id),
-            FaceRegistration.is_active == True
-        ).first()
+        return (
+            self.db.query(FaceRegistration)
+            .filter(FaceRegistration.user_id == uuid.UUID(user_id), FaceRegistration.is_active)
+            .first()
+        )
 
-    def get_by_embedding_id(self, embedding_id: int) -> Optional[FaceRegistration]:
+    def get_by_embedding_id(self, embedding_id: int) -> FaceRegistration | None:
         """
         Get face registration by FAISS embedding ID
 
@@ -48,12 +49,13 @@ class FaceRepository:
         Returns:
             FaceRegistration if found, None otherwise
         """
-        return self.db.query(FaceRegistration).filter(
-            FaceRegistration.embedding_id == embedding_id,
-            FaceRegistration.is_active == True
-        ).first()
+        return (
+            self.db.query(FaceRegistration)
+            .filter(FaceRegistration.embedding_id == embedding_id, FaceRegistration.is_active)
+            .first()
+        )
 
-    def get_active_embeddings(self) -> List[FaceRegistration]:
+    def get_active_embeddings(self) -> list[FaceRegistration]:
         """
         Get all active face registrations
 
@@ -62,9 +64,7 @@ class FaceRepository:
         Returns:
             List of active face registrations
         """
-        return self.db.query(FaceRegistration).filter(
-            FaceRegistration.is_active == True
-        ).all()
+        return self.db.query(FaceRegistration).filter(FaceRegistration.is_active).all()
 
     def create(self, user_id: str, embedding_id: int, embedding_vector: bytes) -> FaceRegistration:
         """
@@ -98,9 +98,7 @@ class FaceRepository:
             raise DuplicateError(f"User already has active face registration: {user_id}")
 
         registration = FaceRegistration(
-            user_id=uuid.UUID(user_id),
-            embedding_id=embedding_id,
-            embedding_vector=embedding_vector
+            user_id=uuid.UUID(user_id), embedding_id=embedding_id, embedding_vector=embedding_vector
         )
         self.db.add(registration)
         self.db.flush()  # Assign PK (id) without committing
@@ -150,7 +148,15 @@ class FaceRepository:
 
     def count_active(self) -> int:
         """Get count of active face registrations"""
-        return self.db.query(FaceRegistration).filter(FaceRegistration.is_active == True).count()
+        return self.db.query(FaceRegistration).filter(FaceRegistration.is_active).count()
+
+    def count_all(self) -> int:
+        """Get total count of face registrations"""
+        return self.db.query(FaceRegistration).count()
+
+    def count_inactive(self) -> int:
+        """Get count of inactive face registrations"""
+        return self.db.query(FaceRegistration).filter(FaceRegistration.is_active.is_(False)).count()
 
     # ------------------------------------------------------------------
     # Multi-embedding operations (FaceEmbedding table)
@@ -161,8 +167,8 @@ class FaceRepository:
         registration_id: str,
         faiss_id: int,
         embedding_vector: bytes,
-        angle_label: Optional[str] = None,
-        quality_score: Optional[float] = None,
+        angle_label: str | None = None,
+        quality_score: float | None = None,
     ) -> FaceEmbedding:
         """Create a single FaceEmbedding row."""
         emb = FaceEmbedding(
@@ -178,8 +184,8 @@ class FaceRepository:
     def create_embeddings_batch(
         self,
         registration_id: str,
-        entries: List[dict],
-    ) -> List[FaceEmbedding]:
+        entries: list[dict],
+    ) -> list[FaceEmbedding]:
         """
         Batch-create FaceEmbedding rows.
 
@@ -205,17 +211,11 @@ class FaceRepository:
             rows.append(row)
         return rows
 
-    def get_embeddings_by_registration(
-        self, registration_id: str
-    ) -> List[FaceEmbedding]:
+    def get_embeddings_by_registration(self, registration_id: str) -> list[FaceEmbedding]:
         """Get all embeddings for a registration."""
-        return (
-            self.db.query(FaceEmbedding)
-            .filter(FaceEmbedding.registration_id == uuid.UUID(registration_id))
-            .all()
-        )
+        return self.db.query(FaceEmbedding).filter(FaceEmbedding.registration_id == uuid.UUID(registration_id)).all()
 
-    def get_all_active_embeddings(self) -> List[FaceEmbedding]:
+    def get_all_active_embeddings(self) -> list[FaceEmbedding]:
         """
         Get all FaceEmbedding rows belonging to active registrations.
 
@@ -224,6 +224,6 @@ class FaceRepository:
         return (
             self.db.query(FaceEmbedding)
             .join(FaceRegistration, FaceEmbedding.registration_id == FaceRegistration.id)
-            .filter(FaceRegistration.is_active == True)
+            .filter(FaceRegistration.is_active)
             .all()
         )

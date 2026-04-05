@@ -15,11 +15,12 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from app.config import settings
 from app.database import Base
 # Import all models to ensure they're registered with Base.metadata
-from app.models import (
+from app.models import (  # noqa: F401
     User, FaceRegistration, FaceEmbedding, Room, Schedule, Enrollment,
     AttendanceRecord, PresenceLog, EarlyLeaveEvent, Notification,
-    StudentRecord, FacultyRecord, EngagementScore, AttendanceAnomaly,
-    AttendancePrediction, NotificationPreference
+    StudentRecord, FacultyRecord, NotificationPreference,
+    RefreshToken, SystemSetting,
+    AttendanceAnomaly, EngagementScore, AttendancePrediction,
 )
 
 # this is the Alembic Config object, which provides

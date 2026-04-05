@@ -1,16 +1,151 @@
+# IAMS Local Development — Docker Compose
+#
+# 7 services: postgres, redis, mediamtx, coturn, api-gateway, dozzle, adminer
+#
+# Usage:
+#   docker compose up -d          # start all services
+#   docker compose logs -f        # tail all logs
+#   docker compose down           # stop
+#   docker compose down -v        # stop and remove volumes
+
 services:
+  # ── Database ────────────────────────────────────────────────────────────────
+
   postgres:
     image: postgres:16-alpine
     container_name: iams-postgres
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: iams
-    ports:
-      - "5433:5432"
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: "123"
     volumes:
-      - iams_pgdata:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./backend/db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+      - ./backend/db/reset.sql:/docker-entrypoint-initdb.d/reset.sql:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d iams"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Cache ───────────────────────────────────────────────────────────────────
+
+  redis:
+    image: redis:7-alpine
+    container_name: iams-redis
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru --save "" --requirepass iams-redis-dev
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "iams-redis-dev", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # ── Media ───────────────────────────────────────────────────────────────────
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: iams-mediamtx
+    volumes:
+      - ./deploy/mediamtx.dev.yml:/mediamtx.yml:ro
+    ports:
+      - "8554:8554"      # RTSP
+      - "8887:8887/udp"  # WebRTC media UDP
+      - "8889:8889"      # WHEP endpoint
+      - "9997:9997"      # API
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  coturn:
+    image: coturn/coturn:latest
+    container_name: iams-coturn
+    command: >
+      -n
+      --realm=iams
+      --fingerprint
+      --listening-port=3478
+      --min-port=49152
+      --max-port=49200
+      --user=iams:iams-turn-secret
+      --lt-cred-mech
+      --no-tls
+      --no-dtls
+      --log-file=stdout
+    ports:
+      - "3478:3478"
+      - "3478:3478/udp"
+      - "49152-49200:49152-49200/udp"
+    restart: unless-stopped
+
+  # ── Core Application ───────────────────────────────────────────────────────
+
+  api-gateway:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: iams-api-gateway
+    env_file:
+      - ./backend/.env
+    environment:
+      - SERVICE_ROLE=api-gateway
+      - DATABASE_URL=postgresql://admin:123@postgres:5432/iams
+      - REDIS_URL=redis://:iams-redis-dev@redis:6379/0
+      - MEDIAMTX_EXTERNAL=true
+      - MEDIAMTX_API_URL=http://host.docker.internal:9997
+      - MEDIAMTX_WEBRTC_URL=http://host.docker.internal:8889
+      - MEDIAMTX_RTSP_URL=rtsp://host.docker.internal:8554
+      - EDGE_API_KEY=iams-edge-key-2026-prod
+    volumes:
+      - ./backend:/app
+      - ./docs/data:/docs/data:ro
+      - faiss_data:/app/data/faiss
+      - face_uploads:/app/data/uploads/faces
+      - insightface_models:/root/.insightface/models
+    ports:
+      - "8000:8000"
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0 --port 8000
+      --reload --reload-dir /app/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Dev Tools ───────────────────────────────────────────────────────────────
+
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: iams-dozzle
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "9999:8080"
+    restart: unless-stopped
+
+  adminer:
+    image: adminer:latest
+    container_name: iams-adminer
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
-  iams_pgdata:
+  postgres_data:
+  faiss_data:
+  face_uploads:
+  insightface_models:

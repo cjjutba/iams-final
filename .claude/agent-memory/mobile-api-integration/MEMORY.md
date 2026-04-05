@@ -53,3 +53,13 @@
 - Fresh axios instance used for refresh call (avoids interceptor loop)
 - Queue processes all waiting requests on refresh success/failure
 - `isRefreshing` flag prevents concurrent refresh attempts
+
+## Android Token Management (Stream J, 2026-03-30)
+- TokenManager: volatile cache + async DataStore init (no runBlocking)
+- TokenAuthenticator: Mutex serializes concurrent 401 refresh attempts
+- See [token-management.md](./token-management.md)
+
+## Android WebSocket Client (Stream J, 2026-03-30)
+- Constructor changed: now takes shared OkHttpClient + tokenProvider lambda
+- FacultyLiveFeedViewModel needs updating to match new constructor
+- See [websocket-notes.md](./websocket-notes.md)

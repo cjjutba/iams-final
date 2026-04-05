@@ -294,22 +294,11 @@ class TestFaceRecognitionFlow:
         """Recognize a face that was previously registered"""
         from app.services.face_service import FaceService
 
-        with patch('app.services.face_service.insightface_model') as mock_facenet, \
-             patch('app.services.face_service.faiss_manager') as mock_faiss, \
-             patch('app.services.face_service.anti_spoof_detector') as mock_antispoof:
+        test_embedding = np.random.randn(512).astype(np.float32)
+        test_embedding = test_embedding / np.linalg.norm(test_embedding)
 
-            # Mock FaceNet
-            test_embedding = np.random.randn(512).astype(np.float32)
-            test_embedding = test_embedding / np.linalg.norm(test_embedding)
-
-            mock_facenet.get_embedding = MagicMock(return_value=test_embedding)
-            del mock_facenet.get_face_with_quality
-
-            # Mock anti-spoof to always pass
-            from app.services.ml.anti_spoof import SpoofResult
-            mock_antispoof.check_registration_set.return_value = SpoofResult(
-                is_live=True, spoof_score=0.9, method="mock", details={}
-            )
+        with patch('app.services.face_service.embed_face', new_callable=AsyncMock, return_value=test_embedding) as mock_embed, \
+             patch('app.services.face_service.faiss_manager') as mock_faiss:
 
             # Mock FAISS search to return match
             mock_faiss.search = MagicMock(
@@ -337,22 +326,11 @@ class TestFaceRecognitionFlow:
         """Recognize a face that is not registered"""
         from app.services.face_service import FaceService
 
-        with patch('app.services.face_service.insightface_model') as mock_facenet, \
-             patch('app.services.face_service.faiss_manager') as mock_faiss, \
-             patch('app.services.face_service.anti_spoof_detector') as mock_antispoof:
+        test_embedding = np.random.randn(512).astype(np.float32)
+        test_embedding = test_embedding / np.linalg.norm(test_embedding)
 
-            # Mock FaceNet
-            test_embedding = np.random.randn(512).astype(np.float32)
-            test_embedding = test_embedding / np.linalg.norm(test_embedding)
-
-            mock_facenet.get_embedding = MagicMock(return_value=test_embedding)
-            del mock_facenet.get_face_with_quality
-
-            # Mock anti-spoof to always pass
-            from app.services.ml.anti_spoof import SpoofResult
-            mock_antispoof.check_registration_set.return_value = SpoofResult(
-                is_live=True, spoof_score=0.9, method="mock", details={}
-            )
+        with patch('app.services.face_service.embed_face', new_callable=AsyncMock, return_value=test_embedding), \
+             patch('app.services.face_service.faiss_manager') as mock_faiss:
 
             # Mock FAISS search to return no match
             mock_faiss.search = MagicMock(return_value=[])
@@ -379,22 +357,11 @@ class TestFaceRecognitionFlow:
         """Recognize face with custom confidence threshold"""
         from app.services.face_service import FaceService
 
-        with patch('app.services.face_service.insightface_model') as mock_facenet, \
-             patch('app.services.face_service.faiss_manager') as mock_faiss, \
-             patch('app.services.face_service.anti_spoof_detector') as mock_antispoof:
+        test_embedding = np.random.randn(512).astype(np.float32)
+        test_embedding = test_embedding / np.linalg.norm(test_embedding)
 
-            # Mock FaceNet
-            test_embedding = np.random.randn(512).astype(np.float32)
-            test_embedding = test_embedding / np.linalg.norm(test_embedding)
-
-            mock_facenet.get_embedding = MagicMock(return_value=test_embedding)
-            del mock_facenet.get_face_with_quality
-
-            # Mock anti-spoof to always pass
-            from app.services.ml.anti_spoof import SpoofResult
-            mock_antispoof.check_registration_set.return_value = SpoofResult(
-                is_live=True, spoof_score=0.9, method="mock", details={}
-            )
+        with patch('app.services.face_service.embed_face', new_callable=AsyncMock, return_value=test_embedding), \
+             patch('app.services.face_service.faiss_manager') as mock_faiss:
 
             # Mock FAISS search with custom threshold
             mock_faiss.search = MagicMock(

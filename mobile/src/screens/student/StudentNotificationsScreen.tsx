@@ -21,7 +21,7 @@ import { api } from '../../utils/api';
 import { theme, strings } from '../../constants';
 import { formatTimeAgo, getErrorMessage } from '../../utils';
 import { ScreenLayout, Header } from '../../components/layouts';
-import { Text, Card, Button } from '../../components/ui';
+import { Text, Card, Button, Skeleton } from '../../components/ui';
 
 /** Notification shape returned by the API */
 interface Notification {
@@ -161,7 +161,7 @@ export const StudentNotificationsScreen: React.FC = () => {
         align="center"
         style={styles.emptySubtext}
       >
-        You're all caught up!
+        You&apos;re all caught up!
       </Text>
     </View>
   );
@@ -196,16 +196,21 @@ export const StudentNotificationsScreen: React.FC = () => {
     return (
       <ScreenLayout safeArea padded={false}>
         <Header showBack title={strings.student.notifications} />
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-          <Text
-            variant="bodySmall"
-            color={theme.colors.text.secondary}
-            align="center"
-            style={styles.loadingText}
-          >
-            {strings.common.loading}
-          </Text>
+        <View style={{ padding: 16 }}>
+          {[1, 2, 3, 4, 5].map((i) => (
+            <View key={i} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginBottom: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+                <Skeleton width={24} height={24} borderRadius={12} style={{ marginRight: 12 }} />
+                <View style={{ flex: 1 }}>
+                  <Skeleton width="60%" height={14} />
+                  <View style={{ height: 6 }} />
+                  <Skeleton width="85%" height={12} />
+                  <View style={{ height: 6 }} />
+                  <Skeleton width="30%" height={10} />
+                </View>
+              </View>
+            </View>
+          ))}
         </View>
       </ScreenLayout>
     );
@@ -252,8 +257,7 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing[3],
   },
   unreadCard: {
-    borderLeftWidth: 3,
-    borderLeftColor: theme.colors.primary,
+    backgroundColor: theme.colors.secondary,
   },
   notificationContent: {
     flexDirection: 'row',
@@ -294,14 +298,6 @@ const styles = StyleSheet.create({
   },
   emptySubtext: {
     marginTop: theme.spacing[2],
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    marginTop: theme.spacing[3],
   },
   errorContainer: {
     flex: 1,

@@ -26,7 +26,7 @@ import { theme, strings } from '../../constants';
 import { formatDate, formatTime, formatPercentage } from '../../utils';
 import type { StudentStackParamList, AttendanceRecord, AttendanceStatus } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
-import { Text, Card, Badge, Button, Loader } from '../../components/ui';
+import { Text, Card, Badge, Button } from '../../components/ui';
 
 type StudentHistoryNavigationProp = StackNavigationProp<StudentStackParamList, 'StudentTabs'>;
 
@@ -185,7 +185,7 @@ export const StudentHistoryScreen: React.FC = () => {
 
   if (error && (!history || history.length === 0) && !isLoading) {
     return (
-      <ScreenLayout safeArea padded={false}>
+      <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
         <Header title={strings.student.history} />
         <View style={styles.errorContainer}>
           <RefreshCw size={40} color={theme.colors.text.tertiary} style={styles.errorIcon} />
@@ -203,7 +203,7 @@ export const StudentHistoryScreen: React.FC = () => {
   // ---------- main render ----------
 
   return (
-    <ScreenLayout safeArea padded={false}>
+    <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
       <Header title={strings.student.history} />
 
       <View style={styles.filtersContainer}>

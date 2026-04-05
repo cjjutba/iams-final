@@ -6,7 +6,7 @@ Data access layer for AttendancePrediction operations.
 
 import uuid
 from datetime import date
-from typing import Optional, List
+
 from sqlalchemy.orm import Session
 
 from app.models.attendance_prediction import AttendancePrediction, RiskLevel
@@ -41,9 +41,7 @@ class PredictionRepository:
         self.db.refresh(prediction)
         return prediction
 
-    def get_by_schedule(
-        self, schedule_id: str, week_start: date
-    ) -> List[AttendancePrediction]:
+    def get_by_schedule(self, schedule_id: str, week_start: date) -> list[AttendancePrediction]:
         """Get all predictions for a schedule for a given week."""
         return (
             self.db.query(AttendancePrediction)
@@ -55,9 +53,7 @@ class PredictionRepository:
             .all()
         )
 
-    def get_at_risk(
-        self, min_risk: RiskLevel = RiskLevel.MODERATE
-    ) -> List[AttendancePrediction]:
+    def get_at_risk(self, min_risk: RiskLevel = RiskLevel.MODERATE) -> list[AttendancePrediction]:
         """Get all at-risk predictions (critical, high, moderate)."""
         risk_levels = [RiskLevel.CRITICAL, RiskLevel.HIGH]
         if min_risk == RiskLevel.MODERATE:
@@ -69,13 +65,9 @@ class PredictionRepository:
             .all()
         )
 
-    def update_actual_rate(
-        self, prediction_id: str, actual_rate: float
-    ) -> Optional[AttendancePrediction]:
+    def update_actual_rate(self, prediction_id: str, actual_rate: float) -> AttendancePrediction | None:
         """Update a prediction with the actual rate after the week ends."""
-        pred = self.db.query(AttendancePrediction).filter(
-            AttendancePrediction.id == uuid.UUID(prediction_id)
-        ).first()
+        pred = self.db.query(AttendancePrediction).filter(AttendancePrediction.id == uuid.UUID(prediction_id)).first()
         if pred:
             pred.actual_rate = actual_rate
             self.db.commit()

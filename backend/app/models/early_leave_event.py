@@ -6,8 +6,9 @@ Tracks return detection and context-aware severity.
 """
 
 import uuid
-from datetime import datetime
-from sqlalchemy import Column, Integer, Boolean, String, DateTime, ForeignKey
+from datetime import UTC, datetime
+
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -41,10 +42,12 @@ class EarlyLeaveEvent(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
     # Foreign key
-    attendance_id = Column(UUID(as_uuid=True), ForeignKey("attendance_records.id"), nullable=False, index=True)
+    attendance_id = Column(
+        UUID(as_uuid=True), ForeignKey("attendance_records.id", ondelete="CASCADE"), nullable=False, index=True
+    )
 
     # Event details
-    detected_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    detected_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
     last_seen_at = Column(DateTime, nullable=False)
     consecutive_misses = Column(Integer, nullable=False)
 
@@ -61,7 +64,7 @@ class EarlyLeaveEvent(Base):
     context_severity = Column(String(20), nullable=True)
 
     # Relationships
-    attendance_record = relationship("AttendanceRecord", backref="early_leave_events")
+    attendance_record = relationship("AttendanceRecord", back_populates="early_leave_events")
 
     def __repr__(self):
         return f"<EarlyLeaveEvent(id={self.id}, attendance_id={self.attendance_id}, misses={self.consecutive_misses}, severity={self.context_severity})>"

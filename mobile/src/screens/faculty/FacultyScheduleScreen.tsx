@@ -88,7 +88,7 @@ export const FacultyScheduleScreen: React.FC = () => {
   );
 
   return (
-    <ScreenLayout safeArea padded={false}>
+    <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
       <Header title={strings.schedule.mySchedule} />
 
       <ScrollView

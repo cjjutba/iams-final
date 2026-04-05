@@ -5,20 +5,26 @@ Business logic for face registration and recognition.
 Orchestrates InsightFace (ArcFace) model, FAISS search, and database operations.
 """
 
+import contextlib
 import io
-from typing import List, Tuple, Optional
-from fastapi import UploadFile
-from sqlalchemy.orm import Session
-import numpy as np
-from PIL import Image
+import time
 
+import numpy as np
+from fastapi import UploadFile
+from PIL import Image
+from sqlalchemy.orm import Session
+
+from app.config import logger, settings
 from app.repositories.face_repository import FaceRepository
-from app.services.ml.insightface_model import insightface_model
-from app.services.ml.faiss_manager import faiss_manager
-from app.services.ml.face_quality import assess_quality, QualityReport
 from app.services.ml.anti_spoof import anti_spoof_detector
-from app.utils.exceptions import ValidationError, FaceRecognitionError, NotFoundError
-from app.config import settings, logger
+from app.services.ml.embedding_pipeline import (
+    embed_face,
+    validate_registration_embeddings,
+)
+from app.services.ml.face_quality import QualityReport, assess_quality
+from app.services.ml.faiss_manager import faiss_manager
+from app.services.ml.insightface_model import insightface_model
+from app.utils.exceptions import FaceRecognitionError, ValidationError
 
 
 class FaceService:
@@ -31,10 +37,8 @@ class FaceService:
         self.faiss = faiss_manager
 
     async def register_face(
-        self,
-        user_id: str,
-        images: List[UploadFile]
-    ) -> Tuple[int, str, Optional[List[QualityReport]]]:
+        self, user_id: str, images: list[UploadFile]
+    ) -> tuple[int, str, list[QualityReport] | None]:
         """
         Register user's face with multiple images
 
@@ -60,14 +64,10 @@ class FaceService:
         """
         # Validate number of images
         if len(images) < settings.MIN_FACE_IMAGES:
-            raise ValidationError(
-                f"Minimum {settings.MIN_FACE_IMAGES} images required for registration"
-            )
+            raise ValidationError(f"Minimum {settings.MIN_FACE_IMAGES} images required for registration")
 
         if len(images) > settings.MAX_FACE_IMAGES:
-            raise ValidationError(
-                f"Maximum {settings.MAX_FACE_IMAGES} images allowed"
-            )
+            raise ValidationError(f"Maximum {settings.MAX_FACE_IMAGES} images allowed")
 
         # Check if user already has registered face
         existing = self.face_repo.get_by_user(user_id)
@@ -79,55 +79,70 @@ class FaceService:
         # Generate embeddings for each image
         embeddings = []
         face_crops = []  # Collected for anti-spoof check
-        quality_reports: List[QualityReport] = []
+        quality_reports: list[QualityReport] = []
         for i, image_file in enumerate(images):
+            _img_start = time.monotonic()
             try:
                 # Read image bytes
                 image_bytes = await image_file.read()
 
                 # Validate file size
                 if len(image_bytes) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
-                    raise ValidationError(f"Image {i+1} exceeds size limit")
+                    raise ValidationError(f"Image {i + 1} exceeds size limit")
 
                 # Generate embedding (with quality metadata if available)
-                if settings.QUALITY_GATE_ENABLED and hasattr(self.facenet, 'get_face_with_quality'):
+                if settings.QUALITY_GATE_ENABLED and hasattr(self.facenet, "get_face_with_quality"):
                     face_data = self.facenet.get_face_with_quality(image_bytes)
                     embedding = face_data["embedding"]
-                    face_crops.append(face_data["image_bgr"])
+                    # Extract the actual face crop using the bbox for anti-spoof.
+                    # Passing the full image causes FFT/LBP to analyze background
+                    # pixels, producing false spoof detections on every image.
+                    bx, by, bw, bh = face_data["bbox"]
+                    face_crop = face_data["image_bgr"][by : by + bh, bx : bx + bw]
+                    face_crops.append(face_crop)
                     quality = assess_quality(
                         image_bgr=face_data["image_bgr"],
                         det_score=face_data["det_score"],
                         bbox=face_data["bbox"],
                         image_shape=face_data["image_bgr"].shape,
+                        blur_threshold_override=settings.QUALITY_BLUR_THRESHOLD_MOBILE,
                     )
                     quality_reports.append(quality)
                     if not quality.passed:
-                        raise ValidationError(
-                            f"Image {i+1} rejected: {', '.join(quality.rejection_reasons)}"
-                        )
+                        raise ValidationError(f"Image {i + 1} rejected: {', '.join(quality.rejection_reasons)}")
                 else:
                     embedding = self.facenet.get_embedding(image_bytes)
 
                 embeddings.append(embedding)
 
-                logger.debug(f"Generated embedding for image {i+1}/{len(images)}")
+                logger.info(f"Image {i + 1}/{len(images)}: embedding generated in {time.monotonic() - _img_start:.2f}s")
 
             except ValidationError:
                 raise
             except ValueError as e:
-                raise FaceRecognitionError(f"Image {i+1}: {str(e)}")
+                raise FaceRecognitionError(f"Image {i + 1}: {str(e)}") from e
             except Exception as e:
-                logger.error(f"Failed to process image {i+1}: {e}")
-                raise FaceRecognitionError(f"Failed to process image {i+1}")
+                logger.error(f"Failed to process image {i + 1}: {e}")
+                raise FaceRecognitionError(f"Failed to process image {i + 1}") from e
 
         if not embeddings:
             raise FaceRecognitionError("No valid face embeddings generated")
 
         # L2 normalize each embedding individually
         normed = []
-        for emb in embeddings:
-            n = emb / np.linalg.norm(emb)
+        for i, emb in enumerate(embeddings):
+            norm = np.linalg.norm(emb)
+            if norm < 1e-6:
+                raise FaceRecognitionError(f"Image {i + 1} produced a degenerate embedding (zero norm)")
+            n = emb / norm
             normed.append(n)
+
+        # Cross-capture validation: warn if embeddings seem inconsistent,
+        # but don't block registration.  Different angles + mobile compression
+        # naturally produce lower pairwise similarity.
+        is_valid, validation_msg = validate_registration_embeddings(normed)
+        if not is_valid:
+            logger.warning(f"Cross-capture validation warning for user {user_id}: {validation_msg}")
 
         # Anti-spoof check (registration-time, uses embedding variance + texture)
         if settings.ANTISPOOF_ENABLED and settings.ANTISPOOF_REGISTRATION_STRICT:
@@ -137,16 +152,9 @@ class FaceService:
             )
             if not spoof_result.is_live:
                 reasons = spoof_result.details.get("rejection_reasons", ["spoof detected"])
-                logger.warning(
-                    f"Anti-spoof rejected registration for user {user_id}: {reasons}"
-                )
-                raise ValidationError(
-                    f"Registration rejected: possible presentation attack. {'; '.join(reasons)}"
-                )
-            logger.debug(
-                f"Anti-spoof passed for user {user_id} "
-                f"(score={spoof_result.spoof_score:.3f})"
-            )
+                logger.warning(f"Anti-spoof rejected registration for user {user_id}: {reasons}")
+                raise ValidationError(f"Registration rejected: possible presentation attack. {'; '.join(reasons)}")
+            logger.debug(f"Anti-spoof passed for user {user_id} (score={spoof_result.spoof_score:.3f})")
 
         # Add all embeddings to FAISS (one per angle, all mapped to same user)
         all_embs = np.stack(normed).astype(np.float32)
@@ -154,7 +162,7 @@ class FaceService:
             faiss_ids = self.faiss.add_batch(all_embs, [user_id] * len(normed))
         except Exception as e:
             logger.error(f"Failed to add to FAISS: {e}")
-            raise FaceRecognitionError("Failed to index face embeddings")
+            raise FaceRecognitionError("Failed to index face embeddings") from e
 
         # Compute a representative averaged embedding for backward-compatible
         # storage in face_registrations.embedding_vector (used as fallback)
@@ -177,15 +185,15 @@ class FaceService:
                 q_score = None
                 if quality_reports and idx < len(quality_reports):
                     q_score = quality_reports[idx].blur_score  # Use blur as overall quality proxy
-                embedding_entries.append({
-                    "faiss_id": fid,
-                    "embedding_vector": emb.astype(np.float32).tobytes(),
-                    "angle_label": angle_labels[idx] if idx < len(angle_labels) else None,
-                    "quality_score": q_score,
-                })
-            self.face_repo.create_embeddings_batch(
-                str(registration.id), embedding_entries
-            )
+                embedding_entries.append(
+                    {
+                        "faiss_id": fid,
+                        "embedding_vector": emb.astype(np.float32).tobytes(),
+                        "angle_label": angle_labels[idx] if idx < len(angle_labels) else None,
+                        "quality_score": q_score,
+                    }
+                )
+            self.face_repo.create_embeddings_batch(str(registration.id), embedding_entries)
             self.db.commit()
 
             # Persist FAISS index to disk only after DB commit succeeds
@@ -199,22 +207,28 @@ class FaceService:
             # Rollback DB transaction
             self.db.rollback()
 
-            # Rollback FAISS additions since DB commit failed
+            # Rollback FAISS additions since DB commit failed.
+            # Note: faiss.remove() only removes from user_map, NOT from the
+            # underlying IndexFlatIP — orphaned vectors remain in the index.
             for fid in faiss_ids:
-                try:
+                with contextlib.suppress(Exception):
                     self.faiss.remove(fid)
-                except Exception:
-                    pass
+
+            # Rebuild the FAISS index from DB to purge orphaned vectors and
+            # ensure full consistency between DB and index.
+            try:
+                await self.rebuild_faiss_index()
+            except Exception:
+                logger.error("Failed to rebuild FAISS after rollback", exc_info=True)
+
             logger.error(f"Failed to save face registration for user {user_id}: {e}")
-            raise FaceRecognitionError("Failed to save face registration")
+            raise FaceRecognitionError("Failed to save face registration") from e
 
         return faiss_ids[0], "Face registered successfully", quality_reports or None
 
     async def recognize_face(
-        self,
-        image_bytes: bytes,
-        threshold: Optional[float] = None
-    ) -> Tuple[Optional[str], Optional[float]]:
+        self, image_bytes: bytes, threshold: float | None = None
+    ) -> tuple[str | None, float | None]:
         """
         Recognize face from image
 
@@ -229,8 +243,11 @@ class FaceService:
             FaceRecognitionError: If face processing fails
         """
         try:
-            # Generate embedding
-            embedding = self.facenet.get_embedding(image_bytes)
+            # Generate embedding via shared pipeline
+            embedding = await embed_face(image_bytes)
+            if embedding is None:
+                logger.debug("No face detected in recognition image")
+                return None, None
 
             # Search FAISS
             results = self.faiss.search(embedding, k=1, threshold=threshold)
@@ -245,13 +262,9 @@ class FaceService:
 
         except Exception as e:
             logger.error(f"Face recognition failed: {e}")
-            raise FaceRecognitionError(f"Face recognition failed: {str(e)}")
+            raise FaceRecognitionError(f"Face recognition failed: {str(e)}") from e
 
-    async def recognize_batch(
-        self,
-        images_bytes: List[bytes],
-        threshold: Optional[float] = None
-    ) -> List[dict]:
+    async def recognize_batch(self, images_bytes: list[bytes], threshold: float | None = None) -> list[dict]:
         """Recognize multiple faces using batch embedding + batch FAISS search."""
         if not images_bytes:
             return []
@@ -287,7 +300,7 @@ class FaceService:
         # Phase 3: Batch FAISS search
         search_results = faiss_manager.search_batch(embeddings, k=settings.RECOGNITION_TOP_K, threshold=th)
 
-        for batch_idx, (orig_idx, matches) in enumerate(zip(index_map, search_results)):
+        for _batch_idx, (orig_idx, matches) in enumerate(zip(index_map, search_results)):
             if matches:
                 user_id, confidence = matches[0]
                 results.append({"index": orig_idx, "user_id": user_id, "confidence": float(confidence)})
@@ -316,38 +329,38 @@ class FaceService:
         # Rebuild FAISS index
         await self.rebuild_faiss_index()
 
-    async def reregister_face(
-        self,
-        user_id: str,
-        images: List[UploadFile]
-    ) -> Tuple[int, str]:
+    async def reregister_face(self, user_id: str, images: list[UploadFile]) -> tuple[int, str]:
         """
         Re-register user's face (update)
 
-        Deletes old face registration, registers new one, and rebuilds
-        FAISS index to remove orphaned vectors from the old registration.
+        Hard-deletes old registration first (including related embeddings),
+        then registers fresh.  Cross-capture validation is warning-only,
+        so the primary failure path (validation block) no longer exists.
 
         Args:
             user_id: User UUID
             images: New face images
 
         Returns:
-            Tuple of (embedding_id, message)
+            Tuple of (embedding_id, message, quality_reports)
         """
-        # Delete old registration (if exists)
-        try:
-            old_registration = self.face_repo.get_by_user(user_id)
-            if old_registration:
-                self.face_repo.delete(str(old_registration.id))
-                logger.info(f"Deleted old face registration for user {user_id}")
-        except NotFoundError:
-            logger.info(f"No previous face registration found for user {user_id}")
+        # Hard-delete old registration so the unique constraint on user_id
+        # won't block the new INSERT.  Embeddings cascade-delete via FK.
+        old_registration = self.face_repo.get_by_user(user_id)
+        if old_registration:
+            self.db.delete(old_registration)
+            self.db.commit()
+            logger.info(f"Deleted old face registration for user {user_id}")
 
-        # Register new face
-        faiss_id, message, quality_reports = await self.register_face(user_id, images)
-
-        # Rebuild FAISS to remove orphaned vectors from old registration
+        # Rebuild FAISS BEFORE register_face so the index is clean and
+        # index.ntotal-based FAISS IDs assigned during registration match
+        # the final index state.  Without this, register_face assigns IDs
+        # based on a stale ntotal, then a post-register rebuild reassigns
+        # all IDs from scratch — leaving DB faiss_ids out of sync.
         await self.rebuild_faiss_index()
+
+        # Register new face (operates on the freshly rebuilt index)
+        faiss_id, message, quality_reports = await self.register_face(user_id, images)
 
         return faiss_id, "Face re-registered successfully", quality_reports
 
@@ -388,14 +401,10 @@ class FaceService:
             return {
                 "registered": True,
                 "registered_at": registration.registered_at,
-                "embedding_id": registration.embedding_id
+                "embedding_id": registration.embedding_id,
             }
         else:
-            return {
-                "registered": False,
-                "registered_at": None,
-                "embedding_id": None
-            }
+            return {"registered": False, "registered_at": None, "embedding_id": None}
 
     def get_statistics(self) -> dict:
         """
@@ -405,12 +414,17 @@ class FaceService:
             Dictionary with stats
         """
         active_count = self.face_repo.count_active()
+        total_count = self.face_repo.count_all()
+        inactive_count = self.face_repo.count_inactive()
         faiss_stats = self.faiss.get_stats()
 
         return {
+            "total_registered": total_count,
+            "total_active": active_count,
+            "total_inactive": inactive_count,
             "active_registrations": active_count,
             "faiss_vectors": faiss_stats["total_vectors"],
-            "faiss_initialized": faiss_stats["initialized"]
+            "faiss_initialized": faiss_stats["initialized"],
         }
 
     def load_model(self):
@@ -452,17 +466,13 @@ class FaceService:
         multi_embs = repo.get_all_active_embeddings()
         if multi_embs:
             return [
-                (np.frombuffer(e.embedding_vector, dtype=np.float32), str(e.registration.user_id))
-                for e in multi_embs
+                (np.frombuffer(e.embedding_vector, dtype=np.float32), str(e.registration.user_id)) for e in multi_embs
             ]
 
         # Fallback: legacy single-embedding registrations
         active_regs = repo.get_active_embeddings()
         if active_regs:
-            return [
-                (np.frombuffer(r.embedding_vector, dtype=np.float32), str(r.user_id))
-                for r in active_regs
-            ]
+            return [(np.frombuffer(r.embedding_vector, dtype=np.float32), str(r.user_id)) for r in active_regs]
 
         return []
 

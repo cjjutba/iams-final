@@ -51,6 +51,21 @@ interface UnreadCountResponse {
   unread_count: number;
 }
 
+/** Notification preference response from backend */
+export interface NotificationPreference {
+  early_leave_alerts: boolean;
+  anomaly_alerts: boolean;
+  attendance_confirmation: boolean;
+  low_attendance_warning: boolean;
+  daily_digest: boolean;
+  weekly_digest: boolean;
+  email_enabled: boolean;
+  low_attendance_threshold: number;
+}
+
+/** Partial update for notification preferences */
+export type NotificationPreferenceUpdate = Partial<NotificationPreference>;
+
 // ---------------------------------------------------------------------------
 // Request parameter interfaces
 // ---------------------------------------------------------------------------
@@ -145,5 +160,34 @@ export const notificationService = {
       '/notifications/unread-count',
     );
     return response.data.unread_count;
+  },
+
+  /**
+   * Get notification preferences for the current user.
+   *
+   * Backend: GET /notifications/preferences
+   * Response: NotificationPreferenceResponse
+   */
+  async getPreferences(): Promise<NotificationPreference> {
+    const response = await api.get<NotificationPreference>(
+      '/notifications/preferences',
+    );
+    return response.data;
+  },
+
+  /**
+   * Update notification preferences for the current user (partial update).
+   *
+   * Backend: PUT /notifications/preferences
+   * Response: NotificationPreferenceResponse
+   */
+  async updatePreferences(
+    data: NotificationPreferenceUpdate,
+  ): Promise<NotificationPreference> {
+    const response = await api.put<NotificationPreference>(
+      '/notifications/preferences',
+      data,
+    );
+    return response.data;
   },
 };

@@ -2,23 +2,24 @@
 Security and Authentication Utilities
 
 Provides password hashing, JWT token creation/verification,
-and Supabase Auth token validation.
+and utility functions for authentication.
 """
 
-from datetime import datetime, timedelta
-from typing import Optional, Dict
+from datetime import UTC, datetime, timedelta
+
+import jwt
+from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
 from passlib.context import CryptContext
-from jose import JWTError, jwt
 
-from app.config import settings, logger
+from app.config import logger, settings
 from app.utils.exceptions import AuthenticationError
-
 
 # Password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 # ===== Password Hashing =====
+
 
 def hash_password(password: str) -> str:
     """
@@ -49,7 +50,8 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 # ===== JWT Token Management (Custom JWT) =====
 
-def create_access_token(data: Dict, expires_delta: Optional[timedelta] = None) -> str:
+
+def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
     """
     Create a JWT access token
 
@@ -63,19 +65,20 @@ def create_access_token(data: Dict, expires_delta: Optional[timedelta] = None) -
     to_encode = data.copy()
 
     # Set expiration
+    now = datetime.now(UTC)
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = now + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
 
-    to_encode.update({"exp": expire, "iat": datetime.utcnow()})
+    to_encode.update({"exp": expire, "iat": now})
 
     # Encode token
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
 
 
-def create_refresh_token(data: Dict) -> str:
+def create_refresh_token(data: dict) -> str:
     """
     Create a JWT refresh token (longer expiration)
 
@@ -86,14 +89,15 @@ def create_refresh_token(data: Dict) -> str:
         Encoded JWT refresh token string
     """
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-    to_encode.update({"exp": expire, "iat": datetime.utcnow(), "type": "refresh"})
+    now = datetime.now(UTC)
+    expire = now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    to_encode.update({"exp": expire, "iat": now, "type": "refresh"})
 
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
 
 
-def verify_token(token: str) -> Dict:
+def verify_token(token: str) -> dict:
     """
     Verify and decode a JWT token
 
@@ -109,139 +113,16 @@ def verify_token(token: str) -> Dict:
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         return payload
-    except JWTError as e:
+    except ExpiredSignatureError as e:
+        logger.debug("JWT token expired")
+        raise AuthenticationError("Token expired") from e
+    except InvalidTokenError as e:
         logger.error(f"JWT verification failed: {e}")
-        raise AuthenticationError("Invalid or expired token")
-
-
-# ===== Supabase Auth Token Verification =====
-
-# Cached JWKS keys from Supabase (fetched once, refreshed on kid miss)
-_jwks_cache: Dict = {}
-_jwks_cache_time: float = 0
-
-
-def _fetch_supabase_jwks() -> Dict:
-    """Fetch and cache the Supabase JWKS public keys."""
-    import time
-    global _jwks_cache, _jwks_cache_time
-
-    now = time.time()
-    # Return cached keys if fresh (cache for 1 hour)
-    if _jwks_cache and (now - _jwks_cache_time) < 3600:
-        return _jwks_cache
-
-    try:
-        import httpx
-        resp = httpx.get(
-            f"{settings.SUPABASE_URL}/auth/v1/.well-known/jwks.json",
-            headers={"apikey": settings.SUPABASE_ANON_KEY},
-            timeout=10.0,
-        )
-        if resp.status_code == 200:
-            jwks = resp.json()
-            # Index by kid for quick lookup
-            _jwks_cache = {k["kid"]: k for k in jwks.get("keys", [])}
-            _jwks_cache_time = now
-            logger.debug(f"Fetched JWKS: {len(_jwks_cache)} key(s)")
-            return _jwks_cache
-    except Exception as e:
-        logger.warning(f"Failed to fetch JWKS: {e}")
-
-    return _jwks_cache  # Return stale cache on failure
-
-
-def verify_supabase_token(token: str) -> Dict:
-    """
-    Verify a Supabase Auth JWT token.
-
-    Supports both:
-    - ES256 (asymmetric, JWKS) — current Supabase default
-    - HS256 (symmetric, JWT secret) — legacy Supabase projects
-
-    Args:
-        token: Supabase JWT token from Authorization header
-
-    Returns:
-        Decoded token payload with user info
-
-    Raises:
-        AuthenticationError: If token is invalid
-    """
-    try:
-        # Peek at the token header to determine algorithm
-        header = jwt.get_unverified_header(token)
-        alg = header.get("alg", "HS256")
-        kid = header.get("kid")
-
-        if alg == "ES256" and kid:
-            # Asymmetric (JWKS) — fetch public key from Supabase
-            jwks = _fetch_supabase_jwks()
-            jwk = jwks.get(kid)
-            if not jwk:
-                # Key not in cache — force refresh and retry
-                global _jwks_cache_time
-                _jwks_cache_time = 0
-                jwks = _fetch_supabase_jwks()
-                jwk = jwks.get(kid)
-            if not jwk:
-                raise AuthenticationError(f"Unknown signing key: {kid}")
-
-            payload = jwt.decode(
-                token,
-                jwk,
-                algorithms=["ES256"],
-                audience="authenticated",
-                options={"verify_aud": True},
-            )
-        elif alg in ("HS256", "HS384", "HS512"):
-            # Symmetric (HMAC) — use JWT secret
-            jwt_secret = settings.SUPABASE_JWT_SECRET
-            if not jwt_secret:
-                logger.warning("SUPABASE_JWT_SECRET not set — skipping signature verification")
-                payload = jwt.decode(
-                    token,
-                    settings.SUPABASE_ANON_KEY,
-                    algorithms=[alg],
-                    audience="authenticated",
-                    options={"verify_signature": False, "verify_aud": True},
-                )
-            else:
-                payload = jwt.decode(
-                    token,
-                    jwt_secret,
-                    algorithms=[alg],
-                    audience="authenticated",
-                    options={"verify_aud": True},
-                )
-        else:
-            raise AuthenticationError(f"Unsupported JWT algorithm: {alg}")
-
-        return payload
-
-    except JWTError as e:
-        logger.error(f"Supabase token verification failed: {e}")
-        raise AuthenticationError("Invalid Supabase token")
-
-
-def is_supabase_token(token: str) -> bool:
-    """
-    Heuristic to detect whether a token was issued by Supabase Auth.
-
-    Supabase tokens contain an "iss" claim pointing to the project URL
-    and an "aud" claim set to "authenticated".
-    """
-    try:
-        # Peek at claims without verifying (just to route)
-        unverified = jwt.get_unverified_claims(token)
-        iss = unverified.get("iss", "")
-        aud = unverified.get("aud", "")
-        return "supabase" in iss or aud == "authenticated"
-    except Exception:
-        return False
+        raise AuthenticationError(f"Invalid token: {e}") from e
 
 
 # ===== Utility Functions =====
+
 
 def validate_password_strength(password: str) -> tuple[bool, str]:
     """

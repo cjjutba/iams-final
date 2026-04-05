@@ -89,7 +89,7 @@ export const StudentProfileScreen: React.FC = () => {
   // ---------- render ----------
 
   return (
-    <ScreenLayout safeArea padded={false}>
+    <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
       <Header title={strings.student.profile} />
 
       <ScrollView

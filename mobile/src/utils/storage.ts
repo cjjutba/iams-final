@@ -16,6 +16,7 @@ const STORAGE_KEYS = {
   USER: 'user',
   ONBOARDING_COMPLETE: 'onboarding_complete',
   LAST_USER_ROLE: 'last_user_role',
+  PENDING_FACE_IMAGES: 'pending_face_images',
 } as const;
 
 /**
@@ -136,6 +137,35 @@ export const storage = {
     } catch (error) {
       console.error('Failed to clear auth:', error);
       return false;
+    }
+  },
+
+  // Pending face images (saved during registration when tokens aren't available yet)
+  async getPendingFaceImages(): Promise<string[] | null> {
+    try {
+      const json = await AsyncStorage.getItem(STORAGE_KEYS.PENDING_FACE_IMAGES);
+      return json ? JSON.parse(json) : null;
+    } catch (error) {
+      console.error('Failed to get pending face images:', error);
+      return null;
+    }
+  },
+
+  async setPendingFaceImages(images: string[]): Promise<boolean> {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.PENDING_FACE_IMAGES, JSON.stringify(images));
+      return true;
+    } catch (error) {
+      console.error('Failed to set pending face images:', error);
+      return false;
+    }
+  },
+
+  async clearPendingFaceImages(): Promise<void> {
+    try {
+      await AsyncStorage.removeItem(STORAGE_KEYS.PENDING_FACE_IMAGES);
+    } catch (error) {
+      console.error('Failed to clear pending face images:', error);
     }
   },
 

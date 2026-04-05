@@ -1,23 +1,22 @@
 /**
  * useDetectionWebSocket
  *
- * Custom hook for the HLS-mode live stream WebSocket. In HLS mode the
- * WebSocket only carries lightweight detection metadata (~200 bytes per
- * message), while video is delivered via HLS to the native video player.
+ * Custom hook for the live stream WebSocket. The WebSocket carries
+ * lightweight recognition metadata while video is delivered via WebRTC
+ * with bounding boxes burned in by the backend.
  *
  * Responsibilities:
  * - Connect/reconnect to ws://<host>/api/v1/stream/{scheduleId}
- * - Parse `type: "connected"` → extract HLS URL
- * - Parse `type: "detections"` → update detection list + student map
+ * - Parse `type: "connected"` to set stream mode
+ * - Parse `type: "fused_tracks"` to update the detected-students panel
  * - Ping/pong heartbeat
- * - Auto-reconnect on disconnect (3-second delay)
+ * - Auto-reconnect on disconnect (exponential backoff)
  */
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
 import { config } from '../constants/config';
 import { storage } from '../utils/storage';
-import type { DetectionItem } from '../components/video/DetectionOverlay';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -34,37 +33,52 @@ export interface DetectedStudent {
 
 interface ConnectedMessage {
   type: 'connected';
-  hls_url?: string;
   schedule_id: string;
   room_id: string;
-  mode: 'hls' | 'webrtc' | 'legacy';
+  mode: 'webrtc';
   stream_fps: number;
   stream_resolution: string;
 }
 
-interface DetectionsMessage {
-  type: 'detections';
-  timestamp: string;
-  detections: DetectionItem[];
-  detection_width?: number;
-  detection_height?: number;
+/** Identity info nested inside a fused track. */
+interface TrackIdentity {
+  user_id: string;
+  name: string;
+  student_id: string;
+  similarity: number;
 }
 
-type WsMessage = ConnectedMessage | DetectionsMessage | { type: string };
+/** A single track in the fused_tracks wire format. */
+interface WireTrack {
+  id: number;
+  conf: number;
+  state: 'confirmed' | 'tentative';
+  identity?: TrackIdentity;
+}
+
+interface FusedTracksMessage {
+  type: 'fused_tracks';
+  room_id: string;
+  ts: number;
+  tracks: WireTrack[];
+}
+
+type WsMessage = ConnectedMessage | FusedTracksMessage | { type: string };
 
 export interface UseDetectionWebSocketReturn {
-  detections: DetectionItem[];
   isConnected: boolean;
   isConnecting: boolean;
-  hlsUrl: string | null;
-  streamMode: 'hls' | 'webrtc' | 'legacy' | null;
+  /** True when connected but waiting for camera/edge device to come online. */
+  isWaitingForCamera: boolean;
+  streamMode: 'webrtc' | null;
+  /** Detected/recognized students for the bottom panel. */
   studentMap: Map<string, DetectedStudent>;
+  /** Total faces currently in frame (recognized + unknown). */
+  detectedCount: number;
+  /** Number of unrecognized faces currently in frame. */
+  unknownCount: number;
   connectionError: string | null;
   reconnect: () => void;
-  /** Detection frame width (from recognition service). */
-  detectionWidth: number;
-  /** Detection frame height (from recognition service). */
-  detectionHeight: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -72,9 +86,8 @@ export interface UseDetectionWebSocketReturn {
 // ---------------------------------------------------------------------------
 
 const getStreamWsUrl = (scheduleId: string): string => {
-  const baseUrl = config.API_BASE_URL;
-  const wsBase = baseUrl.replace(/^http/, 'ws');
-  return wsBase.replace(/\/api\/v1$/, `/api/v1/stream/${scheduleId}`);
+  // config.WS_URL is ws://<host>/api/v1/ws
+  return `${config.WS_URL}/stream/${scheduleId}`;
 };
 
 // ---------------------------------------------------------------------------
@@ -82,15 +95,14 @@ const getStreamWsUrl = (scheduleId: string): string => {
 // ---------------------------------------------------------------------------
 
 export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocketReturn {
-  const [detections, setDetections] = useState<DetectionItem[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(true);
-  const [hlsUrl, setHlsUrl] = useState<string | null>(null);
-  const [streamMode, setStreamMode] = useState<'hls' | 'webrtc' | 'legacy' | null>(null);
+  const [streamMode, setStreamMode] = useState<'webrtc' | null>(null);
   const [studentMap, setStudentMap] = useState<Map<string, DetectedStudent>>(new Map());
+  const [detectedCount, setDetectedCount] = useState(0);
+  const [unknownCount, setUnknownCount] = useState(0);
   const [connectionError, setConnectionError] = useState<string | null>(null);
-  const [detectionWidth, setDetectionWidth] = useState(1280);
-  const [detectionHeight, setDetectionHeight] = useState(720);
+  const [isWaitingForCamera, setIsWaitingForCamera] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -120,6 +132,7 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
 
     setIsConnecting(true);
     setConnectionError(null);
+    setIsWaitingForCamera(false);
     hasErrorRef.current = false;
 
     const url = getStreamWsUrl(scheduleId);
@@ -134,7 +147,7 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
       reconnectAttemptRef.current = 0;
       setIsConnected(true);
       // Keep isConnecting=true until the 'connected' message arrives so the
-      // loading spinner stays visible while streamMode/hlsUrl are still null.
+      // loading spinner stays visible while streamMode is still null.
       setConnectionError(null);
 
       // Start ping interval to keep connection alive
@@ -157,70 +170,59 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
         const message: WsMessage = JSON.parse(event.data);
 
         if (message.type === 'connected') {
-          const connMsg = message as ConnectedMessage;
-          setStreamMode(connMsg.mode ?? 'hls');
-          if (connMsg.hls_url) {
-            // Build full HLS URL from relative path
-            const baseUrl = config.API_BASE_URL;
-            const httpBase = baseUrl.replace(/\/api\/v1$/, '');
-            setHlsUrl(`${httpBase}${connMsg.hls_url}`);
-          }
-          // Now we know the stream mode — stop showing loading spinner
+          setStreamMode('webrtc');
+          setIsWaitingForCamera(false);
+          // Now we know the stream mode -- stop showing loading spinner
           setIsConnecting(false);
-        } else if (message.type === 'detections') {
-          const detMsg = message as DetectionsMessage;
-          setDetections(detMsg.detections ?? []);
+        } else if (message.type === 'fused_tracks') {
+          const ftMsg = message as FusedTracksMessage;
+          const tsIso = new Date(ftMsg.ts).toISOString();
+          const wireTracks = ftMsg.tracks ?? [];
 
-          // Update detection frame dimensions if provided
-          if (detMsg.detection_width && detMsg.detection_height) {
-            setDetectionWidth(detMsg.detection_width);
-            setDetectionHeight(detMsg.detection_height);
+          // Update status bar counts
+          const recognizedIds = new Set<string>();
+          let unknowns = 0;
+          for (const t of wireTracks) {
+            if (t.identity?.user_id) {
+              recognizedIds.add(t.identity.user_id);
+            } else {
+              unknowns++;
+            }
           }
+          setDetectedCount(recognizedIds.size + unknowns);
+          setUnknownCount(unknowns);
 
-          // Update student map
-          const dets = detMsg.detections;
-          if (dets && dets.length > 0) {
-            setStudentMap((prev) => {
-              const next = new Map(prev);
-
-              // Mark all as not currently detected
-              next.forEach((student, key) => {
-                if (student.currentlyDetected) {
-                  next.set(key, { ...student, currentlyDetected: false });
-                }
-              });
-
-              // Update from this detection
-              for (const det of dets) {
-                if (!det.user_id) continue;
-                next.set(det.user_id, {
-                  user_id: det.user_id,
-                  name: det.name || 'Unknown',
-                  student_id: det.student_id || '',
-                  confidence: det.confidence,
-                  currentlyDetected: true,
-                  lastSeen: detMsg.timestamp,
-                });
+          // Update studentMap for the detected-students panel
+          setStudentMap((prev) => {
+            const next = new Map(prev);
+            // Mark all as not currently detected
+            next.forEach((student, key) => {
+              if (student.currentlyDetected) {
+                next.set(key, { ...student, currentlyDetected: false });
               }
-
-              return next;
             });
-          } else {
-            // No detections — mark all not currently detected
-            setStudentMap((prev) => {
-              let changed = false;
-              const next = new Map(prev);
-              next.forEach((student, key) => {
-                if (student.currentlyDetected) {
-                  next.set(key, { ...student, currentlyDetected: false });
-                  changed = true;
-                }
+            // Mark detected students
+            for (const t of wireTracks) {
+              if (!t.identity?.user_id) continue;
+              const id = t.identity;
+              next.set(id.user_id, {
+                user_id: id.user_id,
+                name: id.name || 'Unknown',
+                student_id: id.student_id || '',
+                confidence: id.similarity ?? t.conf,
+                currentlyDetected: true,
+                lastSeen: tsIso,
               });
-              return changed ? next : prev;
-            });
-          }
+            }
+            return next;
+          });
         } else if (message.type === 'pong' || message.type === 'heartbeat') {
-          // Keep-alive responses — no action needed
+          // Keep-alive responses -- no action needed
+        } else if (message.type === 'waiting') {
+          // Camera not streaming yet -- backend keeps WS open and polls
+          setConnectionError(null);
+          setIsWaitingForCamera(true);
+          setIsConnecting(false);
         } else if (message.type === 'error') {
           const errMsg = message as { type: string; message?: string };
           hasErrorRef.current = true;
@@ -315,15 +317,14 @@ export function useDetectionWebSocket(scheduleId: string): UseDetectionWebSocket
   }, [connectWebSocket]);
 
   return {
-    detections,
     isConnected,
     isConnecting,
-    hlsUrl,
+    isWaitingForCamera,
     streamMode,
     studentMap,
+    detectedCount,
+    unknownCount,
     connectionError,
     reconnect,
-    detectionWidth,
-    detectionHeight,
   };
 }

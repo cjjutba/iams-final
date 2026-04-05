@@ -21,8 +21,10 @@
  * @see backend/app/schemas/face.py
  */
 
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
+
 import { api } from '../utils/api';
-import type { FaceRegisterResponse, FaceStatusResponse } from '../types';
+import type { FaceRegisterResponse, FaceStatusResponse, ImageQualityResponse } from '../types';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -31,58 +33,68 @@ import type { FaceRegisterResponse, FaceStatusResponse } from '../types';
 /** Upload timeout: 60 seconds (images can be large) */
 const UPLOAD_TIMEOUT_MS = 60_000;
 
+/** Validation timeout: 15 seconds (single image, lightweight) */
+const VALIDATE_TIMEOUT_MS = 15_000;
+
+/** Max dimension for face images before upload (backend uses 112x112 for recognition) */
+const MAX_IMAGE_DIMENSION = 800;
+
+/** JPEG compression quality for face images (0-1) */
+const IMAGE_COMPRESS_QUALITY = 0.7;
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
 /**
+ * Compress a file:// image by resizing and lowering JPEG quality.
+ * Reduces ~5 MB phone photos to ~100-200 KB — plenty for face recognition
+ * (backend uses 112x112 input) and avoids nginx 413 errors.
+ */
+const compressImage = async (uri: string): Promise<string> => {
+  try {
+    const result = await manipulateAsync(
+      uri,
+      [{ resize: { width: MAX_IMAGE_DIMENSION } }],
+      { compress: IMAGE_COMPRESS_QUALITY, format: SaveFormat.JPEG },
+    );
+    return result.uri;
+  } catch {
+    // If compression fails, fall back to the original image.
+    // nginx allows 50M so uncompressed images will still upload.
+    console.warn('[FaceService] Image compression failed, using original');
+    return uri;
+  }
+};
+
+/**
  * Build a FormData payload from an array of image sources.
  *
- * Handles two image formats:
- * 1. `file://` URIs -- converted to React Native file upload objects
- *    with { uri, type, name } shape (RN's FormData polyfill handles
- *    the actual multipart encoding).
- * 2. Raw base64 strings -- appended directly; the backend's UploadFile
- *    handler decodes them server-side.
+ * Compresses file:// images first to avoid large uploads, then wraps them
+ * in the { uri, type, name } shape that RN's FormData polyfill encodes
+ * as multipart parts.
  *
  * The field name `images` matches the FastAPI parameter:
  *   `images: List[UploadFile] = File(...)`
- *
- * @param images - Array of image URIs or base64 strings
- * @returns Populated FormData instance
  */
-const buildImageFormData = (images: string[]): FormData => {
+const buildImageFormData = async (images: string[]): Promise<FormData> => {
   const formData = new FormData();
 
-  images.forEach((image, index) => {
-    if (image.startsWith('file://') || image.startsWith('content://')) {
-      // React Native file upload object
-      const file = {
-        uri: image,
-        type: 'image/jpeg',
-        name: `face_${index}.jpg`,
-      } as unknown as Blob;
-      formData.append('images', file);
-    } else if (image.startsWith('data:image/')) {
-      // Data URI -- strip prefix and send as file-like object
-      // Some camera libraries return data URIs; we re-wrap them.
-      const base64Data = image.split(',')[1] || image;
-      const file = {
-        uri: `data:image/jpeg;base64,${base64Data}`,
-        type: 'image/jpeg',
-        name: `face_${index}.jpg`,
-      } as unknown as Blob;
-      formData.append('images', file);
-    } else {
-      // Assume raw base64 string
-      const file = {
-        uri: `data:image/jpeg;base64,${image}`,
-        type: 'image/jpeg',
-        name: `face_${index}.jpg`,
-      } as unknown as Blob;
-      formData.append('images', file);
+  for (let index = 0; index < images.length; index++) {
+    let uri = images[index];
+
+    // Compress file:// images to reduce payload size
+    if (uri.startsWith('file://') || uri.startsWith('content://')) {
+      uri = await compressImage(uri);
     }
-  });
+
+    const file = {
+      uri,
+      type: 'image/jpeg',
+      name: `face_${index}.jpg`,
+    } as unknown as Blob;
+    formData.append('images', file);
+  }
 
   return formData;
 };
@@ -107,7 +119,7 @@ export const faceService = {
    * Response: FaceRegisterResponse { success, message, embedding_id, user_id }
    */
   async registerFace(images: string[]): Promise<FaceRegisterResponse> {
-    const formData = buildImageFormData(images);
+    const formData = await buildImageFormData(images);
 
     const response = await api.post<FaceRegisterResponse>(
       '/face/register',
@@ -136,7 +148,7 @@ export const faceService = {
    * Response: FaceRegisterResponse { success, message, embedding_id, user_id }
    */
   async reregisterFace(images: string[]): Promise<FaceRegisterResponse> {
-    const formData = buildImageFormData(images);
+    const formData = await buildImageFormData(images);
 
     const response = await api.post<FaceRegisterResponse>(
       '/face/reregister',
@@ -185,6 +197,41 @@ export const faceService = {
   ): Promise<{ success: boolean; message: string }> {
     const response = await api.delete<{ success: boolean; message: string }>(
       `/face/${userId}`,
+    );
+    return response.data;
+  },
+
+  /**
+   * Validate a single face image quality before adding it to the capture set.
+   *
+   * Runs server-side quality gating (blur, brightness, face size, det confidence)
+   * using the mobile-calibrated blur threshold so the user can retake a bad
+   * angle immediately instead of failing at final submission.
+   *
+   * @param imageUri - file:// URI of the captured image
+   * @returns Quality validation result with pass/fail and rejection reasons
+   * @throws AxiosError on network or server errors
+   *
+   * Backend: POST /face/validate-image (accepts authenticated or unauthenticated)
+   * Request: multipart/form-data with field "image" (single UploadFile)
+   * Response: ImageQualityResponse { passed, blur_score, brightness, ... }
+   */
+  async validateImage(imageUri: string): Promise<ImageQualityResponse> {
+    const formData = new FormData();
+    const file = {
+      uri: imageUri,
+      type: 'image/jpeg',
+      name: 'check.jpg',
+    } as unknown as Blob;
+    formData.append('image', file);
+
+    const response = await api.post<ImageQualityResponse>(
+      '/face/validate-image',
+      formData,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: VALIDATE_TIMEOUT_MS,
+      },
     );
     return response.data;
   },

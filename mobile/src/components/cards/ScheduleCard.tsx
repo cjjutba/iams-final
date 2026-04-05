@@ -2,7 +2,7 @@
  * ScheduleCard Component
  *
  * Displays schedule/class information with time, subject, room, and faculty.
- * Features a left accent bar for visual emphasis.
+ * Clean flat card with 1px border.
  */
 
 import React from 'react';
@@ -20,42 +20,24 @@ interface ScheduleCardProps {
 export const ScheduleCard: React.FC<ScheduleCardProps> = ({ schedule, onPress }) => {
   return (
     <Card onPress={onPress} style={styles.card}>
-      <View style={styles.content}>
-        {/* Accent bar */}
-        <View style={styles.accentBar} />
-
-        {/* Main content */}
-        <View style={styles.mainContent}>
-          {/* Time */}
-          <Text variant="h3" weight="700" style={styles.time}>
-            {formatTime(schedule.start_time)}
+      <Text variant="body" weight="700">
+        {formatTime(schedule.start_time)}
+      </Text>
+      <Text variant="body" weight="600" numberOfLines={1} style={styles.subject}>
+        {schedule.subject_name}
+      </Text>
+      <Text variant="caption" color={theme.colors.text.tertiary}>
+        {schedule.subject_code}
+      </Text>
+      <View style={styles.metaRow}>
+        <Text variant="bodySmall" color={theme.colors.text.secondary}>
+          {schedule.room_name}
+        </Text>
+        {schedule.faculty_name && (
+          <Text variant="bodySmall" color={theme.colors.text.secondary}>
+            {' \u2022 '}{schedule.faculty_name}
           </Text>
-
-          {/* Subject */}
-          <Text variant="body" weight="600" numberOfLines={1} style={styles.subject}>
-            {schedule.subject_name}
-          </Text>
-          <Text variant="caption" color={theme.colors.text.tertiary} style={styles.code}>
-            {schedule.subject_code}
-          </Text>
-
-          {/* Meta info */}
-          <View style={styles.metaRow}>
-            <Text variant="bodySmall" color={theme.colors.text.secondary}>
-              {schedule.room_name}
-            </Text>
-            {schedule.faculty_name && (
-              <>
-                <Text variant="bodySmall" color={theme.colors.text.tertiary}>
-                  {' • '}
-                </Text>
-                <Text variant="bodySmall" color={theme.colors.text.secondary}>
-                  {schedule.faculty_name}
-                </Text>
-              </>
-            )}
-          </View>
-        </View>
+        )}
       </View>
     </Card>
   );
@@ -63,36 +45,15 @@ export const ScheduleCard: React.FC<ScheduleCardProps> = ({ schedule, onPress })
 
 const styles = StyleSheet.create({
   card: {
-    marginBottom: theme.spacing[3], // 12px
-    paddingLeft: 0,
-  },
-  content: {
-    flexDirection: 'row',
-  },
-  accentBar: {
-    width: 4,
-    backgroundColor: theme.colors.primary,
-    borderTopLeftRadius: theme.borderRadius.md,
-    borderBottomLeftRadius: theme.borderRadius.md,
-    marginRight: theme.spacing[4], // 16px
-  },
-  mainContent: {
-    flex: 1,
-    paddingVertical: theme.spacing[2], // 8px
-    paddingRight: theme.spacing[4], // 16px
-  },
-  time: {
-    marginBottom: theme.spacing[2], // 8px
+    marginBottom: theme.spacing[2],
   },
   subject: {
-    marginBottom: theme.spacing[1], // 4px
-  },
-  code: {
-    marginBottom: theme.spacing[2], // 8px
+    marginTop: theme.spacing[1],
+    marginBottom: 2,
   },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    flexWrap: 'wrap',
+    marginTop: theme.spacing[2],
   },
 });

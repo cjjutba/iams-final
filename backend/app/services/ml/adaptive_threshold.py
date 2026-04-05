@@ -14,9 +14,8 @@ Algorithm:
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Dict, Optional
 
-from app.config import settings, logger
+from app.config import logger, settings
 
 
 @dataclass
@@ -31,7 +30,7 @@ class AdaptiveThresholdManager:
     """Tracks match statistics per room and recommends thresholds."""
 
     def __init__(self):
-        self._room_stats: Dict[str, _RoomAccumulator] = {}
+        self._room_stats: dict[str, _RoomAccumulator] = {}
 
     def _get_room(self, room_id: str) -> _RoomAccumulator:
         if room_id not in self._room_stats:
@@ -123,7 +122,7 @@ class AdaptiveThresholdManager:
             "adapted": adapted,
         }
 
-    def reset(self, room_id: Optional[str] = None) -> None:
+    def reset(self, room_id: str | None = None) -> None:
         """Reset statistics for a room or all rooms."""
         if room_id:
             self._room_stats.pop(room_id, None)

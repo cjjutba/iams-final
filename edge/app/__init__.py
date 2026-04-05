@@ -1,8 +1,9 @@
 """
-IAMS Edge Device Application
+IAMS Edge Device — Ultra-lightweight RPi Camera Gateway
 
-Raspberry Pi edge device for continuous face detection and attendance monitoring.
+Captures frames from Reolink P340 and relays to VPS for processing.
+No ML, no detection — just frame sampling and stream relay.
 """
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 __author__ = "IAMS Development Team"

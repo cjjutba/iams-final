@@ -5,7 +5,8 @@ Links students to the classes they are enrolled in.
 """
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
+
 from sqlalchemy import Column, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -32,20 +33,18 @@ class Enrollment(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
     # Foreign keys
-    student_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
-    schedule_id = Column(UUID(as_uuid=True), ForeignKey("schedules.id"), nullable=False, index=True)
+    student_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    schedule_id = Column(UUID(as_uuid=True), ForeignKey("schedules.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # Timestamp
-    enrolled_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    enrolled_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
 
     # Relationships
-    student = relationship("User", foreign_keys=[student_id], backref="enrollments")
-    schedule = relationship("Schedule", backref="enrollments")
+    student = relationship("User", foreign_keys=[student_id], back_populates="enrollments")
+    schedule = relationship("Schedule", back_populates="enrollments")
 
     # Unique constraint (one enrollment per student per schedule)
-    __table_args__ = (
-        UniqueConstraint('student_id', 'schedule_id', name='uq_student_schedule'),
-    )
+    __table_args__ = (UniqueConstraint("student_id", "schedule_id", name="uq_student_schedule"),)
 
     def __repr__(self):
         return f"<Enrollment(id={self.id}, student_id={self.student_id}, schedule_id={self.schedule_id})>"

@@ -5,7 +5,6 @@
  * - Greeting with student's name
  * - Today's date
  * - Face registration status card
- * - Attendance overview (segmented bar + stats)
  * - Current class highlight (if ongoing)
  * - Upcoming class (if no current class but classes remain today)
  * - Today's classes with attendance status
@@ -20,19 +19,18 @@ import type { StackNavigationProp } from '@react-navigation/stack';
 import { RefreshCw } from 'lucide-react-native';
 import { useAuth, useSchedule } from '../../hooks';
 import { useToast } from '../../hooks/useToast';
+import { useNotificationStore } from '../../stores/notificationStore';
 import { faceService, attendanceService } from '../../services';
 import { theme, strings } from '../../constants';
 import { formatDate, formatTime, getDayName } from '../../utils';
 import type {
   StudentStackParamList,
   ScheduleWithAttendance,
-  AttendanceSummary,
   AttendanceRecord,
 } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
 import { Text, Card, Badge, Button } from '../../components/ui';
 import { FaceStatusCard } from '../../components/cards/FaceStatusCard';
-import { AttendanceOverviewCard } from '../../components/cards/AttendanceOverviewCard';
 import { ActivityFeedItem } from '../../components/cards/ActivityFeedItem';
 
 type StudentHomeNavigationProp = StackNavigationProp<StudentStackParamList, 'StudentTabs'>;
@@ -54,6 +52,9 @@ export const StudentHomeScreen: React.FC = () => {
   } = useSchedule();
 
   const { showError } = useToast();
+  const { unreadCount, fetchUnreadCount } = useNotificationStore();
+
+  useEffect(() => { fetchUnreadCount(); }, [fetchUnreadCount]);
 
   const currentClass = getCurrentClass();
   const nextClass = getNextClass();
@@ -78,20 +79,6 @@ export const StudentHomeScreen: React.FC = () => {
     }, []),
   );
 
-  // ---------- attendance summary ----------
-
-  const [summary, setSummary] = useState<AttendanceSummary | null>(null);
-
-  const fetchSummary = useCallback(() => {
-    // Fetch summary for the current semester (approximate: last 6 months)
-    const endDate = new Date().toISOString().split('T')[0];
-    const startDate = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-
-    attendanceService.getAttendanceSummary(startDate, endDate)
-      .then(setSummary)
-      .catch(() => setSummary(null));
-  }, []);
-
   // ---------- recent activity ----------
 
   const [recentActivity, setRecentActivity] = useState<AttendanceRecord[]>([]);
@@ -102,12 +89,11 @@ export const StudentHomeScreen: React.FC = () => {
       .catch(() => setRecentActivity([]));
   }, []);
 
-  // Fetch summary + activity on focus
+  // Fetch activity on focus
   useFocusEffect(
     useCallback(() => {
-      fetchSummary();
       fetchRecentActivity();
-    }, [fetchSummary, fetchRecentActivity]),
+    }, [fetchRecentActivity]),
   );
 
   useEffect(() => {
@@ -145,9 +131,8 @@ export const StudentHomeScreen: React.FC = () => {
   const handleRefresh = useCallback(() => {
     clearError();
     fetchMySchedules();
-    fetchSummary();
     fetchRecentActivity();
-  }, [fetchMySchedules, clearError, fetchSummary, fetchRecentActivity]);
+  }, [fetchMySchedules, clearError, fetchRecentActivity]);
 
   const handleFaceRegisterPress = useCallback(() => {
     navigation.navigate('FaceRegister', { mode: 'register' });
@@ -225,17 +210,6 @@ export const StudentHomeScreen: React.FC = () => {
         onRegister={handleFaceRegisterPress}
         onReregister={handleFaceReregisterPress}
       />
-
-      {/* Attendance overview card */}
-      {summary && (
-        <AttendanceOverviewCard
-          present={summary.present}
-          late={summary.late}
-          absent={summary.absent}
-          earlyLeave={summary.early_leave}
-          attendanceRate={summary.attendance_rate}
-        />
-      )}
 
       {/* Current class highlight */}
       {currentClass && (
@@ -389,10 +363,11 @@ export const StudentHomeScreen: React.FC = () => {
 
   if (error && todaySchedules.length === 0 && !isLoading) {
     return (
-      <ScreenLayout safeArea padded={false}>
+      <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
         <Header
           title={strings.student.home}
           showNotification
+          notificationCount={unreadCount}
           onNotificationPress={handleNotificationPress}
         />
         <View style={styles.errorContainer}>
@@ -411,7 +386,7 @@ export const StudentHomeScreen: React.FC = () => {
   // ---------- main render ----------
 
   return (
-    <ScreenLayout safeArea padded={false}>
+    <ScreenLayout safeArea safeAreaEdges={['top']} padded={false}>
       <Header
         title={strings.student.home}
         showNotification
@@ -443,8 +418,7 @@ export const StudentHomeScreen: React.FC = () => {
 
 const styles = StyleSheet.create({
   headerContent: {
-    paddingHorizontal: theme.spacing[4],
-    paddingTop: theme.spacing[6],
+    paddingTop: theme.spacing[4],
   },
   greeting: {
     marginBottom: theme.spacing[2],
@@ -453,11 +427,11 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing[6],
   },
   currentClassCard: {
-    backgroundColor: theme.colors.secondary,
-    padding: theme.spacing[4],
-    borderRadius: theme.borderRadius.lg,
-    borderLeftWidth: 4,
-    borderLeftColor: theme.colors.primary,
+    backgroundColor: theme.colors.card,
+    padding: theme.spacing[3],
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
     marginBottom: theme.spacing[6],
   },
   currentClassLabel: {
@@ -469,11 +443,11 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing[1],
   },
   upcomingClassCard: {
-    backgroundColor: theme.colors.secondary,
-    padding: theme.spacing[4],
-    borderRadius: theme.borderRadius.lg,
-    borderLeftWidth: 4,
-    borderLeftColor: theme.colors.border,
+    backgroundColor: theme.colors.card,
+    padding: theme.spacing[3],
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
     marginBottom: theme.spacing[6],
   },
   upcomingClassLabel: {
@@ -488,11 +462,10 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing[4],
   },
   listContent: {
-    paddingHorizontal: theme.spacing[4],
-    paddingBottom: theme.spacing[6],
+    padding: theme.spacing[4],
   },
   scheduleCard: {
-    marginBottom: theme.spacing[3],
+    marginBottom: theme.spacing[2],
   },
   cardContent: {
     flexDirection: 'row',
@@ -531,10 +504,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   nextDayCard: {
-    backgroundColor: theme.colors.secondary,
-    paddingVertical: theme.spacing[3],
-    paddingHorizontal: theme.spacing[4],
-    borderRadius: theme.borderRadius.md,
+    backgroundColor: theme.colors.card,
+    paddingVertical: theme.spacing[2],
+    paddingHorizontal: theme.spacing[3],
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
     marginTop: theme.spacing[2],
     width: '100%',
   },

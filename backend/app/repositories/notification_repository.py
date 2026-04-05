@@ -5,8 +5,8 @@ Data access layer for Notification operations.
 """
 
 import uuid as _uuid
-from typing import List, Optional
 from datetime import datetime
+
 from sqlalchemy.orm import Session
 
 from app.models.notification import Notification
@@ -26,19 +26,13 @@ class NotificationRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_by_id(self, notification_id: str) -> Optional[Notification]:
+    def get_by_id(self, notification_id: str) -> Notification | None:
         """Get notification by ID"""
-        return self.db.query(Notification).filter(
-            Notification.id == _to_uuid(notification_id)
-        ).first()
+        return self.db.query(Notification).filter(Notification.id == _to_uuid(notification_id)).first()
 
     def get_by_user(
-        self,
-        user_id: str,
-        unread_only: bool = False,
-        skip: int = 0,
-        limit: int = 50
-    ) -> List[Notification]:
+        self, user_id: str, unread_only: bool = False, skip: int = 0, limit: int = 50
+    ) -> list[Notification]:
         """
         Get notifications for a user
 
@@ -54,16 +48,17 @@ class NotificationRepository:
         query = self.db.query(Notification).filter(Notification.user_id == _to_uuid(user_id))
 
         if unread_only:
-            query = query.filter(Notification.read == False)
+            query = query.filter(Notification.read.is_(False))
 
         return query.order_by(Notification.created_at.desc()).offset(skip).limit(limit).all()
 
     def get_unread_count(self, user_id: str) -> int:
         """Get count of unread notifications for a user"""
-        return self.db.query(Notification).filter(
-            Notification.user_id == _to_uuid(user_id),
-            Notification.read == False
-        ).count()
+        return (
+            self.db.query(Notification)
+            .filter(Notification.user_id == _to_uuid(user_id), Notification.read.is_(False))
+            .count()
+        )
 
     def create(self, notification_data: dict) -> Notification:
         """
@@ -115,12 +110,25 @@ class NotificationRepository:
             Number of notifications updated
         """
         now = datetime.utcnow()
-        count = self.db.query(Notification).filter(
-            Notification.user_id == _to_uuid(user_id),
-            Notification.read == False
-        ).update({
-            "read": True,
-            "read_at": now
-        })
+        count = (
+            self.db.query(Notification)
+            .filter(Notification.user_id == _to_uuid(user_id), Notification.read.is_(False))
+            .update({"read": True, "read_at": now})
+        )
+        self.db.commit()
+        return count
+
+    def delete(self, notification_id: str) -> bool:
+        """Delete a notification by ID. Returns True if deleted."""
+        notification = self.get_by_id(notification_id)
+        if not notification:
+            return False
+        self.db.delete(notification)
+        self.db.commit()
+        return True
+
+    def delete_all(self, user_id: str) -> int:
+        """Delete all notifications for a user. Returns count deleted."""
+        count = self.db.query(Notification).filter(Notification.user_id == _to_uuid(user_id)).delete()
         self.db.commit()
         return count

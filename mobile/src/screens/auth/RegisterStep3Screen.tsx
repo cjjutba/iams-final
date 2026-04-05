@@ -78,7 +78,11 @@ export const RegisterStep3Screen: React.FC = () => {
   }, [studentInfo, accountInfo]);
 
   const handleScanComplete = useCallback((images: string[]) => {
-    navigation.navigate('RegisterReview', { studentInfo, accountInfo, faceImages: images });
+    // FaceScanCamera already deactivated the camera before calling this.
+    // Navigate on next tick to ensure the camera view is fully stopped.
+    requestAnimationFrame(() => {
+      navigation.navigate('RegisterReview', { studentInfo, accountInfo, faceImages: images });
+    });
   }, [studentInfo, accountInfo]);
 
   // ═══════════════════════════════════════════════════════════

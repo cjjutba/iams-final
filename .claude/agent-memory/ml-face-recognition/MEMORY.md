@@ -1,85 +1,42 @@
 # ML Face Recognition Agent Memory
 
+## Index
+
+- [faiss_thread_safety.md](faiss_thread_safety.md) -- FAISSManager RLock pattern and re-entrancy rationale
+- [ort_session_options_pitfall.md](ort_session_options_pitfall.md) -- ORT get_session_options() returns a copy (dead code trap)
+
 ## Critical Learnings
 
 ### FastAPI UploadFile Constructor (2026-02-07)
-**Issue:** Tests failed with `TypeError: UploadFile.__init__() got unexpected keyword argument 'content_type'`
-
-**Root Cause:** FastAPI/Starlette's UploadFile constructor signature:
-```python
-UploadFile(file: BinaryIO, *, size: int | None, filename: str | None, headers: Headers | None)
-```
-- `file` is the first positional argument (required)
-- `content_type` is NOT a valid parameter
-- To set content-type, use `headers` parameter instead
-
-**Correct Test Pattern:**
-```python
-from fastapi import UploadFile
-import io
-
-img_bytes = io.BytesIO(image_data)
-upload_file = UploadFile(
-    file=img_bytes,
-    filename="test.jpg"
-    # NO content_type parameter!
-)
-```
-
-**Files Fixed:**
-- `c:\.cjjutba\.thesis\iams\backend\tests\integration\test_registration_flow.py` (2 helper methods)
-
----
+- `content_type` is NOT a valid UploadFile parameter; use `headers` instead
 
 ### Face Re-Registration Logic (2026-02-07)
-**Issue:** `test_reregister_existing_face` failed with `UNIQUE constraint failed: face_registrations.user_id`
+- `face_registrations.user_id` has UNIQUE constraint -- must DELETE (not deactivate) before re-INSERT
 
-**Root Cause:**
-- `face_registrations.user_id` has a UNIQUE constraint (line 38 of model)
-- Original `reregister_face()` called `deactivate()` which set `is_active=False` but kept the record
-- Calling `register_face()` tried to INSERT a new record → violated UNIQUE constraint
+### FAISS Reregister ID Sync (2026-03-30)
+- `reregister_face()` must rebuild FAISS BEFORE calling `register_face()`, not after
+- Reason: `register_face` assigns IDs via `index.ntotal`; a post-register rebuild reassigns all IDs from scratch, desynchronizing DB `faiss_id` values
 
-**Solution:** Changed `reregister_face()` to DELETE old registration instead of deactivating
-```python
-# OLD: deactivate (sets is_active=False)
-self.face_repo.deactivate(user_id)
-
-# NEW: delete (removes record entirely)
-old_registration = self.face_repo.get_by_user(user_id)
-if old_registration:
-    self.face_repo.delete(str(old_registration.id))
-```
-
-**Rationale:**
-- Old FAISS embedding is already invalidated when re-registering
-- No need to keep inactive records (adds clutter)
-- Respects UNIQUE constraint on user_id
-- Cleaner data model
-
-**Files Modified:**
-- `c:\.cjjutba\.thesis\iams\backend\app\services\face_service.py` (lines 244-254)
-
----
-
-## Test Results
-- **Before:** 6 face registration tests failing
-- **After:** All 12 tests in `test_registration_flow.py` passing
-- **Full Suite:** 275 passing (9 pre-existing failures unrelated to face recognition)
-
----
+### FAISS remove() Limitation (2026-03-30)
+- `faiss.remove(fid)` only deletes from `user_map`, NOT from `IndexFlatIP` (no native delete)
+- After rollback, orphaned vectors remain -- must call `rebuild_faiss_index()` to purge
 
 ## Design Notes
 
 ### FAISS Index Management
-- **Index Type:** `IndexFlatIP` (inner product, no native delete support)
-- **On User Removal:** Must rebuild index or filter results at search time
-- **Embedding Storage:** 512-dim vectors stored as bytes in `face_registrations.embedding_vector` for index rebuilding
+- **Index Type:** `IndexFlatIP` (inner product, no native delete)
+- **Thread Safety:** `threading.RLock` on all read/write methods (added 2026-03-30)
+- **RLock rationale:** `rebuild()` calls `add_batch()` internally -- needs re-entrant lock
+- **Embedding Storage:** 512-dim vectors as bytes in `face_embeddings.embedding_vector`
+- **rebuild()** now returns `dict[int, str]` mapping for DB faiss_id sync
 
 ### Face Registration Constraints
 - **Images Required:** 3-5 per user
 - **Embedding Dimension:** 512 (L2-normalized unit vectors)
-- **Unique Constraint:** One active registration per user (enforced at DB level via `user_id` UNIQUE)
+- **Zero-norm guard:** `norm < 1e-6` check before division (added 2026-03-30)
+- **Unique Constraint:** One active registration per user (`user_id` UNIQUE)
 
-### Current Limitations
-- `face_registrations.user_id` UNIQUE constraint prevents soft-delete pattern
-- Consider future enhancement: change to UNIQUE constraint on `(user_id, is_active)` if audit trail needed
+## Test Environment Notes
+- FAISS Manager tests: all 27 pass (test_faiss_manager.py)
+- Face service tests: pre-existing SQLAlchemy backref conflict on `EarlyLeaveEvent` blocks DB fixture setup
+- Auth/security tests: `jwt` module missing from test venv

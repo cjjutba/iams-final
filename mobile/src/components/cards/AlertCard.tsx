@@ -2,7 +2,7 @@
  * AlertCard Component
  *
  * Displays early leave alert information.
- * Shows warning icon, student name, and time detected.
+ * Compact flat card with 1px border.
  */
 
 import React from 'react';
@@ -22,34 +22,23 @@ export const AlertCard: React.FC<AlertCardProps> = ({ event, onPress }) => {
   return (
     <Card onPress={onPress} style={styles.card}>
       <View style={styles.content}>
-        {/* Warning icon */}
         <View style={styles.iconContainer}>
-          <AlertTriangle size={24} color={theme.colors.warning} />
+          <AlertTriangle size={18} color={theme.colors.warning} />
         </View>
 
-        {/* Info */}
         <View style={styles.info}>
-          {/* Student name */}
-          <Text variant="body" weight="600" numberOfLines={1} style={styles.name}>
+          <Text variant="bodySmall" weight="600" numberOfLines={1}>
             {event.student_name}
           </Text>
-
-          {/* Alert message */}
-          <Text variant="bodySmall" color={theme.colors.text.secondary} style={styles.message}>
-            Left early
-          </Text>
-
-          {/* Time */}
-          <Text variant="caption" color={theme.colors.text.tertiary}>
-            {formatTimeAgo(event.detected_at)}
+          <Text variant="caption" color={theme.colors.text.secondary}>
+            Left early {'\u00B7'} {formatTimeAgo(event.detected_at)}
           </Text>
         </View>
 
-        {/* Consecutive misses indicator */}
         {event.consecutive_misses > 0 && (
           <View style={styles.badge}>
             <Text variant="caption" weight="600" color={theme.colors.warning}>
-              {event.consecutive_misses} misses
+              {event.consecutive_misses}
             </Text>
           </View>
         )}
@@ -60,35 +49,32 @@ export const AlertCard: React.FC<AlertCardProps> = ({ event, onPress }) => {
 
 const styles = StyleSheet.create({
   card: {
-    marginBottom: theme.spacing[2], // 8px
+    marginBottom: theme.spacing[2],
   },
   content: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   iconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: theme.colors.warningLight,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: theme.spacing[3], // 12px
+    marginRight: theme.spacing[3],
   },
   info: {
     flex: 1,
-    marginRight: theme.spacing[3], // 12px
-  },
-  name: {
-    marginBottom: theme.spacing[1], // 4px
-  },
-  message: {
-    marginBottom: theme.spacing[1], // 4px
+    marginRight: theme.spacing[2],
+    gap: 2,
   },
   badge: {
-    paddingHorizontal: theme.spacing[2], // 8px
-    paddingVertical: theme.spacing[1], // 4px
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: theme.colors.warningLight,
-    borderRadius: theme.borderRadius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

@@ -4,18 +4,21 @@ User Model
 Represents all system users: students, faculty, and admins.
 """
 
+import enum
 import uuid
-from datetime import datetime
-from sqlalchemy import Column, String, Boolean, DateTime, Enum as SQLEnum
+from datetime import UTC, datetime
+
+from sqlalchemy import Boolean, Column, DateTime, String
+from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
-import enum
 
 from app.database import Base
 
 
-class UserRole(str, enum.Enum):
+class UserRole(enum.StrEnum):
     """User role enumeration"""
+
     STUDENT = "student"
     FACULTY = "faculty"
     ADMIN = "admin"
@@ -46,8 +49,7 @@ class User(Base):
 
     # Authentication
     email = Column(String(255), unique=True, nullable=False, index=True)
-    password_hash = Column(String(255), nullable=True)  # Nullable when using Supabase Auth
-    supabase_user_id = Column(UUID(as_uuid=True), unique=True, nullable=True, index=True)
+    password_hash = Column(String(255), nullable=False)
 
     # Profile
     role = Column(SQLEnum(UserRole), nullable=False, index=True)
@@ -58,6 +60,9 @@ class User(Base):
     # Student-specific
     student_id = Column(String(50), unique=True, nullable=True, index=True)
 
+    # Supabase integration
+    supabase_user_id = Column(String(255), unique=True, nullable=True, index=True)
+
     # Email verification
     email_verified = Column(Boolean, default=False, nullable=False)
     email_verified_at = Column(DateTime, nullable=True)
@@ -66,14 +71,17 @@ class User(Base):
     is_active = Column(Boolean, default=True, nullable=False)
 
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC), nullable=False)
 
-    # Relationships (will be defined when other models are created)
-    # face_registration = relationship("FaceRegistration", back_populates="user", uselist=False)
-    # schedules = relationship("Schedule", back_populates="faculty")  # For faculty
-    # enrollments = relationship("Enrollment", back_populates="student")  # For students
-    # attendance_records = relationship("AttendanceRecord", back_populates="student")  # For students
+    # Relationships
+    face_registration = relationship("FaceRegistration", back_populates="user", uselist=False)
+    teaching_schedules = relationship("Schedule", back_populates="faculty", foreign_keys="[Schedule.faculty_id]")
+    enrollments = relationship("Enrollment", back_populates="student", foreign_keys="[Enrollment.student_id]")
+    attendance_records = relationship(
+        "AttendanceRecord", back_populates="student", foreign_keys="[AttendanceRecord.student_id]"
+    )
+    notifications = relationship("Notification", back_populates="user", foreign_keys="[Notification.user_id]")
 
     def __repr__(self):
         return f"<User(id={self.id}, email={self.email}, role={self.role})>"

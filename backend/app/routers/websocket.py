@@ -1,319 +1,308 @@
 """
-WebSocket Router
+WebSocket manager — direct broadcast with optional Redis pub/sub for multi-worker.
 
-Real-time communication for attendance updates and early-leave alerts.
+Message types:
+  - frame_update:        Per-frame tracking data at WS_BROADCAST_FPS (~10fps)
+  - attendance_summary:  Periodic attendance state (every 5-10s)
+  - check_in:            Student check-in event
+  - early_leave:         Early leave detection
+  - early_leave_return:  Student return after early leave
+  - scan_result:         Legacy scan result (backward compatibility)
 """
 
+import asyncio
 import json
-from typing import Dict, Set
+import logging
+import os
+from collections import defaultdict
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from app.config import logger
 
+from app.config import settings
+from app.utils.security import verify_token
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
 class ConnectionManager:
-    """
-    WebSocket connection manager
-
-    Manages active WebSocket connections for real-time updates.
-    """
+    """WebSocket connection manager with optional Redis pub/sub backing."""
 
     def __init__(self):
-        # Active connections: user_id → WebSocket
-        self.active_connections: Dict[str, WebSocket] = {}
+        self._attendance_clients: dict[str, set[WebSocket]] = defaultdict(set)
+        self._alert_clients: dict[str, set[WebSocket]] = defaultdict(set)
+        self._redis_subscriber_task: asyncio.Task | None = None
 
-        # Schedule subscriptions: schedule_id → set of user_ids
-        self.schedule_connections: Dict[str, Set[str]] = {}
+    # ── Client management ────────────────────────────────────────
 
-    async def connect(self, user_id: str, websocket: WebSocket):
-        """
-        Accept and store WebSocket connection
-
-        Args:
-            user_id: User UUID
-            websocket: WebSocket connection
-        """
-        await websocket.accept()
-        self.active_connections[user_id] = websocket
-        logger.info(f"WebSocket connected: user {user_id}")
-
-    def register_for_schedule(self, user_id: str, schedule_id: str):
-        """
-        Register user to receive updates for a specific schedule
-
-        Args:
-            user_id: User UUID
-            schedule_id: Schedule UUID
-        """
-        if schedule_id not in self.schedule_connections:
-            self.schedule_connections[schedule_id] = set()
-
-        self.schedule_connections[schedule_id].add(user_id)
-        logger.debug(f"User {user_id} subscribed to schedule {schedule_id}")
-
-    def unregister_from_schedule(self, user_id: str, schedule_id: str):
-        """
-        Unregister user from schedule updates
-
-        Args:
-            user_id: User UUID
-            schedule_id: Schedule UUID
-        """
-        if schedule_id in self.schedule_connections:
-            self.schedule_connections[schedule_id].discard(user_id)
-
-            # Clean up empty sets
-            if not self.schedule_connections[schedule_id]:
-                del self.schedule_connections[schedule_id]
-
-    def disconnect(self, user_id: str):
-        """
-        Remove WebSocket connection
-
-        Args:
-            user_id: User UUID
-        """
-        if user_id in self.active_connections:
-            del self.active_connections[user_id]
-
-            # Clean up schedule subscriptions
-            for schedule_id in list(self.schedule_connections.keys()):
-                self.schedule_connections[schedule_id].discard(user_id)
-                if not self.schedule_connections[schedule_id]:
-                    del self.schedule_connections[schedule_id]
-
-            logger.info(f"WebSocket disconnected: user {user_id}")
-
-    async def send_personal(self, user_id: str, message: dict):
-        """
-        Send message to specific user
-
-        Args:
-            user_id: User UUID
-            message: Message dictionary
-        """
-        if user_id in self.active_connections:
-            try:
-                await self.active_connections[user_id].send_json(message)
-                logger.debug(f"Message sent to user {user_id}: {message.get('event')}")
-            except Exception as e:
-                logger.error(f"Failed to send message to user {user_id}: {e}")
-                self.disconnect(user_id)
-
-    async def broadcast_to_schedule(self, schedule_id: str, message: dict):
-        """
-        Broadcast message to all users subscribed to a schedule
-
-        Sends the message to all users who have registered for updates
-        for this specific schedule (faculty and enrolled students).
-
-        Args:
-            schedule_id: Schedule UUID
-            message: Message dictionary
-        """
-        if schedule_id not in self.schedule_connections:
-            logger.debug(f"No subscribers for schedule {schedule_id}")
-            return
-
-        subscribers = self.schedule_connections[schedule_id]
-        sent_count = 0
-        failed_count = 0
-
-        for user_id in list(subscribers):  # Use list() to avoid modification during iteration
-            if user_id in self.active_connections:
-                try:
-                    await self.active_connections[user_id].send_json(message)
-                    sent_count += 1
-                except Exception as e:
-                    logger.error(f"Failed to broadcast to user {user_id}: {e}")
-                    self.disconnect(user_id)
-                    failed_count += 1
-
-        logger.info(
-            f"Broadcast to schedule {schedule_id} ({message.get('event')}): "
-            f"{sent_count} sent, {failed_count} failed"
+    async def add_attendance_client(self, schedule_id: str, ws: WebSocket):
+        await ws.accept()
+        self._attendance_clients[schedule_id].add(ws)
+        logger.debug(
+            "WS client added for schedule %s (total: %d)", schedule_id, len(self._attendance_clients[schedule_id])
         )
 
-    def get_connection_count(self) -> int:
-        """Get number of active connections"""
-        return len(self.active_connections)
+    def remove_attendance_client(self, schedule_id: str, ws: WebSocket):
+        self._attendance_clients[schedule_id].discard(ws)
 
-    def get_schedule_subscriber_count(self, schedule_id: str) -> int:
-        """
-        Get number of subscribers for a schedule
+    async def add_alert_client(self, user_id: str, ws: WebSocket):
+        await ws.accept()
+        self._alert_clients[user_id].add(ws)
 
-        Args:
-            schedule_id: Schedule UUID
+    def remove_alert_client(self, user_id: str, ws: WebSocket):
+        self._alert_clients[user_id].discard(ws)
 
-        Returns:
-            Number of subscribed users
-        """
-        return len(self.schedule_connections.get(schedule_id, set()))
+    # ── Broadcasting ─────────────────────────────────────────────
+
+    async def broadcast_attendance(self, schedule_id: str, data: dict):
+        """Send data to all local clients for a schedule, then publish to Redis."""
+        dead = []
+        for ws in list(self._attendance_clients.get(schedule_id, set())):
+            try:
+                await ws.send_json(data)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self._attendance_clients[schedule_id].discard(ws)
+
+        # Publish to Redis for multi-worker fanout
+        await self._redis_publish(schedule_id, data)
+
+    async def broadcast_alert(self, user_id: str, data: dict):
+        dead = []
+        for ws in list(self._alert_clients.get(user_id, set())):
+            try:
+                await ws.send_json(data)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self._alert_clients[user_id].discard(ws)
+
+        # Publish to Redis for multi-worker fanout
+        await self._redis_publish_alert(user_id, data)
+
+    async def _redis_publish_alert(self, user_id: str, data: dict) -> None:
+        """Publish alert to Redis channel for other workers."""
+        channel = f"{settings.REDIS_WS_CHANNEL}:alert:{user_id}"
+        try:
+            from app.redis_client import get_redis
+
+            r = await get_redis()
+            enriched = {**data, "origin_pid": os.getpid(), "_alert_user_id": user_id}
+            payload = json.dumps(enriched, default=str)
+            await r.publish(channel, payload)
+        except Exception as e:
+            logger.warning("Redis alert publish failed for %s: %s", user_id, e)
+
+    async def broadcast_scan_result(
+        self,
+        schedule_id: str,
+        detections: list[dict],
+        present_count: int,
+        total_enrolled: int,
+        absent: list[str],
+        early_leave: list[str],
+    ):
+        """Legacy scan_result broadcast (backward compatibility)."""
+        await self.broadcast_attendance(
+            schedule_id,
+            {
+                "type": "scan_result",
+                "schedule_id": schedule_id,
+                "detections": detections,
+                "present_count": present_count,
+                "total_enrolled": total_enrolled,
+                "absent": absent,
+                "early_leave": early_leave,
+            },
+        )
+
+    # ── Redis pub/sub (multi-worker support) ─────────────────────
+
+    async def _redis_publish(self, schedule_id: str, data: dict) -> None:
+        """Publish message to Redis channel for other workers."""
+        channel = f"{settings.REDIS_WS_CHANNEL}:{schedule_id}"
+        try:
+            from app.redis_client import get_redis
+
+            r = await get_redis()
+            enriched = {**data, "origin_pid": os.getpid()}
+            payload = json.dumps(enriched, default=str)
+            await r.publish(channel, payload)
+        except Exception as e:
+            logger.warning("Redis publish failed for %s: %s", channel, e)
+
+    async def start_redis_subscriber(self) -> None:
+        """Start background task to forward Redis messages to local WS clients."""
+        if self._redis_subscriber_task is not None:
+            return
+        self._redis_subscriber_task = asyncio.create_task(
+            self._redis_subscribe_loop(),
+            name="ws-redis-subscriber",
+        )
+
+    async def _redis_subscribe_loop(self) -> None:
+        """Subscribe to Redis ws_broadcast channels and forward to local clients."""
+        from app.redis_client import get_redis
+
+        while True:
+            try:
+                r = await get_redis()
+                pubsub = r.pubsub()
+                await pubsub.psubscribe(f"{settings.REDIS_WS_CHANNEL}:*")
+                logger.info("WebSocket Redis subscriber started")
+
+                async for message in pubsub.listen():
+                    if message["type"] != "pmessage":
+                        continue
+                    try:
+                        channel = message["channel"]
+                        if isinstance(channel, bytes):
+                            channel = channel.decode()
+                        data = json.loads(message["data"])
+
+                        # Skip messages originating from this worker (already delivered locally)
+                        if data.get("origin_pid") == os.getpid():
+                            continue
+
+                        # Determine if this is an alert or attendance channel
+                        # Alert channels: ws_broadcast:alert:{user_id}
+                        # Attendance channels: ws_broadcast:{schedule_id}
+                        parts = channel.split(":")
+                        if len(parts) >= 3 and parts[-2] == "alert":
+                            # Alert message — forward to alert clients
+                            user_id = parts[-1]
+                            dead = []
+                            for ws in list(self._alert_clients.get(user_id, set())):
+                                try:
+                                    await ws.send_json(data)
+                                except Exception:
+                                    dead.append(ws)
+                            for ws in dead:
+                                self._alert_clients[user_id].discard(ws)
+                        else:
+                            # Attendance message — forward to attendance clients
+                            schedule_id = parts[-1]
+                            dead = []
+                            for ws in list(self._attendance_clients.get(schedule_id, set())):
+                                try:
+                                    await ws.send_json(data)
+                                except Exception:
+                                    dead.append(ws)
+                            for ws in dead:
+                                self._attendance_clients[schedule_id].discard(ws)
+
+                    except Exception:
+                        logger.debug("Failed to process Redis WS message", exc_info=True)
+
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("Redis WS subscriber disconnected, reconnecting...")
+                await asyncio.sleep(1)
 
 
-# Global connection manager
-manager = ConnectionManager()
+ws_manager = ConnectionManager()
+
+
+# IMPORTANT: Specific routes MUST be declared before the catch-all /{user_id}.
+# FastAPI matches WebSocket routes in declaration order.
+
+
+@router.websocket("/attendance/{schedule_id}")
+async def attendance_websocket(websocket: WebSocket, schedule_id: str):
+    """Real-time attendance tracking WebSocket for a schedule."""
+    token = websocket.query_params.get("token")
+    if token is None:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+    try:
+        verify_token(token)
+    except Exception:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+
+    await ws_manager.add_attendance_client(schedule_id, websocket)
+
+    # Trigger on-demand pipeline startup so bounding boxes appear immediately
+    # instead of waiting up to 30s for the next scheduler tick.
+    ensure_fn = getattr(websocket.app.state, "ensure_pipeline_running", None)
+    if ensure_fn is not None:
+        asyncio.ensure_future(ensure_fn(schedule_id))
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        logger.warning("Unexpected error on attendance WS for schedule %s", schedule_id, exc_info=True)
+    finally:
+        ws_manager.remove_attendance_client(schedule_id, websocket)
+
+
+@router.websocket("/alerts/{user_id}")
+async def alerts_websocket(websocket: WebSocket, user_id: str):
+    """Early-leave and notification alerts for a specific user."""
+    token = websocket.query_params.get("token")
+    if token is None:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+    try:
+        payload = verify_token(token)
+    except Exception:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+
+    token_user_id = payload.get("user_id")
+    if token_user_id != user_id:
+        await websocket.close(code=4003, reason="Forbidden")
+        return
+
+    await ws_manager.add_alert_client(user_id, websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        logger.warning("Unexpected error on alert WS for user %s", user_id, exc_info=True)
+    finally:
+        ws_manager.remove_alert_client(user_id, websocket)
 
 
 @router.websocket("/{user_id}")
-async def websocket_endpoint(user_id: str, websocket: WebSocket):
-    """
-    **WebSocket Endpoint**
-
-    Real-time communication channel for attendance updates and alerts.
-
-    **Connection:**
-    ```javascript
-    const ws = new WebSocket(`ws://localhost:8000/api/v1/ws/${userId}`);
-    ```
-
-    **Message Format:**
-    ```json
-    {
-      "event": "early_leave" | "attendance_update" | "session_start" | "session_end",
-      "data": {...}
-    }
-    ```
-
-    **Events:**
-
-    1. **early_leave**: Student left class early
-    ```json
-    {
-      "event": "early_leave",
-      "data": {
-        "student_id": "uuid",
-        "student_name": "John Doe",
-        "schedule_id": "uuid",
-        "detected_at": "2024-01-15T10:30:00Z",
-        "consecutive_misses": 3
-      }
-    }
-    ```
-
-    2. **attendance_update**: Attendance status changed
-    ```json
-    {
-      "event": "attendance_update",
-      "data": {
-        "student_id": "uuid",
-        "schedule_id": "uuid",
-        "status": "present",
-        "check_in_time": "2024-01-15T08:00:00Z"
-      }
-    }
-    ```
-
-    3. **session_start**: Class session started
-    ```json
-    {
-      "event": "session_start",
-      "data": {
-        "schedule_id": "uuid",
-        "start_time": "2024-01-15T08:00:00Z"
-      }
-    }
-    ```
-
-    4. **session_end**: Class session ended
-    ```json
-    {
-      "event": "session_end",
-      "data": {
-        "schedule_id": "uuid",
-        "end_time": "2024-01-15T10:00:00Z",
-        "summary": {...}
-      }
-    }
-    ```
-
-    **Usage (Client):**
-    ```javascript
-    const ws = new WebSocket(`ws://localhost:8000/api/v1/ws/${userId}`);
-
-    ws.onopen = () => {
-      console.log('WebSocket connected');
-    };
-
-    ws.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      console.log('Received:', message.event, message.data);
-
-      if (message.event === 'early_leave') {
-        // Show alert to faculty
-        showAlert(`Student ${message.data.student_name} left early`);
-      }
-    };
-
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-    };
-
-    ws.onclose = () => {
-      console.log('WebSocket disconnected');
-    };
-    ```
-
-    **Authentication:**
-    - No token validation for MVP (trusted network)
-    - In production: Verify JWT token before accepting connection
-
-    Args:
-        user_id: User UUID (from URL path)
-        websocket: WebSocket connection
-    """
-    await manager.connect(user_id, websocket)
-
+async def general_websocket(websocket: WebSocket, user_id: str):
+    """General-purpose notification WebSocket for the admin portal.
+    MUST be declared last — catch-all route."""
+    token = websocket.query_params.get("token")
+    if token is None:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
     try:
-        # Send welcome message
-        await websocket.send_json({
-            "event": "connected",
-            "data": {
-                "user_id": user_id,
-                "timestamp": str(__import__('datetime').datetime.now())
-            }
-        })
+        payload = verify_token(token)
+    except Exception:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
 
-        # Keep connection alive and listen for incoming messages
+    token_user_id = payload.get("user_id")
+    if token_user_id != user_id:
+        await websocket.close(code=4003, reason="Forbidden")
+        return
+
+    await ws_manager.add_alert_client(user_id, websocket)
+    try:
         while True:
             data = await websocket.receive_text()
-            logger.debug(f"Received from {user_id}: {data}")
-
-            # Handle application-level ping/pong for heartbeat
-            try:
-                message = json.loads(data)
-                if message.get("event") == "ping":
-                    await websocket.send_json({
-                        "event": "pong",
-                        "data": {}
-                    })
-                    continue
-            except (json.JSONDecodeError, TypeError):
-                pass
-
+            if data == "ping":
+                await websocket.send_text("pong")
     except WebSocketDisconnect:
-        manager.disconnect(user_id)
-    except Exception as e:
-        logger.error(f"WebSocket error for user {user_id}: {e}")
-        manager.disconnect(user_id)
-
-
-@router.get("/status")
-async def websocket_status():
-    """
-    **WebSocket Status**
-
-    Get WebSocket server status and connection count.
-
-    Returns:
-        dict: Status information
-    """
-    return {
-        "success": True,
-        "data": {
-            "active_connections": manager.get_connection_count(),
-            "status": "running"
-        }
-    }
+        pass
+    except Exception:
+        logger.warning("Unexpected error on general WS for user %s", user_id, exc_info=True)
+    finally:
+        ws_manager.remove_alert_client(user_id, websocket)

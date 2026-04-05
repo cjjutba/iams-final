@@ -3,14 +3,15 @@
  *
  * App settings and preferences used by both students and faculty.
  * Implements:
- * - Notification preference toggles (persisted locally via SecureStore)
+ * - Notification preference toggles (synced with backend API)
  *   - Attendance Confirmations
  *   - Early Leave Alerts
  *   - Anomaly Alerts (faculty only)
  *   - Low Attendance Warning
+ *   - Daily Digest (faculty only)
  *   - Weekly Digest
+ *   - Email Notifications
  * - Theme display (read-only for now)
- * - Password change navigation
  * - About section with real app version
  */
 
@@ -26,76 +27,36 @@ import {
   RefreshControl,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { ChevronRight, Info } from 'lucide-react-native';
+import { ChevronRight } from 'lucide-react-native';
 import { useAuth } from '../../hooks';
+import { useToast } from '../../hooks/useToast';
 import { theme, config } from '../../constants';
 import { ScreenLayout, Header } from '../../components/layouts';
-import { Text, Card, Divider } from '../../components/ui';
-
-/** Keys for persisted notification preferences */
-const PREF_KEYS = {
-  NOTIF_ATTENDANCE: '@iams/pref_notif_attendance',
-  NOTIF_ALERTS: '@iams/pref_notif_alerts',
-  NOTIF_SCHEDULE: '@iams/pref_notif_schedule',
-  NOTIF_ATTENDANCE_CONFIRM: '@iams/pref_notif_attendance_confirm',
-  NOTIF_EARLY_LEAVE: '@iams/pref_notif_early_leave',
-  NOTIF_ANOMALY: '@iams/pref_notif_anomaly',
-  NOTIF_LOW_ATTENDANCE: '@iams/pref_notif_low_attendance',
-  NOTIF_WEEKLY_DIGEST: '@iams/pref_notif_weekly_digest',
-} as const;
+import { Text, Card, Skeleton } from '../../components/ui';
+import {
+  notificationService,
+  type NotificationPreference,
+  type NotificationPreferenceUpdate,
+} from '../../services/notificationService';
 
 export const SettingsScreen: React.FC = () => {
   const navigation = useNavigation();
   const { isFaculty } = useAuth();
+  const { showError } = useToast();
 
-  // Legacy notification preferences (kept for backwards compatibility)
-  const [attendanceNotifs, setAttendanceNotifs] = useState(true);
-  const [alertNotifs, setAlertNotifs] = useState(true);
-  const [scheduleNotifs, setScheduleNotifs] = useState(true);
-
-  // New notification preferences
-  const [attendanceConfirmNotifs, setAttendanceConfirmNotifs] = useState(true);
-  const [earlyLeaveNotifs, setEarlyLeaveNotifs] = useState(true);
-  const [anomalyNotifs, setAnomalyNotifs] = useState(true);
-  const [lowAttendanceNotifs, setLowAttendanceNotifs] = useState(true);
-  const [weeklyDigestNotifs, setWeeklyDigestNotifs] = useState(true);
-
+  const [prefs, setPrefs] = useState<NotificationPreference | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [updatingKey, setUpdatingKey] = useState<string | null>(null);
 
-  // Load saved preferences on mount
   const loadPreferences = useCallback(async () => {
     try {
-      // SecureStore only stores strings, so we check for 'false'
-      const SecureStore = await import('expo-secure-store');
-
-      // Legacy preferences
-      const attVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_ATTENDANCE);
-      if (attVal !== null) setAttendanceNotifs(attVal !== 'false');
-
-      const alertVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_ALERTS);
-      if (alertVal !== null) setAlertNotifs(alertVal !== 'false');
-
-      const schedVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_SCHEDULE);
-      if (schedVal !== null) setScheduleNotifs(schedVal !== 'false');
-
-      // New notification preferences
-      const confirmVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_ATTENDANCE_CONFIRM);
-      if (confirmVal !== null) setAttendanceConfirmNotifs(confirmVal !== 'false');
-
-      const earlyVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_EARLY_LEAVE);
-      if (earlyVal !== null) setEarlyLeaveNotifs(earlyVal !== 'false');
-
-      const anomalyVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_ANOMALY);
-      if (anomalyVal !== null) setAnomalyNotifs(anomalyVal !== 'false');
-
-      const lowAttVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_LOW_ATTENDANCE);
-      if (lowAttVal !== null) setLowAttendanceNotifs(lowAttVal !== 'false');
-
-      const digestVal = await SecureStore.getItemAsync(PREF_KEYS.NOTIF_WEEKLY_DIGEST);
-      if (digestVal !== null) setWeeklyDigestNotifs(digestVal !== 'false');
+      const data = await notificationService.getPreferences();
+      setPrefs(data);
     } catch (err) {
-      // Silently fail -- defaults are fine
-      console.error('Failed to load preferences:', err);
+      console.error('Failed to load notification preferences:', err);
+    } finally {
+      setIsLoading(false);
     }
   }, []);
 
@@ -109,18 +70,23 @@ export const SettingsScreen: React.FC = () => {
     setIsRefreshing(false);
   }, [loadPreferences]);
 
-  // Persist a preference toggle
-  const togglePreference = async (
-    key: string,
-    value: boolean,
-    setter: (v: boolean) => void
-  ) => {
-    setter(value);
+  const handleToggle = async (key: keyof NotificationPreference, value: boolean) => {
+    if (!prefs) return;
+    const previous = prefs[key];
+    // Optimistic update
+    setPrefs({ ...prefs, [key]: value });
+    setUpdatingKey(key);
     try {
-      const SecureStore = await import('expo-secure-store');
-      await SecureStore.setItemAsync(key, value.toString());
-    } catch (err) {
-      console.error('Failed to save preference:', err);
+      const updated = await notificationService.updatePreferences({
+        [key]: value,
+      } as NotificationPreferenceUpdate);
+      setPrefs(updated);
+    } catch {
+      // Revert on failure
+      setPrefs({ ...prefs, [key]: previous });
+      showError('Failed to update preference');
+    } finally {
+      setUpdatingKey(null);
     }
   };
 
@@ -141,107 +107,93 @@ export const SettingsScreen: React.FC = () => {
           />
         }
       >
-        {/* Notification Settings */}
+        {/* Notification Preferences */}
         <Card>
-          <Text variant="h4" weight="600" style={styles.sectionTitle}>
-            Notifications
-          </Text>
-
-          <ToggleItem
-            label="Attendance Updates"
-            description="Get notified when your attendance is recorded"
-            value={attendanceNotifs}
-            onToggle={(v) =>
-              togglePreference(PREF_KEYS.NOTIF_ATTENDANCE, v, setAttendanceNotifs)
-            }
-          />
-
-          <ToggleItem
-            label="Early Leave Alerts"
-            description="Receive alerts about early leave detections"
-            value={alertNotifs}
-            onToggle={(v) =>
-              togglePreference(PREF_KEYS.NOTIF_ALERTS, v, setAlertNotifs)
-            }
-          />
-
-          <ToggleItem
-            label="Schedule Reminders"
-            description="Get reminders before classes start"
-            value={scheduleNotifs}
-            onToggle={(v) =>
-              togglePreference(PREF_KEYS.NOTIF_SCHEDULE, v, setScheduleNotifs)
-            }
-            isLast
-          />
-        </Card>
-
-        {/* Notification Preferences (detailed) */}
-        <Card style={styles.card}>
           <Text variant="h4" weight="600" style={styles.sectionTitle}>
             Notification Preferences
           </Text>
 
-          <ToggleItem
-            label="Attendance Confirmations"
-            description="Confirm when your attendance is successfully recorded each session"
-            value={attendanceConfirmNotifs}
-            onToggle={(v) =>
-              togglePreference(
-                PREF_KEYS.NOTIF_ATTENDANCE_CONFIRM,
-                v,
-                setAttendanceConfirmNotifs,
-              )
-            }
-          />
+          {isLoading ? (
+            <View style={styles.loadingContainer}>
+              {[1, 2, 3, 4].map((i) => (
+                <View key={i} style={styles.skeletonToggleRow}>
+                  <View style={{ flex: 1, marginRight: theme.spacing[3] }}>
+                    <Skeleton width="60%" height={14} />
+                    <View style={{ height: 4 }} />
+                    <Skeleton width="85%" height={10} />
+                  </View>
+                  <Skeleton width={44} height={26} borderRadius={13} />
+                </View>
+              ))}
+            </View>
+          ) : prefs ? (
+            <>
+              <ToggleItem
+                label="Attendance Confirmations"
+                description="Confirm when your attendance is successfully recorded"
+                value={prefs.attendance_confirmation}
+                onToggle={(v) => handleToggle('attendance_confirmation', v)}
+                disabled={updatingKey === 'attendance_confirmation'}
+              />
 
-          <ToggleItem
-            label="Early Leave Alerts"
-            description="Get notified when an early leave is detected for you or your students"
-            value={earlyLeaveNotifs}
-            onToggle={(v) =>
-              togglePreference(PREF_KEYS.NOTIF_EARLY_LEAVE, v, setEarlyLeaveNotifs)
-            }
-          />
+              <ToggleItem
+                label="Early Leave Alerts"
+                description="Get notified when an early leave is detected"
+                value={prefs.early_leave_alerts}
+                onToggle={(v) => handleToggle('early_leave_alerts', v)}
+                disabled={updatingKey === 'early_leave_alerts'}
+              />
 
-          {/* Anomaly alerts - faculty only */}
-          {isFaculty && (
-            <ToggleItem
-              label="Anomaly Alerts"
-              description="Receive alerts about unusual attendance patterns in your classes"
-              value={anomalyNotifs}
-              onToggle={(v) =>
-                togglePreference(PREF_KEYS.NOTIF_ANOMALY, v, setAnomalyNotifs)
-              }
-            />
+              {isFaculty && (
+                <ToggleItem
+                  label="Anomaly Alerts"
+                  description="Receive alerts about unusual attendance patterns"
+                  value={prefs.anomaly_alerts}
+                  onToggle={(v) => handleToggle('anomaly_alerts', v)}
+                  disabled={updatingKey === 'anomaly_alerts'}
+                />
+              )}
+
+              <ToggleItem
+                label="Low Attendance Warning"
+                description="Get warned when attendance drops below the threshold"
+                value={prefs.low_attendance_warning}
+                onToggle={(v) => handleToggle('low_attendance_warning', v)}
+                disabled={updatingKey === 'low_attendance_warning'}
+              />
+
+              {isFaculty && (
+                <ToggleItem
+                  label="Daily Digest"
+                  description="Receive a daily attendance summary at 8 PM"
+                  value={prefs.daily_digest}
+                  onToggle={(v) => handleToggle('daily_digest', v)}
+                  disabled={updatingKey === 'daily_digest'}
+                />
+              )}
+
+              <ToggleItem
+                label="Weekly Digest"
+                description="Receive a weekly attendance summary"
+                value={prefs.weekly_digest}
+                onToggle={(v) => handleToggle('weekly_digest', v)}
+                disabled={updatingKey === 'weekly_digest'}
+              />
+
+              <ToggleItem
+                label="Email Notifications"
+                description="Also receive notifications via email"
+                value={prefs.email_enabled}
+                onToggle={(v) => handleToggle('email_enabled', v)}
+                disabled={updatingKey === 'email_enabled'}
+                isLast
+              />
+            </>
+          ) : (
+            <Text variant="bodySmall" color={theme.colors.text.tertiary}>
+              Unable to load preferences. Pull to refresh.
+            </Text>
           )}
-
-          <ToggleItem
-            label="Low Attendance Warning"
-            description="Get warned when attendance drops below the required threshold"
-            value={lowAttendanceNotifs}
-            onToggle={(v) =>
-              togglePreference(
-                PREF_KEYS.NOTIF_LOW_ATTENDANCE,
-                v,
-                setLowAttendanceNotifs,
-              )
-            }
-          />
-
-          <ToggleItem
-            label="Weekly Digest"
-            description="Receive a weekly summary of attendance activity"
-            value={weeklyDigestNotifs}
-            onToggle={(v) =>
-              togglePreference(
-                PREF_KEYS.NOTIF_WEEKLY_DIGEST,
-                v,
-                setWeeklyDigestNotifs,
-              )
-            }
-            isLast
-          />
         </Card>
 
         {/* Appearance */}
@@ -278,7 +230,6 @@ export const SettingsScreen: React.FC = () => {
           <SettingItem
             label="Privacy Policy"
             onPress={() => {
-              // Link to privacy policy once available
               Linking.openURL('https://iams.jrmsu.edu.ph/privacy').catch(() => {});
             }}
           />
@@ -322,8 +273,9 @@ const ToggleItem: React.FC<{
   description?: string;
   value: boolean;
   onToggle: (value: boolean) => void;
+  disabled?: boolean;
   isLast?: boolean;
-}> = ({ label, description, value, onToggle, isLast = false }) => (
+}> = ({ label, description, value, onToggle, disabled = false, isLast = false }) => (
   <View style={[styles.settingItem, isLast && styles.settingItemLast]}>
     <View style={styles.toggleTextContainer}>
       <Text variant="body">{label}</Text>
@@ -340,6 +292,7 @@ const ToggleItem: React.FC<{
     <Switch
       value={value}
       onValueChange={onToggle}
+      disabled={disabled}
       trackColor={{
         false: theme.colors.border,
         true: theme.colors.primary,
@@ -410,6 +363,17 @@ const styles = StyleSheet.create({
   },
   toggleDescription: {
     marginTop: theme.spacing[1],
+  },
+  loadingContainer: {
+    paddingVertical: theme.spacing[2],
+  },
+  skeletonToggleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: theme.spacing[4],
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
   },
   footer: {
     marginTop: theme.spacing[8],

@@ -8,7 +8,7 @@ Type=simple
 User=pi
 Group=pi
 WorkingDirectory=/home/pi/iams-edge
-Environment="PATH=/home/pi/iams-edge/venv/bin"
+Environment="PATH=/home/pi/iams-edge/venv/bin:/usr/local/bin:/usr/bin:/bin"
 ExecStart=/home/pi/iams-edge/venv/bin/python /home/pi/iams-edge/run.py
 
 # Restart policy (aggressive for edge device reliability)

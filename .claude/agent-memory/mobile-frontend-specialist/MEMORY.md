@@ -136,3 +136,33 @@ Every student screen should have:
 - `screens/faculty/FacultyLiveFeedScreen.tsx` - NEW FILE: camera feed via raw WS with face detection overlays
 - `types/navigation.types.ts` - Added `LiveFeed` route params to FacultyStackParamList
 - `screens/faculty/index.ts` - Added FacultyLiveFeedScreen export
+
+## Android Notification System (Session 6)
+
+### Architecture
+- `NotificationService` (@Singleton): centralized unread count + WS lifecycle management
+- `NotificationWebSocketClient`: connects to `/api/v1/ws/alerts/{userId}?token={jwt}`, emits `SharedFlow<NotificationEvent>`
+- `NavViewModel`: injects `NotificationService`, connects WS on auth, disconnects on `onCleared()`
+- `IAMSNavHost`: collects `notificationService.events` via `LaunchedEffect` for toasts, passes `unreadCount` to tab badges
+
+### Key Design Decisions
+- `NotificationService.events` is nullable (`SharedFlow<NotificationEvent>?`) because WS client may not exist yet
+- Home screens collect `notificationService.unreadCount` directly (not from uiState.unreadNotificationCount)
+- All notification ViewModels sync count on: markAsRead (decrement), markAllAsRead (set 0), deleteUnread (decrement), deleteAll (set 0), loadNotifications (fetchUnreadCount reconcile)
+- Bottom bar badges: Student "Home" tab and Faculty "Alerts" tab show unread count
+
+### Files Created
+- `data/api/NotificationWebSocketClient.kt` -- WS client modeled after AttendanceWebSocketClient
+- `data/api/NotificationService.kt` -- Hilt singleton for WS lifecycle + unread count
+
+### Files Modified
+- `data/model/Models.kt` -- Added NotificationEvent data class
+- `ui/navigation/NavViewModel.kt` -- Inject NotificationService + ApiService, WS connect/disconnect
+- `ui/navigation/IAMSNavHost.kt` -- LaunchedEffect for toast events, unreadCount badges on tabs
+- `ui/components/IAMSBottomBar.kt` -- Added badgeCount to BottomNavTab, BadgedBox rendering
+- `ui/faculty/FacultyHomeViewModel.kt` -- Inject NotificationService, centralized unread fetch
+- `ui/faculty/FacultyHomeScreen.kt` -- Read from notificationService.unreadCount
+- `ui/student/StudentHomeViewModel.kt` -- Inject NotificationService, centralized unread fetch
+- `ui/student/StudentHomeScreen.kt` -- Read from notificationService.unreadCount
+- `ui/faculty/FacultyNotificationsViewModel.kt` -- Inject NotificationService, sync on all actions
+- `ui/student/StudentNotificationsViewModel.kt` -- Inject NotificationService, sync on all actions

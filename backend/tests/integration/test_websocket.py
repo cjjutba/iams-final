@@ -1,9 +1,7 @@
 """
-Tests for WebSocket router and ConnectionManager.
+Tests for WebSocket ConnectionManager.
 
-Covers:
-- GET /ws/status endpoint (connection count)
-- ConnectionManager unit tests (connect, disconnect, send, broadcast, schedule subscriptions)
+Covers the current API: add/remove attendance and alert clients, broadcasting.
 """
 
 import asyncio
@@ -11,10 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.config import settings
 from app.routers.websocket import ConnectionManager
-
-API = settings.API_PREFIX
 
 
 # ---------------------------------------------------------------------------
@@ -30,145 +25,80 @@ def _make_mock_ws():
 
 
 # ---------------------------------------------------------------------------
-# HTTP status endpoint
-# ---------------------------------------------------------------------------
-
-class TestWebSocketStatus:
-    """Tests for the GET /ws/status health-check endpoint."""
-
-    def test_ws_status_returns_connection_count(self, client):
-        """GET /ws/status should return active connection count and running status."""
-        response = client.get(f"{API}/ws/status")
-        assert response.status_code == 200
-        body = response.json()
-        assert body["success"] is True
-        assert body["data"]["status"] == "running"
-        assert isinstance(body["data"]["active_connections"], int)
-        assert body["data"]["active_connections"] >= 0
-
-
-# ---------------------------------------------------------------------------
 # ConnectionManager unit tests
 # ---------------------------------------------------------------------------
 
 class TestConnectionManager:
-    """Unit tests for the ConnectionManager class.
+    """Unit tests for the ConnectionManager class."""
 
-    Each test creates its own ConnectionManager instance so there is no
-    shared state between tests.
-    """
-
-    def test_connect_and_disconnect(self):
-        """Connecting a websocket increments the count; disconnecting decrements it."""
+    def test_add_and_remove_attendance_client(self):
+        """Adding a client registers it; removing discards it."""
 
         async def _test():
             manager = ConnectionManager()
             mock_ws = _make_mock_ws()
 
-            await manager.connect("user1", mock_ws)
+            await manager.add_attendance_client("schedule-1", mock_ws)
             mock_ws.accept.assert_awaited_once()
-            assert manager.get_connection_count() == 1
+            assert mock_ws in manager._attendance_clients["schedule-1"]
 
-            manager.disconnect("user1")
-            assert manager.get_connection_count() == 0
+            manager.remove_attendance_client("schedule-1", mock_ws)
+            assert mock_ws not in manager._attendance_clients["schedule-1"]
 
         asyncio.run(_test())
 
-    def test_send_personal_to_connected_user(self):
-        """Sending a personal message to a connected user calls send_json."""
+    def test_add_and_remove_alert_client(self):
+        """Adding an alert client registers it; removing discards it."""
 
         async def _test():
             manager = ConnectionManager()
             mock_ws = _make_mock_ws()
 
-            await manager.connect("user1", mock_ws)
+            await manager.add_alert_client("user-1", mock_ws)
+            mock_ws.accept.assert_awaited_once()
+            assert mock_ws in manager._alert_clients["user-1"]
 
-            message = {"type": "notification", "text": "hello"}
-            await manager.send_personal("user1", message)
-
-            mock_ws.send_json.assert_awaited_once_with(message)
-
-        asyncio.run(_test())
-
-    def test_send_personal_to_unknown_user(self):
-        """Sending a personal message to an unknown user should not raise."""
-
-        async def _test():
-            manager = ConnectionManager()
-            # Should complete without error even though no one is connected
-            await manager.send_personal("nonexistent_user", {"msg": "hi"})
+            manager.remove_alert_client("user-1", mock_ws)
+            assert mock_ws not in manager._alert_clients["user-1"]
 
         asyncio.run(_test())
 
-    def test_register_for_schedule(self):
-        """Registering a user for a schedule increases the subscriber count."""
-
-        async def _test():
-            manager = ConnectionManager()
-            mock_ws = _make_mock_ws()
-            await manager.connect("user1", mock_ws)
-
-            manager.register_for_schedule("user1", "schedule_abc")
-            assert manager.get_schedule_subscriber_count("schedule_abc") == 1
-
-        asyncio.run(_test())
-
-    def test_unregister_from_schedule(self):
-        """Unregistering removes the user; empty schedule sets are cleaned up."""
-
-        async def _test():
-            manager = ConnectionManager()
-            mock_ws = _make_mock_ws()
-            await manager.connect("user1", mock_ws)
-
-            manager.register_for_schedule("user1", "schedule_abc")
-            assert manager.get_schedule_subscriber_count("schedule_abc") == 1
-
-            manager.unregister_from_schedule("user1", "schedule_abc")
-            assert manager.get_schedule_subscriber_count("schedule_abc") == 0
-
-        asyncio.run(_test())
-
-    def test_broadcast_to_schedule(self):
-        """Broadcasting to a schedule sends the message to all subscribers."""
+    def test_broadcast_attendance_sends_to_all(self):
+        """Broadcasting sends data to all connected clients for a schedule."""
 
         async def _test():
             manager = ConnectionManager()
             ws1 = _make_mock_ws()
             ws2 = _make_mock_ws()
 
-            await manager.connect("user1", ws1)
-            await manager.connect("user2", ws2)
+            await manager.add_attendance_client("schedule-1", ws1)
+            await manager.add_attendance_client("schedule-1", ws2)
 
-            manager.register_for_schedule("user1", "schedule_abc")
-            manager.register_for_schedule("user2", "schedule_abc")
-
-            message = {"type": "attendance_update", "data": "payload"}
-            await manager.broadcast_to_schedule("schedule_abc", message)
+            message = {"type": "scan_result", "data": "test"}
+            await manager.broadcast_attendance("schedule-1", message)
 
             ws1.send_json.assert_awaited_once_with(message)
             ws2.send_json.assert_awaited_once_with(message)
 
         asyncio.run(_test())
 
-    def test_disconnect_cleans_schedule_subs(self):
-        """Disconnecting a user removes them from all schedule subscriptions."""
+    def test_broadcast_removes_dead_clients(self):
+        """Dead clients (raise on send) are removed from the set."""
 
         async def _test():
             manager = ConnectionManager()
-            mock_ws = _make_mock_ws()
+            good_ws = _make_mock_ws()
+            dead_ws = _make_mock_ws()
+            dead_ws.send_json.side_effect = Exception("connection closed")
 
-            await manager.connect("user1", mock_ws)
-            manager.register_for_schedule("user1", "schedule_abc")
-            manager.register_for_schedule("user1", "schedule_xyz")
+            await manager.add_attendance_client("schedule-1", good_ws)
+            await manager.add_attendance_client("schedule-1", dead_ws)
 
-            assert manager.get_schedule_subscriber_count("schedule_abc") == 1
-            assert manager.get_schedule_subscriber_count("schedule_xyz") == 1
+            await manager.broadcast_attendance("schedule-1", {"test": True})
 
-            manager.disconnect("user1")
-
-            assert manager.get_schedule_subscriber_count("schedule_abc") == 0
-            assert manager.get_schedule_subscriber_count("schedule_xyz") == 0
-            assert manager.get_connection_count() == 0
+            # Dead client should be removed
+            assert dead_ws not in manager._attendance_clients["schedule-1"]
+            # Good client should remain
+            assert good_ws in manager._attendance_clients["schedule-1"]
 
         asyncio.run(_test())

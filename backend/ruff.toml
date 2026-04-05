@@ -1,0 +1,35 @@
+# Ruff linting configuration for IAMS backend
+target-version = "py311"
+line-length = 120
+src = ["app"]
+
+[lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "TCH",  # flake8-type-checking
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "E712",   # == True/False comparisons (required by SQLAlchemy filter expressions)
+    "B008",   # do not perform function calls in argument defaults (FastAPI Depends pattern)
+    "B904",   # raise from in except (too noisy for HTTP exception re-raises)
+    "B905",   # zip without strict= (Python 3.10+)
+    "N806",   # variable in function should be lowercase (constant-style names in functions)
+    "N817",   # CamelCase imported as acronym (AR, AStatus aliases are idiomatic)
+    "SIM105", # contextlib.suppress vs try-except-pass (explicit cleanup patterns)
+    "SIM108", # use ternary operator (readability preference)
+]
+
+[lint.isort]
+known-first-party = ["app"]
+
+[format]
+quote-style = "double"
+indent-style = "space"

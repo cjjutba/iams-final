@@ -21,7 +21,7 @@ import { theme, strings } from '../../constants';
 import { formatDate, formatTime, formatPercentage, getErrorMessage } from '../../utils';
 import type { StudentStackParamList, AttendanceRecord, PresenceLog } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
-import { Text, Card, Badge, Divider, Loader, Button } from '../../components/ui';
+import { Text, Card, Badge, Divider, Skeleton, Button } from '../../components/ui';
 
 type AttendanceDetailRouteProp = RouteProp<StudentStackParamList, 'AttendanceDetail'>;
 
@@ -94,7 +94,66 @@ export const StudentAttendanceDetailScreen: React.FC = () => {
     return (
       <ScreenLayout safeArea>
         <Header showBack title="Attendance Details" />
-        <Loader fullScreen message={strings.common.loading} />
+        <View style={styles.skeletonContainer}>
+          {/* Status skeleton */}
+          <View style={{ alignItems: 'center', marginBottom: theme.spacing[6] }}>
+            <Skeleton width={80} height={28} borderRadius={theme.borderRadius.full} />
+          </View>
+
+          {/* Stats row skeleton */}
+          <View style={{ flexDirection: 'row', gap: theme.spacing[3], marginBottom: theme.spacing[4] }}>
+            <View style={{ flex: 1, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, alignItems: 'center' }}>
+              <Skeleton width={20} height={20} borderRadius={10} />
+              <View style={{ height: 8 }} />
+              <Skeleton width={60} height={10} />
+              <View style={{ height: 4 }} />
+              <Skeleton width={50} height={16} />
+            </View>
+            <View style={{ flex: 1, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, alignItems: 'center' }}>
+              <Skeleton width={20} height={20} borderRadius={10} />
+              <View style={{ height: 8 }} />
+              <Skeleton width={60} height={10} />
+              <View style={{ height: 4 }} />
+              <Skeleton width={50} height={16} />
+            </View>
+          </View>
+
+          {/* Scan counts skeleton */}
+          <View style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginBottom: theme.spacing[4] }}>
+            <View style={{ flexDirection: 'row' }}>
+              <View style={{ flex: 1, alignItems: 'center' }}>
+                <Skeleton width={60} height={10} />
+                <View style={{ height: 4 }} />
+                <Skeleton width={30} height={24} />
+              </View>
+              <View style={{ width: 1, backgroundColor: '#E5E5E5' }} />
+              <View style={{ flex: 1, alignItems: 'center' }}>
+                <Skeleton width={60} height={10} />
+                <View style={{ height: 4 }} />
+                <Skeleton width={30} height={24} />
+              </View>
+            </View>
+          </View>
+
+          {/* Timeline section skeleton */}
+          <View style={{ height: 1, backgroundColor: '#E5E5E5', marginVertical: theme.spacing[6] }} />
+          <Skeleton width={140} height={16} style={{ marginBottom: theme.spacing[4] }} />
+          {[1, 2, 3].map((i) => (
+            <View key={i} style={{ flexDirection: 'row', marginBottom: theme.spacing[3] }}>
+              <View style={{ alignItems: 'center', marginRight: theme.spacing[4] }}>
+                <Skeleton width={12} height={12} borderRadius={6} />
+                {i < 3 && <View style={{ width: 2, flex: 1, backgroundColor: '#E5E5E5', marginTop: theme.spacing[2] }} />}
+              </View>
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <Skeleton width={80} height={14} />
+                  <Skeleton width={50} height={12} />
+                </View>
+                <Skeleton width={60} height={12} />
+              </View>
+            </View>
+          ))}
+        </View>
       </ScreenLayout>
     );
   }
@@ -320,6 +379,9 @@ export const StudentAttendanceDetailScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
+  skeletonContainer: {
+    padding: theme.spacing[4],
+  },
   scrollContent: {
     flexGrow: 1,
   },

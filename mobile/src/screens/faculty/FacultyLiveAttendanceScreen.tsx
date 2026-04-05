@@ -37,7 +37,7 @@ import type {
   StudentAttendanceStatus,
 } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
-import { Text, Card, Button } from '../../components/ui';
+import { Text, Card, Button, Skeleton } from '../../components/ui';
 
 type LiveAttendanceRouteProp = RouteProp<FacultyStackParamList, 'LiveAttendance'>;
 type LiveAttendanceNavigationProp = StackNavigationProp<FacultyStackParamList, 'LiveAttendance'>;
@@ -197,16 +197,39 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
     return (
       <ScreenLayout safeArea padded={false}>
         <Header showBack title="Live Attendance" />
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-          <Text
-            variant="bodySmall"
-            color={theme.colors.text.secondary}
-            align="center"
-            style={styles.loadingText}
-          >
-            Loading live attendance...
-          </Text>
+        <View style={styles.container}>
+          {/* Stats row skeleton */}
+          <View style={styles.statsRow}>
+            {[1, 2, 3, 4].map((i) => (
+              <View key={i} style={{ flex: 1, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, alignItems: 'center' }}>
+                <Skeleton width={30} height={24} />
+                <View style={{ height: 4 }} />
+                <Skeleton width={40} height={10} />
+              </View>
+            ))}
+          </View>
+
+          {/* Search skeleton */}
+          <View style={{ marginHorizontal: theme.spacing[4], marginBottom: theme.spacing[4] }}>
+            <Skeleton width="100%" height={44} borderRadius={theme.borderRadius.md} />
+          </View>
+
+          {/* Student cards skeleton */}
+          <View style={{ paddingHorizontal: theme.spacing[4] }}>
+            {[1, 2, 3, 4, 5, 6].map((i) => (
+              <View key={i} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginBottom: 8 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Skeleton width={40} height={40} borderRadius={20} style={{ marginRight: 12 }} />
+                  <View style={{ flex: 1 }}>
+                    <Skeleton width="55%" height={14} />
+                    <View style={{ height: 4 }} />
+                    <Skeleton width="35%" height={12} />
+                  </View>
+                  <Skeleton width={56} height={24} borderRadius={12} />
+                </View>
+              </View>
+            ))}
+          </View>
         </View>
       </ScreenLayout>
     );
@@ -243,7 +266,7 @@ export const FacultyLiveAttendanceScreen: React.FC = () => {
             </View>
 
             <Text variant="bodySmall" color={theme.colors.text.secondary}>
-              {item.student_id}
+              {item.student_number || item.student_id}
             </Text>
 
             {item.presence_score !== undefined && (
@@ -584,14 +607,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingVertical: theme.spacing[12],
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    marginTop: theme.spacing[3],
   },
   errorContainer: {
     flex: 1,

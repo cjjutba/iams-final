@@ -3,15 +3,22 @@ FAISS Index Manager
 
 Manages FAISS vector index for fast face similarity search.
 Uses IndexFlatIP for exact nearest neighbor search with inner product (cosine similarity).
+
+The index is memory-mapped (IO_FLAG_MMAP) so that multiple Uvicorn workers
+share the same physical RAM pages for the read-only vector data.  When any
+worker mutates the index it saves to disk and publishes a Redis notification;
+other workers pick up the notification and re-mmap the updated file.
 """
 
+import asyncio
 import os
-import faiss
-import numpy as np
-from typing import List, Tuple, Optional, Dict
+import threading
 from pathlib import Path
 
-from app.config import settings, logger
+import faiss
+import numpy as np
+
+from app.config import logger, settings
 
 
 class FAISSManager:
@@ -31,8 +38,9 @@ class FAISSManager:
         """
         self.index_path = index_path or settings.FAISS_INDEX_PATH
         self.dimension = 512  # ArcFace embedding dimension
-        self.index: Optional[faiss.Index] = None
-        self.user_map: Dict[int, str] = {}  # faiss_id → user_id mapping
+        self.index: faiss.Index | None = None
+        self.user_map: dict[int, str] = {}  # faiss_id → user_id mapping
+        self._lock = threading.RLock()  # Thread safety for concurrent access
 
         # Ensure directory exists
         Path(self.index_path).parent.mkdir(parents=True, exist_ok=True)
@@ -47,19 +55,20 @@ class FAISSManager:
         Raises:
             RuntimeError: If index loading fails
         """
-        if os.path.exists(self.index_path):
-            try:
-                self.index = faiss.read_index(self.index_path)
-                logger.info(f"Loaded FAISS index from {self.index_path} ({self.index.ntotal} vectors)")
+        with self._lock:
+            if os.path.exists(self.index_path):
+                try:
+                    self.index = faiss.read_index(self.index_path, faiss.IO_FLAG_MMAP)
+                    logger.info(f"Loaded FAISS index (mmap) from {self.index_path} ({self.index.ntotal} vectors)")
+                    return self.index
+                except Exception as e:
+                    logger.error(f"Failed to load FAISS index: {e}")
+                    raise RuntimeError(f"FAISS index loading failed: {e}") from e
+            else:
+                logger.info("Creating new FAISS index (IndexFlatIP)")
+                self.index = self._create_index()
+                self.save()
                 return self.index
-            except Exception as e:
-                logger.error(f"Failed to load FAISS index: {e}")
-                raise RuntimeError(f"FAISS index loading failed: {e}")
-        else:
-            logger.info("Creating new FAISS index (IndexFlatIP)")
-            self.index = self._create_index()
-            self.save()
-            return self.index
 
     def _create_index(self) -> faiss.Index:
         """
@@ -89,34 +98,35 @@ class FAISSManager:
             RuntimeError: If index not initialized
             ValueError: If embedding dimension is incorrect
         """
-        if self.index is None:
-            raise RuntimeError("Index not initialized. Call load_or_create_index() first.")
+        with self._lock:
+            if self.index is None:
+                raise RuntimeError("Index not initialized. Call load_or_create_index() first.")
 
-        # Validate embedding dimension
-        if embedding.shape[0] != self.dimension:
-            raise ValueError(f"Expected embedding dimension {self.dimension}, got {embedding.shape[0]}")
+            # Validate embedding dimension
+            if embedding.shape[0] != self.dimension:
+                raise ValueError(f"Expected embedding dimension {self.dimension}, got {embedding.shape[0]}")
 
-        # Ensure 2D array [1, 512]
-        if len(embedding.shape) == 1:
-            embedding = embedding.reshape(1, -1)
+            # Ensure 2D array [1, 512]
+            if len(embedding.shape) == 1:
+                embedding = embedding.reshape(1, -1)
 
-        # Ensure float32
-        embedding = embedding.astype(np.float32)
+            # Ensure float32
+            embedding = embedding.astype(np.float32)
 
-        # Get FAISS ID (current index size)
-        faiss_id = self.index.ntotal
+            # Get FAISS ID (current index size)
+            faiss_id = self.index.ntotal
 
-        # Add to index
-        self.index.add(embedding)
+            # Add to index
+            self.index.add(embedding)
 
-        # Update user mapping
-        self.user_map[faiss_id] = user_id
+            # Update user mapping
+            self.user_map[faiss_id] = user_id
 
-        logger.debug(f"Added embedding for user {user_id} at FAISS ID {faiss_id}")
+            logger.debug(f"Added embedding for user {user_id} at FAISS ID {faiss_id}")
 
-        return faiss_id
+            return faiss_id
 
-    def add_batch(self, embeddings: np.ndarray, user_ids: List[str]) -> List[int]:
+    def add_batch(self, embeddings: np.ndarray, user_ids: list[str]) -> list[int]:
         """
         Add multiple embeddings to index
 
@@ -130,47 +140,43 @@ class FAISSManager:
         Raises:
             ValueError: If lengths don't match or dimensions are wrong
         """
-        if len(embeddings) != len(user_ids):
-            raise ValueError("Embeddings and user_ids must have same length")
+        with self._lock:
+            if len(embeddings) != len(user_ids):
+                raise ValueError("Embeddings and user_ids must have same length")
 
-        if embeddings.shape[1] != self.dimension:
-            raise ValueError(f"Expected embedding dimension {self.dimension}, got {embeddings.shape[1]}")
+            if embeddings.shape[1] != self.dimension:
+                raise ValueError(f"Expected embedding dimension {self.dimension}, got {embeddings.shape[1]}")
 
-        # Ensure float32
-        embeddings = embeddings.astype(np.float32)
+            # Ensure float32
+            embeddings = embeddings.astype(np.float32)
 
-        # Get starting FAISS ID
-        start_id = self.index.ntotal
+            # Get starting FAISS ID
+            start_id = self.index.ntotal
 
-        # Add to index
-        self.index.add(embeddings)
+            # Add to index
+            self.index.add(embeddings)
 
-        # Update user mappings
-        faiss_ids = list(range(start_id, start_id + len(user_ids)))
-        for faiss_id, user_id in zip(faiss_ids, user_ids):
-            self.user_map[faiss_id] = user_id
+            # Update user mappings
+            faiss_ids = list(range(start_id, start_id + len(user_ids)))
+            for faiss_id, user_id in zip(faiss_ids, user_ids):
+                self.user_map[faiss_id] = user_id
 
-        logger.info(f"Added {len(embeddings)} embeddings to FAISS index")
+            logger.info(f"Added {len(embeddings)} embeddings to FAISS index")
 
-        return faiss_ids
+            return faiss_ids
 
     @staticmethod
     def _deduplicate_by_user(
-        raw: List[Tuple[str, float]],
-    ) -> List[Tuple[str, float]]:
+        raw: list[tuple[str, float]],
+    ) -> list[tuple[str, float]]:
         """Keep only the best similarity per user_id, sorted descending."""
-        best: Dict[str, float] = {}
+        best: dict[str, float] = {}
         for user_id, sim in raw:
             if user_id not in best or sim > best[user_id]:
                 best[user_id] = sim
         return sorted(best.items(), key=lambda x: x[1], reverse=True)
 
-    def search(
-        self,
-        embedding: np.ndarray,
-        k: int = 1,
-        threshold: Optional[float] = None
-    ) -> List[Tuple[str, float]]:
+    def search(self, embedding: np.ndarray, k: int = 1, threshold: float | None = None) -> list[tuple[str, float]]:
         """
         Search for similar faces (deduplicated by user_id).
 
@@ -186,49 +192,47 @@ class FAISSManager:
         Returns:
             List of (user_id, similarity) tuples, sorted by similarity (descending)
         """
-        if self.index is None:
-            raise RuntimeError("Index not initialized")
+        with self._lock:
+            if self.index is None:
+                raise RuntimeError("Index not initialized")
 
-        if self.index.ntotal == 0:
-            return []
+            if self.index.ntotal == 0:
+                return []
 
-        # Ensure 2D array [1, 512]
-        if len(embedding.shape) == 1:
-            embedding = embedding.reshape(1, -1)
+            # Ensure 2D array [1, 512]
+            if len(embedding.shape) == 1:
+                embedding = embedding.reshape(1, -1)
 
-        # Ensure float32
-        embedding = embedding.astype(np.float32)
+            # Ensure float32
+            embedding = embedding.astype(np.float32)
 
-        # Fetch more results than requested to account for multi-embedding
-        # duplicates. 5× is a safe multiplier (max 5 embeddings per user).
-        raw_k = min(k * 5, self.index.ntotal)
-        similarities, indices = self.index.search(embedding, raw_k)
+            # Fetch more results than requested to account for multi-embedding
+            # duplicates. 5× is a safe multiplier (max 5 embeddings per user).
+            raw_k = min(k * 5, self.index.ntotal)
+            similarities, indices = self.index.search(embedding, raw_k)
 
-        # Collect raw results above threshold
-        threshold = threshold or settings.RECOGNITION_THRESHOLD
-        raw: List[Tuple[str, float]] = []
+            # Collect raw results above threshold
+            threshold = threshold or settings.RECOGNITION_THRESHOLD
+            raw: list[tuple[str, float]] = []
 
-        for i in range(raw_k):
-            faiss_id = int(indices[0][i])
-            similarity = float(similarities[0][i])
+            for i in range(raw_k):
+                faiss_id = int(indices[0][i])
+                similarity = float(similarities[0][i])
 
-            if faiss_id == -1 or similarity < threshold:
-                continue
+                if faiss_id == -1 or similarity < threshold:
+                    continue
 
-            user_id = self.user_map.get(faiss_id)
-            if user_id:
-                raw.append((user_id, similarity))
+                user_id = self.user_map.get(faiss_id)
+                if user_id:
+                    raw.append((user_id, similarity))
 
-        # Deduplicate: keep best similarity per user
-        deduped = self._deduplicate_by_user(raw)
-        return deduped[:k]
+            # Deduplicate: keep best similarity per user
+            deduped = self._deduplicate_by_user(raw)
+            return deduped[:k]
 
     def search_batch(
-        self,
-        embeddings: np.ndarray,
-        k: int = 1,
-        threshold: Optional[float] = None
-    ) -> List[List[Tuple[str, float]]]:
+        self, embeddings: np.ndarray, k: int = 1, threshold: float | None = None
+    ) -> list[list[tuple[str, float]]]:
         """
         Search for multiple faces (deduplicated by user_id per query).
 
@@ -240,37 +244,38 @@ class FAISSManager:
         Returns:
             List of result lists (one per query, deduplicated)
         """
-        if self.index is None or self.index.ntotal == 0:
-            return [[] for _ in range(len(embeddings))]
+        with self._lock:
+            if self.index is None or self.index.ntotal == 0:
+                return [[] for _ in range(len(embeddings))]
 
-        # Ensure float32
-        embeddings = embeddings.astype(np.float32)
+            # Ensure float32
+            embeddings = embeddings.astype(np.float32)
 
-        # Fetch more results to account for multi-embedding duplicates
-        raw_k = min(k * 5, self.index.ntotal)
-        similarities, indices = self.index.search(embeddings, raw_k)
+            # Fetch more results to account for multi-embedding duplicates
+            raw_k = min(k * 5, self.index.ntotal)
+            similarities, indices = self.index.search(embeddings, raw_k)
 
-        # Extract and deduplicate results per query
-        threshold = threshold or settings.RECOGNITION_THRESHOLD
-        batch_results = []
+            # Extract and deduplicate results per query
+            threshold = threshold or settings.RECOGNITION_THRESHOLD
+            batch_results = []
 
-        for i in range(len(embeddings)):
-            raw: List[Tuple[str, float]] = []
-            for j in range(raw_k):
-                faiss_id = int(indices[i][j])
-                similarity = float(similarities[i][j])
+            for i in range(len(embeddings)):
+                raw: list[tuple[str, float]] = []
+                for j in range(raw_k):
+                    faiss_id = int(indices[i][j])
+                    similarity = float(similarities[i][j])
 
-                if faiss_id == -1 or similarity < threshold:
-                    continue
+                    if faiss_id == -1 or similarity < threshold:
+                        continue
 
-                user_id = self.user_map.get(faiss_id)
-                if user_id:
-                    raw.append((user_id, similarity))
+                    user_id = self.user_map.get(faiss_id)
+                    if user_id:
+                        raw.append((user_id, similarity))
 
-            deduped = self._deduplicate_by_user(raw)
-            batch_results.append(deduped[:k])
+                deduped = self._deduplicate_by_user(raw)
+                batch_results.append(deduped[:k])
 
-        return batch_results
+            return batch_results
 
     def search_with_margin(
         self,
@@ -278,7 +283,7 @@ class FAISSManager:
         k: int = None,
         threshold: float = None,
         margin: float = None,
-    ) -> Dict:
+    ) -> dict:
         """
         Search with confidence margin check between top-1 and top-2.
 
@@ -294,16 +299,30 @@ class FAISSManager:
         if margin is None:
             margin = settings.RECOGNITION_MARGIN
 
-        # Get all k results (unfiltered by threshold)
+        # Note: self.search() already acquires _lock (RLock allows re-entry)
         results = self.search(embedding, k=k, threshold=0.0)
 
-        if not results or results[0][1] < threshold:
+        if not results:
             return {"user_id": None, "confidence": 0.0, "is_ambiguous": False}
+
+        top_raw_score = results[0][1]
+        if top_raw_score < threshold:
+            return {"user_id": None, "confidence": float(top_raw_score), "is_ambiguous": False}
 
         top_user, top_score = results[0]
         second_score = results[1][1] if len(results) > 1 else 0.0
         score_gap = top_score - second_score
         is_ambiguous = score_gap <= margin
+
+        # When there's no second candidate (few enrolled users), require a
+        # higher absolute score to avoid matching every face to the same person.
+        # The ceiling (default 0.65) ensures only strong matches are accepted.
+        if len(results) <= 1 and top_score < settings.ADAPTIVE_THRESHOLD_CEILING:
+            logger.info(
+                f"Weak solo match rejected: {top_user} ({top_score:.3f}) "
+                f"< ceiling {settings.ADAPTIVE_THRESHOLD_CEILING}"
+            )
+            return {"user_id": None, "confidence": float(top_score), "is_ambiguous": False}
 
         if is_ambiguous:
             logger.warning(
@@ -335,15 +354,16 @@ class FAISSManager:
         Raises:
             NotImplementedError: IndexFlatIP does not support deletion
         """
-        # IndexFlatIP doesn't support native deletion
-        # Remove from user map instead
-        if faiss_id in self.user_map:
-            del self.user_map[faiss_id]
-            logger.debug(f"Removed FAISS ID {faiss_id} from user map (index rebuild required)")
-            return True
-        return False
+        with self._lock:
+            # IndexFlatIP doesn't support native deletion
+            # Remove from user map instead
+            if faiss_id in self.user_map:
+                del self.user_map[faiss_id]
+                logger.debug(f"Removed FAISS ID {faiss_id} from user map (index rebuild required)")
+                return True
+            return False
 
-    def rebuild(self, embeddings_data: List[Tuple[np.ndarray, str]]):
+    def rebuild(self, embeddings_data: list[tuple[np.ndarray, str]]) -> dict[int, str]:
         """
         Rebuild index from scratch
 
@@ -352,36 +372,44 @@ class FAISSManager:
         Args:
             embeddings_data: List of (embedding, user_id) tuples
 
+        Returns:
+            New faiss_id -> user_id mapping (callers can use this to update
+            face_embeddings.faiss_id in the DB to stay in sync)
+
         Raises:
             ValueError: If embeddings_data is empty or invalid
         """
-        if not embeddings_data:
-            logger.warning("No embeddings provided for rebuild, creating empty index")
+        with self._lock:
+            if not embeddings_data:
+                logger.warning("No embeddings provided for rebuild, creating empty index")
+                self.index = self._create_index()
+                self.user_map = {}
+                self.save()
+                return {}
+
+            logger.info(f"Rebuilding FAISS index with {len(embeddings_data)} embeddings...")
+
+            # Create new index
             self.index = self._create_index()
             self.user_map = {}
+
+            # Add all embeddings (RLock allows re-entry from add_batch)
+            embeddings = np.array([emb for emb, _ in embeddings_data], dtype=np.float32)
+            user_ids = [user_id for _, user_id in embeddings_data]
+
+            self.add_batch(embeddings, user_ids)
+
+            # Save rebuilt index
             self.save()
-            return
 
-        logger.info(f"Rebuilding FAISS index with {len(embeddings_data)} embeddings...")
+            logger.info("FAISS index rebuilt successfully")
 
-        # Create new index
-        self.index = self._create_index()
-        self.user_map = {}
+            # Return a copy of the new mapping so callers can sync DB faiss_ids
+            return dict(self.user_map)
 
-        # Add all embeddings
-        embeddings = np.array([emb for emb, _ in embeddings_data], dtype=np.float32)
-        user_ids = [user_id for _, user_id in embeddings_data]
-
-        self.add_batch(embeddings, user_ids)
-
-        # Save rebuilt index
-        self.save()
-
-        logger.info("FAISS index rebuilt successfully")
-
-    def save(self, path: Optional[str] = None):
+    def save(self, path: str | None = None):
         """
-        Save FAISS index to disk
+        Save FAISS index to disk and notify other workers to reload.
 
         Args:
             path: Optional custom path (default: self.index_path)
@@ -389,19 +417,113 @@ class FAISSManager:
         Raises:
             RuntimeError: If index not initialized
         """
-        if self.index is None:
-            raise RuntimeError("Index not initialized")
+        with self._lock:
+            if self.index is None:
+                raise RuntimeError("Index not initialized")
 
-        save_path = path or self.index_path
+            save_path = path or self.index_path
 
+            try:
+                faiss.write_index(self.index, save_path)
+                logger.info(f"FAISS index saved to {save_path} ({self.index.ntotal} vectors)")
+            except Exception as e:
+                logger.error(f"Failed to save FAISS index: {e}")
+                raise
+
+        # Notify other workers to reload the updated index (outside lock —
+        # async I/O should not hold the lock)
         try:
-            faiss.write_index(self.index, save_path)
-            logger.info(f"FAISS index saved to {save_path} ({self.index.ntotal} vectors)")
-        except Exception as e:
-            logger.error(f"Failed to save FAISS index: {e}")
-            raise
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.notify_index_changed())
+        except RuntimeError:
+            # No running event loop (e.g. during tests or CLI scripts) — skip notification
+            pass
 
-    def get_stats(self) -> Dict:
+    # ------------------------------------------------------------------
+    # Redis pub/sub for multi-worker index synchronisation
+    # ------------------------------------------------------------------
+
+    async def notify_index_changed(self):
+        """Publish index-change event so other workers reload."""
+        try:
+            from app.redis_client import get_redis
+
+            r = await get_redis()
+            await r.publish("faiss_reload", b"reload")
+            logger.debug("Published FAISS reload notification")
+        except Exception as e:
+            logger.warning(f"Failed to publish FAISS reload notification: {e}")
+
+    def rebuild_user_map_from_db(self):
+        """Rebuild user_map from database so FAISS IDs map to user_ids.
+
+        Must be called after load_or_create_index() to keep user_map in sync.
+        Without this, FAISS search returns vector matches but cannot resolve
+        them to user_ids, causing recognized faces to appear as "Unknown".
+
+        IMPORTANT: This only rebuilds the in-memory user_map dict.  It does
+        NOT call rebuild()/save() — doing so would publish another Redis
+        notification and create an infinite reload loop.
+        """
+        from app.database import SessionLocal
+        from app.repositories.face_repository import FaceRepository
+
+        db = SessionLocal()
+        try:
+            repo = FaceRepository(db)
+            self.user_map = {}
+
+            # Prefer multi-embedding table (face_embeddings)
+            multi_embs = repo.get_all_active_embeddings()
+            if multi_embs:
+                for emb in multi_embs:
+                    self.user_map[emb.faiss_id] = str(emb.registration.user_id)
+            else:
+                # Fallback: legacy single-embedding registrations
+                active_regs = repo.get_active_embeddings()
+                for reg in active_regs:
+                    self.user_map[reg.embedding_id] = str(reg.user_id)
+
+            logger.info(
+                "user_map rebuilt from DB: %d mappings, %d vectors",
+                len(self.user_map),
+                self.index.ntotal if self.index else 0,
+            )
+        except Exception:
+            logger.exception("Failed to rebuild user_map from DB")
+        finally:
+            db.close()
+
+    async def subscribe_index_changes(self):
+        """Listen for index-change events and reload (runs forever as a background task)."""
+        import asyncio
+
+        from app.redis_client import get_redis
+
+        while True:
+            try:
+                r = await get_redis()
+                pubsub = r.pubsub()
+                await pubsub.subscribe("faiss_reload")
+                logger.info("Subscribed to FAISS reload notifications")
+
+                async for message in pubsub.listen():
+                    if message["type"] == "message":
+                        try:
+                            self.load_or_create_index()
+                            # Rebuild user_map from DB — without this,
+                            # FAISS search can't resolve IDs to user_ids
+                            self.rebuild_user_map_from_db()
+                            logger.info("FAISS index reloaded from disk (notified by another worker)")
+                        except Exception as e:
+                            logger.error(f"Failed to reload FAISS index after notification: {e}")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("FAISS reload subscriber connection lost, reconnecting...")
+                await asyncio.sleep(1)
+
+    def get_stats(self) -> dict:
         """
         Get index statistics
 
@@ -409,19 +531,14 @@ class FAISSManager:
             Dictionary with index stats
         """
         if self.index is None:
-            return {
-                "initialized": False,
-                "total_vectors": 0,
-                "dimension": self.dimension,
-                "index_type": None
-            }
+            return {"initialized": False, "total_vectors": 0, "dimension": self.dimension, "index_type": None}
 
         return {
             "initialized": True,
             "total_vectors": self.index.ntotal,
             "dimension": self.dimension,
             "index_type": "IndexFlatIP",
-            "user_mappings": len(self.user_map)
+            "user_mappings": len(self.user_map),
         }
 
 

@@ -15,26 +15,26 @@ import base64
 import io
 import platform
 from dataclasses import dataclass
-from typing import List, Optional, Union
 
 import cv2
 import numpy as np
 from PIL import Image
 
-from app.config import settings, logger
+from app.config import logger, settings
 
 
 @dataclass
 class DetectedFace:
     """Single face detection result with ArcFace embedding."""
+
     x: int
     y: int
     width: int
     height: int
     confidence: float
-    embedding: np.ndarray       # 512-dim, L2-normalized (ArcFace normed_embedding)
-    user_id: Optional[str] = None
-    similarity: Optional[float] = None
+    embedding: np.ndarray  # 512-dim, L2-normalized (ArcFace normed_embedding)
+    user_id: str | None = None
+    similarity: float | None = None
 
 
 class InsightFaceModel:
@@ -54,7 +54,7 @@ class InsightFaceModel:
             settings.INSIGHTFACE_DET_SIZE,
         )
 
-    def _get_providers(self) -> List[str]:
+    def _get_providers(self) -> list[str]:
         """CoreML on macOS (Apple Silicon), CPU everywhere else."""
         if platform.system() == "Darwin":
             return ["CoreMLExecutionProvider", "CPUExecutionProvider"]
@@ -64,24 +64,54 @@ class InsightFaceModel:
         """
         Load buffalo_l model pack (downloads ~500MB on first run to
         ~/.insightface/models/buffalo_l/).
+
+        Thread counts are configured via OMP_NUM_THREADS / MKL_NUM_THREADS
+        environment variables BEFORE InsightFace creates its ONNX sessions.
+        With 4 Uvicorn workers each using ONNX_INTRA_OP_THREADS=2, the OS
+        scheduler distributes 8 total threads across 4 vCPUs without
+        oversubscription.
         """
         try:
+            import os
+
+            import onnxruntime as ort
             from insightface.app import FaceAnalysis
+
+            # --- ONNX Runtime thread control for multi-worker deployment ---
+            # Set env vars BEFORE InsightFace creates its internal ORT sessions
+            # so each worker's sessions respect the configured thread limits.
+            os.environ["OMP_NUM_THREADS"] = str(settings.ONNX_INTRA_OP_THREADS)
+            os.environ["MKL_NUM_THREADS"] = str(settings.ONNX_INTRA_OP_THREADS)
+
+            # Suppress noisy ORT warnings (level 3 = ERROR only)
+            ort.set_default_logger_severity(3)
+
+            logger.info(
+                f"ONNX Runtime threads: intra_op={settings.ONNX_INTRA_OP_THREADS}, "
+                f"inter_op={settings.ONNX_INTER_OP_THREADS}, "
+                f"OMP_NUM_THREADS={os.environ.get('OMP_NUM_THREADS')}"
+            )
 
             providers = self._get_providers()
             logger.info(
-                f"Loading InsightFace '{self._model_name}' "
-                f"(providers={providers}, det_size={self._det_size})..."
+                f"Loading InsightFace '{self._model_name}' (providers={providers}, det_size={self._det_size})..."
             )
             self.app = FaceAnalysis(name=self._model_name, providers=providers)
-            self.app.prepare(ctx_id=0, det_size=self._det_size)
+            self.app.prepare(ctx_id=0, det_size=self._det_size, det_thresh=settings.INSIGHTFACE_DET_THRESH)
+
+            # NOTE: ORT session thread counts are controlled via OMP_NUM_THREADS
+            # and MKL_NUM_THREADS environment variables set above, BEFORE
+            # InsightFace creates its sessions.  The previous code here called
+            # session.get_session_options() and set intra/inter_op_num_threads
+            # on the returned object, but get_session_options() returns a COPY
+            # — modifications have no effect on the live session.  Removed as
+            # dead code.
+
             logger.info(f"InsightFace '{self._model_name}' loaded successfully")
 
         except ImportError:
-            logger.error(
-                "insightface not installed. Run: pip install insightface onnxruntime"
-            )
-            raise RuntimeError("InsightFace dependencies not installed")
+            logger.error("insightface not installed. Run: pip install insightface onnxruntime")
+            raise RuntimeError("InsightFace dependencies not installed") from None
         except Exception as exc:
             logger.exception(f"Failed to load InsightFace model: {exc}")
             raise
@@ -90,7 +120,7 @@ class InsightFaceModel:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _to_bgr(self, image: Union[Image.Image, np.ndarray, bytes]) -> np.ndarray:
+    def _to_bgr(self, image: Image.Image | np.ndarray | bytes) -> np.ndarray:
         """
         Convert PIL Image / bytes / numpy array to BGR ndarray.
         InsightFace uses OpenCV (BGR) convention internally.
@@ -110,7 +140,7 @@ class InsightFaceModel:
 
     def get_embedding(
         self,
-        image: Union[Image.Image, np.ndarray, bytes],
+        image: Image.Image | np.ndarray | bytes,
     ) -> np.ndarray:
         """
         Single image -> 512-dim L2-normalized ArcFace embedding.
@@ -135,7 +165,7 @@ class InsightFaceModel:
         # Take the largest (most prominent) face.
         return faces[0].normed_embedding.copy()
 
-    def get_embeddings_batch(self, images: List) -> np.ndarray:
+    def get_embeddings_batch(self, images: list) -> np.ndarray:
         """
         List of images -> [N, 512] L2-normalized embeddings.
 
@@ -164,7 +194,7 @@ class InsightFaceModel:
     # Recognition API (CCTV)
     # ------------------------------------------------------------------
 
-    def get_faces(self, frame: np.ndarray) -> List[DetectedFace]:
+    def get_faces(self, frame: np.ndarray) -> list[DetectedFace]:
         """
         BGR frame -> list of DetectedFace with bbox + ArcFace embedding.
 
@@ -214,7 +244,7 @@ class InsightFaceModel:
 
     def get_face_with_quality(
         self,
-        image: Union[Image.Image, np.ndarray, bytes],
+        image: Image.Image | np.ndarray | bytes,
     ) -> dict:
         """
         Single image -> embedding + quality metadata for registration.
@@ -267,8 +297,7 @@ class InsightFaceModel:
         try:
             if validate_size and len(base64_string) > 15_000_000:
                 raise ValueError(
-                    f"Base64 image too large: {len(base64_string)} bytes "
-                    "(max 15MB encoded / ~10MB decoded)"
+                    f"Base64 image too large: {len(base64_string)} bytes (max 15MB encoded / ~10MB decoded)"
                 )
 
             if "," in base64_string:
@@ -277,32 +306,24 @@ class InsightFaceModel:
             try:
                 image_bytes = base64.b64decode(base64_string, validate=True)
             except Exception as exc:
-                raise ValueError(f"Invalid Base64 encoding: {exc}")
+                raise ValueError(f"Invalid Base64 encoding: {exc}") from exc
 
             if validate_size and len(image_bytes) > 10_000_000:
-                raise ValueError(
-                    f"Decoded image too large: {len(image_bytes)} bytes (max 10MB)"
-                )
+                raise ValueError(f"Decoded image too large: {len(image_bytes)} bytes (max 10MB)")
 
             try:
                 image = Image.open(io.BytesIO(image_bytes))
             except Exception as exc:
-                raise ValueError(f"Invalid image format: {exc}")
+                raise ValueError(f"Invalid image format: {exc}") from exc
 
             if image.format not in ("JPEG", "PNG"):
-                raise ValueError(
-                    f"Unsupported image format: {image.format} (expected JPEG or PNG)"
-                )
+                raise ValueError(f"Unsupported image format: {image.format} (expected JPEG or PNG)")
 
             width, height = image.size
             if width < 160 or height < 160:
-                raise ValueError(
-                    f"Image too small: {width}x{height}, minimum 160x160 required"
-                )
+                raise ValueError(f"Image too small: {width}x{height}, minimum 160x160 required")
             if width > 4096 or height > 4096:
-                raise ValueError(
-                    f"Image too large: {width}x{height} (maximum 4096x4096)"
-                )
+                raise ValueError(f"Image too large: {width}x{height} (maximum 4096x4096)")
 
             return image
 
@@ -310,7 +331,7 @@ class InsightFaceModel:
             raise
         except Exception as exc:
             logger.error(f"Failed to decode Base64 image: {exc}")
-            raise ValueError(f"Image decoding failed: {exc}")
+            raise ValueError(f"Image decoding failed: {exc}") from exc
 
 
 # Global instance — initialized during FastAPI startup via load_model()

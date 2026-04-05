@@ -19,9 +19,9 @@ export const theme = {
   // Common layout values
   layout: {
     screenPadding: spacing[4], // 16px
-    cardPadding: spacing[4], // 16px
+    cardPadding: spacing[3], // 12px
     sectionSpacing: spacing[6], // 24px
-    listItemSpacing: spacing[3], // 12px
+    listItemSpacing: spacing[2], // 8px
 
     // Header heights
     headerHeight: 56,

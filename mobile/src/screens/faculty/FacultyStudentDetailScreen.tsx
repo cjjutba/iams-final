@@ -24,7 +24,7 @@ import type {
   User,
 } from '../../types';
 import { ScreenLayout, Header } from '../../components/layouts';
-import { Text, Card, Avatar, Badge, Loader, Button } from '../../components/ui';
+import { Text, Card, Avatar, Badge, Skeleton, Button } from '../../components/ui';
 
 type StudentDetailRouteProp = RouteProp<FacultyStackParamList, 'StudentDetail'>;
 
@@ -128,7 +128,50 @@ export const FacultyStudentDetailScreen: React.FC = () => {
     return (
       <ScreenLayout safeArea>
         <Header showBack title={strings.faculty.studentDetail} />
-        <Loader fullScreen message={strings.common.loading} />
+        <View style={{ padding: theme.spacing[4], paddingTop: theme.spacing[6] }}>
+          {/* Avatar + name skeleton */}
+          <View style={{ alignItems: 'center', marginBottom: theme.spacing[8] }}>
+            <Skeleton width={80} height={80} borderRadius={40} />
+            <View style={{ height: 16 }} />
+            <Skeleton width={140} height={20} />
+            <View style={{ height: 8 }} />
+            <Skeleton width={80} height={14} />
+            <View style={{ height: 4 }} />
+            <Skeleton width={120} height={12} />
+          </View>
+
+          {/* Stats card skeleton */}
+          <View style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginBottom: theme.spacing[6] }}>
+            <Skeleton width={140} height={16} style={{ marginBottom: 16 }} />
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-around' }}>
+              {[1, 2, 3, 4].map((i) => (
+                <View key={i} style={{ alignItems: 'center', width: '45%', marginBottom: 16 }}>
+                  <Skeleton width={28} height={22} />
+                  <View style={{ height: 4 }} />
+                  <Skeleton width={60} height={10} />
+                </View>
+              ))}
+            </View>
+            <View style={{ height: 1, backgroundColor: '#E5E5E5', marginBottom: 12 }} />
+            <View style={{ alignItems: 'center' }}>
+              <Skeleton width={80} height={10} />
+              <View style={{ height: 4 }} />
+              <Skeleton width={50} height={22} />
+            </View>
+          </View>
+
+          {/* Recent attendance skeleton */}
+          <Skeleton width={140} height={16} style={{ marginBottom: 16 }} />
+          {[1, 2, 3].map((i) => (
+            <View key={i} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginBottom: 12 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <Skeleton width="40%" height={14} />
+                <Skeleton width={56} height={22} borderRadius={12} />
+              </View>
+              <Skeleton width="50%" height={12} />
+            </View>
+          ))}
+        </View>
       </ScreenLayout>
     );
   }
