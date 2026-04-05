@@ -5,7 +5,7 @@ Key-value store for system-wide configuration settings.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
@@ -40,8 +40,8 @@ class SystemSetting(Base):
     updated_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     updated_at = Column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     def __repr__(self):

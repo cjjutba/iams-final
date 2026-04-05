@@ -6,7 +6,7 @@ Represents all system users: students, faculty, and admins.
 
 import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, Column, DateTime, String
 from sqlalchemy import Enum as SQLEnum
@@ -71,14 +71,16 @@ class User(Base):
     is_active = Column(Boolean, default=True, nullable=False)
 
     # Timestamps
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC), nullable=False)
 
     # Relationships
     face_registration = relationship("FaceRegistration", back_populates="user", uselist=False)
     teaching_schedules = relationship("Schedule", back_populates="faculty", foreign_keys="[Schedule.faculty_id]")
     enrollments = relationship("Enrollment", back_populates="student", foreign_keys="[Enrollment.student_id]")
-    attendance_records = relationship("AttendanceRecord", back_populates="student", foreign_keys="[AttendanceRecord.student_id]")
+    attendance_records = relationship(
+        "AttendanceRecord", back_populates="student", foreign_keys="[AttendanceRecord.student_id]"
+    )
     notifications = relationship("Notification", back_populates="user", foreign_keys="[Notification.user_id]")
 
     def __repr__(self):

@@ -6,7 +6,7 @@ Each FaceRegistration can have multiple FaceEmbeddings (one per angle).
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import Column, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, String
 from sqlalchemy.dialects.postgresql import UUID
@@ -45,7 +45,7 @@ class FaceEmbedding(Base):
     embedding_vector = Column(LargeBinary, nullable=False)
     angle_label = Column(String(20), nullable=True)
     quality_score = Column(Float, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
 
     # Relationships
     registration = relationship(

@@ -6,6 +6,7 @@ registers routers, and handles application lifecycle events.
 """
 
 import asyncio
+import contextlib
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -117,9 +118,7 @@ async def lifespan(app: FastAPI):
             logger.error(f"FAISS reconciliation failed: {e}")
 
         # Background listener for FAISS reload notifications (multi-worker sync)
-        app.state.faiss_subscriber_task = asyncio.create_task(
-            faiss_manager.subscribe_index_changes()
-        )
+        app.state.faiss_subscriber_task = asyncio.create_task(faiss_manager.subscribe_index_changes())
 
         logger.info("Face recognition system initialized")
     except Exception as e:
@@ -223,19 +222,19 @@ async def lifespan(app: FastAPI):
                         faculty_id = str(schedule.faculty_id)
                         student_ids = [
                             str(e.student_id)
-                            for e in db.query(Enrollment.student_id)
-                            .filter(Enrollment.schedule_id == schedule.id)
-                            .all()
+                            for e in db.query(Enrollment.student_id).filter(Enrollment.schedule_id == schedule.id).all()
                         ]
 
-                        to_start.append({
-                            "sid": sid,
-                            "room_id": room_id,
-                            "camera_url": camera_url,
-                            "subject_code": schedule.subject_code,
-                            "faculty_id": faculty_id,
-                            "student_ids": student_ids,
-                        })
+                        to_start.append(
+                            {
+                                "sid": sid,
+                                "room_id": room_id,
+                                "camera_url": camera_url,
+                                "subject_code": schedule.subject_code,
+                                "faculty_id": faculty_id,
+                                "student_ids": student_ids,
+                            }
+                        )
 
                     # Build list of sessions to end
                     to_end = []
@@ -253,18 +252,18 @@ async def lifespan(app: FastAPI):
                         faculty_id = str(schedule.faculty_id)
                         student_ids = [
                             str(e.student_id)
-                            for e in db.query(Enrollment.student_id)
-                            .filter(Enrollment.schedule_id == schedule.id)
-                            .all()
+                            for e in db.query(Enrollment.student_id).filter(Enrollment.schedule_id == schedule.id).all()
                         ]
 
-                        to_end.append({
-                            "sid": sid,
-                            "room_id": str(schedule.room_id),
-                            "subject_code": schedule.subject_code,
-                            "faculty_id": faculty_id,
-                            "student_ids": student_ids,
-                        })
+                        to_end.append(
+                            {
+                                "sid": sid,
+                                "room_id": str(schedule.room_id),
+                                "subject_code": schedule.subject_code,
+                                "faculty_id": faculty_id,
+                                "student_ids": student_ids,
+                            }
+                        )
 
                     return to_start, to_end
                 finally:
@@ -321,15 +320,9 @@ async def lifespan(app: FastAPI):
                         )
                         await pipeline.start()
                         app.state.session_pipelines[sid] = pipeline
-                        logger.info(
-                            f"[lifecycle] Started pipeline for "
-                            f"{subject_code} ({sid})"
-                        )
+                        logger.info(f"[lifecycle] Started pipeline for {subject_code} ({sid})")
                     else:
-                        logger.warning(
-                            f"[lifecycle] No camera for {subject_code}, "
-                            f"session started without pipeline"
-                        )
+                        logger.warning(f"[lifecycle] No camera for {subject_code}, session started without pipeline")
 
                     # Send session-start notifications (fire-and-forget)
                     try:
@@ -340,7 +333,8 @@ async def lifespan(app: FastAPI):
                         try:
                             if faculty_id:
                                 await _notify(
-                                    db, faculty_id,
+                                    db,
+                                    faculty_id,
                                     "Session Started",
                                     f"{subject_code} session has started.",
                                     "session_start",
@@ -348,7 +342,8 @@ async def lifespan(app: FastAPI):
                                 )
                             if student_ids:
                                 await _notify_many(
-                                    db, student_ids,
+                                    db,
+                                    student_ids,
                                     "Class Started",
                                     f"{subject_code} is now in session.",
                                     "session_start",
@@ -405,7 +400,8 @@ async def lifespan(app: FastAPI):
                         try:
                             if faculty_id:
                                 await _notify(
-                                    db, faculty_id,
+                                    db,
+                                    faculty_id,
                                     "Session Ended",
                                     f"{subject_code} session has ended.",
                                     "session_end",
@@ -413,7 +409,8 @@ async def lifespan(app: FastAPI):
                                 )
                             if student_ids:
                                 await _notify_many(
-                                    db, student_ids,
+                                    db,
+                                    student_ids,
                                     "Class Ended",
                                     f"{subject_code} session has ended.",
                                     "session_end",
@@ -541,7 +538,6 @@ async def lifespan(app: FastAPI):
         """
         from datetime import datetime
 
-        from app.models.enrollment import Enrollment
         from app.models.room import Room
         from app.repositories.schedule_repository import ScheduleRepository
         from app.services.frame_grabber import FrameGrabber
@@ -660,10 +656,8 @@ async def lifespan(app: FastAPI):
     # Cancel FAISS subscriber task
     if hasattr(app.state, "faiss_subscriber_task"):
         app.state.faiss_subscriber_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await app.state.faiss_subscriber_task
-        except asyncio.CancelledError:
-            pass
         logger.info("FAISS subscriber task cancelled")
 
     # Stop APScheduler

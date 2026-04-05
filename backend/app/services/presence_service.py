@@ -19,7 +19,6 @@ import json
 from datetime import date, datetime, time, timedelta
 
 import redis as redis_lib
-
 from sqlalchemy.orm import Session
 
 from app.config import logger, settings
@@ -148,8 +147,8 @@ class PresenceService:
     async def _publish_alert(self, alert: dict):
         """Broadcast an alert to connected WebSocket clients, respecting preferences."""
         try:
-            from app.routers.websocket import ws_manager
             from app.models.notification_preference import NotificationPreference
+            from app.routers.websocket import ws_manager
 
             notify_user_ids = alert.get("notify_user_ids", [])
             alert_type = alert.get("type", "")
@@ -162,9 +161,7 @@ class PresenceService:
                 # Check preference before sending WS alert
                 if preference_key:
                     pref = (
-                        self.db.query(NotificationPreference)
-                        .filter(NotificationPreference.user_id == user_id)
-                        .first()
+                        self.db.query(NotificationPreference).filter(NotificationPreference.user_id == user_id).first()
                     )
                     if pref and not getattr(pref, preference_key, True):
                         continue
@@ -200,11 +197,7 @@ class PresenceService:
         """
         if scan_result is None:
             return []
-        from app.services.attendance_engine import ScanResult
-        return [
-            {"user_id": r.user_id, "confidence": r.confidence}
-            for r in scan_result.recognized
-        ]
+        return [{"user_id": r.user_id, "confidence": r.confidence} for r in scan_result.recognized]
 
     def _get_student_info(self, student_id: str) -> dict:
         """Look up student name/student_id from the user repository."""
@@ -451,14 +444,10 @@ class PresenceService:
             pipeline_users = self._get_identified_users_from_scan(scan_result)
         else:
             pipeline_users = self._get_identified_users_from_pipeline(room_id)
-        identified_users = {
-            u["user_id"]: u for u in pipeline_users if "user_id" in u
-        }
+        identified_users = {u["user_id"]: u for u in pipeline_users if "user_id" in u}
         present_user_ids = set(identified_users.keys())
 
-        logger.debug(
-            f"Scan #{scan_count}: {len(present_user_ids)} students detected in room {room_id}"
-        )
+        logger.debug(f"Scan #{scan_count}: {len(present_user_ids)} students detected in room {room_id}")
 
         # Check each enrolled student
         early_leave_candidates = []
@@ -515,11 +504,13 @@ class PresenceService:
                             self.active_sessions[schedule_id].update_student(student_id, detected=True)
 
                     student_info = self._get_student_info(student_id)
-                    present_students.append({
-                        **student_info,
-                        "status": new_status.value,
-                        "check_in_time": check_in_time.isoformat(),
-                    })
+                    present_students.append(
+                        {
+                            **student_info,
+                            "status": new_status.value,
+                            "check_in_time": check_in_time.isoformat(),
+                        }
+                    )
 
                     # Publish individual check-in event
                     await self._publish_attendance(
@@ -538,8 +529,11 @@ class PresenceService:
                     # Notify student of check-in
                     subject_code = session.schedule.subject_code if session.schedule else ""
                     await self._notify_check_in(
-                        student_id, student_info["name"], new_status.value,
-                        check_in_time, subject_code,
+                        student_id,
+                        student_info["name"],
+                        new_status.value,
+                        check_in_time,
+                        subject_code,
                         getattr(session.schedule, "subject_name", ""),
                     )
 
@@ -577,20 +571,22 @@ class PresenceService:
                 new_total_scans = attendance.total_scans + 1
                 presence_score = self.calculate_presence_score(new_total_scans, new_scans_present)
 
-                self.db.query(AttendanceRecord).filter(
-                    AttendanceRecord.id == attendance.id
-                ).update({
-                    AttendanceRecord.scans_present: AttendanceRecord.scans_present + 1,
-                    AttendanceRecord.total_scans: AttendanceRecord.total_scans + 1,
-                    AttendanceRecord.presence_score: presence_score,
-                })
+                self.db.query(AttendanceRecord).filter(AttendanceRecord.id == attendance.id).update(
+                    {
+                        AttendanceRecord.scans_present: AttendanceRecord.scans_present + 1,
+                        AttendanceRecord.total_scans: AttendanceRecord.total_scans + 1,
+                        AttendanceRecord.presence_score: presence_score,
+                    }
+                )
 
                 student_info = self._get_student_info(student_id)
-                present_students.append({
-                    **student_info,
-                    "status": attendance.status.value,
-                    "presence_score": presence_score,
-                })
+                present_students.append(
+                    {
+                        **student_info,
+                        "status": attendance.status.value,
+                        "presence_score": presence_score,
+                    }
+                )
 
             else:
                 # Log as not detected
@@ -603,12 +599,12 @@ class PresenceService:
                 new_total_scans = attendance.total_scans + 1
                 presence_score = self.calculate_presence_score(new_total_scans, attendance.scans_present)
 
-                self.db.query(AttendanceRecord).filter(
-                    AttendanceRecord.id == attendance.id
-                ).update({
-                    AttendanceRecord.total_scans: AttendanceRecord.total_scans + 1,
-                    AttendanceRecord.presence_score: presence_score,
-                })
+                self.db.query(AttendanceRecord).filter(AttendanceRecord.id == attendance.id).update(
+                    {
+                        AttendanceRecord.total_scans: AttendanceRecord.total_scans + 1,
+                        AttendanceRecord.presence_score: presence_score,
+                    }
+                )
 
             # Update session state under lock after DB ops
             async with self._lock:
@@ -707,26 +703,32 @@ class PresenceService:
         notify_user_ids = [uid for uid in [faculty_user_id, student_id] if uid]
 
         # Publish early-leave alert via Redis Streams
-        await self._publish_alert({
-            "type": "early_leave",
-            "student_id": student_id,
-            "student_name": student_info["name"],
-            "student_student_id": student_info["student_id"],
-            "schedule_id": schedule_id,
-            "attendance_id": attendance_id,
-            "consecutive_misses": consecutive_misses,
-            "last_seen_at": last_seen.isoformat() if last_seen else None,
-            "severity": severity,
-            "notify_user_ids": notify_user_ids,
-            "timestamp": datetime.now().isoformat(),
-        })
+        await self._publish_alert(
+            {
+                "type": "early_leave",
+                "student_id": student_id,
+                "student_name": student_info["name"],
+                "student_student_id": student_info["student_id"],
+                "schedule_id": schedule_id,
+                "attendance_id": attendance_id,
+                "consecutive_misses": consecutive_misses,
+                "last_seen_at": last_seen.isoformat() if last_seen else None,
+                "severity": severity,
+                "notify_user_ids": notify_user_ids,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
 
         # Persist in-app + email notifications for early leave
         subject_code = attendance.schedule.subject_code if attendance.schedule else ""
         await self._notify_early_leave(
-            student_id, student_info["name"], faculty_user_id,
-            subject_code, consecutive_misses,
-            last_seen.isoformat() if last_seen else None, severity,
+            student_id,
+            student_info["name"],
+            faculty_user_id,
+            subject_code,
+            consecutive_misses,
+            last_seen.isoformat() if last_seen else None,
+            severity,
             attendance_id,
         )
 
@@ -772,9 +774,7 @@ class PresenceService:
                     + timedelta(minutes=settings.GRACE_PERIOD_MINUTES)
                 ).time()
                 restored_status = (
-                    AttendanceStatus.LATE
-                    if attendance.check_in_time.time() > grace_time
-                    else AttendanceStatus.PRESENT
+                    AttendanceStatus.LATE if attendance.check_in_time.time() > grace_time else AttendanceStatus.PRESENT
                 )
             else:
                 restored_status = AttendanceStatus.PRESENT
@@ -802,16 +802,18 @@ class PresenceService:
         notify_user_ids = [uid for uid in [faculty_user_id, student_id] if uid]
 
         # Publish return alert via Redis Streams
-        await self._publish_alert({
-            "type": "early_leave_return",
-            "student_id": student_id,
-            "student_name": student_info["name"],
-            "schedule_id": schedule_id,
-            "attendance_id": attendance_id,
-            "absence_duration_seconds": event.absence_duration_seconds,
-            "returned_at": now.isoformat(),
-            "notify_user_ids": notify_user_ids,
-        })
+        await self._publish_alert(
+            {
+                "type": "early_leave_return",
+                "student_id": student_id,
+                "student_name": student_info["name"],
+                "schedule_id": schedule_id,
+                "attendance_id": attendance_id,
+                "absence_duration_seconds": event.absence_duration_seconds,
+                "returned_at": now.isoformat(),
+                "notify_user_ids": notify_user_ids,
+            }
+        )
 
         # Notify faculty + student of return (no email)
         from app.services.notification_service import notify as _notify
@@ -819,7 +821,8 @@ class PresenceService:
         minutes = event.absence_duration_seconds // 60 if event.absence_duration_seconds else 0
         for uid in notify_user_ids:
             await _notify(
-                self.db, uid,
+                self.db,
+                uid,
                 "Student Returned",
                 f"{student_info['name']} has returned after {minutes}m absence.",
                 "early_leave_return",
@@ -831,14 +834,20 @@ class PresenceService:
     # ── notification helpers ─────────────────────────────────────
 
     async def _notify_check_in(
-        self, student_id: str, student_name: str, status: str,
-        check_in_time: datetime, subject_code: str, subject_name: str,
+        self,
+        student_id: str,
+        student_name: str,
+        status: str,
+        check_in_time: datetime,
+        subject_code: str,
+        subject_name: str,
     ):
         """Send check-in notification to the student."""
         from app.services.notification_service import notify as _notify
 
         await _notify(
-            self.db, student_id,
+            self.db,
+            student_id,
             "Attendance Confirmed",
             f"You are marked {status} for {subject_code}.",
             "check_in",
@@ -856,9 +865,15 @@ class PresenceService:
         )
 
     async def _notify_early_leave(
-        self, student_id: str, student_name: str, faculty_user_id: str | None,
-        subject_code: str, consecutive_misses: int,
-        last_seen_at: str | None, severity: str, attendance_id: str,
+        self,
+        student_id: str,
+        student_name: str,
+        faculty_user_id: str | None,
+        subject_code: str,
+        consecutive_misses: int,
+        last_seen_at: str | None,
+        severity: str,
+        attendance_id: str,
     ):
         """Send early-leave notifications to both faculty and student."""
         from app.services.notification_service import notify as _notify
@@ -866,7 +881,8 @@ class PresenceService:
         # Faculty notification
         if faculty_user_id:
             await _notify(
-                self.db, faculty_user_id,
+                self.db,
+                faculty_user_id,
                 "Early Leave Alert",
                 f"{student_name} appears to have left {subject_code} early.",
                 "early_leave",
@@ -887,7 +903,8 @@ class PresenceService:
 
         # Student notification
         await _notify(
-            self.db, student_id,
+            self.db,
+            student_id,
             "Early Leave Alert",
             f"You appear to have left {subject_code} early. Please return to class.",
             "early_leave",

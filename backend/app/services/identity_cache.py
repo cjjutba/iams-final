@@ -94,11 +94,16 @@ class IdentityCache:
         await self._redis.expire(key, ttl)
 
         logger.debug(
-            "Wrote %d identities to %s (ttl=%ds)", len(mapping), key, ttl,
+            "Wrote %d identities to %s (ttl=%ds)",
+            len(mapping),
+            key,
+            ttl,
         )
 
     async def read_identities(
-        self, room_id: str, session_id: str,
+        self,
+        room_id: str,
+        session_id: str,
     ) -> dict[str, dict[str, Any]]:
         """Read all identities for a session.
 
@@ -144,9 +149,7 @@ class IdentityCache:
         """
         key = self._meta_key(room_id, session_id)
 
-        mapping: dict[str, str] = {
-            k: json.dumps(v) for k, v in meta.items()
-        }
+        mapping: dict[str, str] = {k: json.dumps(v) for k, v in meta.items()}
 
         await self._redis.hset(name=key, mapping=mapping)
         await self._redis.expire(key, ttl)
@@ -154,7 +157,9 @@ class IdentityCache:
         logger.debug("Wrote scan meta to %s (ttl=%ds)", key, ttl)
 
     async def read_scan_meta(
-        self, room_id: str, session_id: str,
+        self,
+        room_id: str,
+        session_id: str,
     ) -> dict[str, Any] | None:
         """Read scan metadata for a session.
 
@@ -191,5 +196,7 @@ class IdentityCache:
         await self._redis.delete(identity_key, meta_key)
 
         logger.debug(
-            "Cleared session cache: room=%s session=%s", room_id, session_id,
+            "Cleared session cache: room=%s session=%s",
+            room_id,
+            session_id,
         )

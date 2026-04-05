@@ -116,4 +116,3 @@ class ProfileUpdateRequest(BaseModel):
     @classmethod
     def validate_phone(cls, v):
         return _validate_ph_phone(v)
-

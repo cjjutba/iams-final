@@ -60,7 +60,11 @@ class AuthService:
 
         existing_user = self.user_repo.get_by_student_id(normalized)
         if existing_user:
-            return {"exists": True, "available": False, "message": "This student ID is already registered. Please login instead."}
+            return {
+                "exists": True,
+                "available": False,
+                "message": "This student ID is already registered. Please login instead.",
+            }
 
         return {"exists": True, "available": True, "message": "Student ID found"}
 

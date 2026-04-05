@@ -24,7 +24,7 @@ from app.services.ml.embedding_pipeline import (
 from app.services.ml.face_quality import QualityReport, assess_quality
 from app.services.ml.faiss_manager import faiss_manager
 from app.services.ml.insightface_model import insightface_model
-from app.utils.exceptions import FaceRecognitionError, NotFoundError, ValidationError
+from app.utils.exceptions import FaceRecognitionError, ValidationError
 
 
 class FaceService:

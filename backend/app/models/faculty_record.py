@@ -10,7 +10,7 @@ When real school data is available, this table is populated via import.
 For development/pilot testing, it is populated with mock data.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, Column, DateTime, String
 
@@ -36,7 +36,7 @@ class FacultyRecord(Base):
     # Whether this faculty member is currently active
     is_active = Column(Boolean, nullable=False, default=True)
 
-    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
     def __repr__(self) -> str:
         return f"<FacultyRecord faculty_id={self.faculty_id!r} name={self.first_name!r} {self.last_name!r}>"

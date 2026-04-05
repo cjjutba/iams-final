@@ -5,7 +5,7 @@ Stores hashed refresh tokens for secure token rotation and revocation.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
@@ -37,7 +37,7 @@ class RefreshToken(Base):
     token_hash = Column(String(255), nullable=False, unique=True)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     revoked = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False)
 
     def __repr__(self):
         return f"<RefreshToken(id={self.id}, user_id={self.user_id}, revoked={self.revoked})>"

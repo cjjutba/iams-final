@@ -20,7 +20,6 @@ import logging
 import subprocess
 import threading
 import time
-from typing import Optional
 
 import numpy as np
 
@@ -57,23 +56,21 @@ class FrameGrabber:
         self._frame_bytes = self._width * self._height * 3  # BGR24
 
         self._lock = threading.Lock()
-        self._latest_frame: Optional[np.ndarray] = None
+        self._latest_frame: np.ndarray | None = None
         self._frame_time: float = 0.0
 
         self._stop_event = threading.Event()
-        self._process: Optional[subprocess.Popen] = None
+        self._process: subprocess.Popen | None = None
 
         self._process = self._start_ffmpeg()
-        self._thread = threading.Thread(
-            target=self._drain_loop, daemon=True, name="frame-grabber"
-        )
+        self._thread = threading.Thread(target=self._drain_loop, daemon=True, name="frame-grabber")
         self._thread.start()
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def grab(self) -> Optional[np.ndarray]:
+    def grab(self) -> np.ndarray | None:
         """Return a *copy* of the latest frame, or None if unavailable."""
         with self._lock:
             if self._latest_frame is None:
@@ -109,19 +106,27 @@ class FrameGrabber:
     # Internals
     # ------------------------------------------------------------------
 
-    def _start_ffmpeg(self) -> Optional[subprocess.Popen]:
+    def _start_ffmpeg(self) -> subprocess.Popen | None:
         """Start FFmpeg subprocess that decodes RTSP → raw BGR24 on stdout."""
         cmd = [
             "ffmpeg",
-            "-fflags", "+genpts+discardcorrupt",
-            "-rtsp_transport", "tcp",
-            "-i", self._url,
-            "-f", "rawvideo",
-            "-pix_fmt", "bgr24",
-            "-s", f"{self._width}x{self._height}",
-            "-r", str(int(self._fps)),
+            "-fflags",
+            "+genpts+discardcorrupt",
+            "-rtsp_transport",
+            "tcp",
+            "-i",
+            self._url,
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "bgr24",
+            "-s",
+            f"{self._width}x{self._height}",
+            "-r",
+            str(int(self._fps)),
             "-an",  # no audio
-            "-v", "warning",
+            "-v",
+            "warning",
             "pipe:1",
         ]
         try:
@@ -160,7 +165,7 @@ class FrameGrabber:
         self._kill_ffmpeg()
         self._process = self._start_ffmpeg()
 
-    def _read_exactly(self, n: int) -> Optional[bytes]:
+    def _read_exactly(self, n: int) -> bytes | None:
         """Read exactly n bytes from FFmpeg stdout, or None on EOF."""
         if self._process is None or self._process.stdout is None:
             return None
@@ -199,9 +204,7 @@ class FrameGrabber:
             if frames_read <= warmup_frames:
                 continue
 
-            frame = np.frombuffer(data, dtype=np.uint8).reshape(
-                (self._height, self._width, 3)
-            )
+            frame = np.frombuffer(data, dtype=np.uint8).reshape((self._height, self._width, 3))
 
             with self._lock:
                 self._latest_frame = frame

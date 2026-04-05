@@ -20,6 +20,7 @@ RESEND_API_URL = "https://api.resend.com/emails"
 
 # ── HTML templates ───────────────────────────────────────────────
 
+
 def _base_html(title: str, body: str) -> str:
     """Wrap body in a minimal branded HTML email layout."""
     return f"""\
@@ -38,6 +39,7 @@ def _template(name: str):
     def decorator(fn):
         _TEMPLATES[name] = fn
         return fn
+
     return decorator
 
 
@@ -118,6 +120,7 @@ def _generic(ctx: dict) -> tuple[str, str]:
 
 
 # ── Service ──────────────────────────────────────────────────────
+
 
 class EmailService:
     """Sends transactional emails via Resend REST API."""

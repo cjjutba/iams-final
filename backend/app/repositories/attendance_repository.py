@@ -163,19 +163,23 @@ class AttendanceRepository:
         Returns:
             Dictionary with attendance statistics
         """
-        result = self.db.query(
-            func.count().label("total"),
-            func.count(case((AttendanceRecord.status == AttendanceStatus.PRESENT, 1))).label("present"),
-            func.count(case((AttendanceRecord.status == AttendanceStatus.LATE, 1))).label("late"),
-            func.count(case((AttendanceRecord.status == AttendanceStatus.ABSENT, 1))).label("absent"),
-            func.count(case((AttendanceRecord.status == AttendanceStatus.EARLY_LEAVE, 1))).label("early_leave"),
-        ).filter(
-            and_(
-                AttendanceRecord.student_id == uuid.UUID(student_id),
-                AttendanceRecord.date >= start_date,
-                AttendanceRecord.date <= end_date,
+        result = (
+            self.db.query(
+                func.count().label("total"),
+                func.count(case((AttendanceRecord.status == AttendanceStatus.PRESENT, 1))).label("present"),
+                func.count(case((AttendanceRecord.status == AttendanceStatus.LATE, 1))).label("late"),
+                func.count(case((AttendanceRecord.status == AttendanceStatus.ABSENT, 1))).label("absent"),
+                func.count(case((AttendanceRecord.status == AttendanceStatus.EARLY_LEAVE, 1))).label("early_leave"),
             )
-        ).first()
+            .filter(
+                and_(
+                    AttendanceRecord.student_id == uuid.UUID(student_id),
+                    AttendanceRecord.date >= start_date,
+                    AttendanceRecord.date <= end_date,
+                )
+            )
+            .first()
+        )
 
         total = result.total
         present = result.present

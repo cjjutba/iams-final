@@ -1,3 +1,4 @@
+import contextlib
 import logging
 
 import redis.asyncio as redis
@@ -26,10 +27,8 @@ async def get_redis() -> redis.Redis:
             return _redis_pool
         except Exception:
             logger.warning("Redis connection lost, reconnecting...")
-            try:
+            with contextlib.suppress(Exception):
                 await _redis_pool.aclose()
-            except Exception:
-                pass
             _redis_pool = None
 
     _redis_pool = redis.from_url(

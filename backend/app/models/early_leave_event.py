@@ -6,7 +6,7 @@ Tracks return detection and context-aware severity.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
@@ -42,10 +42,12 @@ class EarlyLeaveEvent(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
     # Foreign key
-    attendance_id = Column(UUID(as_uuid=True), ForeignKey("attendance_records.id", ondelete="CASCADE"), nullable=False, index=True)
+    attendance_id = Column(
+        UUID(as_uuid=True), ForeignKey("attendance_records.id", ondelete="CASCADE"), nullable=False, index=True
+    )
 
     # Event details
-    detected_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    detected_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
     last_seen_at = Column(DateTime, nullable=False)
     consecutive_misses = Column(Integer, nullable=False)
 

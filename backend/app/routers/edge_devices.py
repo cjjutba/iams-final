@@ -43,11 +43,7 @@ def _serialize_device(room: Room, db: Session):
     is_scanning = active_schedule is not None
 
     # Count total schedules for this room
-    schedule_count = (
-        db.query(Schedule)
-        .filter(Schedule.room_id == room.id, Schedule.is_active.is_(True))
-        .count()
-    )
+    schedule_count = db.query(Schedule).filter(Schedule.room_id == room.id, Schedule.is_active.is_(True)).count()
 
     session_data = None
     if active_schedule:
@@ -81,11 +77,7 @@ def get_edge_status(
     Returns all rooms with camera endpoints configured as edge devices,
     including real-time scanning status based on active schedules.
     """
-    rooms = (
-        db.query(Room)
-        .filter(Room.camera_endpoint.isnot(None), Room.camera_endpoint != "")
-        .all()
-    )
+    rooms = db.query(Room).filter(Room.camera_endpoint.isnot(None), Room.camera_endpoint != "").all()
 
     devices = [_serialize_device(room, db) for room in rooms]
     scanning_count = sum(1 for d in devices if d["status"] == "scanning")
@@ -108,11 +100,7 @@ def get_edge_device(
     Get detailed info for a single edge device (room with camera).
     Includes assigned schedules.
     """
-    room = (
-        db.query(Room)
-        .filter(Room.id == device_id, Room.camera_endpoint.isnot(None))
-        .first()
-    )
+    room = db.query(Room).filter(Room.id == device_id, Room.camera_endpoint.isnot(None)).first()
     if not room:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -8,7 +8,7 @@ password management, and student ID verification.
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.orm import Session
 
-from app.config import logger, settings
+from app.config import settings
 from app.database import get_db
 from app.models.user import User
 from app.rate_limiter import limiter
@@ -135,7 +135,6 @@ def register(
     )
 
 
-
 # ===================================================================
 # FUN-01-03: Login
 # ===================================================================
@@ -223,7 +222,6 @@ def forgot_password(
     """
     auth_service = AuthService(db)
     return auth_service.forgot_password(body.email)
-
 
 
 # ===================================================================

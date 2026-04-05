@@ -66,14 +66,13 @@ class SessionPipeline:
                 self._subject_name = schedule.subject_name
 
             # Initialize tracker with enrolled user info
-            from app.services.ml.faiss_manager import faiss_manager
-            from app.services.ml.insightface_model import insightface_model
-
             # Build a complete name_map: enrolled students + all face-registered users.
             # Enrolled names come from presence service; augment with any registered
             # user whose face is in FAISS so recognition always shows a name.
             from app.models.face_registration import FaceRegistration
             from app.models.user import User
+            from app.services.ml.faiss_manager import faiss_manager
+            from app.services.ml.insightface_model import insightface_model
 
             full_name_map = dict(self._presence.name_map)
             face_regs = (
@@ -82,7 +81,7 @@ class SessionPipeline:
                 .filter(FaceRegistration.is_active)
                 .all()
             )
-            for user_id, first_name, last_name in face_regs:
+            for user_id, first_name, _last_name in face_regs:
                 uid = str(user_id)
                 if uid not in full_name_map:
                     full_name_map[uid] = first_name
@@ -102,9 +101,7 @@ class SessionPipeline:
             db.close()
 
         # Start the async loop (no long-lived DB session)
-        self._task = asyncio.create_task(
-            self._run_loop(), name=f"pipeline-{self.schedule_id[:8]}"
-        )
+        self._task = asyncio.create_task(self._run_loop(), name=f"pipeline-{self.schedule_id[:8]}")
         logger.info("SessionPipeline started for schedule %s", self.schedule_id)
 
     async def stop(self) -> dict:
@@ -114,7 +111,7 @@ class SessionPipeline:
         if self._task is not None:
             try:
                 await asyncio.wait_for(self._task, timeout=5.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
+            except (TimeoutError, asyncio.CancelledError):
                 self._task.cancel()
 
         summary = {}
@@ -142,7 +139,8 @@ class SessionPipeline:
             self._presence.set_early_leave_timeout(timeout_seconds)
             logger.info(
                 "Early leave timeout updated to %.0fs for schedule %s",
-                timeout_seconds, self.schedule_id[:8],
+                timeout_seconds,
+                self.schedule_id[:8],
             )
 
     async def _run_loop(self) -> None:
@@ -161,9 +159,7 @@ class SessionPipeline:
                 frame = self._grabber.grab()
                 if frame is not None:
                     # Run CPU-intensive ML work in thread executor
-                    track_frame = await loop.run_in_executor(
-                        None, self._tracker.process, frame
-                    )
+                    track_frame = await loop.run_in_executor(None, self._tracker.process, frame)
 
                     self._frame_count += 1
 
@@ -172,9 +168,7 @@ class SessionPipeline:
                     db = self._db_factory()
                     try:
                         self._presence.rebind_db(db)
-                        events = self._presence.process_track_frame(
-                            track_frame, time.monotonic()
-                        )
+                        events = self._presence.process_track_frame(track_frame, time.monotonic())
                     finally:
                         db.close()
 
@@ -240,13 +234,16 @@ class SessionPipeline:
                 for t in track_frame.tracks
             ]
 
-            await ws_manager.broadcast_attendance(self.schedule_id, {
-                "type": "frame_update",
-                "timestamp": track_frame.timestamp,
-                "tracks": tracks_data,
-                "fps": round(track_frame.fps, 1),
-                "processing_ms": round(track_frame.processing_ms, 1),
-            })
+            await ws_manager.broadcast_attendance(
+                self.schedule_id,
+                {
+                    "type": "frame_update",
+                    "timestamp": track_frame.timestamp,
+                    "tracks": tracks_data,
+                    "fps": round(track_frame.fps, 1),
+                    "processing_ms": round(track_frame.processing_ms, 1),
+                },
+            )
         except Exception:
             logger.debug("Frame update broadcast failed", exc_info=True)
 
@@ -269,25 +266,34 @@ class SessionPipeline:
             from app.routers.websocket import ws_manager
 
             if event_type == "check_in":
-                await ws_manager.broadcast_attendance(self.schedule_id, {
-                    "type": "check_in",
-                    "schedule_id": self.schedule_id,
-                    **event,
-                })
+                await ws_manager.broadcast_attendance(
+                    self.schedule_id,
+                    {
+                        "type": "check_in",
+                        "schedule_id": self.schedule_id,
+                        **event,
+                    },
+                )
 
             elif event_type == "early_leave":
-                await ws_manager.broadcast_attendance(self.schedule_id, {
-                    "type": "early_leave",
-                    "schedule_id": self.schedule_id,
-                    **event,
-                })
+                await ws_manager.broadcast_attendance(
+                    self.schedule_id,
+                    {
+                        "type": "early_leave",
+                        "schedule_id": self.schedule_id,
+                        **event,
+                    },
+                )
 
             elif event_type == "early_leave_return":
-                await ws_manager.broadcast_attendance(self.schedule_id, {
-                    "type": "early_leave_return",
-                    "schedule_id": self.schedule_id,
-                    **event,
-                })
+                await ws_manager.broadcast_attendance(
+                    self.schedule_id,
+                    {
+                        "type": "early_leave_return",
+                        "schedule_id": self.schedule_id,
+                        **event,
+                    },
+                )
 
         except Exception:
             logger.debug("Event broadcast failed: %s", event_type, exc_info=True)
@@ -316,7 +322,8 @@ class SessionPipeline:
                 student_id = event.get("student_id")
                 if student_id:
                     await _notify(
-                        db, student_id,
+                        db,
+                        student_id,
                         "Attendance Confirmed",
                         f"You are marked {event.get('status', 'present')} for {subject_code}.",
                         "check_in",
@@ -338,14 +345,13 @@ class SessionPipeline:
                 student_name = event.get("student_name", "A student")
                 attendance_id = event.get("attendance_id")
                 absent_seconds = event.get("absent_seconds", 0)
-                consecutive_misses = max(
-                    1, int(absent_seconds / settings.SCAN_INTERVAL_SECONDS)
-                )
+                consecutive_misses = max(1, int(absent_seconds / settings.SCAN_INTERVAL_SECONDS))
 
                 # Faculty notification
                 if self._faculty_id:
                     await _notify(
-                        db, self._faculty_id,
+                        db,
+                        self._faculty_id,
                         "Early Leave Detected",
                         f"{student_name} left {subject_code} early.",
                         "early_leave",
@@ -367,7 +373,8 @@ class SessionPipeline:
                 # Student notification
                 if student_id:
                     await _notify(
-                        db, student_id,
+                        db,
+                        student_id,
                         "Early Leave Recorded",
                         f"You were marked as early leave from {subject_code}.",
                         "early_leave",
@@ -393,7 +400,8 @@ class SessionPipeline:
                 # Faculty notification (no email — low urgency)
                 if self._faculty_id:
                     await _notify(
-                        db, self._faculty_id,
+                        db,
+                        self._faculty_id,
                         "Student Returned",
                         f"{student_name} has returned to {subject_code}.",
                         "early_leave_return",
@@ -403,7 +411,8 @@ class SessionPipeline:
                 # Student notification (no email)
                 if student_id:
                     await _notify(
-                        db, student_id,
+                        db,
+                        student_id,
                         "Return Noted",
                         f"Your return to {subject_code} has been recorded.",
                         "early_leave_return",
@@ -413,7 +422,9 @@ class SessionPipeline:
         except Exception:
             logger.warning(
                 "Failed to send event notifications for %s (schedule %s)",
-                event_type, self.schedule_id[:8], exc_info=True,
+                event_type,
+                self.schedule_id[:8],
+                exc_info=True,
             )
         finally:
             db.close()

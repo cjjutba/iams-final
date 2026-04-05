@@ -6,19 +6,18 @@ System-wide analytics for admin dashboard — metrics, trends, weekday breakdown
 All data is computed from existing attendance records and anomaly tables.
 """
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.attendance_record import AttendanceRecord, AttendanceStatus
 from app.models.attendance_anomaly import AttendanceAnomaly
+from app.models.attendance_record import AttendanceRecord, AttendanceStatus
 from app.models.early_leave_event import EarlyLeaveEvent
 from app.models.schedule import Schedule
 from app.models.user import User, UserRole
-from app.repositories.attendance_repository import AttendanceRepository
 from app.repositories.schedule_repository import ScheduleRepository
 from app.schemas.analytics import (
     AnomalyItemResponse,
@@ -48,7 +47,6 @@ def get_class_overview(
     from fastapi import HTTPException
 
     schedule_repo = ScheduleRepository(db)
-    attendance_repo = AttendanceRepository(db)
 
     schedule = schedule_repo.get_by_id(schedule_id)
     if not schedule:
@@ -62,11 +60,7 @@ def get_class_overview(
     total_enrolled = len(enrolled)
 
     # Get all attendance records for this schedule
-    all_records = (
-        db.query(AttendanceRecord)
-        .filter(AttendanceRecord.schedule_id == schedule.id)
-        .all()
-    )
+    all_records = db.query(AttendanceRecord).filter(AttendanceRecord.schedule_id == schedule.id).all()
 
     # Count distinct session dates
     session_dates = {r.date for r in all_records}
@@ -74,10 +68,7 @@ def get_class_overview(
 
     # Average attendance rate across all records
     if all_records:
-        present_or_late = sum(
-            1 for r in all_records
-            if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
-        )
+        present_or_late = sum(1 for r in all_records if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE))
         avg_rate = (present_or_late / len(all_records)) * 100
     else:
         avg_rate = 0.0
@@ -91,11 +82,7 @@ def get_class_overview(
     )
 
     # Anomaly count
-    anomaly_count = (
-        db.query(AttendanceAnomaly)
-        .filter(AttendanceAnomaly.schedule_id == schedule.id)
-        .count()
-    )
+    anomaly_count = db.query(AttendanceAnomaly).filter(AttendanceAnomaly.schedule_id == schedule.id).count()
 
     return ClassOverviewResponse(
         schedule_id=schedule_id,
@@ -139,11 +126,7 @@ def get_at_risk_students(
         enrolled = schedule_repo.get_enrolled_students(sid)
 
         # Get all records for this schedule
-        all_records = (
-            db.query(AttendanceRecord)
-            .filter(AttendanceRecord.schedule_id == schedule.id)
-            .all()
-        )
+        all_records = db.query(AttendanceRecord).filter(AttendanceRecord.schedule_id == schedule.id).all()
 
         if not all_records:
             continue
@@ -164,8 +147,7 @@ def get_at_risk_students(
                 missed = 0
             else:
                 present_or_late = sum(
-                    1 for r in records
-                    if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
+                    1 for r in records if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
                 )
                 rate = (present_or_late / total) * 100
                 missed = total - present_or_late
@@ -226,10 +208,7 @@ def get_anomalies(
     # Get anomalies for these schedules + global (no schedule_id)
     anomalies = (
         db.query(AttendanceAnomaly)
-        .filter(
-            (AttendanceAnomaly.schedule_id.in_(schedule_ids))
-            | (AttendanceAnomaly.schedule_id.is_(None))
-        )
+        .filter((AttendanceAnomaly.schedule_id.in_(schedule_ids)) | (AttendanceAnomaly.schedule_id.is_(None)))
         .order_by(AttendanceAnomaly.detected_at.desc())
         .limit(50)
         .all()
@@ -269,8 +248,8 @@ def get_system_metrics(
     System-wide metrics for the admin dashboard stat cards.
     Returns counts of students, faculty, schedules, attendance stats, anomalies, early leaves.
     """
-    from app.models.student_record import StudentRecord
     from app.models.faculty_record import FacultyRecord
+    from app.models.student_record import StudentRecord
 
     total_students = db.query(StudentRecord).count()
     total_faculty = db.query(FacultyRecord).count()
@@ -409,7 +388,7 @@ def resolve_anomaly(
 
     anomaly.resolved = True
     anomaly.resolved_by = current_user.id
-    anomaly.resolved_at = datetime.now(timezone.utc)
+    anomaly.resolved_at = datetime.now(UTC)
     db.commit()
 
     return {"success": True, "message": "Anomaly resolved"}

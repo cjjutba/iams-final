@@ -53,12 +53,14 @@ class StudentRecordRepository:
 
         enriched = []
         for record, user_id, face_count in results:
-            enriched.append({
-                "record": record,
-                "user_id": str(user_id) if user_id else None,
-                "is_registered": user_id is not None,
-                "has_face_registered": face_count > 0,
-            })
+            enriched.append(
+                {
+                    "record": record,
+                    "user_id": str(user_id) if user_id else None,
+                    "is_registered": user_id is not None,
+                    "has_face_registered": face_count > 0,
+                }
+            )
         return enriched
 
     def count(self) -> int:

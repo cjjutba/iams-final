@@ -4,7 +4,7 @@ Notification Schemas
 Request and response models for notification operations.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from pydantic import BaseModel, field_validator
@@ -37,7 +37,7 @@ class NotificationResponse(BaseModel):
     def ensure_timezone_aware(cls, v):
         """Ensure datetime fields include timezone info (UTC) for correct client parsing."""
         if isinstance(v, datetime) and v.tzinfo is None:
-            return v.replace(tzinfo=timezone.utc)
+            return v.replace(tzinfo=UTC)
         return v
 
     class Config:

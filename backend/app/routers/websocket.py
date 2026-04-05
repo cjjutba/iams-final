@@ -16,7 +16,7 @@ import logging
 import os
 from collections import defaultdict
 
-from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.config import settings
 from app.utils.security import verify_token
@@ -38,8 +38,9 @@ class ConnectionManager:
     async def add_attendance_client(self, schedule_id: str, ws: WebSocket):
         await ws.accept()
         self._attendance_clients[schedule_id].add(ws)
-        logger.debug("WS client added for schedule %s (total: %d)",
-                      schedule_id, len(self._attendance_clients[schedule_id]))
+        logger.debug(
+            "WS client added for schedule %s (total: %d)", schedule_id, len(self._attendance_clients[schedule_id])
+        )
 
     def remove_attendance_client(self, schedule_id: str, ws: WebSocket):
         self._attendance_clients[schedule_id].discard(ws)
@@ -93,19 +94,28 @@ class ConnectionManager:
         except Exception as e:
             logger.warning("Redis alert publish failed for %s: %s", user_id, e)
 
-    async def broadcast_scan_result(self, schedule_id: str, detections: list[dict],
-                                     present_count: int, total_enrolled: int,
-                                     absent: list[str], early_leave: list[str]):
+    async def broadcast_scan_result(
+        self,
+        schedule_id: str,
+        detections: list[dict],
+        present_count: int,
+        total_enrolled: int,
+        absent: list[str],
+        early_leave: list[str],
+    ):
         """Legacy scan_result broadcast (backward compatibility)."""
-        await self.broadcast_attendance(schedule_id, {
-            "type": "scan_result",
-            "schedule_id": schedule_id,
-            "detections": detections,
-            "present_count": present_count,
-            "total_enrolled": total_enrolled,
-            "absent": absent,
-            "early_leave": early_leave,
-        })
+        await self.broadcast_attendance(
+            schedule_id,
+            {
+                "type": "scan_result",
+                "schedule_id": schedule_id,
+                "detections": detections,
+                "present_count": present_count,
+                "total_enrolled": total_enrolled,
+                "absent": absent,
+                "early_leave": early_leave,
+            },
+        )
 
     # ── Redis pub/sub (multi-worker support) ─────────────────────
 

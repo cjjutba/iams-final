@@ -20,7 +20,6 @@ from app.schemas.attendance import (
     AttendanceRecordResponse,
     AttendanceSummary,
     AttendanceUpdateRequest,
-    EarlyLeaveResponse,
     LiveAttendanceResponse,
     ManualAttendanceRequest,
     PresenceLogResponse,
@@ -217,7 +216,9 @@ def get_today_attendance(
         if str(schedule.faculty_id) != str(current_user.id):
             from fastapi import HTTPException
 
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this schedule's attendance")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this schedule's attendance"
+            )
 
     attendance_repo = AttendanceRepository(db)
     today = date.today()
@@ -253,7 +254,9 @@ def get_today_attendance_by_path(
         if str(schedule.faculty_id) != str(current_user.id):
             from fastapi import HTTPException
 
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this schedule's attendance")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this schedule's attendance"
+            )
 
     attendance_repo = AttendanceRepository(db)
     today = date.today()
@@ -658,7 +661,8 @@ def export_attendance(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
             if str(schedule.faculty_id) != str(current_user.id):
                 raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN, detail="You can only export attendance for your own schedules"
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You can only export attendance for your own schedules",
                 )
             query = query.filter(AR.schedule_id == schedule.id)
         else:
@@ -669,6 +673,7 @@ def export_attendance(
         # Admin — optionally filter by schedule
         if schedule_id:
             import uuid as _uuid
+
             query = query.filter(AR.schedule_id == _uuid.UUID(schedule_id))
 
     # Apply filters
@@ -759,7 +764,10 @@ def export_attendance(
             )
 
         return {
-            "date_range": {"start": start_date.isoformat() if start_date else None, "end": end_date.isoformat() if end_date else None},
+            "date_range": {
+                "start": start_date.isoformat() if start_date else None,
+                "end": end_date.isoformat() if end_date else None,
+            },
             "total_records": len(result),
             "records": result,
         }
@@ -799,7 +807,6 @@ def export_attendance_pdf(
     from app.services.pdf_service import generate_attendance_pdf
 
     schedule_repo = ScheduleRepository(db)
-    attendance_repo = AttendanceRepository(db)
 
     def _get_records_with_students(schedule_id: str, sd: date, ed: date) -> list:
         """Fetch attendance records with eager-loaded student relationships."""

@@ -55,7 +55,9 @@ class NotificationRepository:
     def get_unread_count(self, user_id: str) -> int:
         """Get count of unread notifications for a user"""
         return (
-            self.db.query(Notification).filter(Notification.user_id == _to_uuid(user_id), Notification.read.is_(False)).count()
+            self.db.query(Notification)
+            .filter(Notification.user_id == _to_uuid(user_id), Notification.read.is_(False))
+            .count()
         )
 
     def create(self, notification_data: dict) -> Notification:

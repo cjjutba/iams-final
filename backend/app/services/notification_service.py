@@ -10,7 +10,7 @@ coordinates three delivery channels:
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
@@ -57,29 +57,24 @@ async def notify(
 
     # ── 1. Check user preference ─────────────────────────────────
     if preference_key:
-        pref = (
-            db.query(NotificationPreference)
-            .filter(NotificationPreference.user_id == user_id)
-            .first()
-        )
+        pref = db.query(NotificationPreference).filter(NotificationPreference.user_id == user_id).first()
         if pref and not getattr(pref, preference_key, True):
-            logger.debug(
-                f"Notification suppressed for user {user_id}: "
-                f"{preference_key} disabled"
-            )
+            logger.debug(f"Notification suppressed for user {user_id}: {preference_key} disabled")
             return
 
     # ── 2. Create DB row (always) ────────────────────────────────
     try:
         repo = NotificationRepository(db)
-        repo.create({
-            "user_id": user_id,
-            "title": title,
-            "message": message,
-            "type": notification_type,
-            "reference_id": reference_id,
-            "reference_type": reference_type,
-        })
+        repo.create(
+            {
+                "user_id": user_id,
+                "title": title,
+                "message": message,
+                "type": notification_type,
+                "reference_id": reference_id,
+                "reference_type": reference_type,
+            }
+        )
     except Exception:
         logger.exception(f"Failed to persist notification for user {user_id}")
 
@@ -87,16 +82,19 @@ async def notify(
     try:
         from app.routers.websocket import ws_manager
 
-        await ws_manager.broadcast_alert(user_id, {
-            "type": "notification",
-            "toast_type": toast_type,
-            "notification_type": notification_type,
-            "title": title,
-            "message": message,
-            "reference_id": reference_id,
-            "reference_type": reference_type,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        await ws_manager.broadcast_alert(
+            user_id,
+            {
+                "type": "notification",
+                "toast_type": toast_type,
+                "notification_type": notification_type,
+                "title": title,
+                "message": message,
+                "reference_id": reference_id,
+                "reference_type": reference_type,
+                "timestamp": datetime.now(UTC).isoformat(),
+            },
+        )
     except Exception:
         logger.exception(f"Failed to push WS toast for user {user_id}")
 
@@ -104,11 +102,7 @@ async def notify(
     if send_email and settings.EMAIL_ENABLED and email_template:
         try:
             # Check user-level email_enabled
-            pref = (
-                db.query(NotificationPreference)
-                .filter(NotificationPreference.user_id == user_id)
-                .first()
-            )
+            pref = db.query(NotificationPreference).filter(NotificationPreference.user_id == user_id).first()
             if pref and pref.email_enabled:
                 from app.models.user import User
 

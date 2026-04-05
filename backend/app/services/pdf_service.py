@@ -5,7 +5,7 @@ Generates attendance report PDFs using ReportLab platypus.
 """
 
 import io
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4

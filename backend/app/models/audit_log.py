@@ -5,7 +5,7 @@ Records admin actions for audit trail purposes.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
@@ -36,7 +36,7 @@ class AuditLog(Base):
     target_type = Column(String(50), nullable=False)
     target_id = Column(String(100), nullable=True)
     details = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
 
     # Relationships
     admin = relationship("User", foreign_keys=[admin_id])

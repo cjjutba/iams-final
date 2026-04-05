@@ -12,7 +12,7 @@ Performance on M5 MacBook Pro (Apple Silicon):
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 import supervision as sv
@@ -148,9 +148,7 @@ class RealtimeTracker:
             embeddings_list.append(face.normed_embedding.copy())
 
         # Apply NMS to remove duplicate face detections
-        bboxes, confidences, embeddings_list = self._nms_faces(
-            bboxes, confidences, embeddings_list
-        )
+        bboxes, confidences, embeddings_list = self._nms_faces(bboxes, confidences, embeddings_list)
 
         det_array = np.array(bboxes, dtype=np.float32)
         conf_array = np.array(confidences, dtype=np.float32)
@@ -164,9 +162,7 @@ class RealtimeTracker:
         tracked = self._tracker.update_with_detections(detections)
 
         # 4. Match embeddings to tracked detections by IoU
-        track_embeddings = self._match_embeddings_to_tracks(
-            det_array, embeddings_list, tracked
-        )
+        track_embeddings = self._match_embeddings_to_tracks(det_array, embeddings_list, tracked)
 
         # 5. For each track: lookup cache or run ArcFace
         results: list[TrackResult] = []
@@ -196,7 +192,8 @@ class RealtimeTracker:
                 if sim < 0.5:
                     logger.info(
                         "Track %d embedding drift (sim=%.2f), forcing re-recognition",
-                        track_id, sim,
+                        track_id,
+                        sim,
                     )
                     identity.recognition_status = "pending"
                     identity.user_id = None
@@ -236,15 +233,17 @@ class RealtimeTracker:
                 float(bbox[3]) / self._frame_h,
             ]
 
-            results.append(TrackResult(
-                track_id=track_id,
-                bbox=norm_bbox,
-                user_id=identity.user_id,
-                name=identity.name,
-                confidence=identity.confidence,
-                status=identity.recognition_status,
-                is_active=True,
-            ))
+            results.append(
+                TrackResult(
+                    track_id=track_id,
+                    bbox=norm_bbox,
+                    user_id=identity.user_id,
+                    name=identity.name,
+                    confidence=identity.confidence,
+                    status=identity.recognition_status,
+                    is_active=True,
+                )
+            )
 
         # 6. Deduplicate by user_id — keep highest confidence per user
         seen_users: dict[str, int] = {}
@@ -292,11 +291,7 @@ class RealtimeTracker:
 
     def get_recognized_user_ids(self) -> set[str]:
         """Return set of currently recognized user_ids across all active tracks."""
-        return {
-            identity.user_id
-            for identity in self._identity_cache.values()
-            if identity.user_id is not None
-        }
+        return {identity.user_id for identity in self._identity_cache.values() if identity.user_id is not None}
 
     def reset(self) -> None:
         """Clear all tracking state."""
@@ -342,9 +337,7 @@ class RealtimeTracker:
 
         return "Unknown"
 
-    def _recognize_track(
-        self, identity: TrackIdentity, embedding: np.ndarray, now: float
-    ) -> None:
+    def _recognize_track(self, identity: TrackIdentity, embedding: np.ndarray, now: float) -> None:
         """Run ArcFace + FAISS search for a track and cache the result."""
         result = self._faiss.search_with_margin(embedding)
 
@@ -359,14 +352,19 @@ class RealtimeTracker:
             identity.recognition_status = "recognized"
             logger.info(
                 "Track %d recognized: %s (%.3f)",
-                identity.track_id, identity.name, confidence,
+                identity.track_id,
+                identity.name,
+                confidence,
             )
         else:
             identity.recognition_status = "unknown"
             identity.confidence = confidence
             logger.debug(
                 "Track %d unknown (score=%.3f, user=%s, ambiguous=%s)",
-                identity.track_id, confidence, user_id, is_ambiguous,
+                identity.track_id,
+                confidence,
+                user_id,
+                is_ambiguous,
             )
 
         identity.last_verified = now
@@ -450,10 +448,7 @@ class RealtimeTracker:
                 break
 
             remaining = indices[1:]
-            ious = np.array([
-                RealtimeTracker._compute_iou(bboxes[i], bboxes[j])
-                for j in remaining
-            ])
+            ious = np.array([RealtimeTracker._compute_iou(bboxes[i], bboxes[j]) for j in remaining])
             indices = remaining[ious <= iou_threshold]
 
         return (
@@ -462,9 +457,7 @@ class RealtimeTracker:
             [embeddings[i] for i in keep],
         )
 
-    def _expire_lost_tracks(
-        self, now: float, active_ids: set[int] | None = None
-    ) -> None:
+    def _expire_lost_tracks(self, now: float, active_ids: set[int] | None = None) -> None:
         """Remove tracks that have been lost for > TRACK_LOST_TIMEOUT."""
         expired = []
         for track_id, identity in self._identity_cache.items():

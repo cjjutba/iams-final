@@ -16,7 +16,7 @@ Replaces scan-count logic with continuous time tracking:
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import desc
@@ -114,15 +114,17 @@ class TrackPresenceService:
             # Get or create attendance record
             existing = self.attendance_repo.get_by_student_date(sid, self.schedule_id, today)
             if not existing:
-                record = self.attendance_repo.create({
-                    "student_id": sid,
-                    "schedule_id": self.schedule_id,
-                    "date": today,
-                    "status": AttendanceStatus.ABSENT,
-                    "total_scans": 0,
-                    "scans_present": 0,
-                    "presence_score": 0.0,
-                })
+                record = self.attendance_repo.create(
+                    {
+                        "student_id": sid,
+                        "schedule_id": self.schedule_id,
+                        "date": today,
+                        "status": AttendanceStatus.ABSENT,
+                        "total_scans": 0,
+                        "scans_present": 0,
+                        "presence_score": 0.0,
+                    }
+                )
                 attendance_id = str(record.id)
             else:
                 attendance_id = str(existing.id)
@@ -135,7 +137,8 @@ class TrackPresenceService:
 
         logger.info(
             "TrackPresenceService started for schedule %s with %d students",
-            self.schedule_id, len(students),
+            self.schedule_id,
+            len(students),
         )
 
     def process_track_frame(self, track_frame: TrackFrame, now_mono: float) -> list[dict]:
@@ -164,11 +167,7 @@ class TrackPresenceService:
                         datetime.combine(date.today(), self._schedule.start_time)
                         + timedelta(minutes=settings.GRACE_PERIOD_MINUTES)
                     ).time()
-                    new_status = (
-                        AttendanceStatus.PRESENT
-                        if now_dt.time() <= grace_time
-                        else AttendanceStatus.LATE
-                    )
+                    new_status = AttendanceStatus.PRESENT if now_dt.time() <= grace_time else AttendanceStatus.LATE
                     state.status = new_status
                     state.check_in_time = now_dt
                     state.last_seen_time = now_mono
@@ -176,18 +175,23 @@ class TrackPresenceService:
                     state.absent_since = None
 
                     # Write check-in to DB immediately
-                    self.attendance_repo.update(state.attendance_id, {
-                        "status": new_status,
-                        "check_in_time": now_dt,
-                    })
+                    self.attendance_repo.update(
+                        state.attendance_id,
+                        {
+                            "status": new_status,
+                            "check_in_time": now_dt,
+                        },
+                    )
 
-                    events.append({
-                        "event": "check_in",
-                        "student_id": sid,
-                        "student_name": state.name,
-                        "status": new_status.value,
-                        "check_in_time": now_dt.isoformat(),
-                    })
+                    events.append(
+                        {
+                            "event": "check_in",
+                            "student_id": sid,
+                            "student_name": state.name,
+                            "status": new_status.value,
+                            "check_in_time": now_dt.isoformat(),
+                        }
+                    )
 
                     logger.info("Student %s checked in: %s", sid, new_status.value)
 
@@ -199,9 +203,12 @@ class TrackPresenceService:
 
                     # Restore attendance record to original status (PRESENT/LATE)
                     restored_status = state.status
-                    self.attendance_repo.update(state.attendance_id, {
-                        "status": restored_status,
-                    })
+                    self.attendance_repo.update(
+                        state.attendance_id,
+                        {
+                            "status": restored_status,
+                        },
+                    )
 
                     # Persist return to EarlyLeaveEvent record
                     early_event = (
@@ -220,13 +227,15 @@ class TrackPresenceService:
                             early_event.absence_duration_seconds = int(now_mono - state.absent_since)
                         self.db.commit()
 
-                    events.append({
-                        "event": "early_leave_return",
-                        "student_id": sid,
-                        "student_name": state.name,
-                        "restored_status": restored_status.value,
-                        "returned_at": datetime.now().isoformat(),
-                    })
+                    events.append(
+                        {
+                            "event": "early_leave_return",
+                            "student_id": sid,
+                            "student_name": state.name,
+                            "restored_status": restored_status.value,
+                            "returned_at": datetime.now().isoformat(),
+                        }
+                    )
                     logger.info("Student %s returned after early leave, restored to %s", sid, restored_status.value)
 
                 else:
@@ -245,7 +254,9 @@ class TrackPresenceService:
                     state.total_present_seconds += elapsed
                     state.last_presence_start = None
 
-                if state.status != AttendanceStatus.ABSENT and (not state.early_leave_flagged or state.early_leave_returned):
+                if state.status != AttendanceStatus.ABSENT and (
+                    not state.early_leave_flagged or state.early_leave_returned
+                ):
                     # Track absence duration
                     if state.absent_since is None:
                         state.absent_since = now_mono
@@ -254,30 +265,26 @@ class TrackPresenceService:
                         state.early_leave_flagged = True
                         state.early_leave_returned = False  # Reset return flag for new absence
                         absent_seconds = now_mono - state.absent_since
-                        events.append({
-                            "event": "early_leave",
-                            "student_id": sid,
-                            "student_name": state.name,
-                            "attendance_id": state.attendance_id,
-                            "absent_seconds": absent_seconds,
-                        })
+                        events.append(
+                            {
+                                "event": "early_leave",
+                                "student_id": sid,
+                                "student_name": state.name,
+                                "attendance_id": state.attendance_id,
+                                "absent_seconds": absent_seconds,
+                            }
+                        )
                         self.attendance_repo.update(
                             state.attendance_id,
                             {"status": AttendanceStatus.EARLY_LEAVE},
                         )
 
                         # Persist EarlyLeaveEvent to DB
-                        consecutive_misses = int(
-                            absent_seconds / settings.SCAN_INTERVAL_SECONDS
-                        )
+                        consecutive_misses = int(absent_seconds / settings.SCAN_INTERVAL_SECONDS)
                         early_leave_event = EarlyLeaveEvent(
                             attendance_id=state.attendance_id,
                             detected_at=datetime.now(),
-                            last_seen_at=(
-                                state.check_in_time
-                                if state.check_in_time
-                                else datetime.now()
-                            ),
+                            last_seen_at=(state.check_in_time if state.check_in_time else datetime.now()),
                             consecutive_misses=max(1, consecutive_misses),
                             context_severity="auto_detected",
                         )
@@ -286,7 +293,8 @@ class TrackPresenceService:
 
                         logger.warning(
                             "Early leave: student %s absent for %.0fs",
-                            sid, absent_seconds,
+                            sid,
+                            absent_seconds,
                         )
 
         return events
@@ -304,7 +312,7 @@ class TrackPresenceService:
         if session_duration <= 0:
             return
 
-        for sid, state in self._students.items():
+        for _sid, state in self._students.items():
             if state.status == AttendanceStatus.ABSENT:
                 continue
 
@@ -312,6 +320,7 @@ class TrackPresenceService:
             # Add current ongoing presence if still present
             if state.last_presence_start is not None:
                 import time
+
                 total_seconds += time.monotonic() - state.last_presence_start
 
             presence_score = min(100.0, (total_seconds / session_duration) * 100.0)
@@ -320,15 +329,19 @@ class TrackPresenceService:
             scan_equivalent_total = max(1, int(session_duration / settings.SCAN_INTERVAL_SECONDS))
             scan_equivalent_present = int(scan_equivalent_total * (presence_score / 100.0))
 
-            self.attendance_repo.update(state.attendance_id, {
-                "total_scans": scan_equivalent_total,
-                "scans_present": scan_equivalent_present,
-                "presence_score": round(presence_score, 2),
-            })
+            self.attendance_repo.update(
+                state.attendance_id,
+                {
+                    "total_scans": scan_equivalent_total,
+                    "scans_present": scan_equivalent_present,
+                    "presence_score": round(presence_score, 2),
+                },
+            )
 
         logger.debug(
             "Flushed presence for schedule %s (%d students)",
-            self.schedule_id, len(self._students),
+            self.schedule_id,
+            len(self._students),
         )
 
     def end_session(self) -> dict:
@@ -354,23 +367,20 @@ class TrackPresenceService:
         now_dt = datetime.now()
         for state in self._students.values():
             if state.status != AttendanceStatus.ABSENT:
-                self.attendance_repo.update(state.attendance_id, {
-                    "check_out_time": now_dt,
-                })
+                self.attendance_repo.update(
+                    state.attendance_id,
+                    {
+                        "check_out_time": now_dt,
+                    },
+                )
 
         summary = {
             "total_students": len(self._students),
             "present_count": sum(
-                1 for s in self._students.values()
-                if s.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
+                1 for s in self._students.values() if s.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
             ),
-            "early_leave_count": sum(
-                1 for s in self._students.values() if s.early_leave_flagged
-            ),
-            "absent_count": sum(
-                1 for s in self._students.values()
-                if s.status == AttendanceStatus.ABSENT
-            ),
+            "early_leave_count": sum(1 for s in self._students.values() if s.early_leave_flagged),
+            "absent_count": sum(1 for s in self._students.values() if s.status == AttendanceStatus.ABSENT),
         }
 
         logger.info("Session ended for schedule %s: %s", self.schedule_id, summary)

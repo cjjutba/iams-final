@@ -5,7 +5,7 @@ Represents in-app notifications for users (attendance alerts, system messages, e
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
@@ -55,7 +55,7 @@ class Notification(Base):
     reference_type = Column(String(50), nullable=True)
 
     # Timestamps
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False, index=True)
 
     # Relationships
     user = relationship("User", foreign_keys=[user_id], back_populates="notifications")

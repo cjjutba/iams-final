@@ -9,6 +9,7 @@ from datetime import date
 from sqlalchemy.orm import Session
 
 from app.config import logger
+from app.models.student_record import StudentRecord  # noqa: TCH001
 from app.models.user import User, UserRole
 from app.repositories.student_record_repository import StudentRecordRepository
 from app.repositories.user_repository import UserRepository
@@ -217,9 +218,11 @@ class UserService:
         user = self.user_repo.get_by_student_id(normalized)
         has_face = False
         if user:
-            face = self.db.query(FaceRegistration).filter(
-                FaceRegistration.user_id == user.id, FaceRegistration.is_active == True
-            ).first()
+            face = (
+                self.db.query(FaceRegistration)
+                .filter(FaceRegistration.user_id == user.id, FaceRegistration.is_active == True)
+                .first()
+            )
             has_face = face is not None
 
         return {
@@ -231,7 +234,6 @@ class UserService:
 
     def update_student_record(self, student_id: str, update_data: dict) -> "StudentRecord":
         """Update a student record."""
-        from app.models.student_record import StudentRecord
 
         normalized = student_id.strip().upper()
         if "birthdate" in update_data and update_data["birthdate"]:
@@ -255,7 +257,6 @@ class UserService:
         Create a student record in the student_records registry.
         The student can then self-register via the mobile app.
         """
-        from app.models.student_record import StudentRecord
 
         normalized_id = body.student_id.strip().upper()
 

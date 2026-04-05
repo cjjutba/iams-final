@@ -15,9 +15,6 @@ The caller (presence_service) handles all business logic.
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional
-
-import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +22,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Result dataclasses
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True, slots=True)
 class RecognizedFace:
@@ -59,6 +57,7 @@ class ScanResult:
 # Engine
 # ---------------------------------------------------------------------------
 
+
 class AttendanceScanEngine:
     """Stateless scan engine: frame in -> ScanResult out.
 
@@ -92,7 +91,7 @@ class AttendanceScanEngine:
     # Public API
     # ------------------------------------------------------------------
 
-    def scan_frame(self) -> Optional[ScanResult]:
+    def scan_frame(self) -> ScanResult | None:
         """Grab one frame, detect faces, recognise each one.
 
         Returns:
@@ -138,7 +137,9 @@ class AttendanceScanEngine:
             if confidence > 0.0:
                 logger.info(
                     "Recognition: det=%.2f sim=%.3f user=%s",
-                    face.det_score, confidence, user_id,
+                    face.det_score,
+                    confidence,
+                    user_id,
                 )
 
             if user_id is not None and not is_ambiguous:

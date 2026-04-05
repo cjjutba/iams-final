@@ -108,9 +108,9 @@ class UserRepository:
         self.db.add(user)
         try:
             self.db.commit()
-        except IntegrityError:
+        except IntegrityError as err:
             self.db.rollback()
-            raise DuplicateError("User with this email or student ID already exists")
+            raise DuplicateError("User with this email or student ID already exists") from err
         self.db.refresh(user)
         return user
 

@@ -76,12 +76,14 @@ def list_student_records(
     user_service = UserService(db)
     results = user_service.get_student_records_with_status(skip, limit)
     return [
-        StudentRecordWithStatusResponse.model_validate({
-            **StudentRecordResponse.model_validate(r["record"]).model_dump(),
-            "user_id": r["user_id"],
-            "is_registered": r["is_registered"],
-            "has_face_registered": r["has_face_registered"],
-        })
+        StudentRecordWithStatusResponse.model_validate(
+            {
+                **StudentRecordResponse.model_validate(r["record"]).model_dump(),
+                "user_id": r["user_id"],
+                "is_registered": r["is_registered"],
+                "has_face_registered": r["has_face_registered"],
+            }
+        )
         for r in results
     ]
 
@@ -103,12 +105,14 @@ def get_student_record(
     """
     user_service = UserService(db)
     r = user_service.get_student_record(student_id)
-    return StudentRecordWithStatusResponse.model_validate({
-        **StudentRecordResponse.model_validate(r["record"]).model_dump(),
-        "user_id": r["user_id"],
-        "is_registered": r["is_registered"],
-        "has_face_registered": r["has_face_registered"],
-    })
+    return StudentRecordWithStatusResponse.model_validate(
+        {
+            **StudentRecordResponse.model_validate(r["record"]).model_dump(),
+            "user_id": r["user_id"],
+            "is_registered": r["is_registered"],
+            "has_face_registered": r["has_face_registered"],
+        }
+    )
 
 
 @router.patch(

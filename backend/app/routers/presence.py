@@ -16,14 +16,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.config import logger, settings
+from app.config import logger
 from app.database import get_db
 from app.models.user import User, UserRole
 from app.repositories.attendance_repository import AttendanceRepository
 from app.repositories.schedule_repository import ScheduleRepository
 from app.schemas.attendance import EarlyLeaveEventResponse, PresenceLogResponse
 from app.services.presence_service import PresenceService
-
 from app.utils.dependencies import get_current_user
 from app.utils.exceptions import NotFoundError
 
@@ -103,11 +102,13 @@ async def start_session(
             frame_grabbers = getattr(http_request.app.state, "frame_grabbers", None)
             if frame_grabbers is not None and room_id not in frame_grabbers:
                 from app.models.room import Room
+
                 room = db.query(Room).filter(Room.id == schedule.room_id).first()
                 camera_url = room.camera_endpoint if room else None
                 if camera_url:
                     try:
                         from app.services.frame_grabber import FrameGrabber
+
                         grabber = FrameGrabber(camera_url)
                         frame_grabbers[room_id] = grabber
                         logger.info(f"FrameGrabber started for room {room_id}")
@@ -128,8 +129,9 @@ async def start_session(
                         if not faiss_manager.user_map:
                             faiss_manager.rebuild_user_map_from_db()
 
-                        from app.services.realtime_pipeline import SessionPipeline
                         from app.database import SessionLocal
+                        from app.services.realtime_pipeline import SessionPipeline
+
                         pipeline = SessionPipeline(
                             schedule_id=body.schedule_id,
                             grabber=grabber,
@@ -352,9 +354,7 @@ async def get_presence_logs(
             schedule_repo = ScheduleRepository(db)
             schedule = schedule_repo.get_by_id(str(attendance.schedule_id))
             if schedule and str(schedule.faculty_id) != str(current_user.id):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this schedule"
-                )
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this schedule")
 
         # Get presence logs
         logs = attendance_repo.get_presence_logs(attendance_id)
@@ -434,4 +434,3 @@ async def get_early_leave_events(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get early leave events: {str(e)}"
         ) from e
-

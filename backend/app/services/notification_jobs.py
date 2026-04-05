@@ -8,9 +8,9 @@ but never propagated so the scheduler stays healthy.
 """
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import and_, func
+from sqlalchemy import func
 
 from app.config import settings
 from app.database import SessionLocal
@@ -22,16 +22,14 @@ logger = logging.getLogger(__name__)
 # 1. Daily Digest
 # =====================================================================
 
+
 async def run_daily_digest() -> None:
     """Send daily attendance summary to users who enabled daily_digest.
 
     Faculty receive stats for all their classes; students receive their
     own attendance records for the day.
     """
-    from app.models.attendance_record import AttendanceRecord, AttendanceStatus
-    from app.models.enrollment import Enrollment
     from app.models.notification_preference import NotificationPreference
-    from app.models.schedule import Schedule
     from app.models.user import User, UserRole
     from app.services.notification_service import notify as _notify
 
@@ -41,11 +39,7 @@ async def run_daily_digest() -> None:
         date_str = today.strftime("%B %d, %Y")
 
         # Users with daily_digest enabled
-        prefs = (
-            db.query(NotificationPreference)
-            .filter(NotificationPreference.daily_digest.is_(True))
-            .all()
-        )
+        prefs = db.query(NotificationPreference).filter(NotificationPreference.daily_digest.is_(True)).all()
 
         if not prefs:
             logger.debug("[daily_digest] No users with daily_digest enabled")
@@ -68,7 +62,8 @@ async def run_daily_digest() -> None:
                     continue
 
                 await _notify(
-                    db, user_id,
+                    db,
+                    user_id,
                     "Daily Attendance Summary",
                     f"Your attendance summary for {date_str}.",
                     "daily_digest",
@@ -84,7 +79,9 @@ async def run_daily_digest() -> None:
                 notified += 1
             except Exception:
                 logger.warning(
-                    "[daily_digest] Failed for user %s", user_id, exc_info=True,
+                    "[daily_digest] Failed for user %s",
+                    user_id,
+                    exc_info=True,
                 )
 
         logger.info("[daily_digest] Sent %d daily digests", notified)
@@ -97,16 +94,12 @@ async def run_daily_digest() -> None:
 
 def _build_faculty_daily_html(db, faculty_id: str, day: date) -> str | None:
     """Build HTML summary rows for a faculty member's classes on a given day."""
+    import uuid
+
     from app.models.attendance_record import AttendanceRecord, AttendanceStatus
     from app.models.schedule import Schedule
 
-    import uuid
-
-    schedules = (
-        db.query(Schedule)
-        .filter(Schedule.faculty_id == uuid.UUID(faculty_id), Schedule.is_active)
-        .all()
-    )
+    schedules = db.query(Schedule).filter(Schedule.faculty_id == uuid.UUID(faculty_id), Schedule.is_active).all()
     if not schedules:
         return None
 
@@ -141,18 +134,16 @@ def _build_faculty_daily_html(db, faculty_id: str, day: date) -> str | None:
     return (
         "<table style='width:100%;border-collapse:collapse'>"
         "<tr><th style='text-align:left'>Subject</th>"
-        "<th>Present</th><th>Late</th><th>Absent</th><th>Early Leave</th></tr>"
-        + "".join(rows)
-        + "</table>"
+        "<th>Present</th><th>Late</th><th>Absent</th><th>Early Leave</th></tr>" + "".join(rows) + "</table>"
     )
 
 
 def _build_student_daily_html(db, student_id: str, day: date) -> str | None:
     """Build HTML summary rows for a student's attendance on a given day."""
+    import uuid
+
     from app.models.attendance_record import AttendanceRecord
     from app.models.schedule import Schedule
-
-    import uuid
 
     records = (
         db.query(AttendanceRecord)
@@ -170,16 +161,12 @@ def _build_student_daily_html(db, student_id: str, day: date) -> str | None:
         sched = db.query(Schedule).filter(Schedule.id == rec.schedule_id).first()
         subject = sched.subject_code if sched else "Unknown"
         check_in = rec.check_in_time.strftime("%I:%M %p") if rec.check_in_time else "N/A"
-        rows.append(
-            f"<tr><td>{subject}</td><td>{rec.status.value}</td><td>{check_in}</td></tr>"
-        )
+        rows.append(f"<tr><td>{subject}</td><td>{rec.status.value}</td><td>{check_in}</td></tr>")
 
     return (
         "<table style='width:100%;border-collapse:collapse'>"
         "<tr><th style='text-align:left'>Subject</th>"
-        "<th>Status</th><th>Check-in</th></tr>"
-        + "".join(rows)
-        + "</table>"
+        "<th>Status</th><th>Check-in</th></tr>" + "".join(rows) + "</table>"
     )
 
 
@@ -187,11 +174,10 @@ def _build_student_daily_html(db, student_id: str, day: date) -> str | None:
 # 2. Weekly Digest
 # =====================================================================
 
+
 async def run_weekly_digest() -> None:
     """Send weekly attendance summary (Mon-Sun) to users with weekly_digest enabled."""
-    from app.models.attendance_record import AttendanceRecord, AttendanceStatus
     from app.models.notification_preference import NotificationPreference
-    from app.models.schedule import Schedule
     from app.models.user import User, UserRole
     from app.services.notification_service import notify as _notify
 
@@ -203,11 +189,7 @@ async def run_weekly_digest() -> None:
         sunday = monday + timedelta(days=6)
         week_label = f"{monday.strftime('%b %d')} - {sunday.strftime('%b %d, %Y')}"
 
-        prefs = (
-            db.query(NotificationPreference)
-            .filter(NotificationPreference.weekly_digest.is_(True))
-            .all()
-        )
+        prefs = db.query(NotificationPreference).filter(NotificationPreference.weekly_digest.is_(True)).all()
 
         if not prefs:
             logger.debug("[weekly_digest] No users with weekly_digest enabled")
@@ -230,7 +212,8 @@ async def run_weekly_digest() -> None:
                     continue
 
                 await _notify(
-                    db, user_id,
+                    db,
+                    user_id,
                     "Weekly Attendance Summary",
                     f"Your attendance summary for {week_label}.",
                     "weekly_digest",
@@ -246,7 +229,9 @@ async def run_weekly_digest() -> None:
                 notified += 1
             except Exception:
                 logger.warning(
-                    "[weekly_digest] Failed for user %s", user_id, exc_info=True,
+                    "[weekly_digest] Failed for user %s",
+                    user_id,
+                    exc_info=True,
                 )
 
         logger.info("[weekly_digest] Sent %d weekly digests", notified)
@@ -258,19 +243,18 @@ async def run_weekly_digest() -> None:
 
 
 def _build_faculty_weekly_html(
-    db, faculty_id: str, start: date, end: date,
+    db,
+    faculty_id: str,
+    start: date,
+    end: date,
 ) -> str | None:
     """Build HTML weekly summary for a faculty member."""
+    import uuid
+
     from app.models.attendance_record import AttendanceRecord, AttendanceStatus
     from app.models.schedule import Schedule
 
-    import uuid
-
-    schedules = (
-        db.query(Schedule)
-        .filter(Schedule.faculty_id == uuid.UUID(faculty_id), Schedule.is_active)
-        .all()
-    )
+    schedules = db.query(Schedule).filter(Schedule.faculty_id == uuid.UUID(faculty_id), Schedule.is_active).all()
     if not schedules:
         return None
 
@@ -314,13 +298,16 @@ def _build_faculty_weekly_html(
 
 
 def _build_student_weekly_html(
-    db, student_id: str, start: date, end: date,
+    db,
+    student_id: str,
+    start: date,
+    end: date,
 ) -> str | None:
     """Build HTML weekly summary for a student."""
+    import uuid
+
     from app.models.attendance_record import AttendanceRecord, AttendanceStatus
     from app.models.schedule import Schedule
-
-    import uuid
 
     records = (
         db.query(AttendanceRecord)
@@ -348,22 +335,19 @@ def _build_student_weekly_html(
         present = sum(1 for r in recs if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE))
         rate = round((present / total) * 100, 1) if total > 0 else 0.0
 
-        rows.append(
-            f"<tr><td>{subject}</td><td>{rate}%</td><td>{present}/{total}</td></tr>"
-        )
+        rows.append(f"<tr><td>{subject}</td><td>{rate}%</td><td>{present}/{total}</td></tr>")
 
     return (
         "<table style='width:100%;border-collapse:collapse'>"
         "<tr><th style='text-align:left'>Subject</th>"
-        "<th>Rate</th><th>Present/Total</th></tr>"
-        + "".join(rows)
-        + "</table>"
+        "<th>Rate</th><th>Present/Total</th></tr>" + "".join(rows) + "</table>"
     )
 
 
 # =====================================================================
 # 3. Low Attendance Check
 # =====================================================================
+
 
 async def run_low_attendance_check() -> None:
     """Check enrolled students for low attendance over a rolling window.
@@ -372,7 +356,6 @@ async def run_low_attendance_check() -> None:
     (or the default 75%). Deduplicates by skipping students who received a
     low_attendance_warning within LOW_ATTENDANCE_RENOTIFY_DAYS.
     """
-    import uuid
 
     from app.models.attendance_record import AttendanceRecord, AttendanceStatus
     from app.models.enrollment import Enrollment
@@ -386,20 +369,14 @@ async def run_low_attendance_check() -> None:
     try:
         today = date.today()
         window_start = today - timedelta(days=settings.LOW_ATTENDANCE_CHECK_WINDOW_DAYS)
-        renotify_cutoff = datetime.now(timezone.utc) - timedelta(
-            days=settings.LOW_ATTENDANCE_RENOTIFY_DAYS
-        )
+        renotify_cutoff = datetime.now(UTC) - timedelta(days=settings.LOW_ATTENDANCE_RENOTIFY_DAYS)
 
         # Active schedules with enrollments
         schedules = db.query(Schedule).filter(Schedule.is_active).all()
 
         warned = 0
         for sched in schedules:
-            enrollments = (
-                db.query(Enrollment)
-                .filter(Enrollment.schedule_id == sched.id)
-                .all()
-            )
+            enrollments = db.query(Enrollment).filter(Enrollment.schedule_id == sched.id).all()
 
             for enrollment in enrollments:
                 student_id = str(enrollment.student_id)
@@ -421,10 +398,7 @@ async def run_low_attendance_check() -> None:
                         continue
 
                     total = len(records)
-                    present = sum(
-                        1 for r in records
-                        if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
-                    )
+                    present = sum(1 for r in records if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE))
                     rate = (present / total) * 100.0
 
                     # Get user's threshold (default 75%)
@@ -456,7 +430,8 @@ async def run_low_attendance_check() -> None:
                     student_name = student.first_name if student else "Student"
 
                     await _notify(
-                        db, student_id,
+                        db,
+                        student_id,
                         "Low Attendance Warning",
                         f"Your attendance for {sched.subject_code} is at {rate:.0f}%, "
                         f"below the {threshold:.0f}% threshold.",
@@ -476,7 +451,8 @@ async def run_low_attendance_check() -> None:
                     # Notify faculty
                     faculty_id = str(sched.faculty_id)
                     await _notify(
-                        db, faculty_id,
+                        db,
+                        faculty_id,
                         "Student Low Attendance",
                         f"{student_name} has {rate:.0f}% attendance in {sched.subject_code}.",
                         "low_attendance_warning",
@@ -489,7 +465,9 @@ async def run_low_attendance_check() -> None:
                 except Exception:
                     logger.warning(
                         "[low_attendance] Failed for student %s in schedule %s",
-                        student_id, str(sched.id)[:8], exc_info=True,
+                        student_id,
+                        str(sched.id)[:8],
+                        exc_info=True,
                     )
 
         logger.info("[low_attendance] Warned %d student-schedule pairs", warned)
@@ -504,13 +482,13 @@ async def run_low_attendance_check() -> None:
 # 4. Anomaly Detection
 # =====================================================================
 
+
 async def run_anomaly_detection() -> None:
     """Detect attendance anomalies: early-leave patterns and sudden drops.
 
     - EARLY_LEAVE_PATTERN: 3+ early leave events in last 7 days for same student+schedule
     - SUDDEN_DROP: >= 80% in prior 2 weeks, < 50% this week
     """
-    import uuid
 
     from app.models.attendance_anomaly import AnomalyType, AttendanceAnomaly
     from app.models.attendance_record import AttendanceRecord, AttendanceStatus
@@ -531,11 +509,7 @@ async def run_anomaly_detection() -> None:
         anomalies_created = 0
 
         for sched in schedules:
-            enrollments = (
-                db.query(Enrollment)
-                .filter(Enrollment.schedule_id == sched.id)
-                .all()
-            )
+            enrollments = db.query(Enrollment).filter(Enrollment.schedule_id == sched.id).all()
             faculty_id = str(sched.faculty_id)
 
             for enrollment in enrollments:
@@ -553,9 +527,7 @@ async def run_anomaly_detection() -> None:
                         .filter(
                             AttendanceRecord.student_id == student_uuid,
                             AttendanceRecord.schedule_id == sched.id,
-                            EarlyLeaveEvent.detected_at >= datetime.combine(
-                                seven_days_ago, datetime.min.time()
-                            ),
+                            EarlyLeaveEvent.detected_at >= datetime.combine(seven_days_ago, datetime.min.time()),
                         )
                         .scalar()
                     ) or 0
@@ -592,10 +564,10 @@ async def run_anomaly_detection() -> None:
                             anomalies_created += 1
 
                             await _notify(
-                                db, faculty_id,
+                                db,
+                                faculty_id,
                                 "Attendance Anomaly",
-                                f"{student_name} has {el_count} early leaves in "
-                                f"{sched.subject_code} this week.",
+                                f"{student_name} has {el_count} early leaves in {sched.subject_code} this week.",
                                 "anomaly_alert",
                                 preference_key="anomaly_alerts",
                                 toast_type="warning",
@@ -626,14 +598,14 @@ async def run_anomaly_detection() -> None:
                     if prior_records and this_week_records:
                         prior_total = len(prior_records)
                         prior_present = sum(
-                            1 for r in prior_records
-                            if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
+                            1 for r in prior_records if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
                         )
                         prior_rate = (prior_present / prior_total) * 100.0
 
                         this_total = len(this_week_records)
                         this_present = sum(
-                            1 for r in this_week_records
+                            1
+                            for r in this_week_records
                             if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
                         )
                         this_rate = (this_present / this_total) * 100.0
@@ -669,7 +641,8 @@ async def run_anomaly_detection() -> None:
                                 anomalies_created += 1
 
                                 await _notify(
-                                    db, faculty_id,
+                                    db,
+                                    faculty_id,
                                     "Sudden Attendance Drop",
                                     f"{student_name}'s attendance in {sched.subject_code} "
                                     f"dropped from {prior_rate:.0f}% to {this_rate:.0f}%.",
@@ -681,7 +654,9 @@ async def run_anomaly_detection() -> None:
                 except Exception:
                     logger.warning(
                         "[anomaly] Failed for student %s in schedule %s",
-                        student_id, str(sched.id)[:8], exc_info=True,
+                        student_id,
+                        str(sched.id)[:8],
+                        exc_info=True,
                     )
 
         logger.info("[anomaly] Created %d anomaly records", anomalies_created)
@@ -696,6 +671,7 @@ async def run_anomaly_detection() -> None:
 # 5. Notification Cleanup
 # =====================================================================
 
+
 async def run_notification_cleanup() -> None:
     """Delete read notifications older than NOTIFICATION_RETENTION_DAYS.
 
@@ -705,9 +681,7 @@ async def run_notification_cleanup() -> None:
 
     db = SessionLocal()
     try:
-        cutoff = datetime.now(timezone.utc) - timedelta(
-            days=settings.NOTIFICATION_RETENTION_DAYS
-        )
+        cutoff = datetime.now(UTC) - timedelta(days=settings.NOTIFICATION_RETENTION_DAYS)
 
         count = (
             db.query(Notification)

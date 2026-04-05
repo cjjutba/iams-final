@@ -17,8 +17,13 @@ select = [
 ]
 ignore = [
     "E501",   # line too long (handled by formatter)
+    "E712",   # == True/False comparisons (required by SQLAlchemy filter expressions)
     "B008",   # do not perform function calls in argument defaults (FastAPI Depends pattern)
+    "B904",   # raise from in except (too noisy for HTTP exception re-raises)
     "B905",   # zip without strict= (Python 3.10+)
+    "N806",   # variable in function should be lowercase (constant-style names in functions)
+    "N817",   # CamelCase imported as acronym (AR, AStatus aliases are idiomatic)
+    "SIM105", # contextlib.suppress vs try-except-pass (explicit cleanup patterns)
     "SIM108", # use ternary operator (readability preference)
 ]
 

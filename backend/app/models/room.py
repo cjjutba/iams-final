@@ -47,9 +47,7 @@ class Room(Base):
     schedules = relationship("Schedule", back_populates="room")
 
     # Constraints
-    __table_args__ = (
-        UniqueConstraint("name", "building", name="uq_room_name_building"),
-    )
+    __table_args__ = (UniqueConstraint("name", "building", name="uq_room_name_building"),)
 
     def __repr__(self):
         return f"<Room(id={self.id}, name={self.name}, building={self.building})>"

@@ -5,7 +5,7 @@ Provides password hashing, JWT token creation/verification,
 and utility functions for authentication.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import jwt
 from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
@@ -65,7 +65,7 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     to_encode = data.copy()
 
     # Set expiration
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if expires_delta:
         expire = now + expires_delta
     else:
@@ -89,7 +89,7 @@ def create_refresh_token(data: dict) -> str:
         Encoded JWT refresh token string
     """
     to_encode = data.copy()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expire = now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
     to_encode.update({"exp": expire, "iat": now, "type": "refresh"})
 
@@ -119,7 +119,6 @@ def verify_token(token: str) -> dict:
     except InvalidTokenError as e:
         logger.error(f"JWT verification failed: {e}")
         raise AuthenticationError(f"Invalid token: {e}") from e
-
 
 
 # ===== Utility Functions =====

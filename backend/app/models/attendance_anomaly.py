@@ -7,7 +7,7 @@ Examples: sudden drops in attendance, impossible check-in patterns, etc.
 
 import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, String, Text
 from sqlalchemy import Enum as SQLEnum
@@ -66,7 +66,7 @@ class AttendanceAnomaly(Base):
     confidence = Column(Float, nullable=True)
 
     # Timestamps
-    detected_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    detected_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False, index=True)
 
     # Resolution
     resolved = Column(Boolean, default=False, nullable=False)

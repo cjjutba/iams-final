@@ -49,9 +49,7 @@ class AnomalyRepository:
 
     def get_unresolved(self, limit: int = 50, anomaly_type: AnomalyType | None = None) -> list[AttendanceAnomaly]:
         """Get unresolved anomalies, optionally filtered by type."""
-        q = self.db.query(AttendanceAnomaly).filter(
-            AttendanceAnomaly.resolved.is_(False)
-        )
+        q = self.db.query(AttendanceAnomaly).filter(AttendanceAnomaly.resolved.is_(False))
         if anomaly_type:
             q = q.filter(AttendanceAnomaly.anomaly_type == anomaly_type)
         return q.order_by(AttendanceAnomaly.detected_at.desc()).limit(limit).all()

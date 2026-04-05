@@ -36,9 +36,9 @@ _process_start_time = time.time()
 async def _check_database() -> dict:
     """Check database connectivity and measure latency."""
     try:
-        from app.database import SessionLocal
-
         from sqlalchemy import text
+
+        from app.database import SessionLocal
 
         start = time.monotonic()
         db = SessionLocal()
@@ -136,20 +136,14 @@ async def deep_health_check():
     worker_status = await _check_workers()
 
     # Determine overall status
-    critical_healthy = (
-        db_status.get("status") == "healthy"
-        and redis_status.get("status") == "healthy"
-    )
+    critical_healthy = db_status.get("status") == "healthy" and redis_status.get("status") == "healthy"
 
     optional_statuses = [
         faiss_status.get("status"),
         mediamtx_status.get("status"),
     ]
     # "disabled" and "no_devices" / "no_workers" are not failures
-    optional_ok = all(
-        s in ("healthy", "disabled", "no_devices", "no_workers")
-        for s in optional_statuses
-    )
+    optional_ok = all(s in ("healthy", "disabled", "no_devices", "no_workers") for s in optional_statuses)
 
     if not critical_healthy:
         overall = "unhealthy"

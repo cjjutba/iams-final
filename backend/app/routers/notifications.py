@@ -8,10 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.config import logger, settings
 from app.database import get_db
 from app.models.notification import Notification
 from app.models.user import User, UserRole
-from app.config import logger, settings
 from app.repositories.notification_preference_repository import NotificationPreferenceRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.schemas.notification import (
@@ -212,11 +212,13 @@ def broadcast_notification(
         role_map = {"students": UserRole.STUDENT, "faculty": UserRole.FACULTY, "admin": UserRole.ADMIN}
         users = db.query(User).filter(User.role == role_map[data.target], User.is_active.is_(True)).all()
     else:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid target. Must be 'all', 'students', 'faculty', or 'admin'")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid target. Must be 'all', 'students', 'faculty', or 'admin'",
+        )
 
     notifications_list = [
-        Notification(user_id=user.id, type="broadcast", title=data.title, message=data.message)
-        for user in users
+        Notification(user_id=user.id, type="broadcast", title=data.title, message=data.message) for user in users
     ]
     db.add_all(notifications_list)
     db.commit()
