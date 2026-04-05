@@ -32,7 +32,10 @@ from PIL import Image
 # Helper factories
 # ---------------------------------------------------------------------------
 
+from app.config import settings
+
 PREFIX = "/api/v1/face"
+EDGE_HEADERS = {"X-API-Key": settings.EDGE_API_KEY}
 
 
 def _make_embedding() -> np.ndarray:
@@ -330,7 +333,7 @@ class TestFaceRecognize:
         )
         with p_fn, p_faiss, p_spoof:
             response = client.post(
-                f"{PREFIX}/recognize", json={"image": _make_test_image_base64()}
+                f"{PREFIX}/recognize", headers=EDGE_HEADERS, json={"image": _make_test_image_base64()}
             )
 
         assert response.status_code == 200
@@ -345,7 +348,7 @@ class TestFaceRecognize:
         p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons(faiss_search=[])
         with p_fn, p_faiss, p_spoof:
             response = client.post(
-                f"{PREFIX}/recognize", json={"image": _make_test_image_base64()}
+                f"{PREFIX}/recognize", headers=EDGE_HEADERS, json={"image": _make_test_image_base64()}
             )
 
         assert response.status_code == 200
@@ -362,7 +365,7 @@ class TestFaceRecognize:
         p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons(decode_base64_image=_raise)
         with p_fn, p_faiss, p_spoof:
             response = client.post(
-                f"{PREFIX}/recognize", json={"image": "not_valid!!!"}
+                f"{PREFIX}/recognize", headers=EDGE_HEADERS, json={"image": "not_valid!!!"}
             )
 
         # The router re-raises the exception; the global handler maps
@@ -395,7 +398,7 @@ class TestEdgeProcess:
             }
         )
         with p_fn, p_faiss, p_spoof:
-            response = client.post(f"{PREFIX}/process", json=self._payload())
+            response = client.post(f"{PREFIX}/process", headers=EDGE_HEADERS, json=self._payload())
 
         assert response.status_code == 200
         data = response.json()
@@ -409,7 +412,7 @@ class TestEdgeProcess:
         """Face that doesn't match anyone -> unmatched=1."""
         p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons(faiss_search=[])
         with p_fn, p_faiss, p_spoof:
-            response = client.post(f"{PREFIX}/process", json=self._payload())
+            response = client.post(f"{PREFIX}/process", headers=EDGE_HEADERS, json=self._payload())
 
         data = response.json()
         assert data["success"] is True
@@ -441,7 +444,7 @@ class TestEdgeProcess:
         mock_faiss.search_with_margin = MagicMock(side_effect=_search_with_margin)
         with p_fn, p_faiss, p_spoof:
             response = client.post(
-                f"{PREFIX}/process", json=self._payload(faces=3)
+                f"{PREFIX}/process", headers=EDGE_HEADERS, json=self._payload(faces=3)
             )
 
         data = response.json()
@@ -457,12 +460,12 @@ class TestEdgeProcess:
         p_fn, p_faiss, p_spoof, _, _ = _patch_ml_singletons(faiss_search=[])
         with p_fn, p_faiss, p_spoof:
             payload = self._payload(room_id=room, request_id=rid)
-            r1 = client.post(f"{PREFIX}/process", json=payload)
+            r1 = client.post(f"{PREFIX}/process", headers=EDGE_HEADERS, json=payload)
             assert r1.status_code == 200
             assert r1.json()["data"]["processed"] == 1
 
             # Same payload again -> deduped
-            r2 = client.post(f"{PREFIX}/process", json=payload)
+            r2 = client.post(f"{PREFIX}/process", headers=EDGE_HEADERS, json=payload)
             assert r2.status_code == 200
             assert r2.json()["data"]["processed"] == 0
 
@@ -497,7 +500,7 @@ class TestEdgeProcess:
         p_fn, p_faiss, p_spoof, mock_fn, _ = _patch_ml_singletons()
         mock_fn.decode_base64_image = MagicMock(side_effect=_raise)
         with p_fn, p_faiss, p_spoof:
-            response = client.post(f"{PREFIX}/process", json=self._payload())
+            response = client.post(f"{PREFIX}/process", headers=EDGE_HEADERS, json=self._payload())
 
         assert response.status_code == 200
         data = response.json()
@@ -519,7 +522,7 @@ class TestEdgeProcess:
                     }
                 ],
             }
-            response = client.post(f"{PREFIX}/process", json=payload)
+            response = client.post(f"{PREFIX}/process", headers=EDGE_HEADERS, json=payload)
 
         assert response.status_code == 200
         assert response.json()["success"] is True

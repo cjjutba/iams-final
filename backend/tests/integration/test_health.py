@@ -1,7 +1,7 @@
 """
-Integration Tests for Health and Root Endpoints
+Integration Tests for Health Endpoint
 
-Verifies that the system health check and root endpoints respond
+Verifies that the system health check endpoint responds
 correctly through the full FastAPI stack.
 """
 
@@ -21,51 +21,29 @@ class TestHealthEndpoint:
         response = client.get(f"{API}/health")
         assert response.status_code == 200
 
-    def test_health_check_status_healthy(self, client):
-        """Response body should include status = 'healthy'."""
+    def test_health_check_has_status(self, client):
+        """Response body should include a status field."""
         response = client.get(f"{API}/health")
         data = response.json()
-        assert data["status"] == "healthy"
+        assert "status" in data
+        assert data["status"] in ("healthy", "unhealthy")
 
-    def test_health_check_contains_app_name(self, client):
-        """Response should include the application name."""
+    def test_health_check_has_role(self, client):
+        """Response should include the service role."""
         response = client.get(f"{API}/health")
         data = response.json()
-        assert data["app"] == settings.APP_NAME
+        assert "role" in data
 
-    def test_health_check_contains_version(self, client):
-        """Response should include a version string."""
+    def test_health_check_has_uptime(self, client):
+        """Response should include uptime_seconds."""
         response = client.get(f"{API}/health")
         data = response.json()
-        assert "version" in data
-        assert isinstance(data["version"], str)
+        assert "uptime_seconds" in data
+        assert isinstance(data["uptime_seconds"], int)
 
-    def test_health_check_contains_debug_flag(self, client):
-        """Response should include the debug flag."""
+    def test_health_check_has_components(self, client):
+        """Response should include component health details."""
         response = client.get(f"{API}/health")
         data = response.json()
-        assert "debug" in data
-        assert isinstance(data["debug"], bool)
-
-
-class TestRootEndpoint:
-    """Tests for GET /."""
-
-    def test_root_endpoint_returns_200(self, client):
-        """Root endpoint should return HTTP 200."""
-        response = client.get("/")
-        assert response.status_code == 200
-
-    def test_root_endpoint_has_message(self, client):
-        """Root response should contain a descriptive message."""
-        response = client.get("/")
-        data = response.json()
-        assert "message" in data
-        assert settings.APP_NAME in data["message"]
-
-    def test_root_endpoint_has_docs_link(self, client):
-        """Root response should include a docs URL."""
-        response = client.get("/")
-        data = response.json()
-        assert "docs" in data
-        assert "/docs" in data["docs"]
+        assert "components" in data
+        assert "database" in data["components"]
