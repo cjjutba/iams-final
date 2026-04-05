@@ -188,12 +188,12 @@ class TestVerifyToken:
             {"user_id": "abc-123"},
             expires_delta=timedelta(seconds=-1),
         )
-        with pytest.raises(AuthenticationError, match="Invalid or expired token"):
+        with pytest.raises(AuthenticationError, match="Token expired"):
             verify_token(token)
 
     def test_verify_token_invalid_string(self):
         """A garbage string should raise AuthenticationError."""
-        with pytest.raises(AuthenticationError, match="Invalid or expired token"):
+        with pytest.raises(AuthenticationError, match="Invalid token"):
             verify_token("this.is.not.a.valid.jwt")
 
     def test_verify_token_wrong_secret(self):
@@ -203,7 +203,7 @@ class TestVerifyToken:
             "wrong-secret-key",
             algorithm=settings.ALGORITHM,
         )
-        with pytest.raises(AuthenticationError, match="Invalid or expired token"):
+        with pytest.raises(AuthenticationError, match="Invalid token"):
             verify_token(token)
 
     def test_verify_token_empty_string(self):
