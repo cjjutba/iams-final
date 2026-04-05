@@ -64,18 +64,20 @@ class FacultyEditProfileViewModel @Inject constructor(
                     _uiState.value = _uiState.value.copy(
                         user = user,
                         email = user?.email ?: "",
+                        isRefreshing = false,
                     )
+                } else {
+                    _uiState.value = _uiState.value.copy(isRefreshing = false)
                 }
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+                _uiState.value = _uiState.value.copy(isRefreshing = false)
+            }
         }
     }
 
     fun refresh() {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isRefreshing = true)
-            loadUser()
-            _uiState.value = _uiState.value.copy(isRefreshing = false)
-        }
+        _uiState.value = _uiState.value.copy(isRefreshing = true)
+        loadUser()
     }
 
     // -- Profile field updates --

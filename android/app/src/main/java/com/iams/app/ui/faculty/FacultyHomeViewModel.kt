@@ -125,6 +125,7 @@ class FacultyHomeViewModel @Inject constructor(
 
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
+                    isRefreshing = false,
                     initialLoadDone = true
                 )
 
@@ -136,6 +137,7 @@ class FacultyHomeViewModel @Inject constructor(
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
+                    isRefreshing = false,
                     initialLoadDone = true,
                     error = "Failed to load data. Pull to refresh."
                 )
@@ -144,11 +146,8 @@ class FacultyHomeViewModel @Inject constructor(
     }
 
     fun refresh() {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isRefreshing = true, error = null)
-            loadData()
-            _uiState.value = _uiState.value.copy(isRefreshing = false)
-        }
+        _uiState.value = _uiState.value.copy(isRefreshing = true, error = null)
+        loadData()
     }
 
     fun getGreeting(): String {
