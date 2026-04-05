@@ -64,8 +64,8 @@ class Settings(BaseSettings):
 
     # Adaptive Threshold
     ADAPTIVE_THRESHOLD_ENABLED: bool = True
-    ADAPTIVE_THRESHOLD_FLOOR: float = 0.30  # Minimum allowed threshold
-    ADAPTIVE_THRESHOLD_CEILING: float = 0.30  # Solo-match ceiling (matches floor — with few users, 0.30+ is safe)
+    ADAPTIVE_THRESHOLD_FLOOR: float = 0.25  # Minimum allowed threshold
+    ADAPTIVE_THRESHOLD_CEILING: float = 0.25  # Solo-match ceiling (sub-stream CCTV scores 0.25-0.40)
     ADAPTIVE_THRESHOLD_MIN_SAMPLES: int = 50  # Min samples before adapting
     ADAPTIVE_THRESHOLD_WINDOW: int = 500  # Rolling window size
 
@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     WS_BROADCAST_FPS: float = 10.0  # WebSocket broadcast rate
 
     # ByteTrack / Track Lifecycle
-    TRACK_LOST_TIMEOUT: float = 5.0  # Seconds before removing lost track
+    TRACK_LOST_TIMEOUT: float = 2.0  # Seconds before removing lost track (shorter = less stale boxes)
     REVERIFY_INTERVAL: float = 5.0  # Re-run ArcFace on existing tracks (seconds)
     TRACK_CONFIRM_FRAMES: int = 1  # Recognize immediately on first detection
 
