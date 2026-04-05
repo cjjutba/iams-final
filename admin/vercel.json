@@ -1,4 +1,7 @@
 {
+  "buildCommand": "npm run build",
+  "installCommand": "npm install",
+  "outputDirectory": "dist",
   "rewrites": [
     { "source": "/api/(.*)", "destination": "http://167.71.217.44/api/$1" },
     { "source": "/(.*)", "destination": "/index.html" }
