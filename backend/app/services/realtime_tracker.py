@@ -150,6 +150,28 @@ class RealtimeTracker:
         # Apply NMS to remove duplicate face detections
         bboxes, confidences, embeddings_list = self._nms_faces(bboxes, confidences, embeddings_list)
 
+        # Filter out faces smaller than 1% of frame area (noise/ghost detections)
+        frame_area = self._frame_w * self._frame_h
+        min_face_area = frame_area * 0.01
+        filtered = [
+            (b, c, e)
+            for b, c, e in zip(bboxes, confidences, embeddings_list)
+            if (b[2] - b[0]) * (b[3] - b[1]) >= min_face_area
+        ]
+        if not filtered:
+            self._expire_lost_tracks(now)
+            duration_ms = (time.monotonic() - t0) * 1000.0
+            return TrackFrame(
+                tracks=[],
+                fps=1000.0 / max(duration_ms, 0.1),
+                processing_ms=duration_ms,
+                timestamp=now,
+            )
+        bboxes, confidences, embeddings_list = zip(*filtered)
+        bboxes = list(bboxes)
+        confidences = list(confidences)
+        embeddings_list = list(embeddings_list)
+
         det_array = np.array(bboxes, dtype=np.float32)
         conf_array = np.array(confidences, dtype=np.float32)
 
