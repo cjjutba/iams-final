@@ -15,6 +15,7 @@ import androidx.compose.ui.text.*
 import androidx.compose.ui.unit.sp
 import com.iams.app.data.model.TrackInfo
 import com.iams.app.webrtc.MlKitFace
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.sqrt
 
@@ -25,6 +26,9 @@ private const val UNKNOWN_LABEL_DELAY_MS = 0L
 
 /** Offset to keep backend trackId keys separate from ML Kit faceId keys. */
 private const val BACKEND_KEY_OFFSET = 100_000
+
+/** Maximum age (ms) before a track is considered stale and faded out. */
+private const val STALE_TRACK_TIMEOUT_MS = 500L
 
 /**
  * Face overlay with persistent identity linking.
@@ -88,6 +92,7 @@ fun HybridFaceOverlay(
                     existing.unknownSince = 0L
                 }
                 existing.status = rt.status
+                existing.lastUpdatedAt = System.currentTimeMillis()
                 if (existing.alpha.value < 1f) {
                     coroutineScope.launch { existing.alpha.animateTo(1f, tween(150)) }
                 }
@@ -105,6 +110,22 @@ fun HybridFaceOverlay(
                 )
                 animatedFaces[rt.key] = state
                 coroutineScope.launch { state.alpha.animateTo(1f, tween(200)) }
+            }
+        }
+    }
+
+    // Staleness sweep: fade out and remove tracks not refreshed within timeout
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(200L)
+            val now = System.currentTimeMillis()
+            val stale = animatedFaces.entries.filter { (_, state) ->
+                (now - state.lastUpdatedAt) > STALE_TRACK_TIMEOUT_MS
+            }
+            for ((key, state) in stale) {
+                launch { state.alpha.animateTo(0f, tween(150)) }
+                delay(160L)
+                animatedFaces.remove(key)
             }
         }
     }
@@ -327,4 +348,5 @@ private class AnimatedFaceState(
     var confidence: Float,
     var status: String,
     var unknownSince: Long = 0L,
+    var lastUpdatedAt: Long = System.currentTimeMillis(),
 )
