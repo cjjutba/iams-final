@@ -192,7 +192,7 @@ class FacultyLiveFeedViewModel @Inject constructor(
         val absent = summary.absent?.map { toStudentStatus(it.userId, it.name, "absent") } ?: emptyList()
         val late = summary.late?.map { toStudentStatus(it.userId, it.name, "late") } ?: emptyList()
         val earlyLeave = summary.earlyLeave?.map { toStudentStatus(it.userId, it.name, "early_leave") } ?: emptyList()
-        val earlyLeaveReturned = summary.earlyLeaveReturned?.map { toStudentStatus(it.userId, it.name, "early_leave") } ?: emptyList()
+        val earlyLeaveReturned = summary.earlyLeaveReturned?.map { toStudentStatus(it.userId, it.name, "returned") } ?: emptyList()
 
         _uiState.value = _uiState.value.copy(
             presentStudents = present,

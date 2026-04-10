@@ -57,7 +57,8 @@
       "mcp__claude_ai_Supabase__confirm_cost",
       "mcp__claude_ai_Supabase__create_project",
       "mcp__claude_ai_Supabase__list_tables",
-      "mcp__claude_ai_Supabase__list_migrations"
+      "mcp__claude_ai_Supabase__list_migrations",
+      "Bash(docker compose:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -150,9 +150,11 @@ class RealtimeTracker:
         # Apply NMS to remove duplicate face detections
         bboxes, confidences, embeddings_list = self._nms_faces(bboxes, confidences, embeddings_list)
 
-        # Filter out faces smaller than 1% of frame area (noise/ghost detections)
+        # Filter out faces smaller than 0.25% of frame area (noise/ghost detections)
+        # 1% was too aggressive — classroom faces at 2-4m are ~1,000-2,500 px² at 896×512,
+        # well below the old 4,587 px² cutoff. 0.25% = ~1,147 px² ≈ 34×34 px minimum.
         frame_area = self._frame_w * self._frame_h
-        min_face_area = frame_area * 0.01
+        min_face_area = frame_area * 0.0025
         filtered = [
             (b, c, e)
             for b, c, e in zip(bboxes, confidences, embeddings_list)

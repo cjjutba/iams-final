@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiService
+import com.iams.app.data.api.TokenManager
 import com.iams.app.data.model.RegisterRequest
 import com.iams.app.data.model.CheckStudentIdRequest
 import com.iams.app.data.model.VerifyStudentIdRequest
@@ -31,6 +32,7 @@ data class RegistrationUiState(
     val lastName: String = "",
     val email: String = "",
     // Step 2 results
+    val accountCreated: Boolean = false,
     val registrationComplete: Boolean = false,
     val registeredEmail: String = "",
     // Step 3 face capture
@@ -44,6 +46,7 @@ data class RegistrationUiState(
 @HiltViewModel
 class RegistrationViewModel @Inject constructor(
     private val apiService: ApiService,
+    private val tokenManager: TokenManager,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
@@ -181,9 +184,20 @@ class RegistrationViewModel @Inject constructor(
                 )
 
                 if (response.isSuccessful) {
+                    val body = response.body()
+                    // Save tokens so face upload can authenticate
+                    val tokens = body?.tokens
+                    if (tokens != null) {
+                        tokenManager.saveTokens(
+                            access = tokens.accessToken,
+                            refresh = tokens.refreshToken ?: "",
+                            role = "STUDENT",
+                            userId = body.user?.id ?: ""
+                        )
+                    }
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
-                        registrationComplete = true,
+                        accountCreated = true,
                         registeredEmail = email
                     )
                 } else {
@@ -362,6 +376,7 @@ class RegistrationViewModel @Inject constructor(
 
     fun resetRegistration() {
         _uiState.value = _uiState.value.copy(
+            accountCreated = false,
             registrationComplete = false,
             error = null
         )

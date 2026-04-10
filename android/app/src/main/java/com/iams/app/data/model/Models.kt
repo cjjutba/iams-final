@@ -113,6 +113,7 @@ data class AttendanceRecordResponse(
     @SerializedName("schedule_id") val scheduleId: String,
     @SerializedName("student_id") val studentId: String?,
     @SerializedName("student_name") val studentName: String?,
+    @SerializedName("subject_code") val subjectCode: String? = null,
     val status: String,
     val date: String,
     @SerializedName("check_in_time") val checkInTime: String?,

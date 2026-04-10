@@ -1,6 +1,7 @@
 import { useMemo, useState, useTransition } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
+import { format } from 'date-fns'
 import { safeFormat } from '@/lib/utils'
 import { CalendarIcon } from 'lucide-react'
 import { usePageTitle } from '@/hooks/use-page-title'
@@ -73,6 +74,29 @@ const columns: ColumnDef<EarlyLeaveAlert>[] = [
       ) : (
         <span className="text-sm text-muted-foreground">No</span>
       ),
+  },
+  {
+    accessorKey: 'returned',
+    header: 'Returned',
+    cell: ({ row }) =>
+      row.original.returned ? (
+        <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
+          {row.original.returned_at ? safeFormat(row.original.returned_at, 'h:mm a') : 'Yes'}
+        </Badge>
+      ) : (
+        <span className="text-sm text-muted-foreground">No</span>
+      ),
+  },
+  {
+    accessorKey: 'absence_duration_seconds',
+    header: 'Duration',
+    cell: ({ row }) => {
+      const seconds = row.original.absence_duration_seconds
+      if (!seconds) return <span className="text-sm text-muted-foreground">—</span>
+      const mins = Math.floor(seconds / 60)
+      const secs = seconds % 60
+      return <span className="text-sm">{mins > 0 ? `${mins}m ${secs}s` : `${secs}s`}</span>
+    },
   },
 ]
 

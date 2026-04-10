@@ -12,6 +12,7 @@ import logging
 import time
 
 from app.config import settings
+from app.services import session_manager
 from app.services.frame_grabber import FrameGrabber
 from app.services.realtime_tracker import RealtimeTracker
 from app.services.track_presence_service import TrackPresenceService
@@ -102,6 +103,16 @@ class SessionPipeline:
 
         # Start the async loop (no long-lived DB session)
         self._task = asyncio.create_task(self._run_loop(), name=f"pipeline-{self.schedule_id[:8]}")
+
+        # Register in global session manager so API endpoints see session_active=True
+        session_manager.register_session(
+            self.schedule_id,
+            {
+                "subject_code": self._subject_code,
+                "subject_name": self._subject_name,
+                "student_count": len(self._presence.enrolled_ids) if self._presence else 0,
+            },
+        )
         logger.info("SessionPipeline started for schedule %s", self.schedule_id)
 
     async def stop(self) -> dict:
@@ -125,6 +136,9 @@ class SessionPipeline:
 
         if self._tracker is not None:
             self._tracker.reset()
+
+        # Unregister from global session manager
+        session_manager.unregister_session(self.schedule_id)
 
         logger.info("SessionPipeline stopped for schedule %s", self.schedule_id)
         return summary
@@ -156,48 +170,58 @@ class SessionPipeline:
             while not self._stop_event.is_set():
                 loop_start = time.monotonic()
 
-                frame = self._grabber.grab()
-                if frame is not None:
-                    # Run CPU-intensive ML work in thread executor
-                    track_frame = await loop.run_in_executor(None, self._tracker.process, frame)
+                try:
+                    frame = self._grabber.grab()
+                    if frame is not None:
+                        # Run CPU-intensive ML work in thread executor
+                        track_frame = await loop.run_in_executor(None, self._tracker.process, frame)
 
-                    self._frame_count += 1
+                        self._frame_count += 1
 
-                    # Update presence state — use short-lived DB session for
-                    # any event-driven writes (check-in, early leave)
-                    db = self._db_factory()
-                    try:
-                        self._presence.rebind_db(db)
-                        events = self._presence.process_track_frame(track_frame, time.monotonic())
-                    finally:
-                        db.close()
+                        # Update presence state — use short-lived DB session for
+                        # any event-driven writes (check-in, early leave)
+                        db = self._db_factory()
+                        try:
+                            self._presence.rebind_db(db)
+                            events = self._presence.process_track_frame(track_frame, time.monotonic())
+                        finally:
+                            db.close()
 
-                    # Broadcast frame update via WebSocket
-                    await self._broadcast_frame_update(track_frame)
+                        # Broadcast frame update via WebSocket
+                        await self._broadcast_frame_update(track_frame)
 
-                    # Handle events (check-in notifications, early leave alerts)
-                    for event in events:
-                        await self._handle_event(event)
+                        # Handle events (check-in notifications, early leave alerts)
+                        for event in events:
+                            await self._handle_event(event)
 
-                    # Log performance periodically
-                    if self._frame_count % 100 == 0:
-                        logger.info(
-                            "Pipeline %s: %d frames, %.1fms/frame, %d tracks",
-                            self.schedule_id[:8],
-                            self._frame_count,
-                            track_frame.processing_ms,
-                            len(track_frame.tracks),
-                        )
+                        # Log performance periodically
+                        if self._frame_count % 100 == 0:
+                            logger.info(
+                                "Pipeline %s: %d frames, %.1fms/frame, %d tracks",
+                                self.schedule_id[:8],
+                                self._frame_count,
+                                track_frame.processing_ms,
+                                len(track_frame.tracks),
+                            )
+
+                except asyncio.CancelledError:
+                    raise  # Re-raise cancellation
+                except Exception:
+                    # Log but don't crash — keep pipeline running for next frame
+                    logger.exception("Pipeline %s: error processing frame %d", self.schedule_id[:8], self._frame_count)
 
                 # Periodic flush (every PRESENCE_FLUSH_INTERVAL) — short-lived DB session
                 now = time.monotonic()
                 if (now - self._last_flush) >= settings.PRESENCE_FLUSH_INTERVAL:
-                    db = self._db_factory()
                     try:
-                        self._presence.rebind_db(db)
-                        self._presence.flush_presence_logs()
-                    finally:
-                        db.close()
+                        db = self._db_factory()
+                        try:
+                            self._presence.rebind_db(db)
+                            self._presence.flush_presence_logs()
+                        finally:
+                            db.close()
+                    except Exception:
+                        logger.exception("Pipeline %s: error flushing presence", self.schedule_id[:8])
                     self._last_flush = now
 
                 # Periodic attendance summary (every 5s)

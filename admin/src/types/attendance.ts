@@ -77,4 +77,7 @@ export interface EarlyLeaveAlert {
   consecutive_misses: number
   notified: boolean
   date: string
+  returned: boolean
+  returned_at: string | null
+  absence_duration_seconds: number | null
 }

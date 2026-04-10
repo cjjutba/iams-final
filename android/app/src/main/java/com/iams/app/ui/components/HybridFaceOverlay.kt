@@ -306,6 +306,23 @@ private fun resolveWithPersistentLink(
         }
     }
 
+    // Add unclaimed ML Kit faces as standalone "unknown" boxes.
+    // These appear when ML Kit detects a face that the backend hasn't assigned a track to yet
+    // (e.g. backend pipeline between frames, RTSP delayed, or no session active).
+    // The 500ms staleness sweep in HybridFaceOverlay provides the ghost-box safety net.
+    for ((faceId, face) in mlKitById) {
+        if (faceId in claimedMlKit) continue
+        result.add(ResolvedTrack(
+            key = faceId, // ML Kit faceId as key — stays below BACKEND_KEY_OFFSET, no collision
+            x1 = face.x1, y1 = face.y1,
+            x2 = face.x2, y2 = face.y2,
+            name = null,
+            confidence = 0f,
+            status = "unknown",
+            fromMlKit = true,
+        ))
+    }
+
     return result
 }
 

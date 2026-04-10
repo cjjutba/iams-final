@@ -39,7 +39,7 @@ webrtcAddress: :8889
 # ICE: Mac's LAN IP so mobile phones on IAMS-Net can reach WebRTC media
 # Auto-updated by scripts/dev-up.sh — or edit manually if IP changes
 webrtcAdditionalHosts:
-  - 192.168.88.13
+  - 192.168.1.9
 
 webrtcLocalUDPAddress: :8887
 
@@ -55,16 +55,16 @@ writeQueueSize: 512
 
 paths:
   # ── EB 226 (192.168.88.10) ──────────────────────────────────────────────
-  # Main stream: HD display for app + frame grabber for recognition
+  # Sub stream: reliable over WiFi, backend upscales for detection
   eb226:
-    source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.10:554/h264Preview_01_main
+    source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.10:554/h264Preview_01_sub
     sourceOnDemand: yes
     sourceProtocol: tcp
 
   # ── EB 227 (192.168.88.11) ──────────────────────────────────────────────
-  # Main stream: HD display for app + frame grabber for recognition
+  # Sub stream: reliable over WiFi, backend upscales for detection
   eb227:
-    source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.11:554/h264Preview_01_main
+    source: rtsp://admin:%40Iams2026THESIS%21@192.168.88.11:554/h264Preview_01_sub
     sourceOnDemand: yes
     sourceProtocol: tcp
 

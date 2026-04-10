@@ -62,13 +62,6 @@ class Settings(BaseSettings):
     QUALITY_MIN_FACE_SIZE_RATIO: float = 0.05  # Face area / image area minimum
     QUALITY_MIN_DET_SCORE: float = 0.5  # SCRFD detection confidence minimum
 
-    # Adaptive Threshold
-    ADAPTIVE_THRESHOLD_ENABLED: bool = True
-    ADAPTIVE_THRESHOLD_FLOOR: float = 0.35  # Minimum allowed threshold
-    ADAPTIVE_THRESHOLD_CEILING: float = 0.45  # Solo-match ceiling (reject weak matches with few enrollments)
-    ADAPTIVE_THRESHOLD_MIN_SAMPLES: int = 50  # Min samples before adapting
-    ADAPTIVE_THRESHOLD_WINDOW: int = 500  # Rolling window size
-
     # Anti-Spoofing / Liveness Detection
     ANTISPOOF_ENABLED: bool = True
     ANTISPOOF_REGISTRATION_STRICT: bool = True  # Block registration if spoof detected

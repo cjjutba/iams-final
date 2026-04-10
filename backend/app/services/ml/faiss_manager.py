@@ -302,6 +302,15 @@ class FAISSManager:
         # Note: self.search() already acquires _lock (RLock allows re-entry)
         results = self.search(embedding, k=k, threshold=0.0)
 
+        # Structured score logging for threshold tuning diagnostics
+        for rank, (uid, sim) in enumerate(results):
+            logger.info(
+                "[FAISS-SCORE] rank=%d user=%s sim=%.4f threshold=%.4f",
+                rank, uid[:8], sim, threshold,
+            )
+        if not results:
+            logger.info("[FAISS-SCORE] no_candidates index_size=%d", self.index.ntotal if self.index else 0)
+
         if not results:
             return {"user_id": None, "confidence": 0.0, "is_ambiguous": False}
 
@@ -314,16 +323,6 @@ class FAISSManager:
         score_gap = top_score - second_score
         is_ambiguous = score_gap <= margin
 
-        # When there's no second candidate (few enrolled users), require a
-        # higher absolute score to avoid matching every face to the same person.
-        # The ceiling (default 0.65) ensures only strong matches are accepted.
-        if len(results) <= 1 and top_score < settings.ADAPTIVE_THRESHOLD_CEILING:
-            logger.info(
-                f"Weak solo match rejected: {top_user} ({top_score:.3f}) "
-                f"< ceiling {settings.ADAPTIVE_THRESHOLD_CEILING}"
-            )
-            return {"user_id": None, "confidence": float(top_score), "is_ambiguous": False}
-
         if is_ambiguous:
             logger.warning(
                 f"Ambiguous match: top={top_user} ({top_score:.3f}), "
@@ -331,10 +330,38 @@ class FAISSManager:
                 f"gap={score_gap:.3f} <= margin={margin}"
             )
 
+        decided_user = top_user if not is_ambiguous else None
+        logger.info(
+            "[FAISS-DECISION] user=%s confidence=%.4f ambiguous=%s gap=%.4f threshold=%.4f margin=%.4f",
+            decided_user[:8] if decided_user else "REJECTED",
+            top_score, is_ambiguous, score_gap, threshold, margin,
+        )
+
         return {
             "user_id": top_user,
             "confidence": float(top_score),
             "is_ambiguous": is_ambiguous,
+        }
+
+    def check_health(self) -> dict:
+        """Check index health and report inconsistencies."""
+        if self.index is None:
+            return {"healthy": False, "reason": "index not initialized"}
+
+        ntotal = self.index.ntotal
+        map_size = len(self.user_map)
+        unique_users = len(set(self.user_map.values()))
+        orphaned = ntotal - map_size if ntotal > map_size else 0
+        dangling = sum(1 for fid in self.user_map if fid >= ntotal)
+
+        healthy = orphaned == 0 and dangling == 0
+        return {
+            "healthy": healthy,
+            "ntotal": ntotal,
+            "user_map_size": map_size,
+            "unique_users": unique_users,
+            "orphaned_vectors": orphaned,
+            "dangling_mappings": dangling,
         }
 
     def remove(self, faiss_id: int) -> bool:
@@ -422,9 +449,11 @@ class FAISSManager:
                 raise RuntimeError("Index not initialized")
 
             save_path = path or self.index_path
+            tmp_path = save_path + ".tmp"
 
             try:
-                faiss.write_index(self.index, save_path)
+                faiss.write_index(self.index, tmp_path)
+                os.replace(tmp_path, save_path)  # atomic on POSIX — prevents partial-write corruption
                 logger.info(f"FAISS index saved to {save_path} ({self.index.ntotal} vectors)")
             except Exception as e:
                 logger.error(f"Failed to save FAISS index: {e}")
