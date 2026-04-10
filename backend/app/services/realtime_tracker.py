@@ -95,7 +95,7 @@ class RealtimeTracker:
 
         # ByteTrack with tuned parameters for face tracking
         self._tracker = sv.ByteTrack(
-            track_activation_threshold=0.1,
+            track_activation_threshold=0.25,
             lost_track_buffer=int(settings.TRACK_LOST_TIMEOUT * settings.PROCESSING_FPS),
             minimum_matching_threshold=0.8,
             frame_rate=int(settings.PROCESSING_FPS),
@@ -345,6 +345,14 @@ class RealtimeTracker:
         confidence = result.get("confidence", 0.0)
         is_ambiguous = result.get("is_ambiguous", False)
 
+        logger.info(
+            "[TRACK-SCORE] track=%d user=%s confidence=%.4f ambiguous=%s status=%s",
+            identity.track_id,
+            user_id[:8] if user_id else "NONE",
+            confidence, is_ambiguous,
+            "ACCEPT" if (user_id and not is_ambiguous) else "REJECT",
+        )
+
         if user_id is not None and not is_ambiguous:
             identity.user_id = user_id
             identity.confidence = confidence
@@ -355,6 +363,15 @@ class RealtimeTracker:
                 identity.track_id,
                 identity.name,
                 confidence,
+            )
+        elif identity.recognition_status == "recognized":
+            # Already recognized — don't downgrade on a single bad frame.
+            # Only log the failed re-verify; keep the existing identity.
+            logger.debug(
+                "Track %d re-verify missed (score=%.3f), keeping %s",
+                identity.track_id,
+                confidence,
+                identity.name,
             )
         else:
             identity.recognition_status = "unknown"
