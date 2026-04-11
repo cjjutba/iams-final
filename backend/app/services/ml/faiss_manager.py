@@ -41,6 +41,7 @@ class FAISSManager:
         self.index: faiss.Index | None = None
         self.user_map: dict[int, str] = {}  # faiss_id → user_id mapping
         self._lock = threading.RLock()  # Thread safety for concurrent access
+        self._adaptive_ids: list[int] = []  # Session-scoped adaptive embeddings (volatile, RAM only)
 
         # Ensure directory exists
         Path(self.index_path).parent.mkdir(parents=True, exist_ok=True)
@@ -165,6 +166,31 @@ class FAISSManager:
 
             return faiss_ids
 
+    def add_adaptive(self, embedding: np.ndarray, user_id: str) -> int:
+        """Add a session-scoped adaptive embedding (volatile, RAM only).
+
+        When a student is recognized with high confidence from the real CCTV
+        camera, that embedding is added to FAISS for the duration of the
+        session. On rebuild() or server restart, these are discarded
+        (the index is rebuilt from DB which doesn't include them).
+
+        This closes the phone→CCTV domain gap within the first session.
+        """
+        with self._lock:
+            if self.index is None:
+                raise RuntimeError("FAISS index not initialized")
+
+            emb = embedding.reshape(1, -1).astype(np.float32)
+            faiss_id = self.index.ntotal
+            self.index.add(emb)
+            self.user_map[faiss_id] = user_id
+            self._adaptive_ids.append(faiss_id)
+            logger.info(
+                "Adaptive embedding added: faiss_id=%d user=%s total_adaptive=%d",
+                faiss_id, user_id[:8], len(self._adaptive_ids),
+            )
+            return faiss_id
+
     @staticmethod
     def _deduplicate_by_user(
         raw: list[tuple[str, float]],
@@ -207,8 +233,9 @@ class FAISSManager:
             embedding = embedding.astype(np.float32)
 
             # Fetch more results than requested to account for multi-embedding
-            # duplicates. 5× is a safe multiplier (max 5 embeddings per user).
-            raw_k = min(k * 5, self.index.ntotal)
+            # duplicates. 15× covers up to 10 embeddings/user (5 phone + 5 CCTV-sim)
+            # with headroom for k unique users.
+            raw_k = min(k * 15, self.index.ntotal)
             similarities, indices = self.index.search(embedding, raw_k)
 
             # Collect raw results above threshold
@@ -252,7 +279,8 @@ class FAISSManager:
             embeddings = embeddings.astype(np.float32)
 
             # Fetch more results to account for multi-embedding duplicates
-            raw_k = min(k * 5, self.index.ntotal)
+            # 15× covers up to 10 embeddings/user (5 phone + 5 CCTV-sim)
+            raw_k = min(k * 15, self.index.ntotal)
             similarities, indices = self.index.search(embeddings, raw_k)
 
             # Extract and deduplicate results per query

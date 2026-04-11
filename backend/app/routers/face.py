@@ -27,12 +27,14 @@ from app.schemas.face import (
     FaceRecognizeResponse,
     FaceRegisterResponse,
     FaceStatusResponse,
+    CameraDiagnosticFace,
+    CameraDiagnosticResponse,
     ImageQualityResponse,
     MatchedUser,
     QualityScoreResponse,
 )
 from app.services.face_service import FaceService
-from app.services.ml.face_quality import assess_quality
+from app.services.ml.face_quality import assess_quality, compute_blur_score, compute_brightness
 from app.services.ml.insightface_model import insightface_model
 from app.services.presence_service import PresenceService
 from app.utils.dependencies import get_current_student, get_current_user, get_optional_user
@@ -592,3 +594,122 @@ async def deregister_face(user_id: str, current_user: User = Depends(get_current
     await face_service.deregister_face(user_id)
 
     return {"success": True, "message": "Face deregistered successfully"}
+
+
+@router.get("/camera-diagnostic", response_model=CameraDiagnosticResponse)
+async def camera_diagnostic(
+    current_user: User = Depends(get_current_user),
+):
+    """Diagnose camera setup: check face detection, lighting, and distance.
+
+    Grabs a single frame from the RTSP stream, runs face detection,
+    and reports quality metrics for each detected face along with a
+    human-readable recommendation.
+
+    Use this before going live to verify camera placement is adequate.
+    """
+    import numpy as np
+
+    from app.services.frame_grabber import FrameGrabber
+
+    # Try to get RTSP URL from room or default
+    rtsp_url = settings.DEFAULT_RTSP_URL
+    if not rtsp_url:
+        from app.database import SessionLocal
+        from app.models.room import Room
+
+        db = SessionLocal()
+        try:
+            room = db.query(Room).first()
+            if room and room.rtsp_url:
+                rtsp_url = room.rtsp_url
+        finally:
+            db.close()
+
+    if not rtsp_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No RTSP URL configured. Set DEFAULT_RTSP_URL or add a room.",
+        )
+
+    # Grab a single frame — FrameGrabber auto-starts FFmpeg in __init__
+    import asyncio
+
+    def _grab_frame() -> np.ndarray | None:
+        grabber = FrameGrabber(
+            rtsp_url=rtsp_url,
+            fps=10.0,
+            width=settings.FRAME_GRABBER_WIDTH,
+            height=settings.FRAME_GRABBER_HEIGHT,
+        )
+        try:
+            import time
+            time.sleep(2.0)
+            return grabber.grab()
+        finally:
+            grabber.stop()
+
+    loop = asyncio.get_event_loop()
+    frame = await loop.run_in_executor(None, _grab_frame)
+
+    if frame is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No frame received from RTSP stream. Check camera connection.",
+        )
+
+    frame_h, frame_w = frame.shape[:2]
+    frame_area = frame_h * frame_w
+
+    # Run face detection
+    raw_faces = insightface_model.app.get(frame) if insightface_model.app else []
+
+    faces_info: list[CameraDiagnosticFace] = []
+    for face in raw_faces:
+        x1, y1, x2, y2 = face.bbox.astype(float)
+        face_w = x2 - x1
+        face_h = y2 - y1
+        size_ratio = (face_w * face_h) / frame_area
+
+        # Extract crop for quality analysis
+        cx1, cy1 = max(0, int(x1)), max(0, int(y1))
+        cx2, cy2 = min(frame_w, int(x2)), min(frame_h, int(y2))
+        crop = frame[cy1:cy2, cx1:cx2]
+
+        blur = compute_blur_score(crop) if crop.size > 0 else 0.0
+        brightness = compute_brightness(crop) if crop.size > 0 else 0.0
+
+        faces_info.append(
+            CameraDiagnosticFace(
+                bbox=[float(x1), float(y1), float(x2), float(y2)],
+                size_ratio=round(size_ratio, 4),
+                blur_score=round(blur, 1),
+                brightness=round(brightness, 1),
+                det_score=round(float(face.det_score), 3),
+            )
+        )
+
+    face_count = len(faces_info)
+    avg_size = np.mean([f.size_ratio for f in faces_info]) if faces_info else 0.0
+    avg_bright = np.mean([f.brightness for f in faces_info]) if faces_info else 0.0
+
+    # Generate recommendation
+    if face_count == 0:
+        recommendation = "No faces detected. Check camera angle, distance, and make sure people are in view."
+    elif avg_size < 0.005:
+        recommendation = f"Faces too small (avg {avg_size:.3f} of frame). Move camera closer or zoom in."
+    elif avg_bright < 50:
+        recommendation = f"Too dark (avg brightness {avg_bright:.0f}/255). Improve lighting on faces."
+    elif avg_bright > 200:
+        recommendation = f"Overexposed (avg brightness {avg_bright:.0f}/255). Reduce direct lighting."
+    else:
+        recommendation = f"Camera setup looks good. {face_count} face(s) detected, avg size {avg_size:.1%} of frame."
+
+    return CameraDiagnosticResponse(
+        frame_size=[frame_w, frame_h],
+        face_count=face_count,
+        faces=faces_info,
+        avg_face_size_ratio=round(float(avg_size), 4),
+        avg_brightness=round(float(avg_bright), 1),
+        recommendation=recommendation,
+    )

@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     # Face Recognition
     INSIGHTFACE_MODEL: str = "buffalo_l"
     INSIGHTFACE_DET_SIZE: int = 640  # 640 for best accuracy with main stream (480 for sub-stream)
-    INSIGHTFACE_DET_THRESH: float = 0.5  # Detection confidence minimum
+    INSIGHTFACE_DET_THRESH: float = 0.3  # Detection confidence minimum (lowered for distant CCTV faces)
     FAISS_INDEX_PATH: str = "data/faiss/faces.index"
     RECOGNITION_THRESHOLD: float = 0.40  # Cosine similarity threshold (sub-stream scores 0.45-0.55, need headroom)
     RECOGNITION_MARGIN: float = 0.10  # Min gap between top-1 and top-2 scores
@@ -70,6 +70,14 @@ class Settings(BaseSettings):
     ANTISPOOF_LBP_THRESHOLD: float = 0.15  # LBP texture uniformity threshold (lowered for mobile selfie)
     ANTISPOOF_FFT_THRESHOLD: float = 0.20  # FFT high-freq energy threshold (lowered for mobile selfie)
 
+    # Adaptive Per-Session Enrollment
+    # When a student is recognized with high confidence from CCTV, store that
+    # real CCTV embedding in FAISS (RAM only, volatile) to boost future matches.
+    ADAPTIVE_ENROLL_ENABLED: bool = True
+    ADAPTIVE_ENROLL_MIN_CONFIDENCE: float = 0.55  # Only enroll very confident matches
+    ADAPTIVE_ENROLL_MAX_PER_USER: int = 3  # Max session embeddings per user
+    ADAPTIVE_ENROLL_COOLDOWN: float = 30.0  # Seconds between adaptive enrollments per user
+
     # Presence Tracking (legacy scan-based — kept for backward compatibility)
     SCAN_INTERVAL_SECONDS: int = 15  # How often to run presence scans
     EARLY_LEAVE_THRESHOLD: int = 3  # Consecutive misses to flag early leave
@@ -77,11 +85,11 @@ class Settings(BaseSettings):
     SESSION_BUFFER_MINUTES: int = 5  # Buffer before/after class for session
 
     # Real-Time Pipeline
-    PROCESSING_FPS: float = 10.0  # Frames/sec for realtime tracker loop
-    WS_BROADCAST_FPS: float = 10.0  # WebSocket broadcast rate
+    PROCESSING_FPS: float = 15.0  # Frames/sec for realtime tracker loop (15fps = 67ms budget, ~25ms processing)
+    WS_BROADCAST_FPS: float = 15.0  # WebSocket broadcast rate
 
     # ByteTrack / Track Lifecycle
-    TRACK_LOST_TIMEOUT: float = 0.5  # Seconds before removing lost track (5 frames at 10fps)
+    TRACK_LOST_TIMEOUT: float = 0.5  # Seconds before removing lost track
     REVERIFY_INTERVAL: float = 5.0  # Re-run ArcFace on existing tracks (seconds)
     TRACK_CONFIRM_FRAMES: int = 1  # Recognize immediately on first detection
 
@@ -90,7 +98,7 @@ class Settings(BaseSettings):
     PRESENCE_FLUSH_INTERVAL: float = 10.0  # Seconds between DB presence flushes
 
     # Frame Grabber
-    FRAME_GRABBER_FPS: float = 10.0  # FFmpeg output frame rate
+    FRAME_GRABBER_FPS: float = 15.0  # FFmpeg output frame rate
     FRAME_GRABBER_WIDTH: int = 896  # Match sub-stream native resolution (no upscale waste)
     FRAME_GRABBER_HEIGHT: int = 512  # Sub-stream native height
 

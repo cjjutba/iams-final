@@ -4,7 +4,7 @@ SessionPipeline — real-time processing loop for one active session.
 Each active session gets one asyncio.Task running this pipeline:
   FrameGrabber → RealtimeTracker → TrackPresenceService → WebSocket broadcast
 
-At 10fps on M5 MacBook Pro: ~15ms processing per frame, 85ms headroom.
+At 15fps on M5 MacBook Pro: ~15ms processing per frame, ~50ms headroom.
 """
 
 import asyncio
@@ -178,6 +178,9 @@ class SessionPipeline:
 
                         self._frame_count += 1
 
+                        # Broadcast frame update FIRST — minimizes latency to phone
+                        await self._broadcast_frame_update(track_frame)
+
                         # Update presence state — use short-lived DB session for
                         # any event-driven writes (check-in, early leave)
                         db = self._db_factory()
@@ -186,9 +189,6 @@ class SessionPipeline:
                             events = self._presence.process_track_frame(track_frame, time.monotonic())
                         finally:
                             db.close()
-
-                        # Broadcast frame update via WebSocket
-                        await self._broadcast_frame_update(track_frame)
 
                         # Handle events (check-in notifications, early leave alerts)
                         for event in events:
@@ -249,6 +249,7 @@ class SessionPipeline:
                 {
                     "track_id": t.track_id,
                     "bbox": t.bbox,
+                    "velocity": t.velocity,
                     "name": t.name,
                     "confidence": t.confidence,
                     "user_id": t.user_id,
@@ -263,6 +264,7 @@ class SessionPipeline:
                 {
                     "type": "frame_update",
                     "timestamp": track_frame.timestamp,
+                    "frame_size": [settings.FRAME_GRABBER_WIDTH, settings.FRAME_GRABBER_HEIGHT],
                     "tracks": tracks_data,
                     "fps": round(track_frame.fps, 1),
                     "processing_ms": round(track_frame.processing_ms, 1),

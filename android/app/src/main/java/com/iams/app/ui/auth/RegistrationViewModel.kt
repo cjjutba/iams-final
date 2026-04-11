@@ -316,9 +316,10 @@ class RegistrationViewModel @Inject constructor(
     }
 
     /**
-     * Save captured face images to app-internal storage for later upload.
-     * The user isn't authenticated yet at registration time,
-     * so face images are uploaded after the user logs in.
+     * Emergency fallback: save captured face images to app-internal storage.
+     * Only called when the immediate post-registration upload fails and the
+     * user taps "Skip for Now". StudentHomeViewModel re-attempts the upload
+     * on next login via PendingFaceUploadManager.
      */
     fun savePendingFaceImages() {
         val faces = _uiState.value.capturedFaces

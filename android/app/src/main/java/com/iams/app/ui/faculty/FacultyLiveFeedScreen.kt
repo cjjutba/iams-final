@@ -81,10 +81,9 @@ import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.SkeletonBox
-import com.iams.app.ui.components.HybridFaceOverlay
+import com.iams.app.ui.components.InterpolatedTrackOverlay
 import com.iams.app.ui.components.NativeWebRtcVideoPlayer
 import com.iams.app.ui.components.IAMSHeader
-import com.iams.app.webrtc.MlKitFrameSink
 import com.iams.app.ui.theme.AbsentBg
 import com.iams.app.ui.theme.AbsentFg
 import com.iams.app.ui.theme.Background
@@ -207,17 +206,11 @@ fun FacultyLiveFeedScreen(
         viewModel.initialize(scheduleId, roomId)
     }
 
-    // ML Kit frame sink — hoisted for both normal and fullscreen modes
-    val mlKitSink = remember { MlKitFrameSink() }
-    val mlKitFaces by mlKitSink.faces.collectAsState()
-    val frameSize by mlKitSink.frameSize.collectAsState()
+    // Frame dimensions from backend WebSocket (replaces ML Kit frameSize)
+    val frameDimensions by viewModel.frameDimensions.collectAsState()
 
-    DisposableEffect(Unit) {
-        onDispose { mlKitSink.close() }
-    }
-
-    val videoAspect = if (frameSize.first > 0 && frameSize.second > 0) {
-        frameSize.first.toFloat() / frameSize.second.toFloat()
+    val videoAspect = if (frameDimensions.first > 0 && frameDimensions.second > 0) {
+        frameDimensions.first.toFloat() / frameDimensions.second.toFloat()
     } else {
         16f / 9f
     }
@@ -406,15 +399,13 @@ fun FacultyLiveFeedScreen(
                             whepUrl = uiState.videoUrl,
                             modifier = Modifier.fillMaxSize(),
                             onError = { error -> viewModel.onVideoError(error) },
-                            additionalSink = mlKitSink
                         )
 
-                        HybridFaceOverlay(
-                            mlKitFaces = mlKitFaces,
-                            backendTracks = tracks,
+                        InterpolatedTrackOverlay(
+                            tracks = tracks,
                             modifier = Modifier.fillMaxSize(),
-                            videoFrameWidth = frameSize.first,
-                            videoFrameHeight = frameSize.second
+                            videoFrameWidth = frameDimensions.first.takeIf { it > 0 } ?: 896,
+                            videoFrameHeight = frameDimensions.second.takeIf { it > 0 } ?: 512
                         )
 
                         if (uiState.videoError != null) {

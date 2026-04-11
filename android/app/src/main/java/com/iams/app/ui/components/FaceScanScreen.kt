@@ -127,6 +127,7 @@ fun FaceScanScreen(
     var retakeIndex by remember { mutableStateOf<Int?>(null) }
     val images = remember { mutableStateListOf<Bitmap>() }
     var showFlash by remember { mutableStateOf(false) }
+    var guidanceText by remember { mutableStateOf("") }
 
     val previewView = remember { PreviewView(context) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
@@ -186,12 +187,48 @@ fun FaceScanScreen(
                                 val face = faces[0]
                                 val bounds = face.boundingBox
                                 val imageWidth = imageProxy.width.toFloat()
+                                val imageHeight = imageProxy.height.toFloat()
                                 val faceSizeRatio = bounds.width() / imageWidth
                                 val eyesOpen = (face.leftEyeOpenProbability ?: 0f) > 0.15f &&
                                         (face.rightEyeOpenProbability ?: 0f) > 0.15f
-                                faceDetected = faceSizeRatio >= MIN_FACE_SIZE_RATIO && eyesOpen
+
+                                // Pose validation: ML Kit provides head Euler angles.
+                                // Enforce that the student actually turns/tilts for each step.
+                                val activeStep = retakeIndex ?: currentStep
+                                val yaw = face.headEulerAngleY   // + left, - right
+                                val pitch = face.headEulerAngleX // - up, + down
+                                val poseOk = when (activeStep) {
+                                    0 -> kotlin.math.abs(yaw) < 15f && kotlin.math.abs(pitch) < 15f
+                                    1 -> yaw > 12f && yaw < 45f
+                                    2 -> yaw < -12f && yaw > -45f
+                                    3 -> pitch < -8f && pitch > -35f
+                                    4 -> pitch > 8f && pitch < 35f
+                                    else -> true
+                                }
+
+                                // Face centering: face center within middle 70% of frame
+                                val faceCenterX = (bounds.left + bounds.right) / 2f
+                                val centered = faceCenterX > imageWidth * 0.15f &&
+                                        faceCenterX < imageWidth * 0.85f
+
+                                faceDetected = faceSizeRatio >= MIN_FACE_SIZE_RATIO &&
+                                        eyesOpen && poseOk && centered
+
+                                // Real-time guidance for the student
+                                guidanceText = when {
+                                    !centered -> "Center your face in the frame"
+                                    !eyesOpen -> "Keep your eyes open"
+                                    !poseOk && activeStep == 0 -> "Look straight at the camera"
+                                    !poseOk && activeStep == 1 -> "Turn your head more to the left"
+                                    !poseOk && activeStep == 2 -> "Turn your head more to the right"
+                                    !poseOk && activeStep == 3 -> "Tilt your head up more"
+                                    !poseOk && activeStep == 4 -> "Tilt your head down more"
+                                    faceSizeRatio < MIN_FACE_SIZE_RATIO -> "Move closer to the camera"
+                                    else -> ""
+                                }
                             } else {
                                 faceDetected = false
+                                guidanceText = "No face detected"
                             }
                         }
                         .addOnFailureListener {
@@ -448,11 +485,11 @@ fun FaceScanScreen(
 
                             Spacer(modifier = Modifier.height(8.dp))
 
-                            if (!faceDetected) {
+                            if (!faceDetected && guidanceText.isNotEmpty()) {
                                 Text(
-                                    text = "Position your face in the oval",
+                                    text = guidanceText,
                                     fontSize = 12.sp,
-                                    color = Color.White.copy(alpha = 0.4f),
+                                    color = Color.White.copy(alpha = 0.6f),
                                     textAlign = TextAlign.Center
                                 )
                             }

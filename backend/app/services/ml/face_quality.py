@@ -85,6 +85,40 @@ def compute_face_size_ratio(
     return float(face_area / image_area)
 
 
+def assess_recognition_quality(
+    face_crop_bgr: np.ndarray,
+    min_size: int = 40,
+) -> tuple[bool, float]:
+    """
+    Fast quality check for recognition-time face crops (~0.5ms).
+
+    Rejects crops that are too small, too blurry, or have extreme lighting
+    before they reach ArcFace. Skipping a bad frame costs nothing — the track
+    simply retries on the next frame (100ms at 10fps).
+
+    Args:
+        face_crop_bgr: BGR face crop extracted from the CCTV frame.
+        min_size: Minimum width/height in pixels. Below this, ArcFace
+                  produces unstable embeddings.
+
+    Returns:
+        (passed, blur_score) — passed is True if the crop is worth recognizing.
+    """
+    h, w = face_crop_bgr.shape[:2]
+    if h < min_size or w < min_size:
+        return False, 0.0
+
+    blur = compute_blur_score(face_crop_bgr)
+    if blur < 15.0:
+        return False, blur
+
+    brightness = compute_brightness(face_crop_bgr)
+    if brightness < 30.0 or brightness > 240.0:
+        return False, blur
+
+    return True, blur
+
+
 def assess_quality(
     image_bgr: np.ndarray,
     det_score: float,

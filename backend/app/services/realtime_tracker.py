@@ -7,17 +7,19 @@ re-verify interval elapses.
 
 Performance on M5 MacBook Pro (Apple Silicon):
   SCRFD ~10ms + ByteTrack ~2ms + ArcFace ~8ms (new tracks only) ≈ 15ms/frame
-  At 10fps (100ms budget), 85ms headroom.
+  At 15fps (67ms budget), ~50ms headroom.
 """
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import supervision as sv
+from scipy.optimize import linear_sum_assignment
 
 from app.config import settings
+from app.services.ml.face_quality import assess_recognition_quality
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +40,11 @@ class TrackIdentity:
     first_seen: float = 0.0
     last_verified: float = 0.0
     last_seen: float = 0.0
+    last_drift_time: float = 0.0  # When embedding drift was last detected
     recognition_status: str = "pending"  # "pending" | "recognized" | "unknown"
     frames_seen: int = 0
     last_embedding: np.ndarray | None = None  # Detect track ID swaps
+    embedding_buffer: list = field(default_factory=list)  # Recent quality-passed embeddings (FIFO, max 5)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +53,7 @@ class TrackResult:
 
     track_id: int
     bbox: list[float]  # [x1, y1, x2, y2] normalized 0-1
+    velocity: list[float]  # [vx, vy, vw, vh] normalized units/second (center+size)
     user_id: str | None
     name: str | None
     confidence: float
@@ -103,6 +108,13 @@ class RealtimeTracker:
 
         # Identity cache: track_id -> TrackIdentity
         self._identity_cache: dict[int, TrackIdentity] = {}
+
+        # Previous frame bboxes for velocity computation: track_id -> [cx, cy, w, h]
+        self._prev_bboxes: dict[int, list[float]] = {}
+        self._processing_fps: float = settings.PROCESSING_FPS
+
+        # Adaptive per-session enrollment state: user_id -> {count, last_time}
+        self._adaptive_state: dict[str, dict] = {}
 
         # Frame dimensions (set on first frame)
         self._frame_h: int = 0
@@ -203,6 +215,25 @@ class RealtimeTracker:
             identity.last_seen = now
             identity.frames_seen += 1
 
+            # Quality gate: check face crop before using embedding for recognition.
+            # Bad crops (too small, blurry, extreme lighting) produce noisy embeddings.
+            # Skipping costs nothing — the track retries next frame (100ms at 10fps).
+            quality_passed = False
+            if embedding is not None:
+                x1p, y1p, x2p, y2p = bbox.astype(int)
+                x1p, y1p = max(0, x1p), max(0, y1p)
+                x2p, y2p = min(self._frame_w, x2p), min(self._frame_h, y2p)
+                crop = frame[y1p:y2p, x1p:x2p]
+                if crop.size > 0:
+                    quality_passed, _ = assess_recognition_quality(crop)
+
+            # Accumulate quality-passed embeddings for temporal aggregation.
+            # Averaging 3-5 frames of the same tracked face stabilizes match scores.
+            if quality_passed and embedding is not None:
+                identity.embedding_buffer.append(embedding)
+                if len(identity.embedding_buffer) > 5:
+                    identity.embedding_buffer.pop(0)
+
             # Detect track ID swaps: if the face embedding suddenly changes
             # (cosine similarity < 0.5 vs cached embedding), ByteTrack likely
             # swapped this track to a different person. Force re-recognition.
@@ -223,7 +254,9 @@ class RealtimeTracker:
                     identity.user_id = None
                     identity.name = None
                     identity.confidence = 0.0
+                    identity.last_drift_time = now
                     embedding_drifted = True
+                    identity.embedding_buffer.clear()
 
             # Cache current embedding for drift detection
             if embedding is not None:
@@ -239,14 +272,20 @@ class RealtimeTracker:
             else:
                 is_unknown_retry = False
 
+            # Use shorter re-verify interval (1s) for 3s after drift detection
+            if identity.last_drift_time > 0 and (now - identity.last_drift_time) < 3.0:
+                reverify_interval = 1.0
+            else:
+                reverify_interval = settings.REVERIFY_INTERVAL
+
             needs_recognition = (
                 identity.recognition_status == "pending"
                 or is_unknown_retry
                 or embedding_drifted
-                or (now - identity.last_verified) > settings.REVERIFY_INTERVAL
+                or (now - identity.last_verified) > reverify_interval
             )
 
-            if needs_recognition and embedding is not None:
+            if needs_recognition and quality_passed and embedding is not None:
                 self._recognize_track(identity, embedding, now)
 
             # Normalize bbox to 0-1
@@ -257,10 +296,30 @@ class RealtimeTracker:
                 float(bbox[3]) / self._frame_h,
             ]
 
+            # Compute velocity in center+size space (normalized units/second)
+            cx = (norm_bbox[0] + norm_bbox[2]) / 2
+            cy = (norm_bbox[1] + norm_bbox[3]) / 2
+            w = norm_bbox[2] - norm_bbox[0]
+            h = norm_bbox[3] - norm_bbox[1]
+            prev = self._prev_bboxes.get(track_id)
+            if prev is not None:
+                pcx, pcy, pw, ph = prev
+                fps = self._processing_fps
+                velocity = [
+                    (cx - pcx) * fps,
+                    (cy - pcy) * fps,
+                    (w - pw) * fps,
+                    (h - ph) * fps,
+                ]
+            else:
+                velocity = [0.0, 0.0, 0.0, 0.0]
+            self._prev_bboxes[track_id] = [cx, cy, w, h]
+
             results.append(
                 TrackResult(
                     track_id=track_id,
                     bbox=norm_bbox,
+                    velocity=velocity,
                     user_id=identity.user_id,
                     name=identity.name,
                     confidence=identity.confidence,
@@ -321,6 +380,8 @@ class RealtimeTracker:
         """Clear all tracking state."""
         self._tracker.reset()
         self._identity_cache.clear()
+        self._prev_bboxes.clear()
+        self._adaptive_state.clear()
 
     # ------------------------------------------------------------------
     # Internals
@@ -362,8 +423,20 @@ class RealtimeTracker:
         return "Unknown"
 
     def _recognize_track(self, identity: TrackIdentity, embedding: np.ndarray, now: float) -> None:
-        """Run ArcFace + FAISS search for a track and cache the result."""
-        result = self._faiss.search_with_margin(embedding)
+        """Run ArcFace + FAISS search for a track and cache the result.
+
+        Uses temporal embedding aggregation when 3+ quality-passed embeddings
+        are available in the buffer. Averaging across frames produces a more
+        stable embedding, boosting match scores by ~0.05-0.10.
+        """
+        if len(identity.embedding_buffer) >= 3:
+            avg = np.mean(identity.embedding_buffer, axis=0)
+            avg = avg / np.linalg.norm(avg)
+            search_embedding = avg
+        else:
+            search_embedding = embedding
+
+        result = self._faiss.search_with_margin(search_embedding)
 
         user_id = result.get("user_id")
         confidence = result.get("confidence", 0.0)
@@ -388,6 +461,13 @@ class RealtimeTracker:
                 identity.name,
                 confidence,
             )
+            # Adaptive per-session enrollment: store high-confidence CCTV
+            # embeddings in FAISS (RAM only) to boost future matches.
+            if (
+                settings.ADAPTIVE_ENROLL_ENABLED
+                and confidence >= settings.ADAPTIVE_ENROLL_MIN_CONFIDENCE
+            ):
+                self._try_adaptive_enroll(user_id, embedding, now)
         elif identity.recognition_status == "recognized":
             # Already recognized — don't downgrade on a single bad frame.
             # Only log the failed re-verify; keep the existing identity.
@@ -410,6 +490,29 @@ class RealtimeTracker:
 
         identity.last_verified = now
 
+    def _try_adaptive_enroll(self, user_id: str, embedding: np.ndarray, now: float) -> None:
+        """Store a high-confidence CCTV embedding in FAISS (volatile, RAM only).
+
+        Closes the phone→CCTV domain gap within the current session by adding
+        real camera embeddings for students who are confidently recognized.
+        Limited to ADAPTIVE_ENROLL_MAX_PER_USER per user with a cooldown.
+        """
+        state = self._adaptive_state.get(user_id, {"count": 0, "last_time": 0.0})
+        if state["count"] >= settings.ADAPTIVE_ENROLL_MAX_PER_USER:
+            return
+        if (now - state["last_time"]) < settings.ADAPTIVE_ENROLL_COOLDOWN:
+            return
+
+        emb = embedding / np.linalg.norm(embedding)
+        self._faiss.add_adaptive(emb.astype(np.float32), user_id)
+        state["count"] += 1
+        state["last_time"] = now
+        self._adaptive_state[user_id] = state
+        logger.info(
+            "Adaptive enroll: user=%s count=%d",
+            user_id[:8], state["count"],
+        )
+
     def _match_embeddings_to_tracks(
         self,
         det_bboxes: np.ndarray,
@@ -418,27 +521,33 @@ class RealtimeTracker:
     ) -> dict[int, np.ndarray]:
         """Match InsightFace embeddings to ByteTrack tracks by IoU.
 
+        Uses the Hungarian algorithm for optimal exclusive 1:1 assignment.
+        This prevents two tracks from claiming the same embedding, which
+        was a root cause of name swaps at scale.
+
         Returns:
             Dict mapping track_id -> embedding for matched tracks.
         """
         if len(tracked) == 0 or len(det_bboxes) == 0:
             return {}
 
+        n_tracks = len(tracked)
+        n_dets = len(det_bboxes)
+
+        # Build IoU cost matrix [n_tracks x n_dets]
+        iou_matrix = np.zeros((n_tracks, n_dets), dtype=np.float64)
+        for i in range(n_tracks):
+            for j in range(n_dets):
+                iou_matrix[i, j] = self._compute_iou(tracked.xyxy[i], det_bboxes[j])
+
+        # Hungarian algorithm: minimize cost → negate IoU to maximize it
+        row_indices, col_indices = linear_sum_assignment(-iou_matrix)
+
         result: dict[int, np.ndarray] = {}
-
-        for i, track_id in enumerate(tracked.tracker_id):
-            track_bbox = tracked.xyxy[i]
-            best_iou = 0.0
-            best_idx = -1
-
-            for j, det_bbox in enumerate(det_bboxes):
-                iou = self._compute_iou(track_bbox, det_bbox)
-                if iou > best_iou:
-                    best_iou = iou
-                    best_idx = j
-
-            if best_idx >= 0 and best_iou > 0.3:
-                result[int(track_id)] = embeddings[best_idx]
+        for row, col in zip(row_indices, col_indices):
+            if iou_matrix[row, col] > 0.3:
+                track_id = int(tracked.tracker_id[row])
+                result[track_id] = embeddings[col]
 
         return result
 
@@ -509,6 +618,7 @@ class RealtimeTracker:
 
         for track_id in expired:
             identity = self._identity_cache.pop(track_id)
+            self._prev_bboxes.pop(track_id, None)
             if identity.recognition_status == "recognized":
                 logger.debug(
                     "Track %d expired: %s (was visible %.1fs)",

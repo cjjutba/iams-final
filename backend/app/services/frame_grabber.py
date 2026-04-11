@@ -110,10 +110,21 @@ class FrameGrabber:
         """Start FFmpeg subprocess that decodes RTSP → raw BGR24 on stdout."""
         cmd = [
             "ffmpeg",
+            # Low-latency RTSP input flags — reduces buffering from ~1s to <50ms
             "-fflags",
-            "+genpts+discardcorrupt",
+            "+genpts+discardcorrupt+nobuffer",
+            "-flags",
+            "low_delay",
             "-rtsp_transport",
             "tcp",
+            "-analyzeduration",
+            "500000",  # 500ms (default 5s) — faster stream analysis
+            "-probesize",
+            "500000",  # 500KB (default 5MB) — faster format detection
+            "-max_delay",
+            "0",  # no demuxer buffering
+            "-reorder_queue_size",
+            "0",  # no packet reordering buffer
             "-i",
             self._url,
             "-f",
@@ -127,6 +138,8 @@ class FrameGrabber:
             "-an",  # no audio
             "-v",
             "warning",
+            "-threads",
+            "1",  # single thread decode — lower latency than multi-threaded
             "pipe:1",
         ]
         try:
@@ -134,7 +147,7 @@ class FrameGrabber:
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
-                bufsize=self._frame_bytes * 2,
+                bufsize=self._frame_bytes,  # buffer exactly 1 frame — minimizes latency
             )
             logger.info("FFmpeg started for %s (pid=%d)", self._url, proc.pid)
             return proc

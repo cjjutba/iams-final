@@ -155,6 +155,30 @@ class FaceRecognizeResponse(BaseModel):
     confidence: float | None = None
 
 
+# ===== Camera Diagnostic =====
+
+
+class CameraDiagnosticFace(BaseModel):
+    """Quality metrics for a single detected face."""
+
+    bbox: list[float] = Field(description="[x1, y1, x2, y2] pixel coordinates")
+    size_ratio: float = Field(description="Face area / frame area")
+    blur_score: float = Field(description="Laplacian variance (higher = sharper)")
+    brightness: float = Field(description="Mean pixel intensity (0-255)")
+    det_score: float = Field(description="SCRFD detection confidence")
+
+
+class CameraDiagnosticResponse(BaseModel):
+    """Camera setup diagnostic report."""
+
+    frame_size: list[int] = Field(description="[width, height]")
+    face_count: int
+    faces: list[CameraDiagnosticFace]
+    avg_face_size_ratio: float
+    avg_brightness: float
+    recommendation: str
+
+
 # ===== Face Gone (RPi Smart Sampler) =====
 
 
