@@ -442,7 +442,7 @@ class RealtimeTracker:
         confidence = result.get("confidence", 0.0)
         is_ambiguous = result.get("is_ambiguous", False)
 
-        logger.info(
+        logger.debug(
             "[TRACK-SCORE] track=%d user=%s confidence=%.4f ambiguous=%s status=%s",
             identity.track_id,
             user_id[:8] if user_id else "NONE",

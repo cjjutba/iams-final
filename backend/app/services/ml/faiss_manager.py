@@ -330,14 +330,15 @@ class FAISSManager:
         # Note: self.search() already acquires _lock (RLock allows re-entry)
         results = self.search(embedding, k=k, threshold=0.0)
 
-        # Structured score logging for threshold tuning diagnostics
+        # Structured score logging — DEBUG level to avoid flooding logs.
+        # Use calibrate_threshold.py for detailed score analysis.
         for rank, (uid, sim) in enumerate(results):
-            logger.info(
+            logger.debug(
                 "[FAISS-SCORE] rank=%d user=%s sim=%.4f threshold=%.4f",
                 rank, uid[:8], sim, threshold,
             )
         if not results:
-            logger.info("[FAISS-SCORE] no_candidates index_size=%d", self.index.ntotal if self.index else 0)
+            logger.debug("[FAISS-SCORE] no_candidates index_size=%d", self.index.ntotal if self.index else 0)
 
         if not results:
             return {"user_id": None, "confidence": 0.0, "is_ambiguous": False}
@@ -359,7 +360,7 @@ class FAISSManager:
             )
 
         decided_user = top_user if not is_ambiguous else None
-        logger.info(
+        logger.debug(
             "[FAISS-DECISION] user=%s confidence=%.4f ambiguous=%s gap=%.4f threshold=%.4f margin=%.4f",
             decided_user[:8] if decided_user else "REJECTED",
             top_score, is_ambiguous, score_gap, threshold, margin,

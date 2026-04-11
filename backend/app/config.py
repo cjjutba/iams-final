@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     INSIGHTFACE_DET_SIZE: int = 640  # 640 for best accuracy with main stream (480 for sub-stream)
     INSIGHTFACE_DET_THRESH: float = 0.3  # Detection confidence minimum (lowered for distant CCTV faces)
     FAISS_INDEX_PATH: str = "data/faiss/faces.index"
-    RECOGNITION_THRESHOLD: float = 0.40  # Cosine similarity threshold (sub-stream scores 0.45-0.55, need headroom)
+    RECOGNITION_THRESHOLD: float = 0.45  # Cosine similarity threshold (CCTV-sim + adaptive enrollment pushes scores to 0.6-0.9)
     RECOGNITION_MARGIN: float = 0.10  # Min gap between top-1 and top-2 scores
     RECOGNITION_TOP_K: int = 3  # Number of neighbors to search in FAISS
     USE_GPU: bool = True  # Use GPU if available, fallback to CPU

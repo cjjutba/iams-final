@@ -44,6 +44,10 @@ class FaceService:
         """
         Apply CCTV-like degradation to each face crop and re-embed with ArcFace.
 
+        Uses get_embedding_from_crop() which resizes the degraded crop to 112x112
+        and runs ArcFace directly — bypassing SCRFD face detection. This is critical
+        because SCRFD cannot re-detect a face in a heavily degraded tiny crop.
+
         Generates domain-matched embeddings so CCTV camera recognition can match
         against phone-registered faces. Each crop produces one simulated embedding.
 
@@ -52,8 +56,6 @@ class FaceService:
 
         Returns:
             List of L2-normalized 512-dim embeddings in the CCTV image domain.
-            May be shorter than face_crops if ArcFace fails to detect a face
-            in a heavily degraded image.
         """
         simulated: list[np.ndarray] = []
         for crop in face_crops:
@@ -61,35 +63,37 @@ class FaceService:
                 h, w = crop.shape[:2]
                 if h < 20 or w < 20:
                     continue
-                # Downscale to simulate CCTV sub-stream, then upscale back
-                scale = 0.35 + random.random() * 0.25  # 35–60%
+
+                # Downscale to simulate CCTV sub-stream resolution, then upscale back.
+                # This introduces the resolution loss typical of surveillance cameras.
+                scale = 0.40 + random.random() * 0.30  # 40–70%
                 small = cv2.resize(
                     crop,
                     (max(1, int(w * scale)), max(1, int(h * scale))),
                     interpolation=cv2.INTER_AREA,
                 )
                 face_sim = cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
-                # JPEG compression (H.264 block noise)
-                quality = random.randint(25, 55)
+
+                # JPEG compression artifacts (simulates H.264 block noise)
+                quality = random.randint(35, 65)
                 _, enc = cv2.imencode(".jpg", face_sim, [cv2.IMWRITE_JPEG_QUALITY, quality])
                 face_sim = cv2.imdecode(enc, cv2.IMREAD_COLOR)
-                # Slight blur (camera focus + motion)
+
+                # Slight Gaussian blur (camera focus + motion)
                 k = random.choice([3, 5])
                 face_sim = cv2.GaussianBlur(face_sim, (k, k), 0)
+
                 # Brightness/contrast shift (indoor CCTV lighting variation)
-                alpha = 0.75 + random.random() * 0.5  # 0.75–1.25 contrast
-                beta = random.randint(-25, 25)         # brightness offset
+                alpha = 0.80 + random.random() * 0.40  # 0.80–1.20 contrast
+                beta = random.randint(-20, 20)          # brightness offset
                 face_sim = np.clip(
                     alpha * face_sim.astype(np.float32) + beta, 0, 255
                 ).astype(np.uint8)
-                # Encode back to bytes for ArcFace pipeline
-                _, sim_bytes = cv2.imencode(".jpg", face_sim)
-                result = self.facenet.get_face_with_quality(sim_bytes.tobytes())
-                if result and result.get("embedding") is not None:
-                    emb = np.array(result["embedding"], dtype=np.float32)
-                    norm = np.linalg.norm(emb)
-                    if norm > 1e-6:
-                        simulated.append(emb / norm)
+
+                # Embed directly via ArcFace (skip SCRFD — crop IS the face)
+                emb = self.facenet.get_embedding_from_crop(face_sim)
+                simulated.append(emb.astype(np.float32))
+
             except Exception as e:
                 logger.debug(f"CCTV simulation skipped for one crop: {e}")
         return simulated

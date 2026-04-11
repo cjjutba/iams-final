@@ -192,17 +192,19 @@ fun FaceScanScreen(
                                 val eyesOpen = (face.leftEyeOpenProbability ?: 0f) > 0.15f &&
                                         (face.rightEyeOpenProbability ?: 0f) > 0.15f
 
-                                // Pose validation: ML Kit provides head Euler angles.
-                                // Enforce that the student actually turns/tilts for each step.
+                                // Pose validation: ML Kit Euler angles.
+                                // headEulerAngleY (yaw): + = turned left, - = turned right
+                                // headEulerAngleX (pitch): + = tilted up, - = tilted down
+                                // Front camera mirrors yaw, so left/right appear swapped on screen.
                                 val activeStep = retakeIndex ?: currentStep
-                                val yaw = face.headEulerAngleY   // + left, - right
-                                val pitch = face.headEulerAngleX // - up, + down
+                                val yaw = face.headEulerAngleY
+                                val pitch = face.headEulerAngleX
                                 val poseOk = when (activeStep) {
                                     0 -> kotlin.math.abs(yaw) < 15f && kotlin.math.abs(pitch) < 15f
-                                    1 -> yaw > 12f && yaw < 45f
-                                    2 -> yaw < -12f && yaw > -45f
-                                    3 -> pitch < -8f && pitch > -35f
-                                    4 -> pitch > 8f && pitch < 35f
+                                    1 -> yaw > 8f && yaw < 45f            // Left turn
+                                    2 -> yaw < -8f && yaw > -45f          // Right turn
+                                    3 -> pitch > 5f && pitch < 35f         // Tilt up (positive pitch)
+                                    4 -> pitch < -5f && pitch > -35f       // Tilt down (negative pitch)
                                     else -> true
                                 }
 
