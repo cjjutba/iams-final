@@ -101,7 +101,8 @@ fun InterpolatedTrackOverlay(
                     currentX2 = track.bbox[2],
                     currentY2 = track.bbox[3],
                     lastUpdateNanos = now,
-                    alpha = Animatable(1f),  // Instant appear — no fade-in delay
+                    createdNanos = now,
+                    alpha = Animatable(1f),
                     name = track.name,
                     confidence = track.confidence,
                     status = track.status,
@@ -152,6 +153,15 @@ fun InterpolatedTrackOverlay(
             val alpha = state.alpha.value
             if (alpha < 0.01f) continue
             if (state.status == "pending") continue
+
+            // Grace period: don't show "Unknown" for new tracks — give the
+            // recognition pipeline 1 second to identify the person first.
+            // Registered students go pending → recognized within ~200ms,
+            // so they never flash "Unknown". Truly unknown people get the
+            // yellow box after 1 second of failed recognition.
+            val isRecognizedTrack = state.status == "recognized" && !state.name.isNullOrEmpty() && state.name != "Unknown"
+            val trackAge = now - state.createdNanos
+            if (!isRecognizedTrack && trackAge < 1_000_000_000L) continue  // < 1 second
 
             // Stale check
             if (now - state.lastUpdateNanos > STALE_TIMEOUT_NS) {
@@ -205,6 +215,7 @@ private class TrackOverlayState(
     var currentX2: Float,
     var currentY2: Float,
     var lastUpdateNanos: Long,
+    val createdNanos: Long,  // When this track was first seen
     val alpha: Animatable<Float, *>,
     var name: String?,
     var confidence: Float,

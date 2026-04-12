@@ -85,8 +85,8 @@ class Settings(BaseSettings):
     SESSION_BUFFER_MINUTES: int = 5  # Buffer before/after class for session
 
     # Real-Time Pipeline
-    PROCESSING_FPS: float = 15.0  # Frames/sec for realtime tracker loop (15fps = 67ms budget, ~25ms processing)
-    WS_BROADCAST_FPS: float = 15.0  # WebSocket broadcast rate
+    PROCESSING_FPS: float = 10.0  # Frames/sec for realtime tracker loop (10fps = 100ms budget for 1280x720)
+    WS_BROADCAST_FPS: float = 10.0  # WebSocket broadcast rate
 
     # ByteTrack / Track Lifecycle
     TRACK_LOST_TIMEOUT: float = 0.5  # Seconds before removing lost track (coasting period)
@@ -98,9 +98,9 @@ class Settings(BaseSettings):
     PRESENCE_FLUSH_INTERVAL: float = 10.0  # Seconds between DB presence flushes
 
     # Frame Grabber
-    FRAME_GRABBER_FPS: float = 15.0  # FFmpeg output frame rate
-    FRAME_GRABBER_WIDTH: int = 896  # Match sub-stream native resolution (no upscale waste)
-    FRAME_GRABBER_HEIGHT: int = 512  # Sub-stream native height
+    FRAME_GRABBER_FPS: float = 10.0  # FFmpeg output frame rate (10fps for 1280x720 CPU budget)
+    FRAME_GRABBER_WIDTH: int = 1280  # 720p — gives ~50-80px faces even on wide-angle lenses
+    FRAME_GRABBER_HEIGHT: int = 720  # Consistent across all cameras
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
