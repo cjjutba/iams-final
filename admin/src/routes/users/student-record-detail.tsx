@@ -64,10 +64,14 @@ import {
   useDeactivateStudentRecord,
   useUserAttendance,
   useDeregisterFace,
+  useStudentEnrollments,
+  useEnrollStudent,
+  useUnenrollStudent,
+  useSchedules,
 } from '@/hooks/use-queries'
 import type { AttendanceRecord } from '@/types'
 import { formatStatus } from '@/types/attendance'
-import { Loader2 } from 'lucide-react'
+import { Loader2, Plus, Trash2, BookOpen } from 'lucide-react'
 
 const statusBadgeVariant: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
   present: 'default',
@@ -102,6 +106,17 @@ export default function StudentRecordDetailPage() {
   const deactivateMutation = useDeactivateStudentRecord()
   const deregisterMutation = useDeregisterFace()
   const actionLoading = deactivateMutation.isPending || deregisterMutation.isPending
+
+  // Enrollment management
+  const { data: enrollments = [], isLoading: enrollmentsLoading } = useStudentEnrollments(student?.user_id ?? '')
+  const { data: allSchedules = [] } = useSchedules()
+  const enrollMutation = useEnrollStudent()
+  const unenrollMutation = useUnenrollStudent()
+  const [enrollDialogOpen, setEnrollDialogOpen] = useState(false)
+  const [unenrollConfirm, setUnenrollConfirm] = useState<{ scheduleId: string; name: string } | null>(null)
+
+  const enrolledScheduleIds = new Set((enrollments as Array<{ schedule_id: string }>).map((e) => e.schedule_id))
+  const availableSchedules = allSchedules.filter((s) => s.is_active && !enrolledScheduleIds.has(s.id))
 
   const [form, setForm] = useState({
     first_name: '',
@@ -412,6 +427,126 @@ export default function StudentRecordDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      {student.user_id && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <BookOpen className="h-5 w-5" />
+                Enrolled Schedules ({(enrollments as unknown[]).length})
+              </CardTitle>
+              <Button size="sm" onClick={() => setEnrollDialogOpen(true)}>
+                <Plus className="mr-2 h-4 w-4" />
+                Enroll in Schedule
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {enrollmentsLoading ? (
+              <Skeleton className="h-24 w-full" />
+            ) : (enrollments as unknown[]).length === 0 ? (
+              <p className="text-sm text-muted-foreground">No enrollments yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {(enrollments as Array<{ enrollment_id: string; schedule_id: string; schedule: { id: string; subject_code: string; subject_name: string; day_of_week: number; start_time: string; end_time: string; faculty_name?: string | null } | null }>).map((e) => (
+                  <div key={e.enrollment_id} className="flex items-center justify-between rounded-md border px-4 py-3">
+                    <div className="cursor-pointer" onClick={() => e.schedule && navigate(`/schedules/${e.schedule.id}`)}>
+                      <p className="text-sm font-medium">{e.schedule?.subject_code} - {e.schedule?.subject_name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {e.schedule ? ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][e.schedule.day_of_week] : ''} {e.schedule?.start_time?.slice(0,5)} - {e.schedule?.end_time?.slice(0,5)}
+                        {e.schedule?.faculty_name ? ` · ${e.schedule.faculty_name}` : ''}
+                      </p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-destructive hover:text-destructive"
+                      onClick={() => setUnenrollConfirm({
+                        scheduleId: e.schedule_id,
+                        name: `${e.schedule?.subject_code} - ${e.schedule?.subject_name}`,
+                      })}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Unenroll Confirmation */}
+      <AlertDialog open={!!unenrollConfirm} onOpenChange={(open) => !open && setUnenrollConfirm(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Unenroll from schedule?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to remove {student.first_name} from <strong>{unenrollConfirm?.name}</strong>? This will remove their enrollment and any future attendance tracking for this schedule.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (unenrollConfirm && student.user_id) {
+                  unenrollMutation.mutate(
+                    { scheduleId: unenrollConfirm.scheduleId, studentUserId: student.user_id },
+                    { onSuccess: () => { toast.success('Unenrolled successfully'); setUnenrollConfirm(null) } }
+                  )
+                }
+              }}
+            >
+              Unenroll
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Enroll in Schedule Dialog */}
+      <Dialog open={enrollDialogOpen} onOpenChange={setEnrollDialogOpen}>
+        <DialogContent className="sm:max-w-md max-h-[80vh]">
+          <DialogHeader>
+            <DialogTitle>Enroll in Schedule</DialogTitle>
+            <DialogDescription>Select a schedule to enroll {student.first_name} in.</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[300px] overflow-y-auto space-y-1">
+            {availableSchedules.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">
+                {(enrollments as unknown[]).length > 0 ? 'Enrolled in all available schedules.' : 'No active schedules available.'}
+              </p>
+            ) : (
+              availableSchedules.map((s) => (
+                <div
+                  key={s.id}
+                  className="flex items-center justify-between rounded-md border px-3 py-2 hover:bg-accent cursor-pointer"
+                  onClick={() => {
+                    if (!student.user_id) return
+                    enrollMutation.mutate(
+                      { scheduleId: s.id, studentUserId: student.user_id },
+                      { onSuccess: () => toast.success(`Enrolled in ${s.subject_code}`) }
+                    )
+                  }}
+                >
+                  <div>
+                    <p className="text-sm font-medium">{s.subject_code} - {s.subject_name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][s.day_of_week]} {s.start_time?.slice(0,5)} - {s.end_time?.slice(0,5)}
+                      {s.faculty_name ? ` · ${s.faculty_name}` : ''}
+                    </p>
+                  </div>
+                  <Plus className="h-4 w-4 text-muted-foreground" />
+                </div>
+              ))
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEnrollDialogOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {student.is_registered && (
         <div>

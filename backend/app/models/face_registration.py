@@ -5,7 +5,7 @@ Links users to their face embeddings in FAISS index.
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, LargeBinary
 from sqlalchemy.dialects.postgresql import UUID
@@ -45,7 +45,7 @@ class FaceRegistration(Base):
     embedding_vector = Column(LargeBinary, nullable=False)  # 512-dim vector as bytes (for rebuild)
 
     # Timestamps
-    registered_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    registered_at = Column(DateTime, default=lambda: datetime.now(), nullable=False)
 
     # Status
     is_active = Column(Boolean, default=True, nullable=False, index=True)

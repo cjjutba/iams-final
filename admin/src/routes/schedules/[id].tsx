@@ -16,6 +16,8 @@ import {
   GraduationCap,
   Loader2,
   Pencil,
+  Plus,
+  Trash2,
   User,
 } from 'lucide-react'
 
@@ -52,6 +54,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
@@ -61,7 +73,10 @@ import {
   useUpdateSchedule,
   useUsers,
   useRooms,
+  useEnrollStudent,
+  useUnenrollStudent,
 } from '@/hooks/use-queries'
+import { usersService } from '@/services/users.service'
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
@@ -118,6 +133,12 @@ export default function ScheduleDetailPage() {
   const updateSchedule = useUpdateSchedule()
 
   const [editOpen, setEditOpen] = useState(false)
+  const [enrollOpen, setEnrollOpen] = useState(false)
+  const [enrollSearch, setEnrollSearch] = useState('')
+  const [allStudents, setAllStudents] = useState<Array<{ user_id: string | null; student_id: string; first_name: string; last_name: string; is_registered?: boolean }>>([])
+  const enrollStudent = useEnrollStudent()
+  const unenrollStudent = useUnenrollStudent()
+  const [unenrollConfirm, setUnenrollConfirm] = useState<{ studentUserId: string; name: string } | null>(null)
 
   const scheduleName = schedule ? `${schedule.subject_code} - ${schedule.subject_name}` : null
   usePageTitle(scheduleName ?? 'Schedule Details')
@@ -188,6 +209,47 @@ export default function ScheduleDetailPage() {
     : (studentsData as { students?: EnrolledStudent[] })?.students ?? []
   const summary = summaryRaw as AttendanceSummaryData | null | undefined
 
+  // Load all students when enroll dialog opens
+  useEffect(() => {
+    if (enrollOpen && allStudents.length === 0) {
+      usersService.listStudentRecords().then(setAllStudents).catch(() => {})
+    }
+  }, [enrollOpen, allStudents.length])
+
+  const enrolledUserIds = new Set(
+    (students as EnrolledStudent[]).map((s) => s.id)
+  )
+
+  const filteredStudents = allStudents.filter(
+    (s) =>
+      (!s.user_id || !enrolledUserIds.has(s.user_id)) &&
+      (enrollSearch === '' ||
+        `${s.first_name} ${s.last_name} ${s.student_id}`.toLowerCase().includes(enrollSearch.toLowerCase()))
+  )
+
+  const handleEnroll = async (studentUserId: string, studentName: string) => {
+    if (!id) return
+    try {
+      await enrollStudent.mutateAsync({ scheduleId: id, studentUserId })
+      // Refresh the student list for the dialog to remove enrolled student
+      usersService.listStudentRecords().then(setAllStudents).catch(() => {})
+      toast.success(`${studentName} enrolled successfully`)
+    } catch {
+      toast.error('Failed to enroll student')
+    }
+  }
+
+  const confirmUnenroll = () => {
+    if (!id || !unenrollConfirm) return
+    unenrollStudent.mutate(
+      { scheduleId: id, studentUserId: unenrollConfirm.studentUserId },
+      {
+        onSuccess: () => { toast.success('Student unenrolled successfully'); setUnenrollConfirm(null) },
+        onError: () => toast.error('Failed to unenroll student'),
+      }
+    )
+  }
+
   const studentColumns: ColumnDef<EnrolledStudent>[] = [
     {
       accessorKey: 'first_name',
@@ -214,6 +276,26 @@ export default function ScheduleDetailPage() {
         ) : (
           <Badge variant="destructive">Inactive</Badge>
         ),
+    },
+    {
+      id: 'actions',
+      header: '',
+      cell: ({ row }) => (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-destructive hover:text-destructive"
+          onClick={(e) => {
+            e.stopPropagation()
+            setUnenrollConfirm({
+              studentUserId: row.original.id,
+              name: `${row.original.first_name} ${row.original.last_name}`,
+            })
+          }}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      ),
     },
   ]
 
@@ -364,10 +446,16 @@ export default function ScheduleDetailPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <GraduationCap className="h-5 w-5" />
-            Enrolled Students
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <GraduationCap className="h-5 w-5" />
+              Enrolled Students
+            </CardTitle>
+            <Button size="sm" onClick={() => { setEnrollOpen(true); setEnrollSearch('') }}>
+              <Plus className="mr-2 h-4 w-4" />
+              Enroll Student
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {studentsError ? (
@@ -386,6 +474,76 @@ export default function ScheduleDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Unenroll Confirmation */}
+      <AlertDialog open={!!unenrollConfirm} onOpenChange={(open) => !open && setUnenrollConfirm(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Unenroll student?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to remove <strong>{unenrollConfirm?.name}</strong> from this schedule?
+              This will remove their enrollment and any future attendance tracking.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={confirmUnenroll}
+            >
+              Unenroll
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog open={enrollOpen} onOpenChange={setEnrollOpen}>
+        <DialogContent className="sm:max-w-md max-h-[80vh]">
+          <DialogHeader>
+            <DialogTitle>Enroll Student</DialogTitle>
+            <DialogDescription>Search and select a student to enroll in this schedule.</DialogDescription>
+          </DialogHeader>
+          <Input
+            placeholder="Search by name or student ID..."
+            value={enrollSearch}
+            onChange={(e) => setEnrollSearch(e.target.value)}
+          />
+          <div className="max-h-[300px] overflow-y-auto space-y-1">
+            {filteredStudents.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">
+                {enrollSearch ? 'No matching students found' : 'All students are already enrolled'}
+              </p>
+            ) : (
+              filteredStudents.slice(0, 50).map((s) => {
+                const isRegistered = !!s.user_id
+                return (
+                  <div
+                    key={s.student_id}
+                    className={`flex items-center justify-between rounded-md border px-3 py-2 ${
+                      isRegistered ? 'hover:bg-accent cursor-pointer' : 'opacity-50 cursor-not-allowed'
+                    }`}
+                    onClick={() => isRegistered && s.user_id && handleEnroll(s.user_id, `${s.first_name} ${s.last_name}`)}
+                  >
+                    <div>
+                      <p className="text-sm font-medium">
+                        {s.first_name} {s.last_name}
+                        {!isRegistered && (
+                          <span className="ml-2 text-xs text-muted-foreground">(not registered)</span>
+                        )}
+                      </p>
+                      <p className="text-xs text-muted-foreground">{s.student_id}</p>
+                    </div>
+                    {isRegistered && <Plus className="h-4 w-4 text-muted-foreground" />}
+                  </div>
+                )
+              })
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEnrollOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">

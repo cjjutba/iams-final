@@ -244,6 +244,40 @@ export function useDeleteSchedule() {
   })
 }
 
+export function useEnrollStudent() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ scheduleId, studentUserId }: { scheduleId: string; studentUserId: string }) =>
+      schedulesService.enrollStudent(scheduleId, studentUserId),
+    onSuccess: (_data, variables) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.schedules.students(variables.scheduleId) })
+      void qc.invalidateQueries({ queryKey: queryKeys.schedules.all })
+      void qc.invalidateQueries({ queryKey: ['enrollments', 'student', variables.studentUserId] })
+    },
+  })
+}
+
+export function useUnenrollStudent() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ scheduleId, studentUserId }: { scheduleId: string; studentUserId: string }) =>
+      schedulesService.unenrollStudent(scheduleId, studentUserId),
+    onSuccess: (_data, variables) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.schedules.students(variables.scheduleId) })
+      void qc.invalidateQueries({ queryKey: queryKeys.schedules.all })
+      void qc.invalidateQueries({ queryKey: ['enrollments', 'student', variables.studentUserId] })
+    },
+  })
+}
+
+export function useStudentEnrollments(studentUserId: string) {
+  return useQuery({
+    queryKey: ['enrollments', 'student', studentUserId],
+    queryFn: () => schedulesService.getStudentEnrollments(studentUserId),
+    enabled: !!studentUserId,
+  })
+}
+
 // ── Rooms ───────────────────────────────────────────────────
 
 export function useRooms() {

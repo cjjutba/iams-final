@@ -15,6 +15,7 @@ services:
     image: postgres:16-alpine
     container_name: iams-postgres
     environment:
+      TZ: Asia/Manila
       POSTGRES_DB: iams
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: "123"
@@ -94,6 +95,7 @@ services:
     env_file:
       - ./backend/.env
     environment:
+      - TZ=Asia/Manila
       - SERVICE_ROLE=api-gateway
       - DATABASE_URL=postgresql://admin:123@postgres:5432/iams
       - REDIS_URL=redis://:iams-redis-dev@redis:6379/0

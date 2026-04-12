@@ -5,7 +5,7 @@ Links students to the classes they are enrolled in.
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
@@ -37,7 +37,7 @@ class Enrollment(Base):
     schedule_id = Column(UUID(as_uuid=True), ForeignKey("schedules.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # Timestamp
-    enrolled_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    enrolled_at = Column(DateTime, default=lambda: datetime.now(), nullable=False)
 
     # Relationships
     student = relationship("User", foreign_keys=[student_id], back_populates="enrollments")

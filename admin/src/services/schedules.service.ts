@@ -14,4 +14,10 @@ export const schedulesService = {
     api.patch<ScheduleResponse>(`/schedules/${id}`, data).then(r => r.data),
   delete: (id: string) =>
     api.delete(`/schedules/${id}`).then(r => r.data),
+  enrollStudent: (scheduleId: string, studentUserId: string) =>
+    api.post(`/schedules/${scheduleId}/enroll/${studentUserId}`).then(r => r.data),
+  unenrollStudent: (scheduleId: string, studentUserId: string) =>
+    api.delete(`/schedules/${scheduleId}/enroll/${studentUserId}`).then(r => r.data),
+  getStudentEnrollments: (studentUserId: string) =>
+    api.get(`/schedules/student/${studentUserId}/enrollments`).then(r => r.data),
 }

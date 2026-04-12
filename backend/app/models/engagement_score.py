@@ -6,7 +6,7 @@ Derived from presence patterns, punctuality, and recognition confidence.
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Float, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
@@ -57,7 +57,7 @@ class EngagementScore(Base):
     engagement_score = Column(Float, nullable=True)  # 0-100
 
     # Timestamps
-    computed_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    computed_at = Column(DateTime, default=lambda: datetime.now(), nullable=False)
 
     # Relationships
     attendance_record = relationship("AttendanceRecord", foreign_keys=[attendance_id])

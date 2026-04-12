@@ -6,7 +6,7 @@ System-wide analytics for admin dashboard — metrics, trends, weekday breakdown
 All data is computed from existing attendance records and anomaly tables.
 """
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func
@@ -388,7 +388,7 @@ def resolve_anomaly(
 
     anomaly.resolved = True
     anomaly.resolved_by = current_user.id
-    anomaly.resolved_at = datetime.now(UTC)
+    anomaly.resolved_at = datetime.now()
     db.commit()
 
     return {"success": True, "message": "Anomaly resolved"}
