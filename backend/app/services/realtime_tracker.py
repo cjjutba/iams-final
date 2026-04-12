@@ -65,6 +65,7 @@ class TrackIdentity:
     embedding_buffer: list = field(default_factory=list)  # Recent quality-passed embeddings (FIFO, max 5)
     is_static: bool = False  # True = likely a poster/portrait, skip recognition
     first_center: tuple[float, float] | None = None  # Initial bbox center (normalized)
+    last_bbox: list[float] | None = None  # Last normalized bbox [x1, y1, x2, y2] for coasting
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,17 +263,26 @@ class RealtimeTracker:
                     logger.info("Track %d marked as static (poster/portrait), skipping recognition", track_id)
 
             # Quality gate: check face crop before using embedding for recognition.
+            # Bypass for pending tracks — get instant first recognition even on
+            # a slightly blurry frame. Quality gate only applies to re-verifications
+            # and embedding buffer accumulation.
             quality_passed = False
+            is_first_recognition = identity.recognition_status == "pending"
             if embedding is not None and not identity.is_static:
-                x1p, y1p, x2p, y2p = bbox.astype(int)
-                x1p, y1p = max(0, x1p), max(0, y1p)
-                x2p, y2p = min(self._frame_w, x2p), min(self._frame_h, y2p)
-                crop = frame[y1p:y2p, x1p:x2p]
-                if crop.size > 0:
-                    quality_passed, _ = assess_recognition_quality(crop)
+                if is_first_recognition:
+                    # Skip quality gate for first recognition — instant match
+                    quality_passed = True
+                else:
+                    x1p, y1p, x2p, y2p = bbox.astype(int)
+                    x1p, y1p = max(0, x1p), max(0, y1p)
+                    x2p, y2p = min(self._frame_w, x2p), min(self._frame_h, y2p)
+                    crop = frame[y1p:y2p, x1p:x2p]
+                    if crop.size > 0:
+                        quality_passed, _ = assess_recognition_quality(crop)
 
             # Accumulate quality-passed embeddings for temporal aggregation.
-            if quality_passed and embedding is not None:
+            # Only add quality-gated frames (not bypassed first-recognition frames).
+            if not is_first_recognition and quality_passed and embedding is not None:
                 identity.embedding_buffer.append(embedding)
                 if len(identity.embedding_buffer) > 5:
                     identity.embedding_buffer.pop(0)
@@ -374,6 +384,9 @@ class RealtimeTracker:
                 velocity = [0.0, 0.0, 0.0, 0.0]
             self._prev_bboxes[track_id] = [cx, cy, w, h]
 
+            # Store last bbox for coasting when track is briefly lost
+            identity.last_bbox = norm_bbox
+
             results.append(
                 TrackResult(
                     track_id=track_id,
@@ -384,6 +397,33 @@ class RealtimeTracker:
                     confidence=identity.confidence,
                     status=identity.recognition_status,
                     is_active=True,
+                )
+            )
+
+        # 5b. Add coasting tracks: recognized tracks that are not detected
+        # this frame but were recently seen. This prevents bounding box blinking
+        # when SCRFD misses a face for 1-2 frames (motion blur, brief occlusion).
+        for tid, identity in self._identity_cache.items():
+            if tid in active_track_ids:
+                continue  # Already in results
+            if identity.recognition_status != "recognized":
+                continue  # Only coast recognized tracks
+            if identity.last_bbox is None:
+                continue
+            age = now - identity.last_seen
+            if age > settings.TRACK_LOST_TIMEOUT:
+                continue  # Too old, let it expire
+
+            results.append(
+                TrackResult(
+                    track_id=tid,
+                    bbox=identity.last_bbox,
+                    velocity=[0.0, 0.0, 0.0, 0.0],
+                    user_id=identity.user_id,
+                    name=identity.name,
+                    confidence=identity.confidence,
+                    status=identity.recognition_status,
+                    is_active=False,  # Not detected this frame, coasting
                 )
             )
 

@@ -16,19 +16,23 @@ import androidx.compose.ui.unit.sp
 import com.iams.app.data.model.TrackInfo
 import kotlinx.coroutines.launch
 
-/** Stale timeout: stop rendering if no backend update for this long. */
-private const val STALE_TIMEOUT_NS = 500_000_000L // 500ms
+/** Stale timeout: matches backend TRACK_LOST_TIMEOUT (0.5s). */
+private const val STALE_TIMEOUT_NS = 500_000_000L // 0.5s
 
 /**
- * Backend-authoritative face overlay with snap positioning.
+ * Fast lerp factor. 0.55 = move 55% toward target each frame at 60fps.
+ * Reaches 95% of target in ~2 frames (~33ms) — feels instant but smooth.
+ * No drift because we lerp toward a fixed backend position, not a predicted one.
+ */
+private const val LERP_FACTOR = 0.55f
+
+/**
+ * Backend-authoritative face overlay with smooth tracking.
  *
- * All positions and identities come from the backend via WebSocket.
- * Boxes snap directly to the backend-reported position — no interpolation,
- * no lerp, no velocity extrapolation. This guarantees the box is always
- * exactly where SCRFD detected the face, with zero drift or lag.
- *
- * At 10-15fps backend updates, position jumps are small enough (~3-5px)
- * that snapping looks stable to the eye.
+ * All positions and identities come from the backend via WebSocket at ~15fps.
+ * Fast lerp interpolation renders at 60fps for seamless box movement.
+ * No velocity extrapolation — avoids drift. The box always converges to
+ * exactly where SCRFD detected the face.
  */
 @Composable
 fun InterpolatedTrackOverlay(
@@ -41,7 +45,15 @@ fun InterpolatedTrackOverlay(
     val trackStates = remember { mutableStateMapOf<Int, TrackOverlayState>() }
     val coroutineScope = rememberCoroutineScope()
 
-    // Update track states when new WebSocket data arrives
+    // Drive continuous 60fps rendering for smooth lerp
+    var frameNanos by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            withFrameNanos { nanos -> frameNanos = nanos }
+        }
+    }
+
+    // Update target positions when new WebSocket data arrives
     LaunchedEffect(tracks) {
         val now = System.nanoTime()
         val activeIds = tracks.map { it.trackId }.toSet()
@@ -51,7 +63,7 @@ fun InterpolatedTrackOverlay(
             if (id !in activeIds && state.isAlive) {
                 state.isAlive = false
                 state.deathTimeNanos = now
-                coroutineScope.launch { state.alpha.animateTo(0f, tween(200)) }
+                coroutineScope.launch { state.alpha.animateTo(0f, tween(300)) }
             }
         }
 
@@ -64,11 +76,11 @@ fun InterpolatedTrackOverlay(
         for (track in tracks) {
             val existing = trackStates[track.trackId]
             if (existing != null) {
-                // Snap to new backend position
-                existing.x1 = track.bbox[0]
-                existing.y1 = track.bbox[1]
-                existing.x2 = track.bbox[2]
-                existing.y2 = track.bbox[3]
+                // Update target — lerp will smoothly move toward it
+                existing.targetX1 = track.bbox[0]
+                existing.targetY1 = track.bbox[1]
+                existing.targetX2 = track.bbox[2]
+                existing.targetY2 = track.bbox[3]
                 existing.lastUpdateNanos = now
                 existing.name = track.name
                 existing.confidence = track.confidence
@@ -78,25 +90,32 @@ fun InterpolatedTrackOverlay(
                     coroutineScope.launch { existing.alpha.animateTo(1f, tween(150)) }
                 }
             } else {
-                // New track — create and fade in
+                // New track — snap current to target (no lerp on first frame)
                 val state = TrackOverlayState(
-                    x1 = track.bbox[0],
-                    y1 = track.bbox[1],
-                    x2 = track.bbox[2],
-                    y2 = track.bbox[3],
+                    targetX1 = track.bbox[0],
+                    targetY1 = track.bbox[1],
+                    targetX2 = track.bbox[2],
+                    targetY2 = track.bbox[3],
+                    currentX1 = track.bbox[0],
+                    currentY1 = track.bbox[1],
+                    currentX2 = track.bbox[2],
+                    currentY2 = track.bbox[3],
                     lastUpdateNanos = now,
-                    alpha = Animatable(0f),
+                    alpha = Animatable(1f),  // Instant appear — no fade-in delay
                     name = track.name,
                     confidence = track.confidence,
                     status = track.status,
                 )
                 trackStates[track.trackId] = state
-                coroutineScope.launch { state.alpha.animateTo(1f, tween(200)) }
             }
         }
     }
 
     Canvas(modifier = modifier.fillMaxSize()) {
+        // Read frameNanos to ensure recomposition every frame
+        @Suppress("UNUSED_EXPRESSION")
+        frameNanos
+
         val canvasW = size.width
         val canvasH = size.height
 
@@ -132,28 +151,34 @@ fun InterpolatedTrackOverlay(
         for ((_, state) in trackStates) {
             val alpha = state.alpha.value
             if (alpha < 0.01f) continue
-            // Skip pending tracks (not yet processed)
             if (state.status == "pending") continue
 
-            // Stale check: stop rendering if no backend update for >500ms
+            // Stale check
             if (now - state.lastUpdateNanos > STALE_TIMEOUT_NS) {
                 continue
             }
 
-            // Map normalized bbox directly to canvas coordinates
-            val left = state.x1 * renderW - cropOffsetX
-            val top = state.y1 * renderH - cropOffsetY
-            val right = state.x2 * renderW - cropOffsetX
-            val bottom = state.y2 * renderH - cropOffsetY
+            // Fast lerp: move current position toward target each frame.
+            // At 0.55, reaches 95% in ~33ms — feels instant but no jitter.
+            state.currentX1 += (state.targetX1 - state.currentX1) * LERP_FACTOR
+            state.currentY1 += (state.targetY1 - state.currentY1) * LERP_FACTOR
+            state.currentX2 += (state.targetX2 - state.currentX2) * LERP_FACTOR
+            state.currentY2 += (state.targetY2 - state.currentY2) * LERP_FACTOR
+
+            // Map to canvas coordinates
+            val left = state.currentX1 * renderW - cropOffsetX
+            val top = state.currentY1 * renderH - cropOffsetY
+            val right = state.currentX2 * renderW - cropOffsetX
+            val bottom = state.currentY2 * renderH - cropOffsetY
             val boxWidth = right - left
             val boxHeight = bottom - top
             if (boxWidth < 2f || boxHeight < 2f) continue
 
             val isRecognized = state.status == "recognized" && !state.name.isNullOrEmpty() && state.name != "Unknown"
             val boxColor = if (isRecognized) {
-                Color(0xFF4CAF50).copy(alpha = alpha) // Green for recognized
+                Color(0xFF4CAF50).copy(alpha = alpha)
             } else {
-                Color(0xFFFF9800).copy(alpha = alpha) // Orange/yellow for unknown
+                Color(0xFFFF9800).copy(alpha = alpha)
             }
 
             drawRect(
@@ -171,10 +196,14 @@ fun InterpolatedTrackOverlay(
 
 /** Mutable state for a single tracked face overlay. */
 private class TrackOverlayState(
-    var x1: Float,
-    var y1: Float,
-    var x2: Float,
-    var y2: Float,
+    var targetX1: Float,
+    var targetY1: Float,
+    var targetX2: Float,
+    var targetY2: Float,
+    var currentX1: Float,
+    var currentY1: Float,
+    var currentX2: Float,
+    var currentY2: Float,
     var lastUpdateNanos: Long,
     val alpha: Animatable<Float, *>,
     var name: String?,
