@@ -43,11 +43,11 @@ class Settings(BaseSettings):
 
     # Face Recognition
     INSIGHTFACE_MODEL: str = "buffalo_l"
-    INSIGHTFACE_DET_SIZE: int = 480  # 480 balances speed and accuracy (640 max, 320 fast)
-    INSIGHTFACE_DET_THRESH: float = 0.5  # Detection confidence minimum
+    INSIGHTFACE_DET_SIZE: int = 640  # 640 for best accuracy with main stream (480 for sub-stream)
+    INSIGHTFACE_DET_THRESH: float = 0.3  # Detection confidence minimum (lowered for distant CCTV faces)
     FAISS_INDEX_PATH: str = "data/faiss/faces.index"
-    RECOGNITION_THRESHOLD: float = 0.25  # Cosine similarity threshold (selfie→CCTV cross-domain scores 0.3-0.5)
-    RECOGNITION_MARGIN: float = 0.05  # Min gap between top-1 and top-2 scores
+    RECOGNITION_THRESHOLD: float = 0.45  # Cosine similarity threshold (CCTV-sim + adaptive enrollment pushes scores to 0.6-0.9)
+    RECOGNITION_MARGIN: float = 0.10  # Min gap between top-1 and top-2 scores
     RECOGNITION_TOP_K: int = 3  # Number of neighbors to search in FAISS
     USE_GPU: bool = True  # Use GPU if available, fallback to CPU
     MIN_FACE_IMAGES: int = 3  # Minimum images for registration
@@ -62,13 +62,6 @@ class Settings(BaseSettings):
     QUALITY_MIN_FACE_SIZE_RATIO: float = 0.05  # Face area / image area minimum
     QUALITY_MIN_DET_SCORE: float = 0.5  # SCRFD detection confidence minimum
 
-    # Adaptive Threshold
-    ADAPTIVE_THRESHOLD_ENABLED: bool = True
-    ADAPTIVE_THRESHOLD_FLOOR: float = 0.25  # Minimum allowed threshold
-    ADAPTIVE_THRESHOLD_CEILING: float = 0.25  # Solo-match ceiling (sub-stream CCTV scores 0.25-0.40)
-    ADAPTIVE_THRESHOLD_MIN_SAMPLES: int = 50  # Min samples before adapting
-    ADAPTIVE_THRESHOLD_WINDOW: int = 500  # Rolling window size
-
     # Anti-Spoofing / Liveness Detection
     ANTISPOOF_ENABLED: bool = True
     ANTISPOOF_REGISTRATION_STRICT: bool = True  # Block registration if spoof detected
@@ -77,6 +70,14 @@ class Settings(BaseSettings):
     ANTISPOOF_LBP_THRESHOLD: float = 0.15  # LBP texture uniformity threshold (lowered for mobile selfie)
     ANTISPOOF_FFT_THRESHOLD: float = 0.20  # FFT high-freq energy threshold (lowered for mobile selfie)
 
+    # Adaptive Per-Session Enrollment
+    # When a student is recognized with high confidence from CCTV, store that
+    # real CCTV embedding in FAISS (RAM only, volatile) to boost future matches.
+    ADAPTIVE_ENROLL_ENABLED: bool = True
+    ADAPTIVE_ENROLL_MIN_CONFIDENCE: float = 0.55  # Only enroll very confident matches
+    ADAPTIVE_ENROLL_MAX_PER_USER: int = 3  # Max session embeddings per user
+    ADAPTIVE_ENROLL_COOLDOWN: float = 30.0  # Seconds between adaptive enrollments per user
+
     # Presence Tracking (legacy scan-based — kept for backward compatibility)
     SCAN_INTERVAL_SECONDS: int = 15  # How often to run presence scans
     EARLY_LEAVE_THRESHOLD: int = 3  # Consecutive misses to flag early leave
@@ -84,11 +85,11 @@ class Settings(BaseSettings):
     SESSION_BUFFER_MINUTES: int = 5  # Buffer before/after class for session
 
     # Real-Time Pipeline
-    PROCESSING_FPS: float = 10.0  # Frames/sec for realtime tracker loop
+    PROCESSING_FPS: float = 10.0  # Frames/sec for realtime tracker loop (10fps = 100ms budget for 1280x720)
     WS_BROADCAST_FPS: float = 10.0  # WebSocket broadcast rate
 
     # ByteTrack / Track Lifecycle
-    TRACK_LOST_TIMEOUT: float = 2.0  # Seconds before removing lost track (shorter = less stale boxes)
+    TRACK_LOST_TIMEOUT: float = 0.5  # Seconds before removing lost track (coasting period)
     REVERIFY_INTERVAL: float = 5.0  # Re-run ArcFace on existing tracks (seconds)
     TRACK_CONFIRM_FRAMES: int = 1  # Recognize immediately on first detection
 
@@ -97,9 +98,9 @@ class Settings(BaseSettings):
     PRESENCE_FLUSH_INTERVAL: float = 10.0  # Seconds between DB presence flushes
 
     # Frame Grabber
-    FRAME_GRABBER_FPS: float = 10.0  # FFmpeg output frame rate
-    FRAME_GRABBER_WIDTH: int = 480  # Output frame width (smaller = faster SCRFD)
-    FRAME_GRABBER_HEIGHT: int = 360  # Output frame height
+    FRAME_GRABBER_FPS: float = 10.0  # FFmpeg output frame rate (10fps for 1280x720 CPU budget)
+    FRAME_GRABBER_WIDTH: int = 1280  # 720p — gives ~50-80px faces even on wide-angle lenses
+    FRAME_GRABBER_HEIGHT: int = 720  # Consistent across all cameras
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"

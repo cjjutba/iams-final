@@ -8,6 +8,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
 import com.google.mlkit.vision.face.Face
+import com.google.mlkit.vision.face.FaceLandmark
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -66,10 +67,10 @@ class MlKitFrameSink : VideoSink, Closeable {
     private val faceDetector = FaceDetection.getClient(
         FaceDetectorOptions.Builder()
             .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
-            .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_NONE)
+            .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
             .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
             .setContourMode(FaceDetectorOptions.CONTOUR_MODE_NONE)
-            .setMinFaceSize(0.13f)
+            .setMinFaceSize(0.15f)
             .enableTracking()
             .build()
     )
@@ -201,8 +202,9 @@ class MlKitFrameSink : VideoSink, Closeable {
     }
 
     /**
-     * Filters out false positive face detections using aspect ratio.
-     * Valid faces are roughly square (0.5–1.5 width/height ratio).
+     * Filters out false positive face detections.
+     * Requires: reasonable aspect ratio AND at least both eyes + nose landmarks visible.
+     * Covered/occluded faces won't have detectable landmarks → filtered out.
      */
     private fun isValidFace(face: Face): Boolean {
         val b = face.boundingBox
@@ -211,7 +213,13 @@ class MlKitFrameSink : VideoSink, Closeable {
         if (height <= 0f || width <= 0f) return false
 
         val aspectRatio = width / height
-        return aspectRatio in 0.5f..1.5f
+        if (aspectRatio !in 0.5f..1.5f) return false
+
+        // Require at least both eyes and nose — covered faces lack these landmarks
+        val hasLeftEye = face.getLandmark(FaceLandmark.LEFT_EYE) != null
+        val hasRightEye = face.getLandmark(FaceLandmark.RIGHT_EYE) != null
+        val hasNose = face.getLandmark(FaceLandmark.NOSE_BASE) != null
+        return hasLeftEye && hasRightEye && hasNose
     }
 
     override fun close() {

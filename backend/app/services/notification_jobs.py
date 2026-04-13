@@ -8,7 +8,7 @@ but never propagated so the scheduler stays healthy.
 """
 
 import logging
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import func
 
@@ -369,7 +369,7 @@ async def run_low_attendance_check() -> None:
     try:
         today = date.today()
         window_start = today - timedelta(days=settings.LOW_ATTENDANCE_CHECK_WINDOW_DAYS)
-        renotify_cutoff = datetime.now(UTC) - timedelta(days=settings.LOW_ATTENDANCE_RENOTIFY_DAYS)
+        renotify_cutoff = datetime.now() - timedelta(days=settings.LOW_ATTENDANCE_RENOTIFY_DAYS)
 
         # Active schedules with enrollments
         schedules = db.query(Schedule).filter(Schedule.is_active).all()
@@ -681,7 +681,7 @@ async def run_notification_cleanup() -> None:
 
     db = SessionLocal()
     try:
-        cutoff = datetime.now(UTC) - timedelta(days=settings.NOTIFICATION_RETENTION_DAYS)
+        cutoff = datetime.now() - timedelta(days=settings.NOTIFICATION_RETENTION_DAYS)
 
         count = (
             db.query(Notification)

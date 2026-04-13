@@ -10,6 +10,7 @@ services:
     image: postgres:16-alpine
     container_name: iams-postgres
     environment:
+      TZ: Asia/Manila
       POSTGRES_DB: iams
       POSTGRES_USER: iams
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-iams_prod_password}
@@ -39,6 +40,7 @@ services:
     env_file:
       - ../backend/.env.production
     environment:
+      - TZ=Asia/Manila
       - SERVICE_ROLE=api-gateway
       - DATABASE_URL=postgresql://iams:${POSTGRES_PASSWORD:-iams_prod_password}@postgres:5432/iams
       - EDGE_API_KEY=iams-edge-key-2026-prod

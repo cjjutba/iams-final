@@ -7,7 +7,7 @@ Used to identify at-risk students before problems escalate.
 
 import enum
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import Column, Date, DateTime, Float, ForeignKey, String
 from sqlalchemy import Enum as SQLEnum
@@ -63,7 +63,7 @@ class AttendancePrediction(Base):
     actual_rate = Column(Float, nullable=True)  # 0-100, filled after week ends
 
     # Timestamps
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(), nullable=False)
 
     # Relationships
     student = relationship("User", foreign_keys=[student_id])

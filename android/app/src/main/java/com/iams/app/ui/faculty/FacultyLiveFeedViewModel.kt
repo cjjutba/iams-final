@@ -63,6 +63,7 @@ class FacultyLiveFeedViewModel @Inject constructor(
     )
     val tracks: StateFlow<List<TrackInfo>> = wsClient.tracks
     val wsConnected: StateFlow<Boolean> = wsClient.isConnected
+    val frameDimensions: StateFlow<Pair<Int, Int>> = wsClient.frameDimensions
 
     private var initialized = false
 
@@ -192,7 +193,7 @@ class FacultyLiveFeedViewModel @Inject constructor(
         val absent = summary.absent?.map { toStudentStatus(it.userId, it.name, "absent") } ?: emptyList()
         val late = summary.late?.map { toStudentStatus(it.userId, it.name, "late") } ?: emptyList()
         val earlyLeave = summary.earlyLeave?.map { toStudentStatus(it.userId, it.name, "early_leave") } ?: emptyList()
-        val earlyLeaveReturned = summary.earlyLeaveReturned?.map { toStudentStatus(it.userId, it.name, "early_leave") } ?: emptyList()
+        val earlyLeaveReturned = summary.earlyLeaveReturned?.map { toStudentStatus(it.userId, it.name, "returned") } ?: emptyList()
 
         _uiState.value = _uiState.value.copy(
             presentStudents = present,
@@ -221,7 +222,7 @@ class FacultyLiveFeedViewModel @Inject constructor(
     fun startSession() {
         if (currentScheduleId.isEmpty()) return
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(sessionLoading = true)
+            _uiState.value = _uiState.value.copy(sessionLoading = true, error = null)
             try {
                 val response = apiService.startSession(SessionStartRequest(currentScheduleId))
                 if (response.isSuccessful) {
@@ -230,10 +231,17 @@ class FacultyLiveFeedViewModel @Inject constructor(
                         sessionLoading = false
                     )
                 } else {
-                    _uiState.value = _uiState.value.copy(sessionLoading = false)
+                    val msg = response.errorBody()?.string() ?: "Failed to start session"
+                    _uiState.value = _uiState.value.copy(
+                        sessionLoading = false,
+                        error = msg
+                    )
                 }
-            } catch (_: Exception) {
-                _uiState.value = _uiState.value.copy(sessionLoading = false)
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    sessionLoading = false,
+                    error = "Network error — could not start session"
+                )
             }
         }
     }
@@ -241,7 +249,7 @@ class FacultyLiveFeedViewModel @Inject constructor(
     fun endSession() {
         if (currentScheduleId.isEmpty()) return
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(sessionLoading = true)
+            _uiState.value = _uiState.value.copy(sessionLoading = true, error = null)
             try {
                 val response = apiService.endSession(currentScheduleId)
                 if (response.isSuccessful) {
@@ -250,10 +258,17 @@ class FacultyLiveFeedViewModel @Inject constructor(
                         sessionLoading = false
                     )
                 } else {
-                    _uiState.value = _uiState.value.copy(sessionLoading = false)
+                    val msg = response.errorBody()?.string() ?: "Failed to end session"
+                    _uiState.value = _uiState.value.copy(
+                        sessionLoading = false,
+                        error = msg
+                    )
                 }
-            } catch (_: Exception) {
-                _uiState.value = _uiState.value.copy(sessionLoading = false)
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    sessionLoading = false,
+                    error = "Network error — could not end session"
+                )
             }
         }
     }

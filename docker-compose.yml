@@ -15,6 +15,7 @@ services:
     image: postgres:16-alpine
     container_name: iams-postgres
     environment:
+      TZ: Asia/Manila
       POSTGRES_DB: iams
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: "123"
@@ -50,7 +51,7 @@ services:
   # ── Media ───────────────────────────────────────────────────────────────────
 
   mediamtx:
-    image: bluenviron/mediamtx:latest
+    image: bluenviron/mediamtx:1.11.3
     container_name: iams-mediamtx
     volumes:
       - ./deploy/mediamtx.dev.yml:/mediamtx.yml:ro
@@ -94,6 +95,7 @@ services:
     env_file:
       - ./backend/.env
     environment:
+      - TZ=Asia/Manila
       - SERVICE_ROLE=api-gateway
       - DATABASE_URL=postgresql://admin:123@postgres:5432/iams
       - REDIS_URL=redis://:iams-redis-dev@redis:6379/0
@@ -107,13 +109,19 @@ services:
       - ./docs/data:/docs/data:ro
       - faiss_data:/app/data/faiss
       - face_uploads:/app/data/uploads/faces
-      - insightface_models:/root/.insightface/models
+      - insightface_models:/home/appuser/.insightface/models
     ports:
       - "8000:8000"
     command: >
       uvicorn app.main:app
       --host 0.0.0.0 --port 8000
       --reload --reload-dir /app/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     depends_on:
       postgres:
         condition: service_healthy

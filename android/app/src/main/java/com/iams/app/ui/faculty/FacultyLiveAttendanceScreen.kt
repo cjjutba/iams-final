@@ -541,16 +541,19 @@ private fun StudentAttendanceCard(
         "present" -> PresentBg
         "late" -> LateBg
         "absent" -> AbsentBg
+        "returned" -> PresentBg
         else -> EarlyLeaveBg
     }
     val statusFgColor = when (student.status) {
         "present" -> PresentFg
         "late" -> LateFg
         "absent" -> AbsentFg
+        "returned" -> PresentFg
         else -> EarlyLeaveFg
     }
     val statusText = when (student.status) {
         "early_leave" -> "Left"
+        "returned" -> "Returned"
         else -> student.status.replaceFirstChar { it.uppercaseChar() }
     }
 

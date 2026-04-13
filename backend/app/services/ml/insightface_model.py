@@ -165,6 +165,44 @@ class InsightFaceModel:
         # Take the largest (most prominent) face.
         return faces[0].normed_embedding.copy()
 
+    def get_embedding_from_crop(self, face_crop_bgr: np.ndarray) -> np.ndarray:
+        """
+        Embed a pre-cropped face directly via ArcFace, skipping SCRFD detection.
+
+        Resizes the crop to 112x112 (ArcFace input size) and runs the recognition
+        model directly. Used for CCTV simulation where we already have a face crop
+        and re-running SCRFD on a degraded tiny image would fail.
+
+        Args:
+            face_crop_bgr: BGR numpy array of a face crop (any size).
+
+        Returns:
+            512-dim L2-normalized ArcFace embedding.
+
+        Raises:
+            RuntimeError: Model not loaded.
+        """
+        if self.app is None:
+            raise RuntimeError("Model not loaded. Call load_model() first.")
+
+        rec_model = self.app.models.get("recognition")
+        if rec_model is None:
+            raise RuntimeError("Recognition model not found in FaceAnalysis")
+
+        # Resize to ArcFace input size (112x112)
+        input_size = rec_model.input_size  # typically (112, 112)
+        aligned = cv2.resize(face_crop_bgr, input_size, interpolation=cv2.INTER_LINEAR)
+
+        # Get embedding directly from recognition model
+        embedding = rec_model.get_feat(aligned).flatten()
+
+        # L2 normalize
+        norm = np.linalg.norm(embedding)
+        if norm > 1e-6:
+            embedding = embedding / norm
+
+        return embedding
+
     def get_embeddings_batch(self, images: list) -> np.ndarray:
         """
         List of images -> [N, 512] L2-normalized embeddings.

@@ -3,6 +3,7 @@ package com.iams.app.ui.auth
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -29,12 +30,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.iams.app.ui.components.AuthLayout
 import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.LocalToastState
+import com.iams.app.ui.components.ToastState
 import com.iams.app.ui.components.ToastType
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.Border
@@ -44,11 +47,11 @@ import com.iams.app.ui.theme.TextSecondary
 import com.iams.app.ui.theme.TextTertiary
 
 /**
- * Step 4 (Review): Shows collected data and creates the account.
+ * Step 4 (Review): Shows collected data, creates the account, and uploads face images.
  *
- * This is where register() is called. After successful registration,
- * the user is redirected to the login screen. Face images are saved
- * locally as "pending" and uploaded after the user logs in.
+ * Flow: register() → save tokens → uploadFaceImages() → navigate to login.
+ * If face upload fails, shows a retry button. Face images are uploaded
+ * immediately using the tokens returned by the registration endpoint.
  */
 @Composable
 fun RegisterReviewScreen(
@@ -75,22 +78,23 @@ fun RegisterReviewScreen(
         }
     }
 
-    // After registration succeeds → save pending face images → navigate to login
-    LaunchedEffect(uiState.registrationComplete) {
-        if (uiState.registrationComplete) {
-            // Save face images for later upload (after login, when we have a valid token)
+    // After account creation → upload faces immediately using registration tokens
+    LaunchedEffect(uiState.accountCreated) {
+        if (uiState.accountCreated) {
             if (hasFaces) {
-                viewModel.savePendingFaceImages()
+                // Upload face images right away — tokens are already saved
+                viewModel.uploadFaceImages()
+            } else {
+                // No faces captured — skip upload, go to login
+                navigateToLogin(viewModel, navController, toastState)
             }
+        }
+    }
 
-            toastState.showToast("Account created! You can now sign in.", ToastType.SUCCESS)
-            RegistrationDataHolder.clear()
-            viewModel.resetRegistration()
-
-            navController.navigate(Routes.STUDENT_LOGIN) {
-                // Pop the entire registration flow from back stack
-                popUpTo(0) { inclusive = false }
-            }
+    // After face upload succeeds → navigate to login
+    LaunchedEffect(uiState.uploadSuccess) {
+        if (uiState.uploadSuccess && uiState.accountCreated) {
+            navigateToLogin(viewModel, navController, toastState)
         }
     }
 
@@ -203,23 +207,95 @@ fun RegisterReviewScreen(
 
         Spacer(modifier = Modifier.height(32.dp))
 
-        // ── Create Account Button ────────────────────────
-        IAMSButton(
-            text = "Create Account",
-            onClick = {
-                viewModel.register(
-                    email = email,
-                    password = regData.password,
-                    studentId = studentId,
-                    firstName = firstName,
-                    lastName = lastName,
-                    birthdate = regData.birthdate
+        if (uiState.isUploading) {
+            // ── Face Upload Progress ─────────────────────────
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(50)),
+                    color = Primary,
+                    trackColor = Border,
                 )
-            },
-            enabled = !uiState.isLoading && isAgreed,
-            isLoading = uiState.isLoading,
-            loadingText = "Creating Account..."
-        )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Uploading face data...",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+            }
+        } else if (uiState.uploadError != null && uiState.accountCreated) {
+            // ── Face Upload Failed — Retry ───────────────────
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Face upload failed. Your account was created, but face registration needs to be completed.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                IAMSButton(
+                    text = "Retry Face Upload",
+                    onClick = {
+                        viewModel.clearUploadError()
+                        viewModel.uploadFaceImages()
+                    },
+                    enabled = true,
+                    isLoading = false
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                IAMSButton(
+                    text = "Skip for Now",
+                    onClick = {
+                        // Save faces locally as fallback, then navigate
+                        viewModel.savePendingFaceImages()
+                        navigateToLogin(viewModel, navController, toastState,
+                            message = "Account created! Please register your face from your profile.")
+                    },
+                    enabled = true,
+                    isLoading = false
+                )
+            }
+        } else {
+            // ── Create Account Button ────────────────────────
+            IAMSButton(
+                text = "Create Account",
+                onClick = {
+                    viewModel.register(
+                        email = email,
+                        password = regData.password,
+                        studentId = studentId,
+                        firstName = firstName,
+                        lastName = lastName,
+                        birthdate = regData.birthdate
+                    )
+                },
+                enabled = !uiState.isLoading && isAgreed && !uiState.accountCreated,
+                isLoading = uiState.isLoading,
+                loadingText = "Creating Account..."
+            )
+        }
+    }
+}
+
+private fun navigateToLogin(
+    viewModel: RegistrationViewModel,
+    navController: NavController,
+    toastState: ToastState,
+    message: String = "Account created! You can now sign in."
+) {
+    toastState.showToast(message, ToastType.SUCCESS)
+    RegistrationDataHolder.clear()
+    viewModel.resetRegistration()
+    navController.navigate(Routes.STUDENT_LOGIN) {
+        popUpTo(Routes.WELCOME) { inclusive = false }
     }
 }
 

@@ -59,6 +59,21 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.app.Activity
+import android.content.pm.ActivityInfo
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.IntSize
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.iams.app.data.model.StudentAttendanceStatus
@@ -66,10 +81,9 @@ import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.SkeletonBox
-import com.iams.app.ui.components.HybridFaceOverlay
+import com.iams.app.ui.components.InterpolatedTrackOverlay
 import com.iams.app.ui.components.NativeWebRtcVideoPlayer
 import com.iams.app.ui.components.IAMSHeader
-import com.iams.app.webrtc.MlKitFrameSink
 import com.iams.app.ui.theme.AbsentBg
 import com.iams.app.ui.theme.AbsentFg
 import com.iams.app.ui.theme.Background
@@ -107,6 +121,74 @@ fun FacultyLiveFeedScreen(
     var activeTab by remember { mutableStateOf(PanelTab.DETECTED) }
     var showEarlyLeaveDialog by remember { mutableStateOf(false) }
 
+    // -- Fullscreen + zoom state --
+    var isFullscreen by remember { mutableStateOf(false) }
+    var zoomScale by remember { mutableStateOf(1f) }
+    var zoomOffset by remember { mutableStateOf(Offset.Zero) }
+    var videoBoxSize by remember { mutableStateOf(IntSize.Zero) }
+
+    val context = LocalContext.current
+    val activity = context as? Activity
+
+    // Pinch-to-zoom gesture handler (active in fullscreen only)
+    val transformableState = rememberTransformableState { zoomChange, panChange, _ ->
+        zoomScale = (zoomScale * zoomChange).coerceIn(1f, 3f)
+        val maxX = (zoomScale - 1) * videoBoxSize.width / 2f
+        val maxY = (zoomScale - 1) * videoBoxSize.height / 2f
+        zoomOffset = Offset(
+            x = (zoomOffset.x + panChange.x).coerceIn(-maxX, maxX),
+            y = (zoomOffset.y + panChange.y).coerceIn(-maxY, maxY)
+        )
+        if (zoomScale <= 1.01f) zoomOffset = Offset.Zero
+    }
+
+    // Back button exits fullscreen instead of navigating away
+    BackHandler(enabled = isFullscreen) {
+        isFullscreen = false
+        zoomScale = 1f
+        zoomOffset = Offset.Zero
+    }
+
+    // Orientation + immersive mode control
+    LaunchedEffect(isFullscreen) {
+        if (isFullscreen) {
+            // Start landscape, but allow user to rotate freely
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            activity?.window?.let { window ->
+                WindowCompat.setDecorFitsSystemWindows(window, false)
+                WindowInsetsControllerCompat(window, window.decorView).let { controller ->
+                    controller.hide(WindowInsetsCompat.Type.systemBars())
+                    controller.systemBarsBehavior =
+                        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                }
+            }
+            // After a brief moment, unlock to full sensor so portrait is also allowed
+            kotlinx.coroutines.delay(300)
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+        } else {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            activity?.window?.let { window ->
+                WindowCompat.setDecorFitsSystemWindows(window, true)
+                WindowInsetsControllerCompat(window, window.decorView)
+                    .show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+        zoomScale = 1f
+        zoomOffset = Offset.Zero
+    }
+
+    // Restore orientation if screen is disposed while in fullscreen
+    DisposableEffect(Unit) {
+        onDispose {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            activity?.window?.let { window ->
+                WindowCompat.setDecorFitsSystemWindows(window, true)
+                WindowInsetsControllerCompat(window, window.decorView)
+                    .show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+    }
+
     // Early leave timeout config dialog
     if (showEarlyLeaveDialog) {
         EarlyLeaveTimeoutDialog(
@@ -124,19 +206,30 @@ fun FacultyLiveFeedScreen(
         viewModel.initialize(scheduleId, roomId)
     }
 
+    // Frame dimensions from backend WebSocket (replaces ML Kit frameSize)
+    val frameDimensions by viewModel.frameDimensions.collectAsState()
+
+    val videoAspect = if (frameDimensions.first > 0 && frameDimensions.second > 0) {
+        frameDimensions.first.toFloat() / frameDimensions.second.toFloat()
+    } else {
+        16f / 9f
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Background)
+            .background(if (isFullscreen) Color.Black else Background)
     ) {
-        // Header
-        IAMSHeader(
-            title = uiState.schedule?.subjectName ?: "Live Feed",
-            onBack = { navController.popBackStack() }
-        )
+        // Header — hidden in fullscreen
+        if (!isFullscreen) {
+            IAMSHeader(
+                title = uiState.schedule?.subjectName ?: "Live Feed",
+                onBack = { navController.popBackStack() }
+            )
+        }
 
         // Error state
-        if (uiState.error != null) {
+        if (!isFullscreen && uiState.error != null) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -165,7 +258,7 @@ fun FacultyLiveFeedScreen(
         }
 
         // Loading state — skeleton matching the final layout
-        if (uiState.isLoading) {
+        if (!isFullscreen && uiState.isLoading) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -255,70 +348,102 @@ fun FacultyLiveFeedScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Primary)
+                .background(if (isFullscreen) Color.Black else Primary)
         ) {
-            // Connection status bar
-            ConnectionStatusBar(
-                isConnected = wsConnected,
-                isWaitingForCamera = uiState.videoUrl.isEmpty(),
-                detectedCount = tracks.count { it.status == "recognized" || it.status == "unknown" }
-            )
+            // Connection status bar and session controls — hidden in fullscreen
+            if (!isFullscreen) {
+                ConnectionStatusBar(
+                    isConnected = wsConnected,
+                    isWaitingForCamera = uiState.videoUrl.isEmpty(),
+                    detectedCount = tracks.count { it.status == "recognized" || it.status == "unknown" }
+                )
 
-            // Session control bar
-            SessionControlBar(
-                sessionActive = uiState.sessionActive,
-                onStartSession = { viewModel.startSession() },
-                onEndSession = { viewModel.endSession() },
-                onSettingsClick = { showEarlyLeaveDialog = true },
-                sessionLoading = uiState.sessionLoading
-            )
-
-            // ML Kit frame sink — hoisted so frameSize drives the Box aspect ratio
-            val mlKitSink = remember { MlKitFrameSink() }
-            val mlKitFaces by mlKitSink.faces.collectAsState()
-            val frameSize by mlKitSink.frameSize.collectAsState()
-
-            DisposableEffect(Unit) {
-                onDispose { mlKitSink.close() }
+                SessionControlBar(
+                    sessionActive = uiState.sessionActive,
+                    onStartSession = { viewModel.startSession() },
+                    onEndSession = { viewModel.endSession() },
+                    onSettingsClick = { showEarlyLeaveDialog = true },
+                    sessionLoading = uiState.sessionLoading
+                )
             }
 
-            // Dynamic aspect ratio from actual video frame; default 16:9 until first frame arrives
-            val videoAspect = if (frameSize.first > 0 && frameSize.second > 0) {
-                frameSize.first.toFloat() / frameSize.second.toFloat()
-            } else {
-                16f / 9f
-            }
-
-            // Video feed area — matches camera's native aspect ratio
+            // Video feed area
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(videoAspect)
+                    .then(
+                        if (isFullscreen) Modifier.weight(1f)
+                        else Modifier.aspectRatio(videoAspect)
+                    )
                     .background(Color.Black)
             ) {
-                if (uiState.videoUrl.isNotEmpty()) {
-                    NativeWebRtcVideoPlayer(
-                        whepUrl = uiState.videoUrl,
-                        modifier = Modifier.fillMaxSize(),
-                        onError = { error -> viewModel.onVideoError(error) },
-                        additionalSink = mlKitSink
-                    )
+                // Zoomable container — zoom + pan active in fullscreen only
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .onSizeChanged { videoBoxSize = it }
+                        .then(
+                            if (isFullscreen) Modifier
+                                .transformable(transformableState)
+                                .graphicsLayer {
+                                    scaleX = zoomScale
+                                    scaleY = zoomScale
+                                    translationX = zoomOffset.x
+                                    translationY = zoomOffset.y
+                                }
+                            else Modifier
+                        )
+                ) {
+                    if (uiState.videoUrl.isNotEmpty()) {
+                        NativeWebRtcVideoPlayer(
+                            whepUrl = uiState.videoUrl,
+                            modifier = Modifier.fillMaxSize(),
+                            onError = { error -> viewModel.onVideoError(error) },
+                        )
 
-                    // Hybrid overlay: accounts for SCALE_ASPECT_FIT letterboxing
-                    HybridFaceOverlay(
-                        mlKitFaces = mlKitFaces,
-                        backendTracks = tracks,
-                        modifier = Modifier.fillMaxSize(),
-                        videoFrameWidth = frameSize.first,
-                        videoFrameHeight = frameSize.second
-                    )
+                        InterpolatedTrackOverlay(
+                            tracks = tracks,
+                            modifier = Modifier.fillMaxSize(),
+                            videoFrameWidth = frameDimensions.first.takeIf { it > 0 } ?: 896,
+                            videoFrameHeight = frameDimensions.second.takeIf { it > 0 } ?: 512
+                        )
 
-                    // Show video error overlay if playback failed
-                    if (uiState.videoError != null) {
+                        if (uiState.videoError != null) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.7f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(
+                                        Icons.Outlined.VideocamOff,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(48.dp),
+                                        tint = AbsentFg
+                                    )
+                                    Spacer(modifier = Modifier.height(spacing.md))
+                                    Text(
+                                        text = "Camera feed error",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color.White,
+                                        textAlign = TextAlign.Center
+                                    )
+                                    Spacer(modifier = Modifier.height(spacing.xs))
+                                    Text(
+                                        text = uiState.videoError!!,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color.White.copy(alpha = 0.7f),
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.padding(horizontal = spacing.xxl)
+                                    )
+                                }
+                            }
+                        }
+                    } else {
                         Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.7f)),
+                            modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -326,62 +451,50 @@ fun FacultyLiveFeedScreen(
                                     Icons.Outlined.VideocamOff,
                                     contentDescription = null,
                                     modifier = Modifier.size(48.dp),
-                                    tint = AbsentFg
+                                    tint = TextDisabled
                                 )
                                 Spacer(modifier = Modifier.height(spacing.md))
                                 Text(
-                                    text = "Camera feed error",
+                                    text = "Waiting for camera",
                                     style = MaterialTheme.typography.bodyLarge,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = Color.White,
+                                    color = TextTertiary,
                                     textAlign = TextAlign.Center
                                 )
-                                Spacer(modifier = Modifier.height(spacing.xs))
+                                Spacer(modifier = Modifier.height(spacing.sm))
                                 Text(
-                                    text = uiState.videoError!!,
+                                    text = "The edge device is not streaming yet.\nThe feed will appear automatically once connected.",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = Color.White.copy(alpha = 0.7f),
+                                    color = TextDisabled,
                                     textAlign = TextAlign.Center,
                                     modifier = Modifier.padding(horizontal = spacing.xxl)
                                 )
                             }
                         }
                     }
-                } else {
-                    // No video URL -- waiting for camera
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                Icons.Outlined.VideocamOff,
-                                contentDescription = null,
-                                modifier = Modifier.size(48.dp),
-                                tint = TextDisabled
-                            )
-                            Spacer(modifier = Modifier.height(spacing.md))
-                            Text(
-                                text = "Waiting for camera",
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.SemiBold,
-                                color = TextTertiary,
-                                textAlign = TextAlign.Center
-                            )
-                            Spacer(modifier = Modifier.height(spacing.sm))
-                            Text(
-                                text = "The edge device is not streaming yet.\nThe feed will appear automatically once connected.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = TextDisabled,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(horizontal = spacing.xxl)
-                            )
-                        }
-                    }
+                }
+
+                // Fullscreen toggle button
+                IconButton(
+                    onClick = { isFullscreen = !isFullscreen },
+                    modifier = Modifier
+                        .align(if (isFullscreen) Alignment.TopEnd else Alignment.BottomEnd)
+                        .padding(8.dp)
+                        .size(36.dp)
+                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                ) {
+                    Icon(
+                        if (isFullscreen) Icons.Default.FullscreenExit
+                        else Icons.Default.Fullscreen,
+                        contentDescription = "Toggle fullscreen",
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
             }
 
             // Bottom panel — fills remaining space below video
+            if (!isFullscreen) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -608,6 +721,7 @@ fun FacultyLiveFeedScreen(
 
                 Spacer(modifier = Modifier.height(spacing.sm))
             }
+            } // end if (!isFullscreen)
         }
     }
 }

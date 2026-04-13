@@ -77,13 +77,13 @@ class PendingFaceUploadManager @Inject constructor(
             } else {
                 val errorBody = response.errorBody()?.string() ?: "unknown error"
                 Log.w(TAG, "Pending face upload failed: ${response.code()} - $errorBody")
-                cleanup()
+                // Don't cleanup on failure — keep files for retry
                 _uploadState.value = PendingUploadState.Failed("Upload failed: ${response.code()}")
                 false
             }
         } catch (e: Exception) {
             Log.w(TAG, "Pending face upload error: ${e.message}")
-            cleanup()
+            // Don't cleanup on failure — keep files for retry
             _uploadState.value = PendingUploadState.Failed(e.message ?: "Upload failed")
             false
         }

@@ -562,7 +562,7 @@ async def lifespan(app: FastAPI):
                 # Check day and time
                 current_day = now.weekday()
                 current_time = now.time()
-                if current_day not in (schedule.days_of_week or []):
+                if current_day != schedule.day_of_week:
                     return None
                 if not (schedule.start_time <= current_time <= schedule.end_time):
                     return None

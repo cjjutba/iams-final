@@ -43,44 +43,31 @@ mediamtx on VPS (RTSP ingest + WebRTC)
 2. **Face detection** — ML Kit on phone (real-time, 30fps, no network needed)
 3. **Attendance** — Backend grabs frames at 10fps → SCRFD+ArcFace+ByteTrack → DB → WebSocket
 
-## Development Workflow — VPS-First
+## Development Workflow — Local Docker Desktop
 
-All development targets the DigitalOcean VPS at `167.71.217.44`. Local Docker Desktop is NOT used.
+All development runs locally via Docker Desktop. The VPS at `167.71.217.44` is production only — do NOT deploy there during development.
 
-### Deploy Backend Changes
+### Start Local Stack
 ```bash
-bash deploy/deploy.sh
-```
-This rsyncs code, rebuilds the Docker image, and restarts the api-gateway on the VPS.
-Backend auto-restarts on code sync (uvicorn watchfiles).
-
-### View VPS Logs
-```bash
-# Live logs
-ssh root@167.71.217.44 "docker logs -f iams-api-gateway"
-
-# Recent logs (last 5 minutes)
-ssh root@167.71.217.44 "docker logs --since 5m iams-api-gateway"
-
-# Web UI (Dozzle)
-# http://167.71.217.44:9999
+docker compose up -d           # Start all services (api-gateway, postgres, redis, mediamtx)
+docker compose up -d --build   # Rebuild after code changes
 ```
 
-### Run Commands on VPS
+### View Local Logs
 ```bash
-# Run a Python command inside the backend container
-ssh root@167.71.217.44 "docker exec iams-api-gateway python -c 'print(1)'"
+docker compose logs -f api-gateway    # Live backend logs
+docker compose logs --since 5m api-gateway  # Recent logs
+```
 
-# Run tests
-ssh root@167.71.217.44 "docker exec iams-api-gateway python -m pytest tests/ -q"
-
-# Django-style shell
-ssh root@167.71.217.44 "docker exec -it iams-api-gateway python"
+### Run Commands Locally
+```bash
+docker compose exec api-gateway python -c 'print(1)'
+docker compose exec -it api-gateway python   # Interactive shell
 ```
 
 ### Database Reset & Seed
 ```bash
-ssh root@167.71.217.44 "docker exec iams-api-gateway python -m scripts.seed_data"
+docker compose exec api-gateway python -m scripts.seed_data
 ```
 
 When asked to "seed the data" or "reset the database", run the command above.
@@ -91,14 +78,20 @@ admin (`admin@admin.com` / `123`), rooms, schedules, and system settings.
 
 ### Database Queries (Direct SQL)
 ```bash
-ssh root@167.71.217.44 "docker exec iams-postgres psql -U iams -d iams -c 'SELECT count(*) FROM users;'"
+docker compose exec postgres psql -U iams -d iams -c 'SELECT count(*) FROM users;'
 ```
 
 ### Testing
 ```bash
-ssh root@167.71.217.44 "docker exec iams-api-gateway python -m pytest tests/ -q"
-ssh root@167.71.217.44 "docker exec iams-api-gateway python -m pytest tests/ -q -k 'faiss or tracker'"
+docker compose exec api-gateway python -m pytest tests/ -q
+docker compose exec api-gateway python -m pytest tests/ -q -k 'faiss or tracker'
 ```
+
+### Deploy to Production (VPS)
+```bash
+bash deploy/deploy.sh
+```
+Only deploy when local testing is complete and you're ready for production.
 
 ### Edge Device (Raspberry Pi)
 ```bash
@@ -307,8 +300,8 @@ bash deploy/deploy.sh
 ```
 
 ### What triggers a deploy
-Any change to files under `backend/` should prompt: "Do you want to deploy this to the VPS?"
-Always deploy after making backend changes — there is no local environment.
+Do NOT auto-deploy to VPS during development. All backend changes are tested locally via Docker Desktop.
+Only deploy to VPS when the user explicitly says they're ready for production.
 
 ## Plan Mode: Lesson Capture
 

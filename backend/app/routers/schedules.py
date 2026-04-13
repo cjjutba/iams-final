@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.config import logger
 from app.database import get_db
+from app.models.enrollment import Enrollment
 from app.models.schedule import Schedule
 from app.models.user import User, UserRole
 from app.repositories.schedule_repository import ScheduleRepository
@@ -281,3 +282,101 @@ def update_schedule_config(
     )
 
     return ScheduleResponse.model_validate(updated)
+
+
+# ===================================================================
+# Manual Enrollment
+# ===================================================================
+
+
+@router.post("/{schedule_id}/enroll/{student_user_id}", status_code=status.HTTP_201_CREATED)
+def enroll_student(
+    schedule_id: str,
+    student_user_id: str,
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
+    db: Session = Depends(get_db),
+):
+    """
+    **Enroll Student** (Admin Only)
+
+    Manually enroll a student in a schedule.
+    """
+    schedule = db.query(Schedule).filter(Schedule.id == schedule_id).first()
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    student = db.query(User).filter(User.id == student_user_id, User.role == UserRole.STUDENT).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    existing = (
+        db.query(Enrollment)
+        .filter(Enrollment.student_id == student_user_id, Enrollment.schedule_id == schedule_id)
+        .first()
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="Student is already enrolled in this schedule")
+
+    enrollment = Enrollment(student_id=student_user_id, schedule_id=schedule_id)
+    db.add(enrollment)
+    db.commit()
+
+    logger.info(f"Manual enrollment: {student.email} -> {schedule.subject_code} by {current_user.email}")
+    return {"success": True, "message": f"{student.first_name} {student.last_name} enrolled successfully"}
+
+
+@router.delete("/{schedule_id}/enroll/{student_user_id}", status_code=status.HTTP_200_OK)
+def unenroll_student(
+    schedule_id: str,
+    student_user_id: str,
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
+    db: Session = Depends(get_db),
+):
+    """
+    **Unenroll Student** (Admin Only)
+
+    Remove a student's enrollment from a schedule.
+    """
+    enrollment = (
+        db.query(Enrollment)
+        .filter(Enrollment.student_id == student_user_id, Enrollment.schedule_id == schedule_id)
+        .first()
+    )
+    if not enrollment:
+        raise HTTPException(status_code=404, detail="Enrollment not found")
+
+    db.delete(enrollment)
+    db.commit()
+
+    logger.info(f"Manual unenrollment: user {student_user_id} from schedule {schedule_id} by {current_user.email}")
+    return {"success": True, "message": "Student unenrolled successfully"}
+
+
+@router.get("/student/{student_user_id}/enrollments", status_code=status.HTTP_200_OK)
+def get_student_enrollments(
+    student_user_id: str,
+    current_user: User = Depends(require_role(UserRole.ADMIN, UserRole.FACULTY)),
+    db: Session = Depends(get_db),
+):
+    """
+    **Get Student Enrollments** (Admin/Faculty)
+
+    Get all schedules a student is enrolled in.
+    """
+    enrollments = (
+        db.query(Enrollment)
+        .options(joinedload(Enrollment.schedule).joinedload(Schedule.faculty))
+        .options(joinedload(Enrollment.schedule).joinedload(Schedule.room))
+        .filter(Enrollment.student_id == student_user_id)
+        .all()
+    )
+
+    return [
+        {
+            "enrollment_id": str(e.id),
+            "schedule_id": str(e.schedule_id),
+            "enrolled_at": e.enrolled_at.isoformat() if e.enrolled_at else None,
+            "schedule": ScheduleResponse.model_validate(e.schedule).model_dump() if e.schedule else None,
+        }
+        for e in enrollments
+    ]

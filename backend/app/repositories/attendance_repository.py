@@ -8,7 +8,7 @@ import uuid
 from datetime import date
 
 from sqlalchemy import and_, case, func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models.attendance_record import AttendanceRecord, AttendanceStatus
 from app.models.early_leave_event import EarlyLeaveEvent
@@ -28,7 +28,12 @@ class AttendanceRepository:
 
     def get_by_id(self, attendance_id: str) -> AttendanceRecord | None:
         """Get attendance record by ID"""
-        return self.db.query(AttendanceRecord).filter(AttendanceRecord.id == uuid.UUID(attendance_id)).first()
+        return (
+            self.db.query(AttendanceRecord)
+            .options(joinedload(AttendanceRecord.student), joinedload(AttendanceRecord.schedule))
+            .filter(AttendanceRecord.id == uuid.UUID(attendance_id))
+            .first()
+        )
 
     def get_by_student_date(self, student_id: str, schedule_id: str, attendance_date: date) -> AttendanceRecord | None:
         """Get attendance record for a student on a specific date"""
@@ -58,6 +63,7 @@ class AttendanceRepository:
         """
         return (
             self.db.query(AttendanceRecord)
+            .options(joinedload(AttendanceRecord.student), joinedload(AttendanceRecord.schedule))
             .filter(
                 and_(
                     AttendanceRecord.schedule_id == uuid.UUID(schedule_id),
@@ -73,6 +79,7 @@ class AttendanceRepository:
         """Get all attendance records for a schedule on a specific date"""
         return (
             self.db.query(AttendanceRecord)
+            .options(joinedload(AttendanceRecord.student), joinedload(AttendanceRecord.schedule))
             .filter(
                 and_(AttendanceRecord.schedule_id == uuid.UUID(schedule_id), AttendanceRecord.date == attendance_date)
             )
@@ -93,7 +100,11 @@ class AttendanceRepository:
         Returns:
             List of attendance records
         """
-        query = self.db.query(AttendanceRecord).filter(AttendanceRecord.student_id == uuid.UUID(student_id))
+        query = (
+            self.db.query(AttendanceRecord)
+            .options(joinedload(AttendanceRecord.student), joinedload(AttendanceRecord.schedule))
+            .filter(AttendanceRecord.student_id == uuid.UUID(student_id))
+        )
 
         if start_date:
             query = query.filter(AttendanceRecord.date >= start_date)

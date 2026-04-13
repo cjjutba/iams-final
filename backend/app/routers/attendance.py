@@ -32,6 +32,16 @@ from app.utils.dependencies import get_current_faculty, get_current_student, get
 router = APIRouter()
 
 
+def _enrich(record) -> AttendanceRecordResponse:
+    """Build AttendanceRecordResponse with student_name and subject_code populated."""
+    resp = AttendanceRecordResponse.model_validate(record)
+    if hasattr(record, "student") and record.student:
+        resp.student_name = f"{record.student.first_name} {record.student.last_name}"
+    if hasattr(record, "schedule") and record.schedule:
+        resp.subject_code = record.schedule.subject_code
+    return resp
+
+
 @router.get("", response_model=list[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
 def list_attendance_records(
     student_id: str | None = Query(None, description="Filter by student UUID"),
@@ -85,17 +95,7 @@ def list_attendance_records(
 
     records = query.order_by(AR.date.desc()).offset(skip).limit(limit).all()
 
-    # Build response with student_name and subject_code
-    results = []
-    for r in records:
-        resp = AttendanceRecordResponse.model_validate(r)
-        if r.student:
-            resp.student_name = f"{r.student.first_name} {r.student.last_name}"
-        if r.schedule:
-            resp.subject_code = r.schedule.subject_code
-        results.append(resp)
-
-    return results
+    return [_enrich(r) for r in records]
 
 
 @router.get(
@@ -225,7 +225,7 @@ def get_today_attendance(
 
     records = attendance_repo.get_by_schedule_date(schedule_id, today)
 
-    return [AttendanceRecordResponse.model_validate(r) for r in records]
+    return [_enrich(r) for r in records]
 
 
 @router.get("/today/{schedule_id}", response_model=list[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
@@ -263,7 +263,7 @@ def get_today_attendance_by_path(
 
     records = attendance_repo.get_by_schedule_date(schedule_id, today)
 
-    return [AttendanceRecordResponse.model_validate(r) for r in records]
+    return [_enrich(r) for r in records]
 
 
 @router.get("/me", response_model=list[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
@@ -289,7 +289,7 @@ def get_my_attendance(
 
     records = attendance_repo.get_student_history(str(current_user.id), start_date, end_date)
 
-    return [AttendanceRecordResponse.model_validate(r) for r in records]
+    return [_enrich(r) for r in records]
 
 
 @router.get("/my-attendance", response_model=list[AttendanceRecordResponse], status_code=status.HTTP_200_OK)
@@ -317,7 +317,7 @@ def get_my_attendance_alias(
 
     records = attendance_repo.get_student_history(str(current_user.id), start_date, end_date)
 
-    return [AttendanceRecordResponse.model_validate(r) for r in records]
+    return [_enrich(r) for r in records]
 
 
 @router.get("/me/summary", response_model=AttendanceSummary, status_code=status.HTTP_200_OK)
@@ -370,7 +370,7 @@ def get_schedule_attendance(
 
     records = attendance_repo.get_by_schedule_date(schedule_id, attendance_date)
 
-    return [AttendanceRecordResponse.model_validate(r) for r in records]
+    return [_enrich(r) for r in records]
 
 
 @router.get("/schedule/{schedule_id}/summary", response_model=dict, status_code=status.HTTP_200_OK)
@@ -978,6 +978,9 @@ def get_early_leave_events(
                 consecutive_misses=event.consecutive_misses,
                 notified=event.notified,
                 date=attendance.date,
+                returned=event.returned,
+                returned_at=event.returned_at,
+                absence_duration_seconds=event.absence_duration_seconds,
             )
         )
 
@@ -1014,7 +1017,7 @@ def get_attendance_record(
 
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    return AttendanceRecordResponse.model_validate(record)
+    return _enrich(record)
 
 
 @router.get("/{attendance_id}/logs", response_model=list[PresenceLogResponse], status_code=status.HTTP_200_OK)
@@ -1096,7 +1099,7 @@ def manual_attendance_entry(
         )
         logger.info(f"Attendance created manually by {current_user.email}: {record.id}")
 
-    return AttendanceRecordResponse.model_validate(record)
+    return _enrich(record)
 
 
 @router.patch("/{attendance_id}", response_model=AttendanceRecordResponse, status_code=status.HTTP_200_OK)
@@ -1133,4 +1136,4 @@ def update_attendance_record(
 
     logger.info(f"Attendance record updated by {current_user.email}: {attendance_id}")
 
-    return AttendanceRecordResponse.model_validate(record)
+    return _enrich(record)

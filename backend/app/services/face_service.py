@@ -7,8 +7,10 @@ Orchestrates InsightFace (ArcFace) model, FAISS search, and database operations.
 
 import contextlib
 import io
+import random
 import time
 
+import cv2
 import numpy as np
 from fastapi import UploadFile
 from PIL import Image
@@ -35,6 +37,66 @@ class FaceService:
         self.face_repo = FaceRepository(db)
         self.facenet = insightface_model
         self.faiss = faiss_manager
+
+    def _generate_cctv_simulated_embeddings(
+        self, face_crops: list[np.ndarray]
+    ) -> list[np.ndarray]:
+        """
+        Apply CCTV-like degradation to each face crop and re-embed with ArcFace.
+
+        Uses get_embedding_from_crop() which resizes the degraded crop to 112x112
+        and runs ArcFace directly — bypassing SCRFD face detection. This is critical
+        because SCRFD cannot re-detect a face in a heavily degraded tiny crop.
+
+        Generates domain-matched embeddings so CCTV camera recognition can match
+        against phone-registered faces. Each crop produces one simulated embedding.
+
+        Args:
+            face_crops: BGR face crops extracted during registration
+
+        Returns:
+            List of L2-normalized 512-dim embeddings in the CCTV image domain.
+        """
+        simulated: list[np.ndarray] = []
+        for crop in face_crops:
+            try:
+                h, w = crop.shape[:2]
+                if h < 20 or w < 20:
+                    continue
+
+                # Downscale to simulate CCTV sub-stream resolution, then upscale back.
+                # This introduces the resolution loss typical of surveillance cameras.
+                scale = 0.40 + random.random() * 0.30  # 40–70%
+                small = cv2.resize(
+                    crop,
+                    (max(1, int(w * scale)), max(1, int(h * scale))),
+                    interpolation=cv2.INTER_AREA,
+                )
+                face_sim = cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
+
+                # JPEG compression artifacts (simulates H.264 block noise)
+                quality = random.randint(35, 65)
+                _, enc = cv2.imencode(".jpg", face_sim, [cv2.IMWRITE_JPEG_QUALITY, quality])
+                face_sim = cv2.imdecode(enc, cv2.IMREAD_COLOR)
+
+                # Slight Gaussian blur (camera focus + motion)
+                k = random.choice([3, 5])
+                face_sim = cv2.GaussianBlur(face_sim, (k, k), 0)
+
+                # Brightness/contrast shift (indoor CCTV lighting variation)
+                alpha = 0.80 + random.random() * 0.40  # 0.80–1.20 contrast
+                beta = random.randint(-20, 20)          # brightness offset
+                face_sim = np.clip(
+                    alpha * face_sim.astype(np.float32) + beta, 0, 255
+                ).astype(np.uint8)
+
+                # Embed directly via ArcFace (skip SCRFD — crop IS the face)
+                emb = self.facenet.get_embedding_from_crop(face_sim)
+                simulated.append(emb.astype(np.float32))
+
+            except Exception as e:
+                logger.debug(f"CCTV simulation skipped for one crop: {e}")
+        return simulated
 
     async def register_face(
         self, user_id: str, images: list[UploadFile]
@@ -156,22 +218,33 @@ class FaceService:
                 raise ValidationError(f"Registration rejected: possible presentation attack. {'; '.join(reasons)}")
             logger.debug(f"Anti-spoof passed for user {user_id} (score={spoof_result.spoof_score:.3f})")
 
-        # Add all embeddings to FAISS (one per angle, all mapped to same user)
-        all_embs = np.stack(normed).astype(np.float32)
+        # Generate CCTV-simulated embeddings for cross-domain tolerance
+        sim_normed = self._generate_cctv_simulated_embeddings(face_crops)
+        if sim_normed:
+            logger.info(f"Generated {len(sim_normed)} CCTV-simulated embeddings for user {user_id}")
+        else:
+            logger.warning(f"No CCTV-simulated embeddings generated for user {user_id} — face crops may be empty")
+
+        # Add phone + simulated embeddings to FAISS (all mapped to same user)
+        all_normed = normed + sim_normed
+        all_embs = np.stack(all_normed).astype(np.float32)
         try:
-            faiss_ids = self.faiss.add_batch(all_embs, [user_id] * len(normed))
+            faiss_ids = self.faiss.add_batch(all_embs, [user_id] * len(all_normed))
         except Exception as e:
             logger.error(f"Failed to add to FAISS: {e}")
             raise FaceRecognitionError("Failed to index face embeddings") from e
 
-        # Compute a representative averaged embedding for backward-compatible
-        # storage in face_registrations.embedding_vector (used as fallback)
-        avg_embedding = np.mean(all_embs, axis=0)
+        # Compute a representative averaged embedding from phone captures only
+        # (backward-compatible storage in face_registrations.embedding_vector)
+        phone_embs = np.stack(normed).astype(np.float32)
+        avg_embedding = np.mean(phone_embs, axis=0)
         avg_embedding = avg_embedding / np.linalg.norm(avg_embedding)
         avg_bytes = avg_embedding.astype(np.float32).tobytes()
 
-        # Angle labels based on step index
+        # Angle labels: phone captures + simulated
         angle_labels = ["center", "left", "right", "up", "down"]
+        sim_labels = [f"sim_{i}" for i in range(len(sim_normed))]
+        all_labels = angle_labels[:len(normed)] + sim_labels
 
         # Transaction: DB insert with FAISS rollback on failure
         try:
@@ -179,9 +252,9 @@ class FaceService:
             # Use _create_no_commit to delay commit until embeddings are also added
             registration = self.face_repo._create_no_commit(user_id, faiss_ids[0], avg_bytes)
 
-            # Create individual FaceEmbedding rows
+            # Create individual FaceEmbedding rows (phone captures + simulated)
             embedding_entries = []
-            for idx, (fid, emb) in enumerate(zip(faiss_ids, normed)):
+            for idx, (fid, emb) in enumerate(zip(faiss_ids, all_normed)):
                 q_score = None
                 if quality_reports and idx < len(quality_reports):
                     q_score = quality_reports[idx].blur_score  # Use blur as overall quality proxy
@@ -189,7 +262,7 @@ class FaceService:
                     {
                         "faiss_id": fid,
                         "embedding_vector": emb.astype(np.float32).tobytes(),
-                        "angle_label": angle_labels[idx] if idx < len(angle_labels) else None,
+                        "angle_label": all_labels[idx] if idx < len(all_labels) else None,
                         "quality_score": q_score,
                     }
                 )
@@ -519,4 +592,13 @@ class FaceService:
             f"FAISS index loaded: {len(embeddings_data)} embeddings, "
             f"user_map populated ({'mismatch fixed' if was_mismatched else 'in sync'})"
         )
+
+        health = faiss_manager.check_health()
+        logger.info("[FAISS-HEALTH] %s", health)
+        if not health["healthy"]:
+            logger.warning(
+                "[FAISS-HEALTH] Index unhealthy! orphaned=%d dangling=%d",
+                health["orphaned_vectors"], health["dangling_mappings"],
+            )
+
         return was_mismatched

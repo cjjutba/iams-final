@@ -92,7 +92,12 @@ class TrackPresenceService:
         self._early_leave_timeout = seconds
 
     def start_session(self) -> None:
-        """Load all enrolled students and create attendance records in batch."""
+        """Load all enrolled students and create attendance records in batch.
+
+        Also auto-enrolls face-registered students who match the schedule's
+        target course/year but aren't enrolled yet, ensuring attendance is
+        tracked for anyone whose face can be recognized.
+        """
         self._schedule = self.schedule_repo.get_by_id(self.schedule_id)
         if not self._schedule:
             raise ValueError(f"Schedule not found: {self.schedule_id}")
@@ -102,6 +107,10 @@ class TrackPresenceService:
             self._early_leave_timeout = self._schedule.early_leave_timeout_minutes * 60.0
 
         self._session_start = datetime.now()
+
+        # Auto-enroll face-registered students who match this schedule
+        self._auto_enroll_matching_students()
+
         students = self.schedule_repo.get_enrolled_students(self.schedule_id)
 
         today = date.today()
@@ -135,11 +144,174 @@ class TrackPresenceService:
                 name=name,
             )
 
-        logger.info(
-            "TrackPresenceService started for schedule %s with %d students",
-            self.schedule_id,
-            len(students),
+        if not students:
+            logger.warning(
+                "TrackPresenceService: NO enrolled students for schedule %s (%s). "
+                "Attendance will not be tracked. Check enrollments. "
+                "target_course=%s, target_year_level=%s",
+                self.schedule_id,
+                self._schedule.subject_code,
+                getattr(self._schedule, "target_course", None),
+                getattr(self._schedule, "target_year_level", None),
+            )
+        else:
+            logger.info(
+                "TrackPresenceService started for schedule %s (%s) with %d enrolled students. "
+                "enrolled_ids=%s, target_course=%s, target_year_level=%s",
+                self.schedule_id,
+                self._schedule.subject_code,
+                len(students),
+                list(self._enrolled_ids),
+                getattr(self._schedule, "target_course", None),
+                getattr(self._schedule, "target_year_level", None),
+            )
+
+    def _jit_enroll_student(self, user_id: str) -> bool:
+        """Just-in-time enroll a recognized student who isn't pre-enrolled.
+
+        Called when the pipeline recognizes a face that isn't in _enrolled_ids.
+        Creates enrollment + attendance record on the spot so the normal
+        check-in flow can proceed. Only fires once per user per session.
+        """
+        try:
+            from app.models.enrollment import Enrollment
+            from app.models.user import User, UserRole
+
+            user = (
+                self.db.query(User)
+                .filter(User.id == user_id, User.role == UserRole.STUDENT, User.is_active == True)
+                .first()
+            )
+            if not user:
+                logger.warning(
+                    "JIT enroll failed: user_id=%s not found or not active student in schedule %s",
+                    user_id,
+                    self.schedule_id,
+                )
+                return False
+
+            # Create enrollment if missing
+            existing_enrollment = (
+                self.db.query(Enrollment)
+                .filter(
+                    Enrollment.student_id == user.id,
+                    Enrollment.schedule_id == self._schedule.id,
+                )
+                .first()
+            )
+            if not existing_enrollment:
+                self.db.add(Enrollment(student_id=user.id, schedule_id=self._schedule.id))
+                self.db.commit()
+
+            # Create attendance record if missing for today
+            today = date.today()
+            sid = str(user.id)
+            existing = self.attendance_repo.get_by_student_date(sid, self.schedule_id, today)
+            if not existing:
+                record = self.attendance_repo.create(
+                    {
+                        "student_id": sid,
+                        "schedule_id": self.schedule_id,
+                        "date": today,
+                        "status": AttendanceStatus.ABSENT,
+                        "total_scans": 0,
+                        "scans_present": 0,
+                        "presence_score": 0.0,
+                    }
+                )
+                attendance_id = str(record.id)
+            else:
+                attendance_id = str(existing.id)
+
+            name = user.first_name
+            self._enrolled_ids.add(sid)
+            self._name_map[sid] = name
+            self._students[sid] = StudentPresenceState(
+                student_id=sid,
+                attendance_id=attendance_id,
+                name=name,
+            )
+
+            logger.info(
+                "JIT enrolled student %s (%s) into schedule %s (%s)",
+                sid,
+                name,
+                self.schedule_id,
+                self._schedule.subject_code,
+            )
+            return True
+
+        except Exception:
+            logger.exception(
+                "JIT enrollment DB error for user_id=%s in schedule %s",
+                user_id,
+                self.schedule_id,
+            )
+            return False
+
+    def _auto_enroll_matching_students(self) -> None:
+        """Auto-enroll face-registered students who match this schedule's target.
+
+        Catches students who registered after the schedule was created, or whose
+        auto-enrollment during registration was skipped/failed.
+        """
+        from app.models.enrollment import Enrollment
+        from app.models.face_registration import FaceRegistration
+        from app.models.student_record import StudentRecord
+        from app.models.user import User, UserRole
+
+        schedule = self._schedule
+        target_course = schedule.target_course
+        target_year = schedule.target_year_level
+
+        if not target_course and not target_year:
+            return
+
+        # Find face-registered students matching the target course/year
+        query = (
+            self.db.query(User)
+            .join(FaceRegistration, FaceRegistration.user_id == User.id)
+            .join(StudentRecord, StudentRecord.student_id == User.student_id)
+            .filter(
+                User.role == UserRole.STUDENT,
+                User.is_active == True,
+                FaceRegistration.is_active == True,
+            )
         )
+        if target_course:
+            query = query.filter(StudentRecord.course == target_course)
+        if target_year:
+            query = query.filter(StudentRecord.year_level == target_year)
+
+        matching_students = query.all()
+
+        # Get already-enrolled student IDs
+        existing_enrollments = (
+            self.db.query(Enrollment.student_id)
+            .filter(Enrollment.schedule_id == schedule.id)
+            .all()
+        )
+        enrolled_user_ids = {row[0] for row in existing_enrollments}
+
+        # Enroll missing students
+        newly_enrolled = 0
+        for student in matching_students:
+            if student.id not in enrolled_user_ids:
+                enrollment = Enrollment(
+                    student_id=student.id,
+                    schedule_id=schedule.id,
+                )
+                self.db.add(enrollment)
+                newly_enrolled += 1
+
+        if newly_enrolled:
+            self.db.commit()
+            logger.info(
+                "Auto-enrolled %d face-registered students into schedule %s (%s)",
+                newly_enrolled,
+                self.schedule_id,
+                schedule.subject_code,
+            )
 
     def process_track_frame(self, track_frame: TrackFrame, now_mono: float) -> list[dict]:
         """Update in-memory presence state from a TrackFrame.
@@ -154,148 +326,171 @@ class TrackPresenceService:
         for track in track_frame.tracks:
             if track.user_id and track.user_id in self._enrolled_ids:
                 present_user_ids.add(track.user_id)
+            elif track.user_id and track.user_id not in self._enrolled_ids:
+                # JIT enroll recognized student who isn't pre-enrolled
+                if self._jit_enroll_student(track.user_id):
+                    present_user_ids.add(track.user_id)
+                else:
+                    logger.warning(
+                        "Recognized face user_id=%s but JIT enrollment failed — attendance NOT tracked (schedule %s)",
+                        track.user_id,
+                        self.schedule_id,
+                    )
 
         for sid, state in self._students.items():
-            is_present = sid in present_user_ids
+            try:
+                is_present = sid in present_user_ids
 
-            if is_present:
-                # Student detected
-                if state.status == AttendanceStatus.ABSENT:
-                    # First detection → check in
-                    now_dt = datetime.now()
-                    grace_time = (
-                        datetime.combine(date.today(), self._schedule.start_time)
-                        + timedelta(minutes=settings.GRACE_PERIOD_MINUTES)
-                    ).time()
-                    new_status = AttendanceStatus.PRESENT if now_dt.time() <= grace_time else AttendanceStatus.LATE
-                    state.status = new_status
-                    state.check_in_time = now_dt
-                    state.last_seen_time = now_mono
-                    state.last_presence_start = now_mono
-                    state.absent_since = None
-
-                    # Write check-in to DB immediately
-                    self.attendance_repo.update(
-                        state.attendance_id,
-                        {
-                            "status": new_status,
-                            "check_in_time": now_dt,
-                        },
-                    )
-
-                    events.append(
-                        {
-                            "event": "check_in",
-                            "student_id": sid,
-                            "student_name": state.name,
-                            "status": new_status.value,
-                            "check_in_time": now_dt.isoformat(),
-                        }
-                    )
-
-                    logger.info("Student %s checked in: %s", sid, new_status.value)
-
-                elif state.early_leave_flagged and not state.early_leave_returned:
-                    # Returned after early leave — restore status but keep flag for logging
-                    state.early_leave_returned = True
-                    state.absent_since = None
-                    state.last_presence_start = now_mono
-
-                    # Restore attendance record to original status (PRESENT/LATE)
-                    restored_status = state.status
-                    self.attendance_repo.update(
-                        state.attendance_id,
-                        {
-                            "status": restored_status,
-                        },
-                    )
-
-                    # Persist return to EarlyLeaveEvent record
-                    early_event = (
-                        self.db.query(EarlyLeaveEvent)
-                        .filter(
-                            EarlyLeaveEvent.attendance_id == state.attendance_id,
-                            EarlyLeaveEvent.returned == False,
-                        )
-                        .order_by(desc(EarlyLeaveEvent.detected_at))
-                        .first()
-                    )
-                    if early_event:
-                        early_event.returned = True
-                        early_event.returned_at = datetime.now()
-                        if state.absent_since is not None:
-                            early_event.absence_duration_seconds = int(now_mono - state.absent_since)
-                        self.db.commit()
-
-                    events.append(
-                        {
-                            "event": "early_leave_return",
-                            "student_id": sid,
-                            "student_name": state.name,
-                            "restored_status": restored_status.value,
-                            "returned_at": datetime.now().isoformat(),
-                        }
-                    )
-                    logger.info("Student %s returned after early leave, restored to %s", sid, restored_status.value)
-
-                else:
-                    # Already present — accumulate time
-                    state.absent_since = None
-                    if state.last_presence_start is None:
+                if is_present:
+                    # Student detected
+                    if state.status == AttendanceStatus.ABSENT:
+                        # First detection → check in
+                        now_dt = datetime.now()
+                        grace_time = (
+                            datetime.combine(date.today(), self._schedule.start_time)
+                            + timedelta(minutes=settings.GRACE_PERIOD_MINUTES)
+                        ).time()
+                        new_status = AttendanceStatus.PRESENT if now_dt.time() <= grace_time else AttendanceStatus.LATE
+                        state.status = new_status
+                        state.check_in_time = now_dt
+                        state.last_seen_time = now_mono
                         state.last_presence_start = now_mono
+                        state.absent_since = None
 
-                state.last_seen_time = now_mono
-
-            else:
-                # Student NOT detected
-                if state.last_presence_start is not None:
-                    # Was present, now absent — accumulate elapsed time
-                    elapsed = now_mono - state.last_presence_start
-                    state.total_present_seconds += elapsed
-                    state.last_presence_start = None
-
-                if state.status != AttendanceStatus.ABSENT and (
-                    not state.early_leave_flagged or state.early_leave_returned
-                ):
-                    # Track absence duration
-                    if state.absent_since is None:
-                        state.absent_since = now_mono
-                    elif (now_mono - state.absent_since) > self._early_leave_timeout:
-                        # Trigger early leave
-                        state.early_leave_flagged = True
-                        state.early_leave_returned = False  # Reset return flag for new absence
-                        absent_seconds = now_mono - state.absent_since
-                        events.append(
-                            {
-                                "event": "early_leave",
-                                "student_id": sid,
-                                "student_name": state.name,
-                                "attendance_id": state.attendance_id,
-                                "absent_seconds": absent_seconds,
-                            }
-                        )
+                        # Write check-in to DB immediately
                         self.attendance_repo.update(
                             state.attendance_id,
-                            {"status": AttendanceStatus.EARLY_LEAVE},
+                            {
+                                "status": new_status,
+                                "check_in_time": now_dt,
+                            },
                         )
 
-                        # Persist EarlyLeaveEvent to DB
-                        consecutive_misses = int(absent_seconds / settings.SCAN_INTERVAL_SECONDS)
-                        early_leave_event = EarlyLeaveEvent(
-                            attendance_id=state.attendance_id,
-                            detected_at=datetime.now(),
-                            last_seen_at=(state.check_in_time if state.check_in_time else datetime.now()),
-                            consecutive_misses=max(1, consecutive_misses),
-                            context_severity="auto_detected",
+                        events.append(
+                            {
+                                "event": "check_in",
+                                "student_id": sid,
+                                "student_name": state.name,
+                                "status": new_status.value,
+                                "check_in_time": now_dt.isoformat(),
+                            }
                         )
-                        self.db.add(early_leave_event)
-                        self.db.commit()
 
-                        logger.warning(
-                            "Early leave: student %s absent for %.0fs",
+                        logger.info(
+                            "Student %s (%s) checked in: %s",
                             sid,
-                            absent_seconds,
+                            state.name,
+                            new_status.value,
                         )
+
+                    elif state.early_leave_flagged and not state.early_leave_returned:
+                        # Returned after early leave — restore status but keep flag for logging
+                        state.early_leave_returned = True
+                        state.absent_since = None
+                        state.last_presence_start = now_mono
+
+                        # Restore attendance record to original status (PRESENT/LATE)
+                        restored_status = state.status
+                        self.attendance_repo.update(
+                            state.attendance_id,
+                            {
+                                "status": restored_status,
+                            },
+                        )
+
+                        # Persist return to EarlyLeaveEvent record
+                        early_event = (
+                            self.db.query(EarlyLeaveEvent)
+                            .filter(
+                                EarlyLeaveEvent.attendance_id == state.attendance_id,
+                                EarlyLeaveEvent.returned == False,
+                            )
+                            .order_by(desc(EarlyLeaveEvent.detected_at))
+                            .first()
+                        )
+                        if early_event:
+                            early_event.returned = True
+                            early_event.returned_at = datetime.now()
+                            if state.absent_since is not None:
+                                early_event.absence_duration_seconds = int(now_mono - state.absent_since)
+                            self.db.commit()
+
+                        events.append(
+                            {
+                                "event": "early_leave_return",
+                                "student_id": sid,
+                                "student_name": state.name,
+                                "restored_status": restored_status.value,
+                                "returned_at": datetime.now().isoformat(),
+                            }
+                        )
+                        logger.info("Student %s returned after early leave, restored to %s", sid, restored_status.value)
+
+                    else:
+                        # Already present — accumulate time
+                        state.absent_since = None
+                        if state.last_presence_start is None:
+                            state.last_presence_start = now_mono
+
+                    state.last_seen_time = now_mono
+
+                else:
+                    # Student NOT detected
+                    if state.last_presence_start is not None:
+                        # Was present, now absent — accumulate elapsed time
+                        elapsed = now_mono - state.last_presence_start
+                        state.total_present_seconds += elapsed
+                        state.last_presence_start = None
+
+                    if state.status != AttendanceStatus.ABSENT and (
+                        not state.early_leave_flagged or state.early_leave_returned
+                    ):
+                        # Track absence duration
+                        if state.absent_since is None:
+                            state.absent_since = now_mono
+                        elif (now_mono - state.absent_since) > self._early_leave_timeout:
+                            # Trigger early leave
+                            state.early_leave_flagged = True
+                            state.early_leave_returned = False  # Reset return flag for new absence
+                            absent_seconds = now_mono - state.absent_since
+                            events.append(
+                                {
+                                    "event": "early_leave",
+                                    "student_id": sid,
+                                    "student_name": state.name,
+                                    "attendance_id": state.attendance_id,
+                                    "absent_seconds": absent_seconds,
+                                }
+                            )
+                            self.attendance_repo.update(
+                                state.attendance_id,
+                                {"status": AttendanceStatus.EARLY_LEAVE},
+                            )
+
+                            # Persist EarlyLeaveEvent to DB
+                            consecutive_misses = int(absent_seconds / settings.SCAN_INTERVAL_SECONDS)
+                            early_leave_event = EarlyLeaveEvent(
+                                attendance_id=state.attendance_id,
+                                detected_at=datetime.now(),
+                                last_seen_at=(state.check_in_time if state.check_in_time else datetime.now()),
+                                consecutive_misses=max(1, consecutive_misses),
+                                context_severity="auto_detected",
+                            )
+                            self.db.add(early_leave_event)
+                            self.db.commit()
+
+                            logger.warning(
+                                "Early leave: student %s absent for %.0fs",
+                                sid,
+                                absent_seconds,
+                            )
+
+            except Exception:
+                logger.exception(
+                    "Error processing presence for student %s in schedule %s",
+                    sid,
+                    self.schedule_id,
+                )
 
         return events
 
@@ -316,27 +511,35 @@ class TrackPresenceService:
             if state.status == AttendanceStatus.ABSENT:
                 continue
 
-            total_seconds = state.total_present_seconds
-            # Add current ongoing presence if still present
-            if state.last_presence_start is not None:
-                import time
+            try:
+                total_seconds = state.total_present_seconds
+                # Add current ongoing presence if still present
+                if state.last_presence_start is not None:
+                    import time
 
-                total_seconds += time.monotonic() - state.last_presence_start
+                    total_seconds += time.monotonic() - state.last_presence_start
 
-            presence_score = min(100.0, (total_seconds / session_duration) * 100.0)
+                presence_score = min(100.0, (total_seconds / session_duration) * 100.0)
 
-            # Map time-based to scan-equivalent for backward compatibility
-            scan_equivalent_total = max(1, int(session_duration / settings.SCAN_INTERVAL_SECONDS))
-            scan_equivalent_present = int(scan_equivalent_total * (presence_score / 100.0))
+                # Map time-based to scan-equivalent for backward compatibility
+                scan_equivalent_total = max(1, int(session_duration / settings.SCAN_INTERVAL_SECONDS))
+                scan_equivalent_present = int(scan_equivalent_total * (presence_score / 100.0))
 
-            self.attendance_repo.update(
-                state.attendance_id,
-                {
-                    "total_scans": scan_equivalent_total,
-                    "scans_present": scan_equivalent_present,
-                    "presence_score": round(presence_score, 2),
-                },
-            )
+                self.attendance_repo.update(
+                    state.attendance_id,
+                    {
+                        "total_scans": scan_equivalent_total,
+                        "scans_present": scan_equivalent_present,
+                        "presence_score": round(presence_score, 2),
+                        "total_present_seconds": round(total_seconds, 2),
+                    },
+                )
+            except Exception:
+                logger.exception(
+                    "Error flushing presence for student %s in schedule %s",
+                    _sid,
+                    self.schedule_id,
+                )
 
         logger.debug(
             "Flushed presence for schedule %s (%d students)",
@@ -371,6 +574,7 @@ class TrackPresenceService:
                     state.attendance_id,
                     {
                         "check_out_time": now_dt,
+                        "total_present_seconds": round(state.total_present_seconds, 2),
                     },
                 )
 

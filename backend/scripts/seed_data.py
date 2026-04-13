@@ -135,7 +135,7 @@ SYSTEM_SETTINGS = [
     ("scan_interval_seconds", "15"),
     ("early_leave_threshold", "3"),
     ("grace_period_minutes", "15"),
-    ("recognition_threshold", "0.30"),
+    ("recognition_threshold", "0.45"),
     ("session_buffer_minutes", "5"),
     ("academic_year", ACADEMIC_YEAR),
     ("semester", SEMESTER),

@@ -113,6 +113,7 @@ data class AttendanceRecordResponse(
     @SerializedName("schedule_id") val scheduleId: String,
     @SerializedName("student_id") val studentId: String?,
     @SerializedName("student_name") val studentName: String?,
+    @SerializedName("subject_code") val subjectCode: String? = null,
     val status: String,
     val date: String,
     @SerializedName("check_in_time") val checkInTime: String?,
@@ -227,16 +228,18 @@ data class Detection(
 data class TrackInfo(
     @SerializedName("track_id") val trackId: Int,
     val bbox: List<Float>,  // [x1, y1, x2, y2] normalized 0-1
+    val velocity: List<Float>? = null,  // [vx, vy, vw, vh] normalized units/second (center+size)
     val name: String?,
     val confidence: Float,
     @SerializedName("user_id") val userId: String?,
     val status: String  // "recognized" | "unknown" | "pending"
 )
 
-/** frame_update message (at ~10fps from backend pipeline) */
+/** frame_update message (at ~15fps from backend pipeline) */
 data class FrameUpdateMessage(
     val type: String,
     val timestamp: Double,
+    @SerializedName("frame_size") val frameSize: List<Int>? = null,  // [width, height] from backend
     val tracks: List<TrackInfo>,
     val fps: Float,
     @SerializedName("processing_ms") val processingMs: Float

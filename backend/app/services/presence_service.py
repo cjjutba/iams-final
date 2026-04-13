@@ -135,6 +135,68 @@ class PresenceService:
 
     # ── helpers ──────────────────────────────────────────────────
 
+    def _auto_enroll_matching_students(self, schedule) -> None:
+        """Auto-enroll face-registered students matching this schedule's target.
+
+        Catches students who registered after the schedule was created, or whose
+        auto-enrollment during registration was skipped/failed.
+        """
+        from app.models.enrollment import Enrollment
+        from app.models.face_registration import FaceRegistration
+        from app.models.student_record import StudentRecord
+        from app.models.user import User, UserRole
+
+        target_course = schedule.target_course
+        target_year = schedule.target_year_level
+
+        if not target_course and not target_year:
+            return
+
+        try:
+            query = (
+                self.db.query(User)
+                .join(FaceRegistration, FaceRegistration.user_id == User.id)
+                .join(StudentRecord, StudentRecord.student_id == User.student_id)
+                .filter(
+                    User.role == UserRole.STUDENT,
+                    User.is_active == True,
+                    FaceRegistration.is_active == True,
+                )
+            )
+            if target_course:
+                query = query.filter(StudentRecord.course == target_course)
+            if target_year:
+                query = query.filter(StudentRecord.year_level == target_year)
+
+            matching_students = query.all()
+
+            existing_enrollments = (
+                self.db.query(Enrollment.student_id)
+                .filter(Enrollment.schedule_id == schedule.id)
+                .all()
+            )
+            enrolled_user_ids = {row[0] for row in existing_enrollments}
+
+            newly_enrolled = 0
+            for student in matching_students:
+                if student.id not in enrolled_user_ids:
+                    self.db.add(Enrollment(
+                        student_id=student.id,
+                        schedule_id=schedule.id,
+                    ))
+                    newly_enrolled += 1
+
+            if newly_enrolled:
+                self.db.commit()
+                logger.info(
+                    "Auto-enrolled %d face-registered students into schedule %s (%s)",
+                    newly_enrolled,
+                    str(schedule.id),
+                    schedule.subject_code,
+                )
+        except Exception:
+            logger.exception("Auto-enrollment failed for schedule %s", str(schedule.id))
+
     async def _publish_attendance(self, schedule_id: str, payload: dict):
         """Broadcast an attendance event to connected WebSocket clients."""
         try:
@@ -217,7 +279,8 @@ class PresenceService:
         Start attendance session for a schedule.
 
         Creates attendance records for all enrolled students
-        and initialises session state.
+        and initialises session state. Also auto-enrolls face-registered
+        students matching the schedule's target course/year.
 
         Args:
             schedule_id: Schedule UUID
@@ -241,10 +304,13 @@ class PresenceService:
 
             logger.info(f"Starting session for schedule {schedule_id} ({schedule.subject_code})")
 
+            # Auto-enroll face-registered students matching target course/year
+            self._auto_enroll_matching_students(schedule)
+
             # Create session state
             session = SessionState(schedule_id, schedule)
 
-            # Get enrolled students
+            # Get enrolled students (includes newly auto-enrolled)
             students = self.schedule_repo.get_enrolled_students(schedule_id)
 
             # Create attendance records for all students (initially absent)

@@ -141,8 +141,9 @@ def register(
 
 
 @router.post("/login", response_model=TokenResponse, status_code=status.HTTP_200_OK)
+@limiter.limit(settings.RATE_LIMIT_AUTH)
 def login(
-    request_obj: Request,
+    request: Request,
     body: LoginRequest,
     db: Session = Depends(get_db),
 ):

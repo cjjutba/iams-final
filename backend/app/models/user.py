@@ -6,7 +6,7 @@ Represents all system users: students, faculty, and admins.
 
 import enum
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import Boolean, Column, DateTime, String
 from sqlalchemy import Enum as SQLEnum
@@ -71,8 +71,8 @@ class User(Base):
     is_active = Column(Boolean, default=True, nullable=False)
 
     # Timestamps
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
-    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(), onupdate=lambda: datetime.now(), nullable=False)
 
     # Relationships
     face_registration = relationship("FaceRegistration", back_populates="user", uselist=False)

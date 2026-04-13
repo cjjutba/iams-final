@@ -4,7 +4,7 @@ Presence Log Model
 Stores individual scan results for continuous presence tracking.
 """
 
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer
 from sqlalchemy.dialects.postgresql import BIGINT, UUID
@@ -42,7 +42,7 @@ class PresenceLog(Base):
 
     # Scan details
     scan_number = Column(Integer, nullable=False)  # Sequential number
-    scan_time = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    scan_time = Column(DateTime, default=lambda: datetime.now(), nullable=False)
     detected = Column(Boolean, nullable=False)
     confidence = Column(Float, nullable=True)  # 0-1 if detected, null if not detected
     track_id = Column(Integer, nullable=True)  # ByteTrack track ID (realtime pipeline)

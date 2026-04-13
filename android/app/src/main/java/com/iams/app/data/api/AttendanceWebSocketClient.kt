@@ -19,7 +19,7 @@ import okhttp3.WebSocketListener
  * WebSocket client for real-time attendance tracking.
  *
  * Handles two message types from the backend pipeline:
- * - frame_update:        Per-frame tracking data at ~10fps
+ * - frame_update:        Per-frame tracking data at ~15fps
  * - attendance_summary:  Periodic attendance state (every 5-10s)
  *
  * Auto-reconnects with exponential backoff using coroutines.
@@ -58,6 +58,10 @@ class AttendanceWebSocketClient(
     // Attendance summary from attendance_summary messages
     private val _attendanceSummary = MutableStateFlow<AttendanceSummaryMessage?>(null)
     val attendanceSummary = _attendanceSummary.asStateFlow()
+
+    // Frame dimensions from backend (width, height)
+    private val _frameDimensions = MutableStateFlow(Pair(0, 0))
+    val frameDimensions = _frameDimensions.asStateFlow()
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected = _isConnected.asStateFlow()
@@ -102,6 +106,9 @@ class AttendanceWebSocketClient(
                             val msg = gson.fromJson(text, FrameUpdateMessage::class.java)
                             _frameUpdate.value = msg
                             _tracks.value = msg.tracks
+                            msg.frameSize?.let { fs ->
+                                if (fs.size >= 2) _frameDimensions.value = Pair(fs[0], fs[1])
+                            }
                         }
                         "attendance_summary" -> {
                             val msg = gson.fromJson(text, AttendanceSummaryMessage::class.java)

@@ -10,7 +10,7 @@ coordinates three delivery channels:
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy.orm import Session
 
@@ -92,7 +92,7 @@ async def notify(
                 "message": message,
                 "reference_id": reference_id,
                 "reference_type": reference_type,
-                "timestamp": datetime.now(UTC).isoformat(),
+                "timestamp": datetime.now().isoformat(),
             },
         )
     except Exception:

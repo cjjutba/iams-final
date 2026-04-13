@@ -41,6 +41,7 @@ class FAISSManager:
         self.index: faiss.Index | None = None
         self.user_map: dict[int, str] = {}  # faiss_id → user_id mapping
         self._lock = threading.RLock()  # Thread safety for concurrent access
+        self._adaptive_ids: list[int] = []  # Session-scoped adaptive embeddings (volatile, RAM only)
 
         # Ensure directory exists
         Path(self.index_path).parent.mkdir(parents=True, exist_ok=True)
@@ -165,6 +166,31 @@ class FAISSManager:
 
             return faiss_ids
 
+    def add_adaptive(self, embedding: np.ndarray, user_id: str) -> int:
+        """Add a session-scoped adaptive embedding (volatile, RAM only).
+
+        When a student is recognized with high confidence from the real CCTV
+        camera, that embedding is added to FAISS for the duration of the
+        session. On rebuild() or server restart, these are discarded
+        (the index is rebuilt from DB which doesn't include them).
+
+        This closes the phone→CCTV domain gap within the first session.
+        """
+        with self._lock:
+            if self.index is None:
+                raise RuntimeError("FAISS index not initialized")
+
+            emb = embedding.reshape(1, -1).astype(np.float32)
+            faiss_id = self.index.ntotal
+            self.index.add(emb)
+            self.user_map[faiss_id] = user_id
+            self._adaptive_ids.append(faiss_id)
+            logger.info(
+                "Adaptive embedding added: faiss_id=%d user=%s total_adaptive=%d",
+                faiss_id, user_id[:8], len(self._adaptive_ids),
+            )
+            return faiss_id
+
     @staticmethod
     def _deduplicate_by_user(
         raw: list[tuple[str, float]],
@@ -207,8 +233,9 @@ class FAISSManager:
             embedding = embedding.astype(np.float32)
 
             # Fetch more results than requested to account for multi-embedding
-            # duplicates. 5× is a safe multiplier (max 5 embeddings per user).
-            raw_k = min(k * 5, self.index.ntotal)
+            # duplicates. 15× covers up to 10 embeddings/user (5 phone + 5 CCTV-sim)
+            # with headroom for k unique users.
+            raw_k = min(k * 15, self.index.ntotal)
             similarities, indices = self.index.search(embedding, raw_k)
 
             # Collect raw results above threshold
@@ -252,7 +279,8 @@ class FAISSManager:
             embeddings = embeddings.astype(np.float32)
 
             # Fetch more results to account for multi-embedding duplicates
-            raw_k = min(k * 5, self.index.ntotal)
+            # 15× covers up to 10 embeddings/user (5 phone + 5 CCTV-sim)
+            raw_k = min(k * 15, self.index.ntotal)
             similarities, indices = self.index.search(embeddings, raw_k)
 
             # Extract and deduplicate results per query
@@ -302,6 +330,16 @@ class FAISSManager:
         # Note: self.search() already acquires _lock (RLock allows re-entry)
         results = self.search(embedding, k=k, threshold=0.0)
 
+        # Structured score logging — DEBUG level to avoid flooding logs.
+        # Use calibrate_threshold.py for detailed score analysis.
+        for rank, (uid, sim) in enumerate(results):
+            logger.debug(
+                "[FAISS-SCORE] rank=%d user=%s sim=%.4f threshold=%.4f",
+                rank, uid[:8], sim, threshold,
+            )
+        if not results:
+            logger.debug("[FAISS-SCORE] no_candidates index_size=%d", self.index.ntotal if self.index else 0)
+
         if not results:
             return {"user_id": None, "confidence": 0.0, "is_ambiguous": False}
 
@@ -314,16 +352,6 @@ class FAISSManager:
         score_gap = top_score - second_score
         is_ambiguous = score_gap <= margin
 
-        # When there's no second candidate (few enrolled users), require a
-        # higher absolute score to avoid matching every face to the same person.
-        # The ceiling (default 0.65) ensures only strong matches are accepted.
-        if len(results) <= 1 and top_score < settings.ADAPTIVE_THRESHOLD_CEILING:
-            logger.info(
-                f"Weak solo match rejected: {top_user} ({top_score:.3f}) "
-                f"< ceiling {settings.ADAPTIVE_THRESHOLD_CEILING}"
-            )
-            return {"user_id": None, "confidence": float(top_score), "is_ambiguous": False}
-
         if is_ambiguous:
             logger.warning(
                 f"Ambiguous match: top={top_user} ({top_score:.3f}), "
@@ -331,10 +359,38 @@ class FAISSManager:
                 f"gap={score_gap:.3f} <= margin={margin}"
             )
 
+        decided_user = top_user if not is_ambiguous else None
+        logger.debug(
+            "[FAISS-DECISION] user=%s confidence=%.4f ambiguous=%s gap=%.4f threshold=%.4f margin=%.4f",
+            decided_user[:8] if decided_user else "REJECTED",
+            top_score, is_ambiguous, score_gap, threshold, margin,
+        )
+
         return {
             "user_id": top_user,
             "confidence": float(top_score),
             "is_ambiguous": is_ambiguous,
+        }
+
+    def check_health(self) -> dict:
+        """Check index health and report inconsistencies."""
+        if self.index is None:
+            return {"healthy": False, "reason": "index not initialized"}
+
+        ntotal = self.index.ntotal
+        map_size = len(self.user_map)
+        unique_users = len(set(self.user_map.values()))
+        orphaned = ntotal - map_size if ntotal > map_size else 0
+        dangling = sum(1 for fid in self.user_map if fid >= ntotal)
+
+        healthy = orphaned == 0 and dangling == 0
+        return {
+            "healthy": healthy,
+            "ntotal": ntotal,
+            "user_map_size": map_size,
+            "unique_users": unique_users,
+            "orphaned_vectors": orphaned,
+            "dangling_mappings": dangling,
         }
 
     def remove(self, faiss_id: int) -> bool:
@@ -422,9 +478,11 @@ class FAISSManager:
                 raise RuntimeError("Index not initialized")
 
             save_path = path or self.index_path
+            tmp_path = save_path + ".tmp"
 
             try:
-                faiss.write_index(self.index, save_path)
+                faiss.write_index(self.index, tmp_path)
+                os.replace(tmp_path, save_path)  # atomic on POSIX — prevents partial-write corruption
                 logger.info(f"FAISS index saved to {save_path} ({self.index.ntotal} vectors)")
             except Exception as e:
                 logger.error(f"Failed to save FAISS index: {e}")
