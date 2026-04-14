@@ -27,14 +27,14 @@ class WhepClient(
 ) {
     companion object {
         private const val TAG = "WhepClient"
-        private const val INITIAL_RECONNECT_DELAY = 1000L
-        private const val MAX_RECONNECT_DELAY = 15000L
+        private const val INITIAL_RECONNECT_DELAY = 500L
+        private const val MAX_RECONNECT_DELAY = 5000L
     }
 
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .writeTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .writeTimeout(5, TimeUnit.SECONDS)
         .build()
 
     private val _videoTrack = MutableStateFlow<VideoTrack?>(null)
@@ -54,7 +54,11 @@ class WhepClient(
 
     private val iceServers = listOf(
         PeerConnection.IceServer.builder("stun:stun.l.google.com:19302")
-            .createIceServer()
+            .createIceServer(),
+        PeerConnection.IceServer.builder("turn:167.71.217.44:3478?transport=udp")
+            .setUsername("iams")
+            .setPassword("iams-turn-secret-2026")
+            .createIceServer(),
     )
 
     fun connect() {
@@ -166,7 +170,7 @@ class WhepClient(
         pc.awaitSetLocalDescription(offer)
 
         // Wait for ICE gathering to complete (all candidates bundled in SDP)
-        withTimeout(10_000) {
+        withTimeout(3_000) {
             iceGatheringComplete.await()
         }
 
