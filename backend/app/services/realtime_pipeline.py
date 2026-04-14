@@ -165,6 +165,7 @@ class SessionPipeline:
         """
         frame_interval = 1.0 / settings.PROCESSING_FPS
         loop = asyncio.get_event_loop()
+        _consecutive_none = 0
 
         try:
             while not self._stop_event.is_set():
@@ -172,7 +173,22 @@ class SessionPipeline:
 
                 try:
                     frame = self._grabber.grab()
+                    if frame is None:
+                        _consecutive_none += 1
+                        # Log every 10s worth of missed frames (at PROCESSING_FPS)
+                        if _consecutive_none == int(10 * settings.PROCESSING_FPS):
+                            logger.warning(
+                                "Pipeline %s: no frames for ~10s — camera may be offline",
+                                self.schedule_id[:8],
+                            )
+                        elif _consecutive_none % int(60 * settings.PROCESSING_FPS) == 0:
+                            logger.warning(
+                                "Pipeline %s: no frames for ~%ds — camera offline",
+                                self.schedule_id[:8],
+                                _consecutive_none // int(settings.PROCESSING_FPS),
+                            )
                     if frame is not None:
+                        _consecutive_none = 0
                         # Run CPU-intensive ML work in thread executor
                         track_frame = await loop.run_in_executor(None, self._tracker.process, frame)
 
@@ -227,6 +243,8 @@ class SessionPipeline:
                 # Periodic attendance summary (every 5s)
                 if (now - self._last_summary) >= 5.0:
                     await self._broadcast_attendance_summary()
+                    # Broadcast stream health so the app can show "camera offline"
+                    await self._broadcast_stream_status(_consecutive_none > 0)
                     self._last_summary = now
 
                 # Sleep to hit target FPS
@@ -272,6 +290,22 @@ class SessionPipeline:
             )
         except Exception:
             logger.debug("Frame update broadcast failed", exc_info=True)
+
+    async def _broadcast_stream_status(self, frames_missing: bool) -> None:
+        """Notify clients whether the camera stream is healthy."""
+        try:
+            from app.routers.websocket import ws_manager
+
+            await ws_manager.broadcast_attendance(
+                self.schedule_id,
+                {
+                    "type": "stream_status",
+                    "camera_online": not frames_missing,
+                    "grabber_alive": self._grabber.is_alive() if self._grabber else False,
+                },
+            )
+        except Exception:
+            pass
 
     async def _broadcast_attendance_summary(self) -> None:
         """Send periodic attendance_summary message to WebSocket clients."""

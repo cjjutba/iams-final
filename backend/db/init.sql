@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS schedules (
     academic_year   VARCHAR(20) NOT NULL,
     target_course   VARCHAR(100),
     target_year_level INTEGER,
+    early_leave_timeout_minutes INTEGER,
     is_active       BOOLEAN NOT NULL DEFAULT TRUE
 );
 

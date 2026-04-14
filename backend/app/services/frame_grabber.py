@@ -146,10 +146,14 @@ class FrameGrabber:
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 bufsize=self._frame_bytes,  # buffer exactly 1 frame — minimizes latency
             )
             logger.info("FFmpeg started for %s (pid=%d)", self._url, proc.pid)
+            # Drain stderr in a background thread so we can log FFmpeg errors
+            threading.Thread(
+                target=self._drain_stderr, args=(proc,), daemon=True, name="ffmpeg-stderr"
+            ).start()
             return proc
         except Exception:
             logger.exception("Failed to start FFmpeg for %s", self._url)
@@ -171,6 +175,16 @@ class FrameGrabber:
                 except Exception:
                     pass
             self._process = None
+
+    def _drain_stderr(self, proc: subprocess.Popen) -> None:
+        """Read FFmpeg stderr and log warnings/errors."""
+        try:
+            for line in proc.stderr:
+                msg = line.decode("utf-8", errors="replace").strip()
+                if msg:
+                    logger.warning("FFmpeg [%s]: %s", self._url, msg)
+        except Exception:
+            pass  # process died, nothing to drain
 
     def _reconnect(self) -> None:
         """Kill current FFmpeg and start a fresh one."""

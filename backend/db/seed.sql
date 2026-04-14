@@ -34,9 +34,9 @@ ON CONFLICT DO NOTHING;
 INSERT INTO rooms (id, name, building, capacity, camera_endpoint, stream_key, is_active)
 VALUES
     ('00000000-0000-0000-0000-000000000101', 'EB226', 'Engineering Building', 50,
-     'rtsp://host.docker.internal:8554/eb226', 'eb226', TRUE),
+     'rtsp://mediamtx:8554/eb226', 'eb226', TRUE),
     ('00000000-0000-0000-0000-000000000102', 'EB227', 'Engineering Building', 50,
-     'rtsp://host.docker.internal:8554/eb227', 'eb227', TRUE)
+     'rtsp://mediamtx:8554/eb227', 'eb227', TRUE)
 ON CONFLICT DO NOTHING;
 
 -- ── Schedules ───────────────────────────────────────────────────────────────

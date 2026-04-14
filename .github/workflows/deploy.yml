@@ -5,22 +5,28 @@ on:
     branches: [main]
     paths:
       - "backend/**"
+      - "admin/**"
       - "deploy/**"
       - ".github/workflows/deploy.yml"
 
 jobs:
   deploy:
-    name: Deploy Backend
+    name: Deploy Backend & Admin
     runs-on: ubuntu-latest
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup SSH key
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
+          echo "$SSH_KEY" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
 
       - name: Sync backend code
         run: |
@@ -35,8 +41,24 @@ jobs:
             --exclude 'data/.models/' \
             --exclude 'logs/' \
             --exclude 'test.db' \
+            --exclude 'nul' \
             --exclude '.env' \
-            backend/ ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/iams/backend/
+            --exclude '.env.production' \
+            backend/ "$VPS_USER@$VPS_HOST":/opt/iams/backend/
+
+      - name: Sync database init scripts
+        run: |
+          rsync -avz \
+            backend/db/ "$VPS_USER@$VPS_HOST":/opt/iams/backend/db/
+
+      - name: Sync admin dashboard
+        run: |
+          rsync -avz --delete \
+            --exclude 'node_modules/' \
+            --exclude 'dist/' \
+            --exclude '.env.local' \
+            --exclude '.env.development' \
+            admin/ "$VPS_USER@$VPS_HOST":/opt/iams/admin/
 
       - name: Sync deploy configs
         run: |
@@ -44,24 +66,30 @@ jobs:
             deploy/docker-compose.prod.yml \
             deploy/nginx.conf \
             deploy/mediamtx.yml \
-            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/iams/deploy/
+            "$VPS_USER@$VPS_HOST":/opt/iams/deploy/
 
       - name: Build and restart containers
         run: |
-          ssh ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'EOF'
+          ssh "$VPS_USER@$VPS_HOST" << 'EOF'
             cd /opt/iams/deploy
-            echo "Building Docker image..."
-            docker compose -f docker-compose.prod.yml build --no-cache
-            echo "Restarting containers..."
-            docker compose -f docker-compose.prod.yml down || true
-            docker compose -f docker-compose.prod.yml up -d
+
+            # Open ports for mediamtx + coturn (if not already open)
+            ufw allow 8554/tcp comment "mediamtx RTSP" 2>/dev/null || true
+            ufw allow 8887/udp comment "mediamtx WebRTC" 2>/dev/null || true
+            ufw allow 3478/tcp comment "coturn TURN" 2>/dev/null || true
+            ufw allow 3478/udp comment "coturn TURN" 2>/dev/null || true
+            ufw allow 49152:49252/udp comment "coturn relay" 2>/dev/null || true
+            ufw allow 9999/tcp comment "dozzle logs" 2>/dev/null || true
+
+            # Rolling restart (zero-downtime)
+            docker compose -f docker-compose.prod.yml up -d --build
           EOF
 
       - name: Wait for health check
         run: |
           echo "Waiting for backend to be healthy..."
           for i in $(seq 1 30); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://${{ secrets.VPS_HOST }}/api/v1/health" || echo "000")
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://$VPS_HOST/api/v1/health" || echo "000")
             if [ "$STATUS" = "200" ]; then
               echo "Backend is healthy! (attempt $i)"
               exit 0
