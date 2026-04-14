@@ -26,8 +26,6 @@ import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useEdgeDevice } from '@/hooks/use-queries'
 
-const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-
 interface DeviceSchedule {
   id: string
   subject_code: string

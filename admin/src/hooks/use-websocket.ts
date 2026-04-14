@@ -73,7 +73,9 @@ export function useWebSocket(onMessage?: MessageHandler) {
   const user = useAuthStore((s) => s.user)
   const [isConnected, setIsConnected] = useState(false)
   const onMessageRef = useRef(onMessage)
-  onMessageRef.current = onMessage
+  useEffect(() => {
+    onMessageRef.current = onMessage
+  }, [onMessage])
 
   // Stable handler wrapper
   const handlerRef = useRef<MessageHandler>((data) => {
@@ -84,6 +86,7 @@ export function useWebSocket(onMessage?: MessageHandler) {
     if (!user) {
       // User logged out — tear down the singleton
       disconnectShared()
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsConnected(false)
       return
     }
@@ -94,7 +97,8 @@ export function useWebSocket(onMessage?: MessageHandler) {
     }
 
     connectShared(user.id)
-    messageHandlers.add(handlerRef.current)
+    const handler = handlerRef.current
+    messageHandlers.add(handler)
 
     // Track connection state
     const interval = setInterval(() => {
@@ -102,7 +106,7 @@ export function useWebSocket(onMessage?: MessageHandler) {
     }, 2000)
 
     return () => {
-      messageHandlers.delete(handlerRef.current)
+      messageHandlers.delete(handler)
       clearInterval(interval)
       // Don't disconnect the singleton on component unmount —
       // it stays alive for the entire session

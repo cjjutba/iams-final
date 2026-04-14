@@ -7,6 +7,7 @@ Supports two modes:
   - "transcode": Re-encode to a normalized H.264 Baseline stream. Needed for
                  cameras like the CX810 that produce bursty/problematic output.
 """
+
 import logging
 import subprocess
 import threading
@@ -45,43 +46,64 @@ class StreamRelay:
         cmd = [
             "ffmpeg",
             "-hide_banner",
-            "-loglevel", "warning",
-            "-fflags", "nobuffer",
-            "-flags", "low_delay",
-            "-probesize", "500000",
-            "-analyzeduration", "500000",
-            "-rtsp_transport", "tcp",
-            "-i", self.source_url,
+            "-loglevel",
+            "warning",
+            "-fflags",
+            "nobuffer",
+            "-flags",
+            "low_delay",
+            "-probesize",
+            "500000",
+            "-analyzeduration",
+            "500000",
+            "-rtsp_transport",
+            "tcp",
+            "-i",
+            self.source_url,
         ]
 
         if self.mode == "transcode":
             # Re-encode to a clean, predictable H.264 Baseline stream.
             # ultrafast preset keeps RPi CPU usage reasonable (~40-60% on Pi 4).
             cmd += [
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-tune", "zerolatency",
-                "-profile:v", "baseline",
-                "-b:v", self.bitrate,
-                "-maxrate", self.max_bitrate,
-                "-bufsize", "1500k",
-                "-s", self.resolution,
-                "-r", self.fps,
-                "-g", str(int(self.fps) * 2),  # Keyframe every 2 seconds
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-tune",
+                "zerolatency",
+                "-profile:v",
+                "baseline",
+                "-b:v",
+                self.bitrate,
+                "-maxrate",
+                self.max_bitrate,
+                "-bufsize",
+                "1500k",
+                "-s",
+                self.resolution,
+                "-r",
+                self.fps,
+                "-g",
+                str(int(self.fps) * 2),  # Keyframe every 2 seconds
                 "-an",  # Drop audio
             ]
         else:
             # Copy mode: passthrough, no transcoding
             cmd += [
-                "-c", "copy",
+                "-c",
+                "copy",
                 "-an",
             ]
 
         # Common output flags
         cmd += [
-            "-f", "rtsp",
-            "-rtsp_transport", "tcp",
-            "-muxdelay", "0",
+            "-f",
+            "rtsp",
+            "-rtsp_transport",
+            "tcp",
+            "-muxdelay",
+            "0",
             self.target_url,
         ]
         return cmd
@@ -90,14 +112,10 @@ class StreamRelay:
         """Start FFmpeg RTSP relay in a background thread."""
         self._stop_event.clear()
         cmd = self._build_cmd()
-        logger.info(
-            f"Starting RTSP relay ({self.mode} mode): "
-            f"{self.source_url} -> {self.target_url}"
-        )
+        logger.info(f"Starting RTSP relay ({self.mode} mode): {self.source_url} -> {self.target_url}")
         if self.mode == "transcode":
             logger.info(
-                f"Transcode settings: {self.resolution} @ {self.bitrate} "
-                f"(max {self.max_bitrate}), {self.fps}fps"
+                f"Transcode settings: {self.resolution} @ {self.bitrate} (max {self.max_bitrate}), {self.fps}fps"
             )
         self._thread = threading.Thread(target=self._run, args=(cmd,), daemon=True)
         self._thread.start()
@@ -105,9 +123,7 @@ class StreamRelay:
     def _run(self, cmd):
         while not self._stop_event.is_set():
             try:
-                self.process = subprocess.Popen(
-                    cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-                )
+                self.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 logger.info("FFmpeg relay started")
                 self.process.wait()
                 if self._stop_event.is_set():

@@ -116,7 +116,7 @@ export default function EdgeDevicesPage() {
   const navigate = useNavigate()
   const { data: rawData, isLoading } = useEdgeStatus()
   const statusData = rawData as EdgeStatusResponse | null | undefined
-  const devices: EdgeDevice[] = statusData?.devices ?? []
+  const devices = useMemo<EdgeDevice[]>(() => statusData?.devices ?? [], [statusData])
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [isPending, startTransition] = useTransition()

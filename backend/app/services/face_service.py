@@ -38,9 +38,7 @@ class FaceService:
         self.facenet = insightface_model
         self.faiss = faiss_manager
 
-    def _generate_cctv_simulated_embeddings(
-        self, face_crops: list[np.ndarray]
-    ) -> list[np.ndarray]:
+    def _generate_cctv_simulated_embeddings(self, face_crops: list[np.ndarray]) -> list[np.ndarray]:
         """
         Apply CCTV-like degradation to each face crop and re-embed with ArcFace.
 
@@ -85,10 +83,8 @@ class FaceService:
 
                 # Brightness/contrast shift (indoor CCTV lighting variation)
                 alpha = 0.80 + random.random() * 0.40  # 0.80–1.20 contrast
-                beta = random.randint(-20, 20)          # brightness offset
-                face_sim = np.clip(
-                    alpha * face_sim.astype(np.float32) + beta, 0, 255
-                ).astype(np.uint8)
+                beta = random.randint(-20, 20)  # brightness offset
+                face_sim = np.clip(alpha * face_sim.astype(np.float32) + beta, 0, 255).astype(np.uint8)
 
                 # Embed directly via ArcFace (skip SCRFD — crop IS the face)
                 emb = self.facenet.get_embedding_from_crop(face_sim)
@@ -244,7 +240,7 @@ class FaceService:
         # Angle labels: phone captures + simulated
         angle_labels = ["center", "left", "right", "up", "down"]
         sim_labels = [f"sim_{i}" for i in range(len(sim_normed))]
-        all_labels = angle_labels[:len(normed)] + sim_labels
+        all_labels = angle_labels[: len(normed)] + sim_labels
 
         # Transaction: DB insert with FAISS rollback on failure
         try:
@@ -598,7 +594,8 @@ class FaceService:
         if not health["healthy"]:
             logger.warning(
                 "[FAISS-HEALTH] Index unhealthy! orphaned=%d dangling=%d",
-                health["orphaned_vectors"], health["dangling_mappings"],
+                health["orphaned_vectors"],
+                health["dangling_mappings"],
             )
 
         return was_mismatched

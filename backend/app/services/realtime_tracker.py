@@ -336,10 +336,7 @@ class RealtimeTracker:
 
             # Stagger re-verifications: cap at MAX_REVERIFIES_PER_FRAME.
             # New/pending tracks are NOT capped (they must be recognized ASAP).
-            is_reverify = (
-                needs_recognition
-                and identity.recognition_status == "recognized"
-            )
+            is_reverify = needs_recognition and identity.recognition_status == "recognized"
             if is_reverify:
                 if reverify_count >= MAX_REVERIFIES_PER_FRAME:
                     needs_recognition = False
@@ -438,13 +435,15 @@ class RealtimeTracker:
                     bbox=r.bbox,
                     velocity=r.velocity,
                     user_id=self._identity_cache[r.track_id].user_id
-                        if r.track_id in self._identity_cache else r.user_id,
-                    name=self._identity_cache[r.track_id].name
-                        if r.track_id in self._identity_cache else r.name,
+                    if r.track_id in self._identity_cache
+                    else r.user_id,
+                    name=self._identity_cache[r.track_id].name if r.track_id in self._identity_cache else r.name,
                     confidence=self._identity_cache[r.track_id].confidence
-                        if r.track_id in self._identity_cache else r.confidence,
+                    if r.track_id in self._identity_cache
+                    else r.confidence,
                     status=self._identity_cache[r.track_id].recognition_status
-                        if r.track_id in self._identity_cache else r.status,
+                    if r.track_id in self._identity_cache
+                    else r.status,
                     is_active=r.is_active,
                 )
                 for r in results
@@ -566,7 +565,8 @@ class RealtimeTracker:
                 "[TRACK-SCORE] track=%d user=%s confidence=%.4f ambiguous=%s status=%s",
                 identity.track_id,
                 user_id[:8] if user_id else "NONE",
-                confidence, is_ambiguous,
+                confidence,
+                is_ambiguous,
                 "ACCEPT" if (user_id and not is_ambiguous) else "REJECT",
             )
 
@@ -582,10 +582,7 @@ class RealtimeTracker:
                     confidence,
                 )
                 # Adaptive per-session enrollment
-                if (
-                    settings.ADAPTIVE_ENROLL_ENABLED
-                    and confidence >= settings.ADAPTIVE_ENROLL_MIN_CONFIDENCE
-                ):
+                if settings.ADAPTIVE_ENROLL_ENABLED and confidence >= settings.ADAPTIVE_ENROLL_MIN_CONFIDENCE:
                     self._try_adaptive_enroll(user_id, search_embedding, now)
             elif identity.recognition_status == "recognized":
                 # Already recognized — don't downgrade on a single bad frame
@@ -628,7 +625,9 @@ class RealtimeTracker:
         RealtimeTracker._global_adaptive_state[user_id] = state
         logger.info(
             "Adaptive enroll: user=%s count=%d/%d",
-            user_id[:8], state["count"], settings.ADAPTIVE_ENROLL_MAX_PER_USER,
+            user_id[:8],
+            state["count"],
+            settings.ADAPTIVE_ENROLL_MAX_PER_USER,
         )
 
     def _match_embeddings_to_tracks(
@@ -672,7 +671,8 @@ class RealtimeTracker:
 
         stale_threshold = settings.TRACK_LOST_TIMEOUT
         to_remove = [
-            tid for tid, identity in self._identity_cache.items()
+            tid
+            for tid, identity in self._identity_cache.items()
             if tid not in active_track_ids and (now - identity.last_seen) > stale_threshold
         ]
         for tid in to_remove:
@@ -723,9 +723,7 @@ class RealtimeTracker:
         for i in indices:
             suppress = False
             for j in keep:
-                iou = RealtimeTracker._compute_iou(
-                    np.array(bboxes[i]), np.array(bboxes[j])
-                )
+                iou = RealtimeTracker._compute_iou(np.array(bboxes[i]), np.array(bboxes[j]))
                 if iou > iou_threshold:
                     suppress = True
                     break

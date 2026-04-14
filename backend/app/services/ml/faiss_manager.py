@@ -187,7 +187,9 @@ class FAISSManager:
             self._adaptive_ids.append(faiss_id)
             logger.info(
                 "Adaptive embedding added: faiss_id=%d user=%s total_adaptive=%d",
-                faiss_id, user_id[:8], len(self._adaptive_ids),
+                faiss_id,
+                user_id[:8],
+                len(self._adaptive_ids),
             )
             return faiss_id
 
@@ -335,7 +337,10 @@ class FAISSManager:
         for rank, (uid, sim) in enumerate(results):
             logger.debug(
                 "[FAISS-SCORE] rank=%d user=%s sim=%.4f threshold=%.4f",
-                rank, uid[:8], sim, threshold,
+                rank,
+                uid[:8],
+                sim,
+                threshold,
             )
         if not results:
             logger.debug("[FAISS-SCORE] no_candidates index_size=%d", self.index.ntotal if self.index else 0)
@@ -363,7 +368,11 @@ class FAISSManager:
         logger.debug(
             "[FAISS-DECISION] user=%s confidence=%.4f ambiguous=%s gap=%.4f threshold=%.4f margin=%.4f",
             decided_user[:8] if decided_user else "REJECTED",
-            top_score, is_ambiguous, score_gap, threshold, margin,
+            top_score,
+            is_ambiguous,
+            score_gap,
+            threshold,
+            margin,
         )
 
         return {

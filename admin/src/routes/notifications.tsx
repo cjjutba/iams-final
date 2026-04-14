@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { type ColumnDef } from '@tanstack/react-table'
 import { safeFormat } from '@/lib/utils'
 import { useForm } from 'react-hook-form'
@@ -55,6 +54,7 @@ function SendNotificationForm() {
     defaultValues: { target: 'all', title: '', message: '' },
   })
 
+  // eslint-disable-next-line react-hooks/incompatible-library
   const targetValue = watch('target')
 
   const onSubmit = async (data: BroadcastForm) => {

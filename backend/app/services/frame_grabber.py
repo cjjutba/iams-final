@@ -151,9 +151,7 @@ class FrameGrabber:
             )
             logger.info("FFmpeg started for %s (pid=%d)", self._url, proc.pid)
             # Drain stderr in a background thread so we can log FFmpeg errors
-            threading.Thread(
-                target=self._drain_stderr, args=(proc,), daemon=True, name="ffmpeg-stderr"
-            ).start()
+            threading.Thread(target=self._drain_stderr, args=(proc,), daemon=True, name="ffmpeg-stderr").start()
             return proc
         except Exception:
             logger.exception("Failed to start FFmpeg for %s", self._url)

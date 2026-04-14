@@ -19,6 +19,8 @@ from app.database import get_db
 from app.models.user import User
 from app.repositories.schedule_repository import ScheduleRepository
 from app.schemas.face import (
+    CameraDiagnosticFace,
+    CameraDiagnosticResponse,
     EdgeProcessRequest,
     EdgeProcessResponse,
     EdgeProcessResponseData,
@@ -27,8 +29,6 @@ from app.schemas.face import (
     FaceRecognizeResponse,
     FaceRegisterResponse,
     FaceStatusResponse,
-    CameraDiagnosticFace,
-    CameraDiagnosticResponse,
     ImageQualityResponse,
     MatchedUser,
     QualityScoreResponse,
@@ -644,6 +644,7 @@ async def camera_diagnostic(
         )
         try:
             import time
+
             time.sleep(2.0)
             return grabber.grab()
         finally:

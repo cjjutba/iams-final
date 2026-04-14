@@ -38,6 +38,7 @@ export default function SettingsPage() {
           loaded[key] = String(val)
         }
       }
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setValues(loaded)
     }
   }, [settingsData])

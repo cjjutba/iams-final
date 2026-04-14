@@ -40,6 +40,7 @@ export function EditUserDialog({ user, open, onOpenChange }: EditUserDialogProps
 
   useEffect(() => {
     if (open && user) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setForm({
         first_name: user.first_name,
         last_name: user.last_name,
@@ -84,8 +85,9 @@ export function EditUserDialog({ user, open, onOpenChange }: EditUserDialogProps
       })
       toast.success(`${form.first_name} ${form.last_name} has been updated.`)
       onOpenChange(false)
-    } catch (err: any) {
-      const msg = err?.response?.data?.detail || err?.message || 'Failed to update user'
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { detail?: string } }; message?: string }
+      const msg = e?.response?.data?.detail || e?.message || 'Failed to update user'
       const errorMsg = typeof msg === 'string' ? msg : JSON.stringify(msg)
       toast.error(errorMsg)
     }
