@@ -51,7 +51,7 @@ export default function LandingPage() {
               className="h-12 w-full gap-2 text-sm font-semibold uppercase tracking-wide"
               size="lg"
             >
-              <a href="/iams.apk" download>
+              <a href="http://167.71.217.44/iams.apk" download>
                 <Download className="h-4 w-4" />
                 Download App
               </a>
