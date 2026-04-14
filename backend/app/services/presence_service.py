@@ -171,19 +171,19 @@ class PresenceService:
             matching_students = query.all()
 
             existing_enrollments = (
-                self.db.query(Enrollment.student_id)
-                .filter(Enrollment.schedule_id == schedule.id)
-                .all()
+                self.db.query(Enrollment.student_id).filter(Enrollment.schedule_id == schedule.id).all()
             )
             enrolled_user_ids = {row[0] for row in existing_enrollments}
 
             newly_enrolled = 0
             for student in matching_students:
                 if student.id not in enrolled_user_ids:
-                    self.db.add(Enrollment(
-                        student_id=student.id,
-                        schedule_id=schedule.id,
-                    ))
+                    self.db.add(
+                        Enrollment(
+                            student_id=student.id,
+                            schedule_id=schedule.id,
+                        )
+                    )
                     newly_enrolled += 1
 
             if newly_enrolled:

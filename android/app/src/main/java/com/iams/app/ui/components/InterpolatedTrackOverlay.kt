@@ -154,14 +154,14 @@ fun InterpolatedTrackOverlay(
             if (alpha < 0.01f) continue
             if (state.status == "pending") continue
 
-            // Grace period: don't show "Unknown" for new tracks — give the
-            // recognition pipeline 1 second to identify the person first.
+            // Grace period: don't show "Unknown" for brand-new tracks — give
+            // the recognition pipeline a moment to identify the person first.
             // Registered students go pending → recognized within ~200ms,
             // so they never flash "Unknown". Truly unknown people get the
-            // yellow box after 1 second of failed recognition.
+            // yellow box after 300ms of failed recognition.
             val isRecognizedTrack = state.status == "recognized" && !state.name.isNullOrEmpty() && state.name != "Unknown"
             val trackAge = now - state.createdNanos
-            if (!isRecognizedTrack && trackAge < 1_000_000_000L) continue  // < 1 second
+            if (!isRecognizedTrack && trackAge < 300_000_000L) continue  // < 300ms
 
             // Stale check
             if (now - state.lastUpdateNanos > STALE_TIMEOUT_NS) {

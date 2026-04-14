@@ -131,6 +131,7 @@ export default function StudentRecordDetailPage() {
   })
   useEffect(() => {
     if (editOpen && student) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setForm({
         first_name: student.first_name,
         middle_name: student.middle_name ?? '',
@@ -173,8 +174,9 @@ export default function StudentRecordDetailPage() {
       })
       toast.success(`${form.first_name} ${form.last_name} has been updated.`)
       setEditOpen(false)
-    } catch (err: any) {
-      const msg = err?.response?.data?.detail || err?.message || 'Failed to update'
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { detail?: string } }; message?: string }
+      const msg = e?.response?.data?.detail || e?.message || 'Failed to update'
       const errorMsg = typeof msg === 'string' ? msg : JSON.stringify(msg)
       toast.error(errorMsg)
     }

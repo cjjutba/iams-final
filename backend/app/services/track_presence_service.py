@@ -286,11 +286,7 @@ class TrackPresenceService:
         matching_students = query.all()
 
         # Get already-enrolled student IDs
-        existing_enrollments = (
-            self.db.query(Enrollment.student_id)
-            .filter(Enrollment.schedule_id == schedule.id)
-            .all()
-        )
+        existing_enrollments = self.db.query(Enrollment.student_id).filter(Enrollment.schedule_id == schedule.id).all()
         enrolled_user_ids = {row[0] for row in existing_enrollments}
 
         # Enroll missing students

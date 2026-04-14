@@ -39,6 +39,7 @@ export function Header() {
 
   useEffect(() => {
     if (notifOpen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLoadingNotifs(true)
       notificationsService
         .list()

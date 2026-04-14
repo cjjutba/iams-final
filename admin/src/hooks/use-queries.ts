@@ -326,7 +326,7 @@ export function useSystemMetrics() {
     queryKey: queryKeys.analytics.metrics,
     queryFn: async () => {
       const res = await analyticsService.systemMetrics()
-      return (res as any).data ?? res
+      return (res as Record<string, unknown>).data ?? res
     },
     refetchInterval: 60_000,
   })
@@ -373,7 +373,7 @@ export function useResolveAnomaly() {
 export function useAttendanceList(params?: Record<string, unknown>) {
   return useQuery({
     queryKey: queryKeys.attendance.list(params),
-    queryFn: () => attendanceService.list(params as any),
+    queryFn: () => attendanceService.list(params as Record<string, string | number | boolean | undefined>),
   })
 }
 
@@ -421,7 +421,7 @@ export function useFaceStatistics() {
     queryKey: queryKeys.face.statistics,
     queryFn: async () => {
       const res = await faceService.statistics()
-      return (res as any).data ?? res
+      return (res as Record<string, unknown>).data ?? res
     },
   })
 }
@@ -442,7 +442,7 @@ export function useDeregisterFace() {
 export function useAuditLogs(params?: Record<string, unknown>) {
   return useQuery({
     queryKey: queryKeys.audit.logs(params),
-    queryFn: () => auditService.getLogs(params as any),
+    queryFn: () => auditService.getLogs(params as Record<string, string | number | boolean | undefined>),
     placeholderData: keepPreviousData,
   })
 }

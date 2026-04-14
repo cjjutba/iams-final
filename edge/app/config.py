@@ -1,4 +1,5 @@
 """RPi Camera Gateway configuration — RTSP relay only."""
+
 import os
 from urllib.parse import quote
 

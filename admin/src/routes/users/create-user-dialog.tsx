@@ -145,8 +145,9 @@ export function CreateUserDialog({ role, open, onOpenChange }: CreateUserDialogP
       toast.success(successMsg)
       resetForm()
       onOpenChange(false)
-    } catch (err: any) {
-      const msg = err?.response?.data?.detail || err?.message || 'Failed to create record'
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { detail?: string } }; message?: string }
+      const msg = e?.response?.data?.detail || e?.message || 'Failed to create record'
       const errorMsg = typeof msg === 'string' ? msg : JSON.stringify(msg)
       toast.error(errorMsg)
     }
