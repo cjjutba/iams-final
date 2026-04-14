@@ -13,7 +13,7 @@ const isDev = __DEV__;
 // Set to `true`  → dev builds hit your local backend (auto-detected LAN IP)
 // Set to `false` → dev builds hit the DigitalOcean VPS (same as production)
 // Has no effect on production builds — they always use the VPS.
-const USE_LOCAL_BACKEND = true;
+const USE_LOCAL_BACKEND = false;
 // ────────────────────────────────────────────────────────────────────────
 
 // Read from EXPO_PUBLIC_ env vars if set, otherwise fall back to defaults.

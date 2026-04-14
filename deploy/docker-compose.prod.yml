@@ -49,7 +49,7 @@ services:
       - MEDIAMTX_API_URL=http://mediamtx:9997
       - MEDIAMTX_WEBRTC_URL=http://mediamtx:8889
       - MEDIAMTX_RTSP_URL=rtsp://mediamtx:8554
-      - ADMIN_URL=https://iams.vercel.app
+      - ADMIN_URL=https://iams-thesis.vercel.app
     volumes:
       - faiss_data:/app/data/faiss
       - face_uploads:/app/data/uploads/faces
@@ -116,18 +116,18 @@ services:
     image: coturn/coturn:4.6.2-r1
     container_name: iams-coturn
     restart: unless-stopped
-    command: >
-      -n
-      --realm=iams
-      --fingerprint
-      --listening-port=3478
-      --min-port=49152
-      --max-port=49252
-      --user=iams:iams-turn-secret-2026
-      --lt-cred-mech
-      --no-tls
-      --no-dtls
-      --log-file=stdout
+    command:
+      - "-n"
+      - "--realm=iams"
+      - "--fingerprint"
+      - "--listening-port=3478"
+      - "--min-port=49152"
+      - "--max-port=49252"
+      - "--user=iams:iams-turn-secret-2026"
+      - "--lt-cred-mech"
+      - "--no-tls"
+      - "--no-dtls"
+      - "--log-file=stdout"
     ports:
       - "3478:3478"
       - "3478:3478/udp"
