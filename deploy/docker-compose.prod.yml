@@ -54,6 +54,7 @@ services:
       - faiss_data:/app/data/faiss
       - face_uploads:/app/data/uploads/faces
       - app_logs:/app/logs
+      - ../docs/data:/docs/data:ro
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
