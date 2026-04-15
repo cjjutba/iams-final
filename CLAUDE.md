@@ -93,6 +93,84 @@ bash deploy/deploy.sh
 ```
 Only deploy when local testing is complete and you're ready for production.
 
+## Switching Environments (Local ↔ Production)
+
+When the user says **"switch to local"** or **"switch to production"**, perform ALL steps below for that environment. Do not skip any step.
+
+### Switch to Local (Docker Desktop)
+
+1. **Android app** — edit `android/gradle.properties`:
+   ```properties
+   IAMS_BACKEND_HOST=<USER_LAN_IP>
+   IAMS_BACKEND_PORT=8000
+   IAMS_MEDIAMTX_PORT=8554
+   IAMS_MEDIAMTX_WEBRTC_PORT=8889
+   ```
+   Ask the user for their LAN IP if unknown. Find it with `ipconfig getifaddr en0` (macOS) or `ipconfig` (Windows).
+
+2. **Admin portal** — edit `admin/.env`:
+   ```env
+   VITE_API_URL=http://<USER_LAN_IP>:8000/api/v1
+   VITE_WS_URL=ws://<USER_LAN_IP>:8000
+   ```
+
+3. **Start Docker** — run `docker compose up -d` from project root.
+
+4. **Seed if needed** — `docker compose exec api-gateway python -m scripts.seed_data`
+
+5. **Fix Room camera endpoints** — after seeding, the Room `camera_endpoint` values are `rtsp://mediamtx:8554/...` which doesn't resolve locally. Update them:
+   ```bash
+   # Get token
+   TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"identifier":"admin@admin.com","password":"123"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+   # Get room IDs
+   ROOMS=$(curl -s http://localhost:8000/api/v1/rooms/ -H "Authorization: Bearer $TOKEN")
+   # Update each room to use host.docker.internal
+   echo $ROOMS | python3 -c "
+   import sys,json
+   for r in json.load(sys.stdin):
+       print(r['id'], r['name'], r['camera_endpoint'])
+   "
+   # Then PATCH each room:
+   # curl -X PATCH http://localhost:8000/api/v1/rooms/<ID> -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"camera_endpoint":"rtsp://host.docker.internal:8554/eb226"}'
+   ```
+
+6. **Tell user** to rebuild the Android app in Android Studio after the config change.
+
+### Switch to Production (VPS)
+
+1. **Android app** — edit `android/gradle.properties`:
+   ```properties
+   IAMS_BACKEND_HOST=167.71.217.44
+   IAMS_BACKEND_PORT=80
+   IAMS_MEDIAMTX_PORT=8554
+   IAMS_MEDIAMTX_WEBRTC_PORT=8889
+   ```
+
+2. **Admin portal** — edit `admin/.env`:
+   ```env
+   VITE_API_URL=/api/v1
+   VITE_WS_URL=ws://167.71.217.44
+   ```
+
+3. **Deploy** — run `bash deploy/deploy.sh` from project root.
+
+4. **Tell user** to rebuild the Android app in Android Studio after the config change.
+
+### Key Differences (Local vs Production)
+
+| | Local | Production |
+|---|---|---|
+| Docker Compose | `docker-compose.yml` | `deploy/docker-compose.prod.yml` |
+| Backend .env | `backend/.env` | `backend/.env.production` |
+| DB credentials | `admin` / `123` | `iams` / `iams_prod_password` |
+| Redis | Password: `iams-redis-dev` | No password |
+| mediamtx from backend | `host.docker.internal:8554` | `mediamtx:8554` |
+| Room camera_endpoint | `rtsp://host.docker.internal:8554/...` | `rtsp://mediamtx:8554/...` |
+| API port | 8000 (direct) | 80 (nginx proxy) |
+| CORS | includes `localhost:5173` | includes `iams-thesis.vercel.app` |
+
 ### Edge Device (Raspberry Pi)
 ```bash
 cd edge
