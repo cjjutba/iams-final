@@ -48,25 +48,11 @@ MARKDOWN_PATH = (
     Path(__file__).resolve().parents[2]
     / "docs"
     / "data"
-    / "ListofStudents_All-thesis-purposes.md"
+    / "ListofStudents_All-Thesis-purposes-updated1.md"
 )
 
 SEMESTER = "2nd"
 ACADEMIC_YEAR = "2025-2026"
-
-# ─── Test Student ─────────────────────────────────────────────────────────────
-
-TEST_STUDENT = {
-    "student_id": "21-A-02177",
-    "first_name": "Christian Jerald",
-    "last_name": "Jutba",
-    "email": "cjjutbaofficial@gmail.com",
-    "course": "BSCPE",
-    "year_level": 4,
-    "section": "A",
-    "birthdate": date(2003, 1, 13),
-    "contact_number": "09764556948",
-}
 
 # ─── Faculty Records (faculty_records table) ─────────────────────────────────
 
@@ -250,10 +236,20 @@ def parse_name(full_name: str) -> tuple[str, str | None, str]:
 
 
 def parse_date_str(date_str: str) -> date | None:
-    """Parse flexible date formats: MM/DD/YYYY, MM/DD/YY, MMDD/YY."""
+    """Parse flexible date formats: YYYY-MM-DD, MM/DD/YYYY, MM/DD/YY, MMDD/YY."""
     date_str = date_str.strip()
     if not date_str:
         return None
+
+    # YYYY-MM-DD (ISO format)
+    if "-" in date_str and len(date_str) >= 8:
+        dash_parts = date_str.split("-")
+        if len(dash_parts) == 3 and len(dash_parts[0]) == 4:
+            try:
+                y, m, d = int(dash_parts[0]), int(dash_parts[1]), int(dash_parts[2])
+                return date(y, m, d)
+            except (ValueError, TypeError):
+                pass
 
     parts = date_str.split("/")
     if len(parts) == 3:
@@ -496,11 +492,7 @@ def _seed_student_records(db) -> int:
 
     if not MARKDOWN_PATH.exists():
         print(f"  WARNING: Markdown file not found: {MARKDOWN_PATH}")
-        print("  Only seeding test student.")
-        ts = TEST_STUDENT
-        db.add(StudentRecord(**ts, is_active=True))
-        db.flush()
-        return 1
+        return 0
 
     raw = parse_students_from_md(MARKDOWN_PATH)
     students = deduplicate_students(raw)
@@ -538,24 +530,6 @@ def _seed_student_records(db) -> int:
             is_active=True,
         ))
         added += 1
-
-    # Test student (CJ Jutba)
-    ts = TEST_STUDENT
-    if ts["student_id"] not in used_ids:
-        db.add(StudentRecord(
-            student_id=ts["student_id"],
-            first_name=ts["first_name"],
-            last_name=ts["last_name"],
-            email=ts["email"],
-            course=ts["course"],
-            year_level=ts["year_level"],
-            section=ts["section"],
-            birthdate=ts["birthdate"],
-            contact_number=ts["contact_number"],
-            is_active=True,
-        ))
-        added += 1
-        print(f"  Added test student: {ts['student_id']} — {ts['first_name']} {ts['last_name']}")
 
     db.flush()
     pending = sum(1 for s in used_ids if s.startswith("PENDING"))
@@ -671,9 +645,7 @@ def seed():
             print(f"  {email}")
         print(f"\nAdmin Login:")
         print(f"  admin@admin.com / 123")
-        ts = TEST_STUDENT
-        print(f"\nTest Student (for mobile app registration):")
-        print(f"  {ts['student_id']} — {ts['first_name']} {ts['last_name']} (DOB: {ts['birthdate']})")
+        print(f"\nStudents self-register via the mobile app using their Student ID.")
 
     except Exception as e:
         db.rollback()
