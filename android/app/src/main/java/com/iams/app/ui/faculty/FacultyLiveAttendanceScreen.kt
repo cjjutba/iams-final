@@ -421,7 +421,7 @@ private fun StatsRow(
         horizontalArrangement = Arrangement.spacedBy(spacing.sm)
     ) {
         StatCard(
-            label = "Present",
+            label = "On Time",
             value = presentCount,
             color = PresentFg,
             modifier = Modifier.weight(1f)

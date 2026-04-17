@@ -155,7 +155,7 @@ fun FacultyClassDetailScreen(
                             horizontalArrangement = Arrangement.SpaceAround,
                         ) {
                             StatItem(
-                                label = "Present",
+                                label = "On Time",
                                 value = uiState.presentCount,
                                 color = PresentFg,
                             )

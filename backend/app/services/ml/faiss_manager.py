@@ -381,6 +381,66 @@ class FAISSManager:
             "is_ambiguous": is_ambiguous,
         }
 
+    def search_batch_with_margin(
+        self,
+        embeddings: np.ndarray,
+        k: int = None,
+        threshold: float = None,
+        margin: float = None,
+    ) -> list[dict]:
+        """Batch version of search_with_margin — single lock, BLAS-parallelized.
+
+        Args:
+            embeddings: [N, 512] query embeddings (L2-normalized).
+            k, threshold, margin: same semantics as search_with_margin().
+
+        Returns:
+            List of N dicts, each with user_id, confidence, is_ambiguous.
+        """
+        if k is None:
+            k = settings.RECOGNITION_TOP_K
+        if threshold is None:
+            threshold = settings.RECOGNITION_THRESHOLD
+        if margin is None:
+            margin = settings.RECOGNITION_MARGIN
+
+        batch_results = self.search_batch(embeddings, k=k, threshold=0.0)
+
+        results = []
+        for per_query in batch_results:
+            if not per_query:
+                results.append({"user_id": None, "confidence": 0.0, "is_ambiguous": False})
+                continue
+
+            top_raw_score = per_query[0][1]
+            if top_raw_score < threshold:
+                results.append({"user_id": None, "confidence": float(top_raw_score), "is_ambiguous": False})
+                continue
+
+            top_user, top_score = per_query[0]
+            second_score = per_query[1][1] if len(per_query) > 1 else 0.0
+            score_gap = top_score - second_score
+            is_ambiguous = score_gap <= margin
+
+            if is_ambiguous:
+                logger.warning(
+                    "Ambiguous match: top=%s (%.3f), second=%s (%.3f), gap=%.3f <= margin=%.3f",
+                    top_user,
+                    top_score,
+                    per_query[1][0] if len(per_query) > 1 else "N/A",
+                    second_score,
+                    score_gap,
+                    margin,
+                )
+
+            results.append({
+                "user_id": top_user if not is_ambiguous else None,
+                "confidence": float(top_score),
+                "is_ambiguous": is_ambiguous,
+            })
+
+        return results
+
     def check_health(self) -> dict:
         """Check index health and report inconsistencies."""
         if self.index is None:

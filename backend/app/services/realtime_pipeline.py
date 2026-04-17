@@ -249,6 +249,13 @@ class SessionPipeline:
 
                 # Sleep to hit target FPS
                 elapsed = time.monotonic() - loop_start
+                if elapsed > frame_interval * 1.5:
+                    logger.debug(
+                        "Pipeline %s: frame took %.1fms (budget %.1fms), skipping ahead",
+                        self.schedule_id[:8],
+                        elapsed * 1000,
+                        frame_interval * 1000,
+                    )
                 sleep_time = max(0, frame_interval - elapsed)
                 if sleep_time > 0:
                     await asyncio.sleep(sleep_time)

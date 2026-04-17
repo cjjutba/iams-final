@@ -436,7 +436,7 @@ private fun ActiveSessionHeroCard(
                 StatBox(
                     count = liveAttendance?.presentCount,
                     subtitle = if (totalEnrolled != null) "/$totalEnrolled" else null,
-                    label = "Present",
+                    label = "On Time",
                     color = PresentFg,
                     modifier = Modifier.weight(1f)
                 )

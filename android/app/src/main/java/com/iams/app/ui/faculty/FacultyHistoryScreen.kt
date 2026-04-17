@@ -96,6 +96,7 @@ fun FacultyHistoryScreen(
     alertsViewModel: FacultyAlertsViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val alertsUiState by alertsViewModel.uiState.collectAsState()
     val spacing = IAMSThemeTokens.spacing
     val toastState = LocalToastState.current
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(0) }
@@ -114,6 +115,19 @@ fun FacultyHistoryScreen(
         }
     }
 
+    LaunchedEffect(alertsUiState.error) {
+        alertsUiState.error?.let {
+            toastState.showToast(it, ToastType.ERROR)
+        }
+    }
+
+    LaunchedEffect(alertsUiState.exportSuccess) {
+        alertsUiState.exportSuccess?.let {
+            toastState.showToast(it, ToastType.SUCCESS)
+            alertsViewModel.clearExportSuccess()
+        }
+    }
+
     val context = LocalContext.current
 
     Column(
@@ -125,7 +139,7 @@ fun FacultyHistoryScreen(
             title = "History",
             trailing = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (uiState.hasLoaded && uiState.sessions.isNotEmpty()) {
+                    if (selectedTabIndex == 0 && uiState.hasLoaded && uiState.sessions.isNotEmpty()) {
                         IconButton(
                             onClick = { viewModel.exportPdf(context) },
                             enabled = !uiState.isExporting,
@@ -139,7 +153,27 @@ fun FacultyHistoryScreen(
                             } else {
                                 Icon(
                                     Icons.Default.Download,
-                                    contentDescription = "Export PDF",
+                                    contentDescription = "Export Attendance PDF",
+                                    tint = Primary,
+                                )
+                            }
+                        }
+                    }
+                    if (selectedTabIndex == 1 && alertsUiState.alerts.isNotEmpty()) {
+                        IconButton(
+                            onClick = { alertsViewModel.exportPdf(context) },
+                            enabled = !alertsUiState.isExporting,
+                        ) {
+                            if (alertsUiState.isExporting) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                    color = Primary,
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Default.Download,
+                                    contentDescription = "Export Alerts PDF",
                                     tint = Primary,
                                 )
                             }

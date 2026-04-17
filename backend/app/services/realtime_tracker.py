@@ -20,6 +20,7 @@ Performance on M5 MacBook Pro (Apple Silicon):
 import logging
 import random
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -59,13 +60,19 @@ class TrackIdentity:
     last_verified: float = 0.0
     last_seen: float = 0.0
     last_drift_time: float = 0.0  # When embedding drift was last detected
+    drift_strike_count: int = 0  # Consecutive low-sim frames (must reach threshold to trigger)
     recognition_status: str = "pending"  # "pending" | "recognized" | "unknown"
     frames_seen: int = 0
     last_embedding: np.ndarray | None = None  # Detect track ID swaps
-    embedding_buffer: list = field(default_factory=list)  # Recent quality-passed embeddings (FIFO, max 5)
+    anchor_embedding: np.ndarray | None = None  # Fixed reference from recognition time (never shifts)
+    embedding_buffer: deque = field(default_factory=lambda: deque(maxlen=5))  # Recent quality-passed embeddings (FIFO, max 5)
     is_static: bool = False  # True = likely a poster/portrait, skip recognition
     first_center: tuple[float, float] | None = None  # Initial bbox center (normalized)
     last_bbox: list[float] | None = None  # Last normalized bbox [x1, y1, x2, y2] for coasting
+    held_user_id: str | None = None  # Saved identity during hold window
+    held_name: str | None = None
+    held_confidence: float = 0.0
+    held_at: float = 0.0  # When identity was saved for hold
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +140,12 @@ class RealtimeTracker:
 
         # Identity cache: track_id -> TrackIdentity
         self._identity_cache: dict[int, TrackIdentity] = {}
+
+        # Graveyard: recently-expired recognized tracks for spatial inheritance.
+        # When a new track appears near a graveyarded track, it inherits the identity
+        # instantly instead of starting from scratch. Prevents recognized→unknown flicker
+        # when ByteTrack assigns a new track ID after briefly losing detection.
+        self._identity_graveyard: list[TrackIdentity] = []
 
         # Previous frame bboxes for velocity computation: track_id -> [cx, cy, w, h]
         self._prev_bboxes: dict[int, list[float]] = {}
@@ -235,7 +248,7 @@ class RealtimeTracker:
             bbox = tracked.xyxy[i]
             embedding = track_embeddings.get(track_id)
 
-            identity = self._get_or_create_identity(track_id, now)
+            identity = self._get_or_create_identity(track_id, now, bbox=bbox)
             identity.last_seen = now
             identity.frames_seen += 1
 
@@ -281,39 +294,59 @@ class RealtimeTracker:
                         quality_passed, _ = assess_recognition_quality(crop)
 
             # Accumulate quality-passed embeddings for temporal aggregation.
-            # Only add quality-gated frames (not bypassed first-recognition frames).
-            if not is_first_recognition and quality_passed and embedding is not None:
+            if quality_passed and embedding is not None:
                 identity.embedding_buffer.append(embedding)
-                if len(identity.embedding_buffer) > 5:
-                    identity.embedding_buffer.pop(0)
 
-            # Detect track ID swaps: if the face embedding suddenly changes
-            # (cosine similarity < 0.5 vs cached embedding), ByteTrack likely
-            # swapped this track to a different person. Force re-recognition.
+            # Detect track ID swaps: compare against anchor_embedding (fixed at
+            # recognition time) instead of rolling last_embedding. Requires
+            # DRIFT_CONSECUTIVE_REQUIRED consecutive strikes to trigger, preventing
+            # single-frame noise from resetting identity on normal head turns.
             embedding_drifted = False
             if (
                 embedding is not None
-                and identity.last_embedding is not None
+                and identity.anchor_embedding is not None
                 and identity.recognition_status == "recognized"
+                and identity.frames_seen % 5 == 0  # Check every 5th frame (~500ms at 10fps)
             ):
-                sim = float(np.dot(embedding, identity.last_embedding))
-                if sim < 0.5:
-                    logger.info(
-                        "Track %d embedding drift (sim=%.2f), forcing re-recognition",
-                        track_id,
-                        sim,
-                    )
-                    identity.recognition_status = "pending"
-                    identity.user_id = None
-                    identity.name = None
-                    identity.confidence = 0.0
-                    identity.last_drift_time = now
-                    embedding_drifted = True
-                    identity.embedding_buffer.clear()
-                    identity.is_static = False  # Reset static flag on drift
+                sim = float(np.dot(embedding, identity.anchor_embedding))
+                if sim < settings.DRIFT_SIM_THRESHOLD:
+                    identity.drift_strike_count += 1
+                    if identity.drift_strike_count >= settings.DRIFT_CONSECUTIVE_REQUIRED:
+                        logger.info(
+                            "Track %d confirmed drift (sim=%.2f, strikes=%d), forcing re-recognition",
+                            track_id,
+                            sim,
+                            identity.drift_strike_count,
+                        )
+                        # Save identity for hold period before wiping
+                        identity.held_user_id = identity.user_id
+                        identity.held_name = identity.name
+                        identity.held_confidence = identity.confidence
+                        identity.held_at = now
+                        # Reset identity
+                        identity.recognition_status = "pending"
+                        identity.user_id = None
+                        identity.name = None
+                        identity.confidence = 0.0
+                        identity.last_drift_time = now
+                        embedding_drifted = True
+                        identity.embedding_buffer.clear()
+                        identity.is_static = False
+                        identity.drift_strike_count = 0
+                        identity.anchor_embedding = None
+                    else:
+                        logger.debug(
+                            "Track %d drift strike %d/%d (sim=%.2f)",
+                            track_id,
+                            identity.drift_strike_count,
+                            settings.DRIFT_CONSECUTIVE_REQUIRED,
+                            sim,
+                        )
+                else:
+                    identity.drift_strike_count = 0  # Reset on good frame
 
-            # Cache current embedding for drift detection
-            if embedding is not None:
+            # Cache current embedding for drift detection (only quality-passed)
+            if embedding is not None and (quality_passed or is_first_recognition):
                 identity.last_embedding = embedding
 
             # Determine if this track needs recognition
@@ -324,7 +357,13 @@ class RealtimeTracker:
                 needs_recognition = True
             elif identity.recognition_status == "unknown":
                 age = now - identity.first_seen
-                retry_interval = 0.0 if age < 5.0 else 2.0
+                # Graduated retry: instant first attempt, then back off
+                if age < 1.0:
+                    retry_interval = 0.0  # Instant first attempt
+                elif age < 5.0:
+                    retry_interval = 0.5  # Every 500ms for first 5s
+                else:
+                    retry_interval = 2.0  # Every 2s after that
                 needs_recognition = (now - identity.last_verified) > retry_interval
             else:
                 # Recognized track: re-verify at interval, but stagger to avoid storms
@@ -345,8 +384,48 @@ class RealtimeTracker:
 
             # Collect for batch recognition
             if needs_recognition and quality_passed and embedding is not None:
+                # For pending tracks (first recognition), accumulate a small buffer
+                # before searching to reduce single-frame noise. Skip buffering for
+                # drift-reset tracks (they already had frames).
+                if (
+                    identity.recognition_status == "pending"
+                    and not embedding_drifted
+                    and len(identity.embedding_buffer) < 3
+                    and identity.frames_seen < 5  # Safety: don't buffer forever
+                ):
+                    if len(identity.embedding_buffer) < 2:
+                        # Need at least 2 frames — skip this round
+                        identity.last_verified = now
+                        # Continue to bbox/velocity computation below (don't skip track)
+                        norm_bbox = [
+                            float(bbox[0]) / self._frame_w,
+                            float(bbox[1]) / self._frame_h,
+                            float(bbox[2]) / self._frame_w,
+                            float(bbox[3]) / self._frame_h,
+                        ]
+                        cx = (norm_bbox[0] + norm_bbox[2]) / 2
+                        cy = (norm_bbox[1] + norm_bbox[3]) / 2
+                        w = norm_bbox[2] - norm_bbox[0]
+                        h = norm_bbox[3] - norm_bbox[1]
+                        prev = self._prev_bboxes.get(track_id)
+                        if prev is not None:
+                            pcx, pcy, pw, ph = prev
+                            fps = self._processing_fps
+                            velocity = [(cx - pcx) * fps, (cy - pcy) * fps, (w - pw) * fps, (h - ph) * fps]
+                        else:
+                            velocity = [0.0, 0.0, 0.0, 0.0]
+                        self._prev_bboxes[track_id] = [cx, cy, w, h]
+                        identity.last_bbox = norm_bbox
+                        d_uid, d_name, d_conf, d_status = self._get_display_identity(track_id, now)
+                        results.append(TrackResult(
+                            track_id=track_id, bbox=norm_bbox, velocity=velocity,
+                            user_id=d_uid, name=d_name, confidence=d_conf,
+                            status=d_status, is_active=True,
+                        ))
+                        continue
+
                 # Prepare search embedding (temporal average if available)
-                if len(identity.embedding_buffer) >= 3:
+                if len(identity.embedding_buffer) >= 2:
                     avg = np.mean(identity.embedding_buffer, axis=0)
                     avg = avg / np.linalg.norm(avg)
                     search_emb = avg
@@ -384,42 +463,48 @@ class RealtimeTracker:
             # Store last bbox for coasting when track is briefly lost
             identity.last_bbox = norm_bbox
 
+            # Apply identity hold: show held identity during hold window
+            # so the frontend never sees recognized → unknown flicker
+            d_uid, d_name, d_conf, d_status = self._get_display_identity(track_id, now)
+
             results.append(
                 TrackResult(
                     track_id=track_id,
                     bbox=norm_bbox,
                     velocity=velocity,
-                    user_id=identity.user_id,
-                    name=identity.name,
-                    confidence=identity.confidence,
-                    status=identity.recognition_status,
+                    user_id=d_uid,
+                    name=d_name,
+                    confidence=d_conf,
+                    status=d_status,
                     is_active=True,
                 )
             )
 
-        # 5b. Add coasting tracks: recognized tracks that are not detected
-        # this frame but were recently seen. This prevents bounding box blinking
-        # when SCRFD misses a face for 1-2 frames (motion blur, brief occlusion).
+        # 5b. Add coasting tracks: recognized tracks (or held tracks) that are
+        # not detected this frame but were recently seen. This prevents bounding
+        # box blinking when SCRFD misses a face for 1-2 frames.
         for tid, identity in self._identity_cache.items():
             if tid in active_track_ids:
                 continue  # Already in results
-            if identity.recognition_status != "recognized":
-                continue  # Only coast recognized tracks
             if identity.last_bbox is None:
                 continue
             age = now - identity.last_seen
             if age > settings.TRACK_LOST_TIMEOUT:
                 continue  # Too old, let it expire
 
+            d_uid, d_name, d_conf, d_status = self._get_display_identity(tid, now)
+            if d_status != "recognized":
+                continue  # Only coast recognized (or held) tracks
+
             results.append(
                 TrackResult(
                     track_id=tid,
                     bbox=identity.last_bbox,
                     velocity=[0.0, 0.0, 0.0, 0.0],
-                    user_id=identity.user_id,
-                    name=identity.name,
-                    confidence=identity.confidence,
-                    status=identity.recognition_status,
+                    user_id=d_uid,
+                    name=d_name,
+                    confidence=d_conf,
+                    status=d_status,
                     is_active=False,  # Not detected this frame, coasting
                 )
             )
@@ -428,26 +513,24 @@ class RealtimeTracker:
         if pending_recognitions:
             self._recognize_batch(pending_recognitions, now)
 
-            # Update results with newly recognized identities
-            results = [
-                TrackResult(
-                    track_id=r.track_id,
-                    bbox=r.bbox,
-                    velocity=r.velocity,
-                    user_id=self._identity_cache[r.track_id].user_id
-                    if r.track_id in self._identity_cache
-                    else r.user_id,
-                    name=self._identity_cache[r.track_id].name if r.track_id in self._identity_cache else r.name,
-                    confidence=self._identity_cache[r.track_id].confidence
-                    if r.track_id in self._identity_cache
-                    else r.confidence,
-                    status=self._identity_cache[r.track_id].recognition_status
-                    if r.track_id in self._identity_cache
-                    else r.status,
-                    is_active=r.is_active,
-                )
-                for r in results
-            ]
+            # Update results with newly recognized identities (with hold applied)
+            updated: list[TrackResult] = []
+            for r in results:
+                if r.track_id in self._identity_cache:
+                    d_uid, d_name, d_conf, d_status = self._get_display_identity(r.track_id, now)
+                    updated.append(TrackResult(
+                        track_id=r.track_id,
+                        bbox=r.bbox,
+                        velocity=r.velocity,
+                        user_id=d_uid,
+                        name=d_name,
+                        confidence=d_conf,
+                        status=d_status,
+                        is_active=r.is_active,
+                    ))
+                else:
+                    updated.append(r)
+            results = updated
 
         # 7. Deduplicate by user_id — keep highest confidence per user
         seen_users: dict[str, int] = {}
@@ -501,24 +584,86 @@ class RealtimeTracker:
         self._tracker.reset()
         self._identity_cache.clear()
         self._prev_bboxes.clear()
+        self._identity_graveyard.clear()
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
-    def _get_or_create_identity(self, track_id: int, now: float) -> TrackIdentity:
-        """Get existing identity or create a new pending one."""
+    def _get_display_identity(self, track_id: int, now: float) -> tuple[str | None, str | None, float, str]:
+        """Return (user_id, name, confidence, status) with identity hold applied.
+
+        If the track is pending/unknown but was recently recognized,
+        return the held identity so the frontend never sees a flicker.
+        """
+        identity = self._identity_cache[track_id]
+        if (
+            identity.recognition_status in ("pending", "unknown")
+            and identity.held_user_id is not None
+            and (now - identity.held_at) < settings.IDENTITY_HOLD_SECONDS
+        ):
+            return (identity.held_user_id, identity.held_name, identity.held_confidence, "recognized")
+        return (identity.user_id, identity.name, identity.confidence, identity.recognition_status)
+
+    def _get_or_create_identity(self, track_id: int, now: float, bbox: np.ndarray | None = None) -> TrackIdentity:
+        """Get existing identity or create a new one.
+
+        For new tracks, checks the graveyard for a recently-expired recognized
+        track at a nearby position. If found, inherits the identity instantly
+        (skip buffering and FAISS search) — prevents recognized→unknown flicker
+        when ByteTrack creates a new track ID for the same person.
+        """
         if track_id not in self._identity_cache:
-            # Jitter last_verified so re-verifications are naturally staggered
-            # across tracks. Without this, all tracks created at the same time
-            # would re-verify simultaneously every REVERIFY_INTERVAL seconds.
-            jitter = random.uniform(0, settings.REVERIFY_INTERVAL)
-            self._identity_cache[track_id] = TrackIdentity(
-                track_id=track_id,
-                first_seen=now,
-                last_seen=now,
-                last_verified=now - jitter,  # Stagger initial re-verify timing
-            )
+            # Try spatial inheritance from graveyard
+            inherited = None
+            if bbox is not None and self._identity_graveyard:
+                norm_bbox = [
+                    float(bbox[0]) / self._frame_w,
+                    float(bbox[1]) / self._frame_h,
+                    float(bbox[2]) / self._frame_w,
+                    float(bbox[3]) / self._frame_h,
+                ]
+                best_iou = 0.0
+                best_idx = -1
+                for i, grave in enumerate(self._identity_graveyard):
+                    if grave.last_bbox is None:
+                        continue
+                    iou = self._compute_iou_norm(norm_bbox, grave.last_bbox)
+                    if iou > best_iou:
+                        best_iou = iou
+                        best_idx = i
+                if best_iou > 0.15 and best_idx >= 0:
+                    inherited = self._identity_graveyard.pop(best_idx)
+
+            if inherited is not None:
+                # Inherit identity from graveyard — instant recognition, no buffering
+                self._identity_cache[track_id] = TrackIdentity(
+                    track_id=track_id,
+                    user_id=inherited.user_id,
+                    name=inherited.name,
+                    confidence=inherited.confidence,
+                    first_seen=now,
+                    last_verified=now,
+                    last_seen=now,
+                    recognition_status="recognized",
+                    anchor_embedding=inherited.anchor_embedding,
+                    last_embedding=inherited.last_embedding,
+                )
+                logger.info(
+                    "Track %d inherited identity from graveyard: %s (IoU=%.2f)",
+                    track_id,
+                    inherited.name,
+                    best_iou,
+                )
+            else:
+                # Jitter last_verified so re-verifications are naturally staggered
+                jitter = random.uniform(0, settings.REVERIFY_INTERVAL)
+                self._identity_cache[track_id] = TrackIdentity(
+                    track_id=track_id,
+                    first_seen=now,
+                    last_seen=now,
+                    last_verified=now - jitter,
+                )
         return self._identity_cache[track_id]
 
     def _resolve_name(self, user_id: str) -> str:
@@ -550,13 +695,16 @@ class RealtimeTracker:
         pending: list[tuple[TrackIdentity, np.ndarray]],
         now: float,
     ) -> None:
-        """Run FAISS search for all pending tracks in batch.
+        """Run FAISS search for all pending tracks in a single batch call.
 
-        Each track's result is applied to its identity (recognized/unknown).
+        Stacks embeddings into [N, 512] for BLAS-parallelized search with
+        a single lock acquisition instead of N individual searches.
         """
-        for identity, search_embedding in pending:
-            result = self._faiss.search_with_margin(search_embedding)
+        # Stack embeddings for batch search
+        stacked = np.stack([emb for _, emb in pending]).astype(np.float32)
+        batch_results = self._faiss.search_batch_with_margin(stacked)
 
+        for (identity, search_embedding), result in zip(pending, batch_results):
             user_id = result.get("user_id")
             confidence = result.get("confidence", 0.0)
             is_ambiguous = result.get("is_ambiguous", False)
@@ -575,6 +723,9 @@ class RealtimeTracker:
                 identity.confidence = confidence
                 identity.name = self._resolve_name(user_id)
                 identity.recognition_status = "recognized"
+                # Set anchor embedding for drift detection (fixed reference)
+                identity.anchor_embedding = search_embedding.copy()
+                identity.drift_strike_count = 0
                 logger.info(
                     "Track %d recognized: %s (%.3f)",
                     identity.track_id,
@@ -638,19 +789,26 @@ class RealtimeTracker:
     ) -> dict[int, np.ndarray]:
         """Match InsightFace embeddings to ByteTrack tracks by IoU.
 
-        Uses the Hungarian algorithm for optimal exclusive 1:1 assignment.
+        Uses vectorized numpy IoU computation + Hungarian algorithm for
+        optimal exclusive 1:1 assignment.
         """
         if len(tracked) == 0 or len(det_bboxes) == 0:
             return {}
 
-        n_tracks = len(tracked)
-        n_dets = len(det_bboxes)
+        # Vectorized IoU: broadcast [N,4] vs [M,4] → [N,M]
+        t = tracked.xyxy.astype(np.float64)  # [N, 4]
+        d = det_bboxes.astype(np.float64)    # [M, 4]
 
-        # Build IoU cost matrix [n_tracks x n_dets]
-        iou_matrix = np.zeros((n_tracks, n_dets), dtype=np.float64)
-        for i in range(n_tracks):
-            for j in range(n_dets):
-                iou_matrix[i, j] = self._compute_iou(tracked.xyxy[i], det_bboxes[j])
+        x1 = np.maximum(t[:, None, 0], d[None, :, 0])
+        y1 = np.maximum(t[:, None, 1], d[None, :, 1])
+        x2 = np.minimum(t[:, None, 2], d[None, :, 2])
+        y2 = np.minimum(t[:, None, 3], d[None, :, 3])
+        inter = np.maximum(0, x2 - x1) * np.maximum(0, y2 - y1)
+
+        area_t = (t[:, 2] - t[:, 0]) * (t[:, 3] - t[:, 1])  # [N]
+        area_d = (d[:, 2] - d[:, 0]) * (d[:, 3] - d[:, 1])  # [M]
+        union = area_t[:, None] + area_d[None, :] - inter
+        iou_matrix = np.where(union > 0, inter / union, 0.0)
 
         # Hungarian algorithm: maximize IoU → minimize (1 - IoU)
         cost_matrix = 1.0 - iou_matrix
@@ -665,7 +823,7 @@ class RealtimeTracker:
         return result
 
     def _expire_lost_tracks(self, now: float, active_track_ids: set[int] | None = None) -> None:
-        """Remove stale tracks from identity cache."""
+        """Remove stale tracks from identity cache, moving recognized ones to graveyard."""
         if active_track_ids is None:
             active_track_ids = set()
 
@@ -676,8 +834,18 @@ class RealtimeTracker:
             if tid not in active_track_ids and (now - identity.last_seen) > stale_threshold
         ]
         for tid in to_remove:
+            identity = self._identity_cache[tid]
+            # Move recognized tracks to graveyard for spatial inheritance
+            if identity.user_id is not None and identity.last_bbox is not None:
+                self._identity_graveyard.append(identity)
             del self._identity_cache[tid]
             self._prev_bboxes.pop(tid, None)
+
+        # Clean graveyard entries older than IDENTITY_HOLD_SECONDS
+        self._identity_graveyard = [
+            g for g in self._identity_graveyard
+            if (now - g.last_seen) < settings.IDENTITY_HOLD_SECONDS
+        ]
 
     @staticmethod
     def _compute_iou(box_a: np.ndarray, box_b: np.ndarray) -> float:

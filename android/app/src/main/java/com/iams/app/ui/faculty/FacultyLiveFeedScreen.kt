@@ -355,7 +355,7 @@ fun FacultyLiveFeedScreen(
                 ConnectionStatusBar(
                     isConnected = wsConnected,
                     isWaitingForCamera = uiState.videoUrl.isEmpty(),
-                    detectedCount = tracks.count { it.status == "recognized" || it.status == "unknown" }
+                    detectedCount = remember(tracks) { tracks.count { it.status == "recognized" || it.status == "unknown" } }
                 )
 
                 SessionControlBar(
@@ -586,8 +586,10 @@ fun FacultyLiveFeedScreen(
                                     color = TextPrimary
                                 )
                             }
+                            val recognizedCount = remember(tracks) { tracks.count { it.status == "recognized" } }
+                            val detectedCount = remember(tracks) { tracks.count { it.status == "recognized" || it.status == "unknown" } }
                             Text(
-                                text = "${tracks.count { it.status == "recognized" }} recognized / ${tracks.count { it.status == "recognized" || it.status == "unknown" }} detected",
+                                text = "$recognizedCount recognized / $detectedCount detected",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextSecondary
                             )
@@ -636,6 +638,10 @@ fun FacultyLiveFeedScreen(
                     }
                 }
 
+                // Cache filtered track lists outside LazyColumn (composable scope)
+                val recognizedTracks = remember(tracks) { tracks.filter { it.status == "recognized" && it.name != null } }
+                val unknownTracks = remember(tracks) { tracks.filter { it.status == "unknown" } }
+
                 // Attendance list
                 LazyColumn(
                     modifier = Modifier
@@ -644,20 +650,16 @@ fun FacultyLiveFeedScreen(
                 ) {
                     when (activeTab) {
                         PanelTab.DETECTED -> {
-                            // Show currently tracked faces from real-time data
-                            val recognized = tracks.filter { it.status == "recognized" && it.name != null }
-                            val unknown = tracks.filter { it.status == "unknown" }
-
-                            if (recognized.isNotEmpty()) {
-                                item { AttendanceSectionLabel("Recognized (${recognized.size})", PresentFg) }
-                                items(recognized, key = { it.trackId }) { track ->
+                            if (recognizedTracks.isNotEmpty()) {
+                                item { AttendanceSectionLabel("Recognized (${recognizedTracks.size})", PresentFg) }
+                                items(recognizedTracks, key = { it.trackId }) { track ->
                                     TrackRow(name = track.name ?: "Unknown", dotColor = PresentFg)
                                     HorizontalDivider(color = Border, thickness = 0.5.dp)
                                 }
                             }
-                            if (unknown.isNotEmpty()) {
-                                item { AttendanceSectionLabel("Unknown (${unknown.size})", Color(0xFFFF9800)) }
-                                items(unknown, key = { it.trackId }) { track ->
+                            if (unknownTracks.isNotEmpty()) {
+                                item { AttendanceSectionLabel("Unknown (${unknownTracks.size})", Color(0xFFFF9800)) }
+                                items(unknownTracks, key = { it.trackId }) { track ->
                                     TrackRow(name = "Unknown", dotColor = Color(0xFFFF9800))
                                     HorizontalDivider(color = Border, thickness = 0.5.dp)
                                 }

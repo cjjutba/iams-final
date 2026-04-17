@@ -76,9 +76,9 @@ class Settings(BaseSettings):
     # When a student is recognized with high confidence from CCTV, store that
     # real CCTV embedding in FAISS (RAM only, volatile) to boost future matches.
     ADAPTIVE_ENROLL_ENABLED: bool = True
-    ADAPTIVE_ENROLL_MIN_CONFIDENCE: float = 0.55  # Only enroll very confident matches
-    ADAPTIVE_ENROLL_MAX_PER_USER: int = 3  # Max session embeddings per user
-    ADAPTIVE_ENROLL_COOLDOWN: float = 30.0  # Seconds between adaptive enrollments per user
+    ADAPTIVE_ENROLL_MIN_CONFIDENCE: float = 0.48  # Enroll any match above recognition threshold
+    ADAPTIVE_ENROLL_MAX_PER_USER: int = 5  # Max session embeddings per user (more = better pose coverage)
+    ADAPTIVE_ENROLL_COOLDOWN: float = 10.0  # Seconds between adaptive enrollments per user
 
     # Presence Tracking (legacy scan-based — kept for backward compatibility)
     SCAN_INTERVAL_SECONDS: int = 15  # How often to run presence scans
@@ -91,9 +91,16 @@ class Settings(BaseSettings):
     WS_BROADCAST_FPS: float = 10.0  # WebSocket broadcast rate
 
     # ByteTrack / Track Lifecycle
-    TRACK_LOST_TIMEOUT: float = 0.5  # Seconds before removing lost track (coasting period)
+    TRACK_LOST_TIMEOUT: float = 2.0  # Seconds before removing lost track (coasting period)
     REVERIFY_INTERVAL: float = 5.0  # Re-run ArcFace on existing tracks (seconds)
     TRACK_CONFIRM_FRAMES: int = 1  # Recognize immediately on first detection
+
+    # Drift Detection (track ID swap detection)
+    DRIFT_SIM_THRESHOLD: float = 0.35  # Cosine sim below this = potential track swap (tolerates 40° head turns)
+    DRIFT_CONSECUTIVE_REQUIRED: int = 3  # Consecutive low-sim frames before resetting identity
+
+    # Identity Hold (sticky identity)
+    IDENTITY_HOLD_SECONDS: float = 3.0  # Keep showing recognized identity during drift re-verification
 
     # Track-Based Presence
     EARLY_LEAVE_TIMEOUT: float = 300.0  # Fallback: 5 min absent before early-leave alert (per-schedule override in DB)

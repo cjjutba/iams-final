@@ -228,7 +228,7 @@ class FacultyHomeViewModel @Inject constructor(
                         liveAttendance = LiveAttendanceResponse(
                             scheduleId = msg.scheduleId,
                             totalEnrolled = msg.totalEnrolled,
-                            presentCount = msg.presentCount,
+                            presentCount = msg.presentCount - (msg.late?.size ?: 0),
                             lateCount = msg.late?.size ?: 0,
                             absentCount = msg.totalEnrolled - msg.presentCount - (msg.earlyLeave?.size ?: 0),
                             earlyLeaveCount = msg.earlyLeave?.size ?: 0,

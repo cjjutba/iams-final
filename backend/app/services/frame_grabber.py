@@ -87,7 +87,7 @@ class FrameGrabber:
                 self._reconnect()
                 return None
 
-            return self._latest_frame.copy()
+            return self._latest_frame
 
     def is_alive(self) -> bool:
         """Return True if the drain thread is running."""

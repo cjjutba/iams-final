@@ -535,25 +535,13 @@ async def get_live_attendance(
     )
 
 
-@router.get("/alerts", response_model=list[AlertResponse], status_code=status.HTTP_200_OK)
-def get_early_leave_alerts(
-    filter: str | None = Query("all", description="Filter: today, week, or all"),
-    schedule_id: str | None = Query(None, description="Filter by schedule"),
-    current_user: User = Depends(get_current_faculty),
-    db: Session = Depends(get_db),
-):
-    """
-    **Get Early Leave Alerts** (Faculty Only)
-
-    Get early leave alerts for the faculty's schedules.
-
-    - **filter**: Time filter (today, week, all)
-    - **schedule_id**: Optional schedule filter
-
-    Returns list of early leave alerts with student and schedule details.
-
-    Requires faculty authentication.
-    """
+def _fetch_alerts(
+    filter: str | None,
+    schedule_id: str | None,
+    current_user: User,
+    db: Session,
+) -> list[AlertResponse]:
+    """Shared helper to fetch and enrich early leave alerts."""
     from datetime import timedelta
 
     attendance_repo = AttendanceRepository(db)
@@ -568,28 +556,23 @@ def get_early_leave_alerts(
         start_date = today_date
         end_date = today_date
     elif filter == "week":
-        # Start of current week (Monday)
         start_date = today_date - timedelta(days=today_date.weekday())
         end_date = today_date
 
-    # Get early leave events
     events = attendance_repo.get_early_leave_events(schedule_id=schedule_id, start_date=start_date, end_date=end_date)
 
-    # Build enriched response with student and schedule info
     alerts = []
     for event in events:
         attendance = attendance_repo.get_by_id(str(event.attendance_id))
         if not attendance:
             continue
 
-        # Admin sees all alerts; faculty sees only their own schedules
         schedule = schedule_repo.get_by_id(str(attendance.schedule_id))
         if not schedule:
             continue
         if current_user.role != UserRole.ADMIN and str(schedule.faculty_id) != str(current_user.id):
             continue
 
-        # Get student info
         student = db.query(User).filter(User.id == attendance.student_id).first()
         if not student:
             continue
@@ -615,9 +598,87 @@ def get_early_leave_alerts(
             )
         )
 
-    # Sort: still-absent first (more urgent), then by detected_at descending
     alerts.sort(key=lambda a: (a.returned, -(a.detected_at.timestamp() if a.detected_at else 0)))
     return alerts
+
+
+@router.get("/alerts", response_model=list[AlertResponse], status_code=status.HTTP_200_OK)
+def get_early_leave_alerts(
+    filter: str | None = Query("all", description="Filter: today, week, or all"),
+    schedule_id: str | None = Query(None, description="Filter by schedule"),
+    current_user: User = Depends(get_current_faculty),
+    db: Session = Depends(get_db),
+):
+    """
+    **Get Early Leave Alerts** (Faculty Only)
+
+    Get early leave alerts for the faculty's schedules.
+
+    - **filter**: Time filter (today, week, all)
+    - **schedule_id**: Optional schedule filter
+
+    Returns list of early leave alerts with student and schedule details.
+
+    Requires faculty authentication.
+    """
+    return _fetch_alerts(filter, schedule_id, current_user, db)
+
+
+@router.get("/alerts/export/pdf", status_code=status.HTTP_200_OK)
+def export_alerts_pdf(
+    filter: str = Query("all", description="Filter: today, week, or all"),
+    schedule_id: str | None = Query(None, description="Filter by schedule"),
+    current_user: User = Depends(get_current_faculty),
+    db: Session = Depends(get_db),
+):
+    """
+    **Export Early Leave Alerts as PDF** (Faculty Only)
+
+    Generate and download a PDF report of early leave alerts.
+
+    - **filter**: Time filter (today, week, all)
+    - **schedule_id**: Optional schedule filter
+
+    Requires faculty authentication.
+    """
+    from io import BytesIO
+
+    from starlette.responses import StreamingResponse
+
+    from app.services.pdf_service import generate_alerts_pdf
+
+    alerts = _fetch_alerts(filter, schedule_id, current_user, db)
+
+    filter_labels = {"today": "Today", "week": "This Week", "all": "All"}
+    filter_label = filter_labels.get(filter, "All")
+
+    faculty_name = f"{current_user.first_name} {current_user.last_name}"
+
+    alerts_data = [
+        {
+            "student_name": a.student_name,
+            "student_student_id": a.student_student_id,
+            "subject_code": a.subject_code,
+            "subject_name": a.subject_name,
+            "detected_at": a.detected_at,
+            "detected_at_ts": a.detected_at.timestamp() if a.detected_at else 0,
+            "date": a.date,
+            "returned": a.returned,
+            "returned_at": a.returned_at,
+            "absence_duration_seconds": a.absence_duration_seconds,
+        }
+        for a in alerts
+    ]
+
+    pdf_bytes = generate_alerts_pdf(faculty_name, filter_label, alerts_data)
+
+    return StreamingResponse(
+        BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename=alerts_report_{filter}.pdf",
+        },
+    )
 
 
 @router.get("/export", status_code=status.HTTP_200_OK)

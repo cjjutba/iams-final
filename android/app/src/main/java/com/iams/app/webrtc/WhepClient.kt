@@ -1,5 +1,6 @@
 package com.iams.app.webrtc
 
+import com.iams.app.BuildConfig
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.*
@@ -27,8 +28,9 @@ class WhepClient(
 ) {
     companion object {
         private const val TAG = "WhepClient"
-        private const val INITIAL_RECONNECT_DELAY = 500L
-        private const val MAX_RECONNECT_DELAY = 5000L
+        private const val INITIAL_RECONNECT_DELAY = 300L
+        private const val MAX_RECONNECT_DELAY = 3000L
+        private const val ICE_GATHER_TIMEOUT_MS = 500L
     }
 
     private val httpClient = OkHttpClient.Builder()
@@ -55,9 +57,9 @@ class WhepClient(
     private val iceServers = listOf(
         PeerConnection.IceServer.builder("stun:stun.l.google.com:19302")
             .createIceServer(),
-        PeerConnection.IceServer.builder("turn:167.71.217.44:3478?transport=udp")
+        PeerConnection.IceServer.builder("turn:${BuildConfig.BACKEND_HOST}:3478?transport=udp")
             .setUsername("iams")
-            .setPassword("iams-turn-secret-2026")
+            .setPassword("iams-turn-secret")
             .createIceServer(),
     )
 
@@ -136,7 +138,7 @@ class WhepClient(
                     PeerConnection.PeerConnectionState.DISCONNECTED -> {
                         // Brief disconnection — may recover on its own
                         scope.launch {
-                            delay(3000)
+                            delay(1000)
                             if (_state.value != WhepConnectionState.Connected) {
                                 scheduleReconnect()
                             }
@@ -169,9 +171,15 @@ class WhepClient(
         val offer = pc.awaitCreateOffer()
         pc.awaitSetLocalDescription(offer)
 
-        // Wait for ICE gathering to complete (all candidates bundled in SDP)
-        withTimeout(3_000) {
-            iceGatheringComplete.await()
+        // Wait briefly for ICE candidates. Host candidates arrive in <50ms;
+        // STUN srflx in ~100ms. TURN can take 5-10s — we skip it.
+        // On LAN, host candidates alone are sufficient.
+        try {
+            withTimeout(ICE_GATHER_TIMEOUT_MS) {
+                iceGatheringComplete.await()
+            }
+        } catch (_: TimeoutCancellationException) {
+            Log.w(TAG, "ICE gathering timed out after ${ICE_GATHER_TIMEOUT_MS}ms, proceeding with available candidates")
         }
 
         // POST offer to WHEP endpoint
