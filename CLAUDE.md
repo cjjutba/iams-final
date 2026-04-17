@@ -23,25 +23,33 @@ RPi (FFmpeg relay, no ML)
        v
 mediamtx on VPS (RTSP ingest + WebRTC)
        │
-       ├──> WebRTC ──> Kotlin App (ExoPlayer, smooth video)
-       │                    │
-       │               ML Kit (on-device face detection, 30fps)
-       │                    │
-       │               Draws real-time bounding boxes
+       ├──> WebRTC ──> Kotlin App
+       │                 ├── SurfaceViewRenderer (smooth video)
+       │                 └── MlKitFrameSink (~15fps face detection, emits MlKitFace)
+       │                           │
+       │                           v
+       │                 FaceIdentityMatcher (IoU-binds ML Kit faces to backend identities)
+       │                           │
+       │                           v
+       │                 HybridTrackOverlay (draws boxes at ML Kit cadence, labels from backend)
        │
-       └──> Backend FrameGrabber (grabs frames at 10fps)
+       └──> Backend FrameGrabber (grabs frames at 20fps)
                  │
                  v
-            SCRFD + ArcFace → FAISS match → DB
+            SCRFD + ByteTrack + ArcFace → FAISS match → DB
                  │
                  v
-            WebSocket broadcast (names + bbox) → Kotlin App overlays names
+            WebSocket broadcast {track_id, bbox, name, server_time_ms, frame_sequence}
+                 │
+                 └──> merged by FaceIdentityMatcher on the phone
 ```
 
-**Three independent systems:**
-1. **Video delivery** — mediamtx → WebRTC → phone (always smooth, no backend processing)
-2. **Face detection** — ML Kit on phone (real-time, 30fps, no network needed)
-3. **Attendance** — Backend grabs frames at 10fps → SCRFD+ArcFace+ByteTrack → DB → WebSocket
+**Three independent systems (hybrid — master-plan 2026-04-17):**
+1. **Video delivery** — mediamtx → WebRTC → phone (always smooth, no backend processing).
+2. **Face detection (position)** — ML Kit on phone, consuming WebRTC frames via `MlKitFrameSink`. ~15fps, zero network.
+3. **Face recognition (identity)** — Backend at 20fps: SCRFD + ByteTrack + ArcFace + FAISS → WebSocket → `FaceIdentityMatcher` on phone sticks names to ML Kit faces via IoU.
+
+The hybrid overlay is gated by `BuildConfig.HYBRID_DETECTION_ENABLED` (default on). When false, the app falls back to the legacy backend-authoritative `InterpolatedTrackOverlay`. `HybridFallbackController` automatically drops to the legacy path if the ML Kit sink stalls or to no-overlay if both legs go silent.
 
 ## Development Workflow — Local Docker Desktop
 
@@ -205,13 +213,21 @@ ffmpeg -stream_loop -1 -re -i test_video.mp4 -c:v libx264 -f rtsp rtsp://localho
 - **Model:** InsightFace buffalo_l (SCRFD detection + ArcFace recognition), 512-dim embeddings
 
 ### On-Device Face Detection (ML Kit)
-- Google ML Kit Face Detection runs at 30fps on the Android phone
-- Processes frames from ExoPlayer's TextureView
-- Draws real-time bounding boxes (no network round-trip)
-- Backend recognition results (names) are matched to ML Kit boxes via IoU
+- Google ML Kit Face Detection runs on the Android phone at ~15 fps (every 2nd WebRTC frame).
+- Processes frames from `MlKitFrameSink` (a WebRTC `VideoSink`), not ExoPlayer's TextureView.
+- Draws real-time bounding boxes (no network round-trip).
+- `FaceIdentityMatcher` binds ML Kit faces to backend-recognised identities via IoU. The backend is the single source of truth for names; ML Kit is the single source of truth for positions. See `docs/plans/2026-04-17-hybrid-detection/`.
+
+### Hybrid Detection (gated by BuildConfig.HYBRID_DETECTION_ENABLED)
+- **ML Kit (phone):** ~15 fps detection, instant local bounding boxes.
+- **Backend (20 fps):** SCRFD + ByteTrack + ArcFace + FAISS; broadcasts `{track_id, bbox, name, server_time_ms, frame_sequence}` over WebSocket.
+- **Matcher (phone):** greedy IoU assignment with sticky release threshold and identity-hold TTL; swap-prevention logic stops name-flipping when two faces cluster.
+- **Fallback:** `HybridFallbackController` monitors ML Kit + WebSocket liveness. Modes: `HYBRID` / `BACKEND_ONLY` / `DEGRADED` / `OFFLINE`. The screen picks the right overlay per mode automatically.
+- **Diagnostic HUD:** long-press the video area in debug builds to toggle a live FPS/skew/binding-count overlay.
+- **Tuning values:** see `docs/plans/2026-04-17-hybrid-detection/TUNING.md`.
 
 ### Continuous Presence Tracking
-- Backend runs real-time pipeline at 10fps during active sessions
+- Backend runs real-time pipeline at 20fps during active sessions (see `backend/app/config.py::PROCESSING_FPS`)
 - Configurable early-leave timeout per schedule (default from settings)
 - Presence score = (total_present / total_scans) × 100%
 
