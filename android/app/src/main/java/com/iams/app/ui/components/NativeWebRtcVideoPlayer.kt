@@ -10,25 +10,51 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import com.iams.app.webrtc.WhepClient
 import com.iams.app.webrtc.WhepConnectionState
+import java.util.concurrent.atomic.AtomicBoolean
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
+import org.webrtc.VideoFrame
 import org.webrtc.VideoSink
 import org.webrtc.VideoTrack
 
 private const val TAG = "NativeWebRtcPlayer"
 
 /**
+ * VideoSink wrapper that fires a callback on the first frame rendered.
+ *
+ * Used to synchronize the bounding-box overlay with actual video rendering
+ * so detections don't appear on a black screen during WebRTC negotiation.
+ * The callback fires exactly once, on the first real frame.
+ */
+private class FirstFrameDetector(
+    private val onFirstFrame: () -> Unit
+) : VideoSink {
+    private val signaled = AtomicBoolean(false)
+
+    override fun onFrame(frame: VideoFrame) {
+        // Fire callback on first frame only (atomic CAS — safe from any thread)
+        if (signaled.compareAndSet(false, true)) {
+            onFirstFrame()
+        }
+    }
+}
+
+/**
  * Native WebRTC video player using WHEP signaling with mediamtx.
  *
- * Drop-in replacement for the old WebView-based WebRtcVideoPlayer.
  * Uses SurfaceViewRenderer for reliable hardware-accelerated rendering.
+ *
+ * @param onVideoReady Called exactly once when the first video frame is rendered.
+ *                     Use this to synchronize overlays (bounding boxes, etc.)
+ *                     with actual video display.
  */
 @Composable
 fun NativeWebRtcVideoPlayer(
     whepUrl: String,
     modifier: Modifier = Modifier,
     onError: ((String) -> Unit)? = null,
-    additionalSink: VideoSink? = null
+    additionalSink: VideoSink? = null,
+    onVideoReady: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val client = remember(whepUrl) {
@@ -37,6 +63,14 @@ fun NativeWebRtcVideoPlayer(
 
     val videoTrack by client.videoTrack.collectAsState()
     val connectionState by client.state.collectAsState()
+
+    // Stable first-frame detector tied to this whepUrl. Rebuilt if whepUrl changes.
+    val firstFrameDetector = remember(whepUrl) {
+        FirstFrameDetector {
+            Log.i(TAG, "First video frame rendered")
+            onVideoReady()
+        }
+    }
 
     // Start connection
     LaunchedEffect(client) {
@@ -64,7 +98,7 @@ fun NativeWebRtcVideoPlayer(
     val currentTrack = remember { mutableStateOf<VideoTrack?>(null) }
     val rendererRef = remember { mutableStateOf<SurfaceViewRenderer?>(null) }
 
-    // Manage sinks: add/remove video track from renderer + optional additional sink
+    // Manage sinks: renderer + first-frame detector + optional additional sink
     LaunchedEffect(videoTrack, additionalSink) {
         val renderer = rendererRef.value
         val oldTrack = currentTrack.value
@@ -75,12 +109,14 @@ fun NativeWebRtcVideoPlayer(
                 if (renderer != null) {
                     try { oldTrack.removeSink(renderer) } catch (_: Exception) {}
                 }
+                try { oldTrack.removeSink(firstFrameDetector) } catch (_: Exception) {}
                 additionalSink?.let { try { oldTrack.removeSink(it) } catch (_: Exception) {} }
             }
             if (newTrack != null) {
                 if (renderer != null) {
                     newTrack.addSink(renderer)
                 }
+                newTrack.addSink(firstFrameDetector)
                 additionalSink?.let { newTrack.addSink(it) }
                 Log.i(TAG, "Video sinks attached (additional=${additionalSink != null})")
             }
@@ -94,7 +130,6 @@ fun NativeWebRtcVideoPlayer(
                 SurfaceViewRenderer(ctx).apply {
                     // Default z-order: SurfaceView renders behind the View hierarchy,
                     // allowing Compose Canvas overlays (bounding boxes) to draw on top.
-                    // Do NOT set setZOrderMediaOverlay(true) — it would cover the overlay.
                     setEnableHardwareScaler(false)
                     setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
                     init(client.eglBase.eglBaseContext, null)
@@ -103,6 +138,7 @@ fun NativeWebRtcVideoPlayer(
                     // Attach track if already available
                     videoTrack?.let { track ->
                         track.addSink(this)
+                        track.addSink(firstFrameDetector)
                         additionalSink?.let { track.addSink(it) }
                     }
                     currentTrack.value = videoTrack
@@ -112,6 +148,7 @@ fun NativeWebRtcVideoPlayer(
             onRelease = { renderer ->
                 currentTrack.value?.let { track ->
                     track.removeSink(renderer)
+                    try { track.removeSink(firstFrameDetector) } catch (_: Exception) {}
                     additionalSink?.let { try { track.removeSink(it) } catch (_: Exception) {} }
                 }
                 currentTrack.value = null

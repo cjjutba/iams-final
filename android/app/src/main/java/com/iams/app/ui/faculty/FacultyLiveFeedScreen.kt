@@ -121,6 +121,11 @@ fun FacultyLiveFeedScreen(
     var activeTab by remember { mutableStateOf(PanelTab.DETECTED) }
     var showEarlyLeaveDialog by remember { mutableStateOf(false) }
 
+    // Video-ready state: true only once WebRTC has delivered the first actual frame.
+    // Gates the bounding-box overlay so detections don't appear on a black screen
+    // during the ~1-3s WebRTC handshake. Reset whenever the stream URL changes.
+    var isVideoReady by remember(uiState.videoUrl) { mutableStateOf(false) }
+
     // -- Fullscreen + zoom state --
     var isFullscreen by remember { mutableStateOf(false) }
     var zoomScale by remember { mutableStateOf(1f) }
@@ -355,7 +360,10 @@ fun FacultyLiveFeedScreen(
                 ConnectionStatusBar(
                     isConnected = wsConnected,
                     isWaitingForCamera = uiState.videoUrl.isEmpty(),
-                    detectedCount = remember(tracks) { tracks.count { it.status == "recognized" || it.status == "unknown" } }
+                    detectedCount = remember(tracks, isVideoReady) {
+                        if (!isVideoReady) 0
+                        else tracks.count { it.status == "recognized" || it.status == "unknown" }
+                    }
                 )
 
                 SessionControlBar(
@@ -399,14 +407,42 @@ fun FacultyLiveFeedScreen(
                             whepUrl = uiState.videoUrl,
                             modifier = Modifier.fillMaxSize(),
                             onError = { error -> viewModel.onVideoError(error) },
+                            onVideoReady = { isVideoReady = true },
                         )
 
                         InterpolatedTrackOverlay(
                             tracks = tracks,
                             modifier = Modifier.fillMaxSize(),
                             videoFrameWidth = frameDimensions.first.takeIf { it > 0 } ?: 896,
-                            videoFrameHeight = frameDimensions.second.takeIf { it > 0 } ?: 512
+                            videoFrameHeight = frameDimensions.second.takeIf { it > 0 } ?: 512,
+                            isVideoReady = isVideoReady,
                         )
+
+                        // "Connecting..." overlay shown during WebRTC handshake
+                        // (before first video frame arrives). Disappears when video is ready.
+                        if (!isVideoReady && uiState.videoError == null) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.5f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    CircularProgressIndicator(
+                                        color = Color.White.copy(alpha = 0.7f),
+                                        strokeWidth = 2.dp,
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(spacing.md))
+                                    Text(
+                                        text = "Connecting to camera…",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = Color.White.copy(alpha = 0.85f),
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
 
                         if (uiState.videoError != null) {
                             Box(
@@ -586,8 +622,13 @@ fun FacultyLiveFeedScreen(
                                     color = TextPrimary
                                 )
                             }
-                            val recognizedCount = remember(tracks) { tracks.count { it.status == "recognized" } }
-                            val detectedCount = remember(tracks) { tracks.count { it.status == "recognized" || it.status == "unknown" } }
+                            val recognizedCount = remember(tracks, isVideoReady) {
+                                if (!isVideoReady) 0 else tracks.count { it.status == "recognized" }
+                            }
+                            val detectedCount = remember(tracks, isVideoReady) {
+                                if (!isVideoReady) 0
+                                else tracks.count { it.status == "recognized" || it.status == "unknown" }
+                            }
                             Text(
                                 text = "$recognizedCount recognized / $detectedCount detected",
                                 style = MaterialTheme.typography.bodySmall,
@@ -595,7 +636,7 @@ fun FacultyLiveFeedScreen(
                             )
                         }
 
-                        if (tracks.isEmpty() && uiState.presentStudents.isEmpty()) {
+                        if (isVideoReady && tracks.isEmpty() && uiState.presentStudents.isEmpty()) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -630,7 +671,7 @@ fun FacultyLiveFeedScreen(
                                 color = TextPrimary
                             )
                             Text(
-                                text = "${uiState.presentCount} / ${uiState.totalEnrolled}",
+                                text = if (isVideoReady) "${uiState.presentCount} / ${uiState.totalEnrolled}" else "— / —",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextSecondary
                             )
@@ -638,9 +679,16 @@ fun FacultyLiveFeedScreen(
                     }
                 }
 
-                // Cache filtered track lists outside LazyColumn (composable scope)
-                val recognizedTracks = remember(tracks) { tracks.filter { it.status == "recognized" && it.name != null } }
-                val unknownTracks = remember(tracks) { tracks.filter { it.status == "unknown" } }
+                // Cache filtered track lists outside LazyColumn (composable scope).
+                // Gated on isVideoReady — panels must stay in sync with the video feed
+                // so detections aren't shown while the stream is still connecting.
+                val recognizedTracks = remember(tracks, isVideoReady) {
+                    if (!isVideoReady) emptyList()
+                    else tracks.filter { it.status == "recognized" && it.name != null }
+                }
+                val unknownTracks = remember(tracks, isVideoReady) {
+                    if (!isVideoReady) emptyList() else tracks.filter { it.status == "unknown" }
+                }
 
                 // Attendance list
                 LazyColumn(
@@ -648,7 +696,31 @@ fun FacultyLiveFeedScreen(
                         .weight(1f)
                         .padding(horizontal = spacing.cardPadding)
                 ) {
-                    when (activeTab) {
+                    if (!isVideoReady) {
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = spacing.xxl),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    CircularProgressIndicator(
+                                        color = TextTertiary,
+                                        strokeWidth = 2.dp,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(spacing.md))
+                                    Text(
+                                        text = "Waiting for camera feed…",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = TextTertiary,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+                    } else when (activeTab) {
                         PanelTab.DETECTED -> {
                             if (recognizedTracks.isNotEmpty()) {
                                 item { AttendanceSectionLabel("Recognized (${recognizedTracks.size})", PresentFg) }

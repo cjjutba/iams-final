@@ -46,14 +46,17 @@ import com.iams.app.ui.theme.Secondary
 import com.iams.app.ui.theme.TextSecondary
 
 /**
- * Step 2: Collect email and password. NO API call here.
- * Account creation happens in Step 4 (Review).
+ * Step 2: Collect email and password. NO API call here — account creation
+ * happens in Step 4 (Review).
  *
  * Validation:
  *   - Email: RFC + live sanitization on submit
  *   - Password: unified [PasswordPolicy] with real-time strength meter and
- *     rule checklist; submit blocked until every rule is satisfied and
- *     confirm-password matches.
+ *     rule checklist
+ *   - Confirm password: live, character-by-character comparison. The Continue
+ *     button is disabled until passwords match *and* policy passes, and
+ *     `proceed()` re-validates before navigation so the keyboard Done action
+ *     can never slip through a mismatch either.
  */
 @Composable
 fun RegisterStep2Screen(
@@ -77,45 +80,58 @@ fun RegisterStep2Screen(
 
     val focusManager = LocalFocusManager.current
 
-    // Real-time password evaluation — recomputed on every keystroke.
-    val evaluation by remember(password) {
-        derivedStateOf { PasswordPolicy.evaluate(password) }
-    }
+    // Real-time password evaluation — `derivedStateOf` automatically tracks
+    // reads of `password` (a MutableState) and recomputes on change. No keys
+    // are passed to `remember` because that would recreate the derived state
+    // on every keystroke, which is what caused mismatch races previously.
+    val evaluation by remember { derivedStateOf { PasswordPolicy.evaluate(password) } }
 
-    // Real-time confirm-password live error (only surfaces after confirm is touched).
-    val liveConfirmError by remember(password, confirmPassword, confirmTouched) {
+    // Live "passwords do not match" message, suppressed until confirm is touched.
+    val liveConfirmError by remember {
         derivedStateOf {
-            if (!confirmTouched || confirmPassword.isEmpty()) null
-            else if (password != confirmPassword) "Passwords do not match"
-            else null
+            when {
+                !confirmTouched || confirmPassword.isEmpty() -> null
+                password != confirmPassword -> "Passwords do not match"
+                else -> null
+            }
         }
     }
 
-    // The Continue button is only enabled when every field is valid client-side.
-    val formValid by remember(email, password, confirmPassword, evaluation) {
-        derivedStateOf {
-            InputValidation.validateEmail(email) == null &&
-                evaluation.isValid &&
-                confirmPassword.isNotEmpty() &&
-                password == confirmPassword
-        }
+    val passwordsMatch by remember {
+        derivedStateOf { confirmPassword.isNotEmpty() && password == confirmPassword }
+    }
+
+    val emailValid by remember {
+        derivedStateOf { InputValidation.validateEmail(email) == null }
+    }
+
+    val formValid by remember {
+        derivedStateOf { emailValid && evaluation.isValid && passwordsMatch }
     }
 
     fun proceed() {
-        // Sanitize at submit time so we never store stray whitespace in the
-        // registration holder that downstream API calls consume.
+        // Mark touched so every field can surface its error after a failed submit.
+        passwordTouched = true
+        confirmTouched = true
+
         val sanitizedEmail = InputSanitizer.email(email)
         val sanitizedPassword = InputSanitizer.password(password)
 
         val eErr = InputValidation.validateEmail(sanitizedEmail)
         val pErr = InputValidation.validatePassword(sanitizedPassword)
         val cErr = InputValidation.validatePasswordMatch(sanitizedPassword, confirmPassword)
+
         emailError = eErr
         passwordError = pErr
         confirmPasswordError = cErr
-        passwordTouched = true
-        confirmTouched = true
+
+        // Defensive: never navigate if anything is wrong, including a last-
+        // moment mismatch check against the raw (untrimmed) confirm value.
         if (eErr != null || pErr != null || cErr != null) return
+        if (sanitizedPassword != confirmPassword) {
+            confirmPasswordError = "Passwords do not match"
+            return
+        }
 
         RegistrationDataHolder.studentId = studentId
         RegistrationDataHolder.firstName = firstName
@@ -193,8 +209,7 @@ fun RegisterStep2Screen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Email field — rejects leading/trailing whitespace as-you-type by
-        // re-validating on every change once it's been touched.
+        // Email field
         IAMSTextField(
             value = email,
             onValueChange = { newValue ->
@@ -222,6 +237,9 @@ fun RegisterStep2Screen(
                 password = newValue
                 passwordTouched = true
                 passwordError = null
+                // If confirm was typed first, re-validate it live so the
+                // match indicator updates without needing to re-touch confirm.
+                if (confirmPassword.isNotEmpty()) confirmPasswordError = null
             },
             label = "Password",
             placeholder = "At least 8 characters",
@@ -237,7 +255,6 @@ fun RegisterStep2Screen(
             )
         )
 
-        // Real-time meter & checklist — only shown once the user has started typing
         if (password.isNotEmpty() || passwordTouched) {
             Spacer(modifier = Modifier.height(12.dp))
             PasswordStrengthMeter(evaluation = evaluation)

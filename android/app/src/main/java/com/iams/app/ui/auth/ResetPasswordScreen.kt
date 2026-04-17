@@ -108,19 +108,19 @@ private fun FormContent(
     var confirmTouched by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
 
-    val evaluation by remember(password) {
-        derivedStateOf { PasswordPolicy.evaluate(password) }
-    }
+    val evaluation by remember { derivedStateOf { PasswordPolicy.evaluate(password) } }
 
-    val liveConfirmError by remember(password, confirmPassword, confirmTouched) {
+    val liveConfirmError by remember {
         derivedStateOf {
-            if (!confirmTouched || confirmPassword.isEmpty()) null
-            else if (password != confirmPassword) "Passwords do not match"
-            else null
+            when {
+                !confirmTouched || confirmPassword.isEmpty() -> null
+                password != confirmPassword -> "Passwords do not match"
+                else -> null
+            }
         }
     }
 
-    val formValid by remember(password, confirmPassword, evaluation) {
+    val formValid by remember {
         derivedStateOf {
             evaluation.isValid && confirmPassword.isNotEmpty() && password == confirmPassword
         }
@@ -148,6 +148,7 @@ private fun FormContent(
             password = it
             passwordTouched = true
             passwordError = null
+            if (confirmPassword.isNotEmpty()) confirmPasswordError = null
             viewModel.clearError()
         },
         label = "New Password",

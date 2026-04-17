@@ -2,6 +2,7 @@ package com.iams.app.ui.auth
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.iams.app.data.api.ApiErrorParser
 import com.iams.app.data.api.ApiService
 import com.iams.app.data.api.TokenManager
 import com.iams.app.data.model.LoginRequest
@@ -55,12 +56,11 @@ class LoginViewModel @Inject constructor(
                         successMessage = "Welcome back!"
                     )
                 } else {
-                    val errorBody = response.errorBody()?.string()
                     val message = when (response.code()) {
                         401 -> "Invalid credentials"
                         403 -> "Account not verified. Please check your email."
                         404 -> "Account not found"
-                        else -> errorBody ?: "Login failed"
+                        else -> ApiErrorParser.parse(response, fallback = "Login failed. Please try again.")
                     }
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,

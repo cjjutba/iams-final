@@ -2,6 +2,7 @@ package com.iams.app.ui.faculty
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.iams.app.data.api.ApiErrorParser
 import com.iams.app.data.api.ApiService
 import com.iams.app.data.model.ChangePasswordRequest
 import com.iams.app.data.model.UpdateProfileRequest
@@ -173,7 +174,7 @@ class FacultyEditProfileViewModel @Inject constructor(
                 } else {
                     _uiState.value = _uiState.value.copy(
                         isSavingProfile = false,
-                        errorMessage = "Failed to update profile",
+                        errorMessage = ApiErrorParser.parse(response, fallback = "Failed to update profile"),
                     )
                 }
             } catch (e: Exception) {
@@ -236,7 +237,7 @@ class FacultyEditProfileViewModel @Inject constructor(
                 } else {
                     val msg = when (response.code()) {
                         400, 401 -> "Current password is incorrect"
-                        else -> "Failed to change password"
+                        else -> ApiErrorParser.parse(response, fallback = "Failed to change password")
                     }
                     _uiState.value = _uiState.value.copy(
                         isChangingPassword = false,

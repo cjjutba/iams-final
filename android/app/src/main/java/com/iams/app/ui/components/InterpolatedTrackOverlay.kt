@@ -53,7 +53,8 @@ fun InterpolatedTrackOverlay(
     tracks: List<TrackInfo>,
     modifier: Modifier = Modifier,
     videoFrameWidth: Int = 0,
-    videoFrameHeight: Int = 0
+    videoFrameHeight: Int = 0,
+    isVideoReady: Boolean = true
 ) {
     val textMeasurer = rememberTextMeasurer()
     val trackStates = remember { mutableMapOf<Int, TrackOverlayState>() }
@@ -61,6 +62,18 @@ fun InterpolatedTrackOverlay(
 
     // Invalidation trigger — incremented at 30fps to drive drawWithCache
     var drawTick by remember { mutableIntStateOf(0) }
+
+    // Overlay-wide fade-in alpha. Starts at 0 (hidden) and animates to 1 when
+    // isVideoReady becomes true. Prevents bounding boxes from appearing on a
+    // black screen during WebRTC connection negotiation (~1-3s handshake).
+    val overlayAlpha = remember { Animatable(0f) }
+    LaunchedEffect(isVideoReady) {
+        if (isVideoReady) {
+            overlayAlpha.animateTo(1f, tween(200))
+        } else {
+            overlayAlpha.snapTo(0f)
+        }
+    }
 
     // 30fps render loop
     LaunchedEffect(Unit) {
@@ -189,10 +202,15 @@ fun InterpolatedTrackOverlay(
                 }
 
                 onDrawBehind {
+                    // Overall fade multiplier — 0 until video is confirmed rendering.
+                    // Skip drawing entirely when fully faded out (video not ready).
+                    val fade = overlayAlpha.value
+                    if (fade < 0.01f) return@onDrawBehind
+
                     val now = System.nanoTime()
 
                     for ((_, state) in trackStates) {
-                        val alpha = state.alpha.value
+                        val alpha = state.alpha.value * fade
                         if (alpha < 0.01f) continue
                         if (state.status == "pending") continue
 
@@ -204,8 +222,6 @@ fun InterpolatedTrackOverlay(
                         if (now - state.lastUpdateNanos > STALE_TIMEOUT_NS) continue
 
                         // Smooth snap: move current position toward target.
-                        // Always converges TO the backend position, never drifts AWAY.
-                        // No velocity, no prediction — just smooth interpolation.
                         state.currentX1 += (state.targetX1 - state.currentX1) * SNAP_FACTOR
                         state.currentY1 += (state.targetY1 - state.currentY1) * SNAP_FACTOR
                         state.currentX2 += (state.targetX2 - state.currentX2) * SNAP_FACTOR
