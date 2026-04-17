@@ -80,9 +80,27 @@ docker compose exec api-gateway python -m scripts.seed_data
 
 When asked to "seed the data" or "reset the database", run the command above.
 
-This wipes ALL data and reseeds from scratch: ~160 student records, 2 faculty accounts
-(`faculty.eb226@gmail.com`, `faculty.eb227@gmail.com`, password: `password123`),
-admin (`admin@admin.com` / `123`), rooms, schedules, and system settings.
+This wipes ALL data and reseeds from scratch: ~180 student records, 5 faculty accounts
+(`faculty.eb226@gmail.com`, `faculty.eb227@gmail.com`, plus 3 real JRMSU instructors;
+all password `password123`), admin (`admin@admin.com` / `123`), rooms, schedules,
+and system settings.
+
+**Test schedules — REMOVE BEFORE PRODUCTION.** The seed script generates two
+synthetic schedule sets used only for development:
+
+- `TEST 226` — EB226 always-on (00:00–23:59 every day) for raw video / hybrid
+  overlay debugging.
+- `EB227-HHMM` — 336 rolling 30-min EB227 sessions (48/day × 7 days) with a
+  per-schedule `early_leave_timeout_minutes=2` so we can exercise
+  PRESENT / LATE / ABSENT / EARLY_LEAVE transitions any time of day.
+
+For production, delete `_seed_rolling_eb227()` and the `TEST 226` row from
+`SCHEDULE_DEFS` in [`backend/scripts/seed_data.py`](backend/scripts/seed_data.py).
+The real schedules are the 15 entries already in `SCHEDULE_DEFS` (Elumba /
+Gahisan / Lasco), sourced from
+[`docs/data/ListofStudents_All-Thesis-purposes-updated1.md`](docs/data/ListofStudents_All-Thesis-purposes-updated1.md)
+— which is also the canonical source for student records and faculty
+assignments.
 
 ### Database Queries (Direct SQL)
 ```bash
