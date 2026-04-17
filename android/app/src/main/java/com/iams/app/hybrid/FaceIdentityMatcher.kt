@@ -138,6 +138,9 @@ class DefaultFaceIdentityMatcher(
 
     override fun onBackendDisconnected() {
         backendOnline = false
+        // Drop any cached backend tracks so BACKEND_ONLY boxes don't linger at stale
+        // positions while the backend is down. ML-Kit-only boxes continue to draw.
+        latestBackendTracks = emptyList()
         emitSnapshot()
     }
 
@@ -195,8 +198,13 @@ class DefaultFaceIdentityMatcher(
     private fun emitSnapshot() {
         val now = clock()
         val faces = latestMlkitFaces
-        val list = ArrayList<HybridTrack>(faces.size)
+        val list = ArrayList<HybridTrack>(faces.size + latestBackendTracks.size)
         var expired: ArrayList<Int>? = null
+
+        // Track which backend track IDs ended up represented via an ML Kit binding so we
+        // don't also emit them as BACKEND_ONLY (otherwise the overlay draws two boxes on
+        // the same face).
+        val coveredBackendIds = HashSet<Int>()
 
         for (face in faces) {
             val faceId = face.faceId ?: continue
@@ -226,6 +234,8 @@ class DefaultFaceIdentityMatcher(
             val identity = effectiveBinding?.identity
                 ?: HybridIdentity(null, null, 0f, "pending")
 
+            effectiveBinding?.let { coveredBackendIds.add(it.backendTrackId) }
+
             list += HybridTrack(
                 mlkitFaceId = faceId,
                 bbox = floatArrayOf(face.x1, face.y1, face.x2, face.y2),
@@ -237,7 +247,55 @@ class DefaultFaceIdentityMatcher(
         }
 
         expired?.forEach { bindingsByMlkitId.remove(it) }
+
+        // Emit any backend tracks that have no ML Kit face covering them. Uses a relaxed
+        // IoU floor (iouReleaseThreshold) to suppress near-duplicates where the ML Kit
+        // face just barely failed to bind — without this the overlay would draw two
+        // boxes on a single physical face.
+        if (backendOnline) {
+            for (bt in latestBackendTracks) {
+                if (bt.trackId in coveredBackendIds) continue
+                val bbox = bt.bbox
+                if (bbox.size < 4) continue
+                val bx1 = bbox[0].toFloat()
+                val by1 = bbox[1].toFloat()
+                val bx2 = bbox[2].toFloat()
+                val by2 = bbox[3].toFloat()
+                if ((bx2 - bx1) <= 0f || (by2 - by1) <= 0f) continue
+
+                val spatiallyCoveredByMlkit = faces.any { f ->
+                    f.faceId != null &&
+                        iou(f.x1, f.y1, f.x2, f.y2, bx1, by1, bx2, by2) >= config.iouReleaseThreshold
+                }
+                if (spatiallyCoveredByMlkit) continue
+
+                list += HybridTrack(
+                    mlkitFaceId = backendOnlyRenderKey(bt.trackId),
+                    bbox = floatArrayOf(bx1, by1, bx2, by2),
+                    backendTrackId = bt.trackId,
+                    identity = HybridIdentity(
+                        userId = bt.userId,
+                        name = bt.name,
+                        confidence = bt.confidence,
+                        status = bt.status,
+                    ),
+                    lastBoundAtNs = 0L,
+                    source = HybridSource.BACKEND_ONLY,
+                )
+            }
+        }
+
         _tracks.value = list
+    }
+
+    /**
+     * Synthesise a stable, negative "render key" for a backend-only track so the overlay
+     * can keep ML Kit faceIds (always non-negative) disjoint from backend-only markers.
+     * Stability across frames means fade-in/out animations key correctly.
+     */
+    private fun backendOnlyRenderKey(backendTrackId: Int): Int {
+        // Shift into the negative half of Int. Int.MIN_VALUE avoids overlap with 0.
+        return Int.MIN_VALUE + (backendTrackId and 0x7FFFFFFF)
     }
 
     private data class Candidate(val mIdx: Int, val bIdx: Int, val iou: Float)
