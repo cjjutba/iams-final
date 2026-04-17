@@ -47,9 +47,9 @@ class Settings(BaseSettings):
     INSIGHTFACE_DET_THRESH: float = 0.3  # Detection confidence minimum (lowered for distant CCTV faces)
     FAISS_INDEX_PATH: str = "data/faiss/faces.index"
     RECOGNITION_THRESHOLD: float = (
-        0.45  # Cosine similarity threshold (CCTV-sim + adaptive enrollment pushes scores to 0.6-0.9)
+        0.38  # Cosine similarity threshold — CCTV cross-domain typically 0.35-0.55 without adaptive help
     )
-    RECOGNITION_MARGIN: float = 0.10  # Min gap between top-1 and top-2 scores
+    RECOGNITION_MARGIN: float = 0.06  # Min gap between top-1 and top-2 scores (reduced for similar-looking students)
     RECOGNITION_TOP_K: int = 3  # Number of neighbors to search in FAISS
     USE_GPU: bool = True  # Use GPU if available, fallback to CPU
     MIN_FACE_IMAGES: int = 3  # Minimum images for registration
@@ -76,9 +76,9 @@ class Settings(BaseSettings):
     # When a student is recognized with high confidence from CCTV, store that
     # real CCTV embedding in FAISS (RAM only, volatile) to boost future matches.
     ADAPTIVE_ENROLL_ENABLED: bool = True
-    ADAPTIVE_ENROLL_MIN_CONFIDENCE: float = 0.55  # Only enroll very confident matches
-    ADAPTIVE_ENROLL_MAX_PER_USER: int = 3  # Max session embeddings per user
-    ADAPTIVE_ENROLL_COOLDOWN: float = 30.0  # Seconds between adaptive enrollments per user
+    ADAPTIVE_ENROLL_MIN_CONFIDENCE: float = 0.55  # Balance: strict enough to avoid poisoning, loose enough to close domain gap
+    ADAPTIVE_ENROLL_MAX_PER_USER: int = 3  # Max session embeddings per user (conservative to avoid corruption)
+    ADAPTIVE_ENROLL_COOLDOWN: float = 30.0  # Seconds between adaptive enrollments per user (was too aggressive)
 
     # Presence Tracking (legacy scan-based — kept for backward compatibility)
     SCAN_INTERVAL_SECONDS: int = 15  # How often to run presence scans
@@ -87,20 +87,37 @@ class Settings(BaseSettings):
     SESSION_BUFFER_MINUTES: int = 5  # Buffer before/after class for session
 
     # Real-Time Pipeline
-    PROCESSING_FPS: float = 10.0  # Frames/sec for realtime tracker loop (10fps = 100ms budget for 1280x720)
-    WS_BROADCAST_FPS: float = 10.0  # WebSocket broadcast rate
+    # 20 fps = 50 ms per-frame budget for SCRFD+ByteTrack+ArcFace. Faster identity
+    # refresh means names appear on newly-seen faces in ~100 ms instead of ~200 ms
+    # (first-recognition needs ~2 quality-gated frames to lock in). On the dev Mac
+    # this will peg the backend container CPU (~1000 %) when multiple rooms are
+    # active — if that becomes a bottleneck, drop to 10 fps: the phone's ML Kit
+    # already owns 30 fps positions so backend FPS only affects name latency, not
+    # box smoothness. Production override in backend/.env.production=5.
+    PROCESSING_FPS: float = 20.0
+    WS_BROADCAST_FPS: float = 20.0  # WebSocket broadcast rate (one broadcast per processed frame)
 
     # ByteTrack / Track Lifecycle
-    TRACK_LOST_TIMEOUT: float = 0.5  # Seconds before removing lost track (coasting period)
+    TRACK_LOST_TIMEOUT: float = 2.0  # Seconds before removing lost track (coasting period)
     REVERIFY_INTERVAL: float = 5.0  # Re-run ArcFace on existing tracks (seconds)
     TRACK_CONFIRM_FRAMES: int = 1  # Recognize immediately on first detection
+
+    # Drift Detection (track ID swap detection)
+    DRIFT_SIM_THRESHOLD: float = 0.35  # Cosine sim below this = potential track swap (tolerates 40° head turns)
+    DRIFT_CONSECUTIVE_REQUIRED: int = 3  # Consecutive low-sim frames before resetting identity
+
+    # Identity Hold (sticky identity)
+    IDENTITY_HOLD_SECONDS: float = 3.0  # Keep showing recognized identity during drift re-verification
 
     # Track-Based Presence
     EARLY_LEAVE_TIMEOUT: float = 300.0  # Fallback: 5 min absent before early-leave alert (per-schedule override in DB)
     PRESENCE_FLUSH_INTERVAL: float = 10.0  # Seconds between DB presence flushes
 
     # Frame Grabber
-    FRAME_GRABBER_FPS: float = 10.0  # FFmpeg output frame rate (10fps for 1280x720 CPU budget)
+    # Match PROCESSING_FPS so FFmpeg doesn't decode frames the pipeline will drop.
+    # "More than 1000 frames duplicated" warnings in the logs indicate a mismatch —
+    # keep this equal to or slightly above PROCESSING_FPS.
+    FRAME_GRABBER_FPS: float = 20.0
     FRAME_GRABBER_WIDTH: int = 1280  # 720p — gives ~50-80px faces even on wide-angle lenses
     FRAME_GRABBER_HEIGHT: int = 720  # Consistent across all cameras
 

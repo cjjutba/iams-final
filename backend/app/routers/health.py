@@ -116,6 +116,12 @@ async def _check_workers() -> dict:
     return {"status": "no_workers"}
 
 
+@router.get("/time", tags=["System"])
+async def server_time() -> dict:
+    """Return current UTC epoch milliseconds. Used by Android clock-sync."""
+    return {"server_time_ms": int(time.time() * 1000)}
+
+
 @router.get("", tags=["System"])
 async def deep_health_check():
     """

@@ -90,11 +90,13 @@ def assess_recognition_quality(
     min_size: int = 40,
 ) -> tuple[bool, float]:
     """
-    Fast quality check for recognition-time face crops (~0.5ms).
+    Fast quality check for recognition-time face crops (~0.3ms).
 
     Rejects crops that are too small, too blurry, or have extreme lighting
     before they reach ArcFace. Skipping a bad frame costs nothing — the track
     simply retries on the next frame (100ms at 10fps).
+
+    Uses a single BGR→gray conversion for both blur and brightness checks.
 
     Args:
         face_crop_bgr: BGR face crop extracted from the CCTV frame.
@@ -108,12 +110,15 @@ def assess_recognition_quality(
     if h < min_size or w < min_size:
         return False, 0.0
 
-    blur = compute_blur_score(face_crop_bgr)
-    if blur < 15.0:
+    # Single BGR→gray conversion for both blur and brightness
+    gray = cv2.cvtColor(face_crop_bgr, cv2.COLOR_BGR2GRAY)
+
+    blur = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    if blur < settings.QUALITY_BLUR_THRESHOLD:
         return False, blur
 
-    brightness = compute_brightness(face_crop_bgr)
-    if brightness < 30.0 or brightness > 240.0:
+    brightness = float(np.mean(gray))
+    if brightness < settings.QUALITY_BRIGHTNESS_MIN or brightness > settings.QUALITY_BRIGHTNESS_MAX:
         return False, blur
 
     return True, blur

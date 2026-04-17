@@ -16,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,8 +36,12 @@ import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSTextField
 import com.iams.app.ui.components.LocalToastState
+import com.iams.app.ui.components.PasswordMatchIndicator
+import com.iams.app.ui.components.PasswordStrengthMeter
 import com.iams.app.ui.components.ToastType
+import com.iams.app.ui.utils.InputSanitizer
 import com.iams.app.ui.utils.InputValidation
+import com.iams.app.ui.utils.PasswordPolicy
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.PresentFg
 import com.iams.app.ui.theme.Primary
@@ -99,38 +104,69 @@ private fun FormContent(
     var confirmPassword by remember { mutableStateOf("") }
     var passwordError by remember { mutableStateOf<String?>(null) }
     var confirmPasswordError by remember { mutableStateOf<String?>(null) }
+    var passwordTouched by remember { mutableStateOf(false) }
+    var confirmTouched by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
 
+    val evaluation by remember { derivedStateOf { PasswordPolicy.evaluate(password) } }
+
+    val liveConfirmError by remember {
+        derivedStateOf {
+            when {
+                !confirmTouched || confirmPassword.isEmpty() -> null
+                password != confirmPassword -> "Passwords do not match"
+                else -> null
+            }
+        }
+    }
+
+    val formValid by remember {
+        derivedStateOf {
+            evaluation.isValid && confirmPassword.isNotEmpty() && password == confirmPassword
+        }
+    }
+
     fun submit() {
-        val pErr = InputValidation.validatePassword(password)
-        val cErr = InputValidation.validatePasswordMatch(password, confirmPassword)
+        val sanitized = InputSanitizer.password(password)
+        val pErr = InputValidation.validatePassword(sanitized)
+        val cErr = InputValidation.validatePasswordMatch(sanitized, confirmPassword)
         passwordError = pErr
         confirmPasswordError = cErr
+        passwordTouched = true
+        confirmTouched = true
         if (pErr != null || cErr != null) return
         focusManager.clearFocus()
-        onSubmit(password, confirmPassword)
+        onSubmit(sanitized, confirmPassword)
     }
 
     Spacer(modifier = Modifier.height(32.dp))
 
-    // New Password field
+    // New Password field — unified policy + real-time feedback below
     IAMSTextField(
         value = password,
         onValueChange = {
             password = it
+            passwordTouched = true
             passwordError = null
+            if (confirmPassword.isNotEmpty()) confirmPasswordError = null
             viewModel.clearError()
         },
         label = "New Password",
         placeholder = "At least 8 characters",
         isPassword = true,
         enabled = !uiState.isLoading,
-        error = passwordError,
+        error = if (passwordTouched) passwordError else null,
+        supportingText = PasswordPolicy.REQUIREMENTS_TEXT,
         keyboardOptions = KeyboardOptions(
             keyboardType = KeyboardType.Password,
             imeAction = ImeAction.Next
         )
     )
+
+    if (password.isNotEmpty() || passwordTouched) {
+        Spacer(modifier = Modifier.height(12.dp))
+        PasswordStrengthMeter(evaluation = evaluation)
+    }
 
     Spacer(modifier = Modifier.height(20.dp))
 
@@ -139,6 +175,7 @@ private fun FormContent(
         value = confirmPassword,
         onValueChange = {
             confirmPassword = it
+            confirmTouched = true
             confirmPasswordError = null
             viewModel.clearError()
         },
@@ -146,7 +183,7 @@ private fun FormContent(
         placeholder = "Confirm new password",
         isPassword = true,
         enabled = !uiState.isLoading,
-        error = confirmPasswordError,
+        error = confirmPasswordError ?: liveConfirmError,
         keyboardOptions = KeyboardOptions(
             keyboardType = KeyboardType.Password,
             imeAction = ImeAction.Done
@@ -156,14 +193,22 @@ private fun FormContent(
         )
     )
 
-    Spacer(modifier = Modifier.height(8.dp))
+    if (confirmPassword.isNotEmpty()) {
+        Spacer(modifier = Modifier.height(8.dp))
+        PasswordMatchIndicator(
+            password = password,
+            confirmPassword = confirmPassword,
+        )
+    }
+
+    Spacer(modifier = Modifier.height(16.dp))
 
     // Submit button
     IAMSButton(
         text = "Reset Password",
         onClick = { submit() },
         size = IAMSButtonSize.LG,
-        enabled = !uiState.isLoading,
+        enabled = !uiState.isLoading && formValid,
         isLoading = uiState.isLoading,
         loadingText = "Resetting..."
     )

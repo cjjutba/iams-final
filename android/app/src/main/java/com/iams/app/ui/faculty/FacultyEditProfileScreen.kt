@@ -27,6 +27,9 @@ import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSHeader
 import com.iams.app.ui.components.IAMSTextField
+import com.iams.app.ui.components.PasswordMatchIndicator
+import com.iams.app.ui.components.PasswordStrengthMeter
+import com.iams.app.ui.utils.PasswordPolicy
 import com.iams.app.ui.theme.Border
 import com.iams.app.ui.theme.IAMSThemeTokens
 
@@ -127,9 +130,15 @@ fun FacultyEditProfileScreen(
                     onValueChange = { viewModel.updateNewPassword(it) },
                     label = "New Password",
                     placeholder = "New Password",
-                    error = uiState.newPasswordError,
+                    error = if (uiState.newPasswordTouched) uiState.newPasswordError else null,
+                    supportingText = PasswordPolicy.REQUIREMENTS_TEXT,
                     isPassword = true,
                 )
+
+                if (uiState.newPassword.isNotEmpty() || uiState.newPasswordTouched) {
+                    Spacer(modifier = Modifier.height(spacing.md))
+                    PasswordStrengthMeter(evaluation = uiState.passwordEvaluation)
+                }
 
                 Spacer(modifier = Modifier.height(spacing.lg))
 
@@ -138,9 +147,17 @@ fun FacultyEditProfileScreen(
                     onValueChange = { viewModel.updateConfirmPassword(it) },
                     label = "Confirm Password",
                     placeholder = "Confirm Password",
-                    error = uiState.confirmPasswordError,
+                    error = uiState.confirmPasswordError ?: uiState.liveConfirmError,
                     isPassword = true,
                 )
+
+                if (uiState.confirmPassword.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(spacing.sm))
+                    PasswordMatchIndicator(
+                        password = uiState.newPassword,
+                        confirmPassword = uiState.confirmPassword,
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(spacing.lg))
 
@@ -151,6 +168,7 @@ fun FacultyEditProfileScreen(
                     size = IAMSButtonSize.LG,
                     isLoading = uiState.isChangingPassword,
                     loadingText = "Changing...",
+                    enabled = uiState.canSubmitPassword,
                 )
 
                 Spacer(modifier = Modifier.height(spacing.xxl))

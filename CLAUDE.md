@@ -23,25 +23,33 @@ RPi (FFmpeg relay, no ML)
        v
 mediamtx on VPS (RTSP ingest + WebRTC)
        │
-       ├──> WebRTC ──> Kotlin App (ExoPlayer, smooth video)
-       │                    │
-       │               ML Kit (on-device face detection, 30fps)
-       │                    │
-       │               Draws real-time bounding boxes
+       ├──> WebRTC ──> Kotlin App
+       │                 ├── SurfaceViewRenderer (smooth video)
+       │                 └── MlKitFrameSink (~15fps face detection, emits MlKitFace)
+       │                           │
+       │                           v
+       │                 FaceIdentityMatcher (IoU-binds ML Kit faces to backend identities)
+       │                           │
+       │                           v
+       │                 HybridTrackOverlay (draws boxes at ML Kit cadence, labels from backend)
        │
-       └──> Backend FrameGrabber (grabs frames at 10fps)
+       └──> Backend FrameGrabber (grabs frames at 20fps)
                  │
                  v
-            SCRFD + ArcFace → FAISS match → DB
+            SCRFD + ByteTrack + ArcFace → FAISS match → DB
                  │
                  v
-            WebSocket broadcast (names + bbox) → Kotlin App overlays names
+            WebSocket broadcast {track_id, bbox, name, server_time_ms, frame_sequence}
+                 │
+                 └──> merged by FaceIdentityMatcher on the phone
 ```
 
-**Three independent systems:**
-1. **Video delivery** — mediamtx → WebRTC → phone (always smooth, no backend processing)
-2. **Face detection** — ML Kit on phone (real-time, 30fps, no network needed)
-3. **Attendance** — Backend grabs frames at 10fps → SCRFD+ArcFace+ByteTrack → DB → WebSocket
+**Three independent systems (hybrid — master-plan 2026-04-17):**
+1. **Video delivery** — mediamtx → WebRTC → phone (always smooth, no backend processing).
+2. **Face detection (position)** — ML Kit on phone, consuming WebRTC frames via `MlKitFrameSink`. ~15fps, zero network.
+3. **Face recognition (identity)** — Backend at 20fps (local dev; 5fps production): SCRFD + ByteTrack + ArcFace + FAISS → WebSocket → `FaceIdentityMatcher` on phone sticks names to ML Kit faces via IoU.
+
+The hybrid overlay is gated by `BuildConfig.HYBRID_DETECTION_ENABLED` (default on). When false, the app falls back to the legacy backend-authoritative `InterpolatedTrackOverlay`. `HybridFallbackController` automatically drops to the legacy path if the ML Kit sink stalls or to no-overlay if both legs go silent.
 
 ## Development Workflow — Local Docker Desktop
 
@@ -93,6 +101,84 @@ bash deploy/deploy.sh
 ```
 Only deploy when local testing is complete and you're ready for production.
 
+## Switching Environments (Local ↔ Production)
+
+When the user says **"switch to local"** or **"switch to production"**, perform ALL steps below for that environment. Do not skip any step.
+
+### Switch to Local (Docker Desktop)
+
+1. **Android app** — edit `android/gradle.properties`:
+   ```properties
+   IAMS_BACKEND_HOST=<USER_LAN_IP>
+   IAMS_BACKEND_PORT=8000
+   IAMS_MEDIAMTX_PORT=8554
+   IAMS_MEDIAMTX_WEBRTC_PORT=8889
+   ```
+   Ask the user for their LAN IP if unknown. Find it with `ipconfig getifaddr en0` (macOS) or `ipconfig` (Windows).
+
+2. **Admin portal** — edit `admin/.env`:
+   ```env
+   VITE_API_URL=http://<USER_LAN_IP>:8000/api/v1
+   VITE_WS_URL=ws://<USER_LAN_IP>:8000
+   ```
+
+3. **Start Docker** — run `docker compose up -d` from project root.
+
+4. **Seed if needed** — `docker compose exec api-gateway python -m scripts.seed_data`
+
+5. **Fix Room camera endpoints** — after seeding, the Room `camera_endpoint` values are `rtsp://mediamtx:8554/...` which doesn't resolve locally. Update them:
+   ```bash
+   # Get token
+   TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"identifier":"admin@admin.com","password":"123"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+   # Get room IDs
+   ROOMS=$(curl -s http://localhost:8000/api/v1/rooms/ -H "Authorization: Bearer $TOKEN")
+   # Update each room to use host.docker.internal
+   echo $ROOMS | python3 -c "
+   import sys,json
+   for r in json.load(sys.stdin):
+       print(r['id'], r['name'], r['camera_endpoint'])
+   "
+   # Then PATCH each room:
+   # curl -X PATCH http://localhost:8000/api/v1/rooms/<ID> -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"camera_endpoint":"rtsp://host.docker.internal:8554/eb226"}'
+   ```
+
+6. **Tell user** to rebuild the Android app in Android Studio after the config change.
+
+### Switch to Production (VPS)
+
+1. **Android app** — edit `android/gradle.properties`:
+   ```properties
+   IAMS_BACKEND_HOST=167.71.217.44
+   IAMS_BACKEND_PORT=80
+   IAMS_MEDIAMTX_PORT=8554
+   IAMS_MEDIAMTX_WEBRTC_PORT=8889
+   ```
+
+2. **Admin portal** — edit `admin/.env`:
+   ```env
+   VITE_API_URL=/api/v1
+   VITE_WS_URL=ws://167.71.217.44
+   ```
+
+3. **Deploy** — run `bash deploy/deploy.sh` from project root.
+
+4. **Tell user** to rebuild the Android app in Android Studio after the config change.
+
+### Key Differences (Local vs Production)
+
+| | Local | Production |
+|---|---|---|
+| Docker Compose | `docker-compose.yml` | `deploy/docker-compose.prod.yml` |
+| Backend .env | `backend/.env` | `backend/.env.production` |
+| DB credentials | `admin` / `123` | `iams` / `iams_prod_password` |
+| Redis | Password: `iams-redis-dev` | No password |
+| mediamtx from backend | `host.docker.internal:8554` | `mediamtx:8554` |
+| Room camera_endpoint | `rtsp://host.docker.internal:8554/...` | `rtsp://mediamtx:8554/...` |
+| API port | 8000 (direct) | 80 (nginx proxy) |
+| CORS | includes `localhost:5173` | includes `iams-thesis.vercel.app` |
+
 ### Edge Device (Raspberry Pi)
 ```bash
 cd edge
@@ -127,13 +213,21 @@ ffmpeg -stream_loop -1 -re -i test_video.mp4 -c:v libx264 -f rtsp rtsp://localho
 - **Model:** InsightFace buffalo_l (SCRFD detection + ArcFace recognition), 512-dim embeddings
 
 ### On-Device Face Detection (ML Kit)
-- Google ML Kit Face Detection runs at 30fps on the Android phone
-- Processes frames from ExoPlayer's TextureView
-- Draws real-time bounding boxes (no network round-trip)
-- Backend recognition results (names) are matched to ML Kit boxes via IoU
+- Google ML Kit Face Detection runs on the Android phone at ~15 fps (every 2nd WebRTC frame).
+- Processes frames from `MlKitFrameSink` (a WebRTC `VideoSink`), not ExoPlayer's TextureView.
+- Draws real-time bounding boxes (no network round-trip).
+- `FaceIdentityMatcher` binds ML Kit faces to backend-recognised identities via IoU. The backend is the single source of truth for names; ML Kit is the single source of truth for positions. See `docs/plans/2026-04-17-hybrid-detection/`.
+
+### Hybrid Detection (gated by BuildConfig.HYBRID_DETECTION_ENABLED)
+- **ML Kit (phone):** ~15 fps detection, instant local bounding boxes.
+- **Backend (20 fps):** SCRFD + ByteTrack + ArcFace + FAISS; broadcasts `{track_id, bbox, name, server_time_ms, frame_sequence}` over WebSocket.
+- **Matcher (phone):** greedy IoU assignment with sticky release threshold and identity-hold TTL; swap-prevention logic stops name-flipping when two faces cluster.
+- **Fallback:** `HybridFallbackController` monitors ML Kit + WebSocket liveness. Modes: `HYBRID` / `BACKEND_ONLY` / `DEGRADED` / `OFFLINE`. The screen picks the right overlay per mode automatically.
+- **Diagnostic HUD:** long-press the video area in debug builds to toggle a live FPS/skew/binding-count overlay.
+- **Tuning values:** see `docs/plans/2026-04-17-hybrid-detection/TUNING.md`.
 
 ### Continuous Presence Tracking
-- Backend runs real-time pipeline at 10fps during active sessions
+- Backend runs real-time pipeline at 20fps during active sessions by default (see `backend/app/config.py::PROCESSING_FPS`). Production env overrides to 5fps.
 - Configurable early-leave timeout per schedule (default from settings)
 - Presence score = (total_present / total_scans) × 100%
 

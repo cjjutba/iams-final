@@ -186,7 +186,7 @@ fun FacultyStudentDetailScreen(
                         horizontalArrangement = Arrangement.SpaceAround,
                     ) {
                         StatCell(label = "Total Classes", value = totalClasses.toString())
-                        StatCell(label = "Present", value = present.toString(), color = PresentFg)
+                        StatCell(label = "On Time", value = present.toString(), color = PresentFg)
                     }
                     Spacer(modifier = Modifier.height(spacing.lg))
                     Row(

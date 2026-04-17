@@ -242,7 +242,10 @@ data class FrameUpdateMessage(
     @SerializedName("frame_size") val frameSize: List<Int>? = null,  // [width, height] from backend
     val tracks: List<TrackInfo>,
     val fps: Float,
-    @SerializedName("processing_ms") val processingMs: Float
+    @SerializedName("processing_ms") val processingMs: Float,
+    // Session 05 additions (backwards-compatible; nullable for legacy backends).
+    @SerializedName("server_time_ms") val serverTimeMs: Long? = null,
+    @SerializedName("frame_sequence") val frameSequence: Int? = null
 )
 
 /** attendance_summary message (every 5-10s from backend pipeline) */
@@ -250,6 +253,10 @@ data class AttendanceSummaryMessage(
     val type: String,
     @SerializedName("schedule_id") val scheduleId: String,
     @SerializedName("present_count") val presentCount: Int,
+    @SerializedName("on_time_count") val onTimeCount: Int = 0,
+    @SerializedName("late_count") val lateCount: Int = 0,
+    @SerializedName("absent_count") val absentCount: Int = 0,
+    @SerializedName("early_leave_count") val earlyLeaveCount: Int = 0,
     @SerializedName("total_enrolled") val totalEnrolled: Int,
     val present: List<AttendanceSummaryStudent>?,
     val absent: List<AttendanceSummaryStudent>?,

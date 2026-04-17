@@ -45,6 +45,7 @@ class SessionPipeline:
         self._last_flush: float = 0.0
         self._last_summary: float = 0.0
         self._frame_count: int = 0
+        self._frame_sequence: int = 0
 
         # Cached schedule metadata for notification context
         self._faculty_id: str | None = None
@@ -175,6 +176,12 @@ class SessionPipeline:
                     frame = self._grabber.grab()
                     if frame is None:
                         _consecutive_none += 1
+                        # Pause presence tracking after ~2s of missing frames so
+                        # camera downtime does NOT count as student absence.
+                        # resume_absence_tracking() fires automatically on next frame.
+                        if _consecutive_none == int(2.0 * settings.PROCESSING_FPS):
+                            if self._presence is not None:
+                                self._presence.pause_absence_tracking(time.monotonic())
                         # Log every 10s worth of missed frames (at PROCESSING_FPS)
                         if _consecutive_none == int(10 * settings.PROCESSING_FPS):
                             logger.warning(
@@ -207,6 +214,10 @@ class SessionPipeline:
                             db.close()
 
                         # Handle events (check-in notifications, early leave alerts)
+                        if events:
+                            # Broadcast updated summary immediately on any status change
+                            await self._broadcast_attendance_summary()
+                            self._last_summary = time.monotonic()
                         for event in events:
                             await self._handle_event(event)
 
@@ -240,8 +251,8 @@ class SessionPipeline:
                         logger.exception("Pipeline %s: error flushing presence", self.schedule_id[:8])
                     self._last_flush = now
 
-                # Periodic attendance summary (every 5s)
-                if (now - self._last_summary) >= 5.0:
+                # Periodic attendance summary (every 2s for real-time UI responsiveness)
+                if (now - self._last_summary) >= 2.0:
                     await self._broadcast_attendance_summary()
                     # Broadcast stream health so the app can show "camera offline"
                     await self._broadcast_stream_status(_consecutive_none > 0)
@@ -249,6 +260,13 @@ class SessionPipeline:
 
                 # Sleep to hit target FPS
                 elapsed = time.monotonic() - loop_start
+                if elapsed > frame_interval * 1.5:
+                    logger.debug(
+                        "Pipeline %s: frame took %.1fms (budget %.1fms), skipping ahead",
+                        self.schedule_id[:8],
+                        elapsed * 1000,
+                        frame_interval * 1000,
+                    )
                 sleep_time = max(0, frame_interval - elapsed)
                 if sleep_time > 0:
                     await asyncio.sleep(sleep_time)
@@ -260,6 +278,7 @@ class SessionPipeline:
 
     async def _broadcast_frame_update(self, track_frame) -> None:
         """Send frame_update message to WebSocket clients."""
+        self._frame_sequence += 1
         try:
             from app.routers.websocket import ws_manager
 
@@ -282,6 +301,8 @@ class SessionPipeline:
                 {
                     "type": "frame_update",
                     "timestamp": track_frame.timestamp,
+                    "server_time_ms": int(time.time() * 1000),
+                    "frame_sequence": self._frame_sequence,
                     "frame_size": [settings.FRAME_GRABBER_WIDTH, settings.FRAME_GRABBER_HEIGHT],
                     "tracks": tracks_data,
                     "fps": round(track_frame.fps, 1),

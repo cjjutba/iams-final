@@ -260,7 +260,7 @@ fun FacultyReportsScreen(
                                         color = TextPrimary
                                     )
                                     ReportStatItem(
-                                        label = "Present",
+                                        label = "On Time",
                                         value = "${report.summary.presentCount}",
                                         color = PresentFg
                                     )

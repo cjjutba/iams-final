@@ -2,6 +2,7 @@ package com.iams.app.ui.auth
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.iams.app.data.api.ApiErrorParser
 import com.iams.app.data.api.ApiService
 import com.iams.app.data.model.ForgotPasswordRequest
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -46,7 +47,7 @@ class ForgotPasswordViewModel @Inject constructor(
                     val message = when (response.code()) {
                         404 -> "No account found with that email"
                         429 -> "Too many requests. Please try again later."
-                        else -> response.errorBody()?.string() ?: "Failed to send reset link"
+                        else -> ApiErrorParser.parse(response, fallback = "Failed to send reset link")
                     }
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,

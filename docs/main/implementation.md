@@ -340,3 +340,73 @@ Score = (total_present / total_scans) × 100%
 | Database error | Return 500, log error |
 | Invalid token | Return 401, prompt re-login |
 | WebSocket disconnect | Auto-reconnect |
+
+---
+
+## 10. Hybrid Detection (2026-04-17 rollout)
+
+> The Live Feed now uses **hybrid detection**: ML Kit on the phone owns box positions, the backend owns identities. See master plan `docs/plans/2026-04-17-hybrid-detection/00-master-plan.md` for the authoritative design.
+
+### 10.1 What each side does
+
+| Component | Role |
+|-----------|------|
+| `MlKitFrameSink` (phone) | Taps the WebRTC `VideoTrack` as a second sink; emits `MlKitFace` detections at ~15 fps. |
+| Backend `realtime_pipeline` | Runs SCRFD + ByteTrack + ArcFace + FAISS at 20 fps; broadcasts `frame_update` with `server_time_ms` + `frame_sequence`. |
+| `FaceIdentityMatcher` (phone) | Greedy IoU binds ML Kit faces to backend tracks; sticky release, identity hold, swap prevention. |
+| `HybridFallbackController` (phone) | Watches ML Kit + WS liveness, emits `HYBRID` / `BACKEND_ONLY` / `DEGRADED` / `OFFLINE`. |
+| `HybridTrackOverlay` (phone) | Pure drawing — takes `HybridTrack`s, paints boxes at 30 fps. |
+| `InterpolatedTrackOverlay` (phone) | Legacy path for `BACKEND_ONLY` / feature-flag-off. |
+
+### 10.2 Feature flag
+
+`BuildConfig.HYBRID_DETECTION_ENABLED` (default `true` in debug) gates the entire ViewModel integration. When `false`, the Live Feed is visually identical to the pre-rollout state.
+
+### 10.3 Starting the pipeline
+
+`FacultyLiveFeedViewModel.initialize()` (called once per screen opening) does:
+
+```text
+if HYBRID_DETECTION_ENABLED:
+  - TimeSyncClient.start("http://<host>:<port>")
+  - HybridFallbackController.start()
+  - 2 Hz ticker emitting DiagnosticMetricsCollector.Snapshot
+```
+
+ML Kit callbacks fan in via `NativeWebRtcVideoPlayer`'s `onMlKitFacesUpdate` / `onMlKitFrameSize`. WebSocket `frame_update` messages fan in via the existing `AttendanceWebSocketClient.frameUpdate` flow. Both paths hand the matcher its data through a **single-threaded** `Dispatchers.Default.limitedParallelism(1)` (matcher is not thread-safe by contract — master-plan §5.5).
+
+### 10.4 Overlay selection rules
+
+| Fallback mode | Overlay rendered |
+|---------------|------------------|
+| `HYBRID` | `HybridTrackOverlay` — ML Kit positions + backend names |
+| `DEGRADED` (WS silent) | `HybridTrackOverlay` in COASTING visual style |
+| `BACKEND_ONLY` (ML Kit silent) | `InterpolatedTrackOverlay` (legacy) |
+| `OFFLINE` (both silent) | No overlay |
+| Flag `false` | `InterpolatedTrackOverlay` (legacy) |
+
+### 10.5 Backend protocol additions (backwards compatible)
+
+Every `frame_update` now carries:
+
+```json
+{ "server_time_ms": 1744876543210, "frame_sequence": 1523, ... }
+```
+
+Plus a new endpoint:
+
+```http
+GET /api/v1/health/time  →  { "server_time_ms": <int> }
+```
+
+Old Android APKs ignore the new keys; new APKs tolerate their absence (fields are nullable).
+
+### 10.6 Where to tune
+
+All knob values live in `docs/plans/2026-04-17-hybrid-detection/TUNING.md`. Change code + the tuning log together.
+
+### 10.7 Testing
+
+- Unit: `./gradlew :app:testDebugUnitTest` (matcher tests, ≥ 95 % coverage on `com.iams.app.hybrid`).
+- Coverage: `./gradlew :app:jacocoTestReport`.
+- Manual: scenario matrix in `docs/plans/2026-04-17-hybrid-detection/10-integration-validation-docs.md` §3 (pending first on-device pass).

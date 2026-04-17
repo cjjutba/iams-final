@@ -76,14 +76,20 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
+import com.iams.app.BuildConfig
 import com.iams.app.data.model.StudentAttendanceStatus
+import com.iams.app.hybrid.HybridMode
 import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.SkeletonBox
+import com.iams.app.ui.components.HybridTrackOverlay
 import com.iams.app.ui.components.InterpolatedTrackOverlay
 import com.iams.app.ui.components.NativeWebRtcVideoPlayer
 import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.debug.HybridDiagnosticHud
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import com.iams.app.ui.theme.AbsentBg
 import com.iams.app.ui.theme.AbsentFg
 import com.iams.app.ui.theme.Background
@@ -116,10 +122,24 @@ fun FacultyLiveFeedScreen(
     val uiState by viewModel.uiState.collectAsState()
     val tracks by viewModel.tracks.collectAsState()
     val wsConnected by viewModel.wsConnected.collectAsState()
+    val hybridTracks by viewModel.hybridTracks.collectAsState()
+    val hybridMode by viewModel.hybridMode.collectAsState()
+    val mlkitFrameSize by viewModel.mlkitFrameSize.collectAsState()
+    val hudSnapshot by viewModel.hudSnapshot.collectAsState()
     val spacing = IAMSThemeTokens.spacing
+
+    // Hybrid diagnostic HUD — hidden by default; long-press the video to toggle.
+    // (Was on-by-default in debug but that cluttered the screen on low-spec devices —
+    //  opt-in avoids visual noise unless the user is actively debugging.)
+    var hudVisible by remember { mutableStateOf(false) }
 
     var activeTab by remember { mutableStateOf(PanelTab.DETECTED) }
     var showEarlyLeaveDialog by remember { mutableStateOf(false) }
+
+    // Video-ready state: true only once WebRTC has delivered the first actual frame.
+    // Gates the bounding-box overlay so detections don't appear on a black screen
+    // during the ~1-3s WebRTC handshake. Reset whenever the stream URL changes.
+    var isVideoReady by remember(uiState.videoUrl) { mutableStateOf(false) }
 
     // -- Fullscreen + zoom state --
     var isFullscreen by remember { mutableStateOf(false) }
@@ -355,7 +375,10 @@ fun FacultyLiveFeedScreen(
                 ConnectionStatusBar(
                     isConnected = wsConnected,
                     isWaitingForCamera = uiState.videoUrl.isEmpty(),
-                    detectedCount = tracks.count { it.status == "recognized" || it.status == "unknown" }
+                    detectedCount = remember(tracks, isVideoReady) {
+                        if (!isVideoReady) 0
+                        else tracks.count { it.status == "recognized" || it.status == "unknown" }
+                    }
                 )
 
                 SessionControlBar(
@@ -399,14 +422,95 @@ fun FacultyLiveFeedScreen(
                             whepUrl = uiState.videoUrl,
                             modifier = Modifier.fillMaxSize(),
                             onError = { error -> viewModel.onVideoError(error) },
+                            onVideoReady = { isVideoReady = true },
+                            onMlKitFacesUpdate = viewModel::onMlKitFaces,
+                            onMlKitFrameSize = viewModel::onMlKitFrameSize,
+                            enableMlKit = BuildConfig.HYBRID_DETECTION_ENABLED,
                         )
 
-                        InterpolatedTrackOverlay(
-                            tracks = tracks,
-                            modifier = Modifier.fillMaxSize(),
-                            videoFrameWidth = frameDimensions.first.takeIf { it > 0 } ?: 896,
-                            videoFrameHeight = frameDimensions.second.takeIf { it > 0 } ?: 512
-                        )
+                        // Overlay selection: hybrid (ML Kit boxes + backend names) vs legacy
+                        // (backend-authoritative interpolated boxes). The fallback controller
+                        // picks BACKEND_ONLY if ML Kit is silent >2s and OFFLINE if both legs
+                        // are silent — in which case we draw no overlay at all.
+                        val useHybridOverlay = BuildConfig.HYBRID_DETECTION_ENABLED &&
+                            hybridMode != HybridMode.BACKEND_ONLY &&
+                            hybridMode != HybridMode.OFFLINE
+                        val useLegacyOverlay = !BuildConfig.HYBRID_DETECTION_ENABLED ||
+                            hybridMode == HybridMode.BACKEND_ONLY
+
+                        if (useHybridOverlay) {
+                            // Prefer ML Kit's reported frame dimensions (post-rotation) so the
+                            // aspect-fit math matches the faces the sink actually saw. Fall back
+                            // to the backend-reported size or the 896x512 default if unknown.
+                            val effW = mlkitFrameSize.first
+                                .takeIf { it > 0 }
+                                ?: frameDimensions.first.takeIf { it > 0 }
+                                ?: 896
+                            val effH = mlkitFrameSize.second
+                                .takeIf { it > 0 }
+                                ?: frameDimensions.second.takeIf { it > 0 }
+                                ?: 512
+                            HybridTrackOverlay(
+                                tracks = hybridTracks,
+                                modifier = Modifier.fillMaxSize(),
+                                videoFrameWidth = effW,
+                                videoFrameHeight = effH,
+                                isVideoReady = isVideoReady,
+                            )
+                        } else if (useLegacyOverlay) {
+                            InterpolatedTrackOverlay(
+                                tracks = tracks,
+                                modifier = Modifier.fillMaxSize(),
+                                videoFrameWidth = frameDimensions.first.takeIf { it > 0 } ?: 896,
+                                videoFrameHeight = frameDimensions.second.takeIf { it > 0 } ?: 512,
+                                isVideoReady = isVideoReady,
+                            )
+                        }
+
+                        // Diagnostic HUD — only renders when hybrid is on AND the user hasn't
+                        // toggled it off. Long-press the video area to flip. Zero cost when hidden.
+                        if (BuildConfig.HYBRID_DETECTION_ENABLED) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .pointerInput(Unit) {
+                                        detectTapGestures(onLongPress = { hudVisible = !hudVisible })
+                                    },
+                            ) {
+                                if (hudVisible) {
+                                    HybridDiagnosticHud(
+                                        snapshot = hudSnapshot,
+                                        modifier = Modifier.align(Alignment.TopStart),
+                                    )
+                                }
+                            }
+                        }
+
+                        // "Connecting..." overlay shown during WebRTC handshake
+                        // (before first video frame arrives). Disappears when video is ready.
+                        if (!isVideoReady && uiState.videoError == null) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.5f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    CircularProgressIndicator(
+                                        color = Color.White.copy(alpha = 0.7f),
+                                        strokeWidth = 2.dp,
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(spacing.md))
+                                    Text(
+                                        text = "Connecting to camera…",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = Color.White.copy(alpha = 0.85f),
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
 
                         if (uiState.videoError != null) {
                             Box(
@@ -586,14 +690,21 @@ fun FacultyLiveFeedScreen(
                                     color = TextPrimary
                                 )
                             }
+                            val recognizedCount = remember(tracks, isVideoReady) {
+                                if (!isVideoReady) 0 else tracks.count { it.status == "recognized" }
+                            }
+                            val detectedCount = remember(tracks, isVideoReady) {
+                                if (!isVideoReady) 0
+                                else tracks.count { it.status == "recognized" || it.status == "unknown" }
+                            }
                             Text(
-                                text = "${tracks.count { it.status == "recognized" }} recognized / ${tracks.count { it.status == "recognized" || it.status == "unknown" }} detected",
+                                text = "$recognizedCount recognized / $detectedCount detected",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextSecondary
                             )
                         }
 
-                        if (tracks.isEmpty() && uiState.presentStudents.isEmpty()) {
+                        if (isVideoReady && tracks.isEmpty() && uiState.presentStudents.isEmpty()) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -628,12 +739,23 @@ fun FacultyLiveFeedScreen(
                                 color = TextPrimary
                             )
                             Text(
-                                text = "${uiState.presentCount} / ${uiState.totalEnrolled}",
+                                text = if (isVideoReady) "${uiState.presentCount} / ${uiState.totalEnrolled}" else "— / —",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextSecondary
                             )
                         }
                     }
+                }
+
+                // Cache filtered track lists outside LazyColumn (composable scope).
+                // Gated on isVideoReady — panels must stay in sync with the video feed
+                // so detections aren't shown while the stream is still connecting.
+                val recognizedTracks = remember(tracks, isVideoReady) {
+                    if (!isVideoReady) emptyList()
+                    else tracks.filter { it.status == "recognized" && it.name != null }
+                }
+                val unknownTracks = remember(tracks, isVideoReady) {
+                    if (!isVideoReady) emptyList() else tracks.filter { it.status == "unknown" }
                 }
 
                 // Attendance list
@@ -642,22 +764,42 @@ fun FacultyLiveFeedScreen(
                         .weight(1f)
                         .padding(horizontal = spacing.cardPadding)
                 ) {
-                    when (activeTab) {
+                    if (!isVideoReady) {
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = spacing.xxl),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    CircularProgressIndicator(
+                                        color = TextTertiary,
+                                        strokeWidth = 2.dp,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(spacing.md))
+                                    Text(
+                                        text = "Waiting for camera feed…",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = TextTertiary,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+                    } else when (activeTab) {
                         PanelTab.DETECTED -> {
-                            // Show currently tracked faces from real-time data
-                            val recognized = tracks.filter { it.status == "recognized" && it.name != null }
-                            val unknown = tracks.filter { it.status == "unknown" }
-
-                            if (recognized.isNotEmpty()) {
-                                item { AttendanceSectionLabel("Recognized (${recognized.size})", PresentFg) }
-                                items(recognized, key = { it.trackId }) { track ->
+                            if (recognizedTracks.isNotEmpty()) {
+                                item { AttendanceSectionLabel("Recognized (${recognizedTracks.size})", PresentFg) }
+                                items(recognizedTracks, key = { it.trackId }) { track ->
                                     TrackRow(name = track.name ?: "Unknown", dotColor = PresentFg)
                                     HorizontalDivider(color = Border, thickness = 0.5.dp)
                                 }
                             }
-                            if (unknown.isNotEmpty()) {
-                                item { AttendanceSectionLabel("Unknown (${unknown.size})", Color(0xFFFF9800)) }
-                                items(unknown, key = { it.trackId }) { track ->
+                            if (unknownTracks.isNotEmpty()) {
+                                item { AttendanceSectionLabel("Unknown (${unknownTracks.size})", Color(0xFFFF9800)) }
+                                items(unknownTracks, key = { it.trackId }) { track ->
                                     TrackRow(name = "Unknown", dotColor = Color(0xFFFF9800))
                                     HorizontalDivider(color = Border, thickness = 0.5.dp)
                                 }

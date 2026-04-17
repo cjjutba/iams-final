@@ -2,12 +2,15 @@ package com.iams.app.ui.faculty
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.iams.app.data.api.ApiErrorParser
 import com.iams.app.data.api.ApiService
 import com.iams.app.data.model.ChangePasswordRequest
 import com.iams.app.data.model.UpdateProfileRequest
 import com.iams.app.data.model.UserResponse
 import com.iams.app.ui.utils.InputSanitizer
 import com.iams.app.ui.utils.InputValidation
+import com.iams.app.ui.utils.PasswordEvaluation
+import com.iams.app.ui.utils.PasswordPolicy
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -41,7 +44,26 @@ data class FacultyEditProfileUiState(
     // Result messages
     val successMessage: String? = null,
     val errorMessage: String? = null,
-)
+
+    // Touched flags — suppress errors until user interacts.
+    val newPasswordTouched: Boolean = false,
+    val confirmPasswordTouched: Boolean = false,
+) {
+    val passwordEvaluation: PasswordEvaluation
+        get() = PasswordPolicy.evaluate(newPassword)
+
+    val liveConfirmError: String?
+        get() = if (!confirmPasswordTouched || confirmPassword.isEmpty()) null
+        else if (newPassword != confirmPassword) "Passwords do not match"
+        else null
+
+    val canSubmitPassword: Boolean
+        get() = currentPassword.isNotBlank() &&
+            passwordEvaluation.isValid &&
+            confirmPassword.isNotEmpty() &&
+            newPassword == confirmPassword &&
+            !isChangingPassword
+}
 
 @HiltViewModel
 class FacultyEditProfileViewModel @Inject constructor(
@@ -105,11 +127,19 @@ class FacultyEditProfileViewModel @Inject constructor(
     }
 
     fun updateNewPassword(value: String) {
-        _uiState.value = _uiState.value.copy(newPassword = value, newPasswordError = null)
+        _uiState.value = _uiState.value.copy(
+            newPassword = value,
+            newPasswordError = null,
+            newPasswordTouched = true,
+        )
     }
 
     fun updateConfirmPassword(value: String) {
-        _uiState.value = _uiState.value.copy(confirmPassword = value, confirmPasswordError = null)
+        _uiState.value = _uiState.value.copy(
+            confirmPassword = value,
+            confirmPasswordError = null,
+            confirmPasswordTouched = true,
+        )
     }
 
     // -- Save profile --
@@ -144,7 +174,7 @@ class FacultyEditProfileViewModel @Inject constructor(
                 } else {
                     _uiState.value = _uiState.value.copy(
                         isSavingProfile = false,
-                        errorMessage = "Failed to update profile",
+                        errorMessage = ApiErrorParser.parse(response, fallback = "Failed to update profile"),
                     )
                 }
             } catch (e: Exception) {
@@ -160,17 +190,28 @@ class FacultyEditProfileViewModel @Inject constructor(
 
     fun changePassword() {
         val state = _uiState.value
+        val sanitizedNew = InputSanitizer.password(state.newPassword)
 
         // Validate
         val currentErr = InputValidation.validateRequired(state.currentPassword, "Current password")
-        val newErr = InputValidation.validatePassword(state.newPassword)
-        val confirmErr = InputValidation.validatePasswordMatch(state.newPassword, state.confirmPassword)
+        val newErr = InputValidation.validatePassword(sanitizedNew)
+        val confirmErr = InputValidation.validatePasswordMatch(sanitizedNew, state.confirmPassword)
 
         if (currentErr != null || newErr != null || confirmErr != null) {
             _uiState.value = _uiState.value.copy(
                 currentPasswordError = currentErr,
                 newPasswordError = newErr,
-                confirmPasswordError = confirmErr
+                confirmPasswordError = confirmErr,
+                newPasswordTouched = true,
+                confirmPasswordTouched = true,
+            )
+            return
+        }
+
+        if (state.currentPassword == sanitizedNew) {
+            _uiState.value = state.copy(
+                newPasswordError = "New password must be different from current password",
+                newPasswordTouched = true,
             )
             return
         }
@@ -180,7 +221,7 @@ class FacultyEditProfileViewModel @Inject constructor(
             try {
                 val request = ChangePasswordRequest(
                     oldPassword = state.currentPassword,
-                    newPassword = state.newPassword,
+                    newPassword = sanitizedNew,
                 )
                 val response = apiService.changePassword(request)
                 if (response.isSuccessful) {
@@ -189,12 +230,18 @@ class FacultyEditProfileViewModel @Inject constructor(
                         currentPassword = "",
                         newPassword = "",
                         confirmPassword = "",
+                        newPasswordTouched = false,
+                        confirmPasswordTouched = false,
                         successMessage = "Password changed successfully",
                     )
                 } else {
+                    val msg = when (response.code()) {
+                        400, 401 -> "Current password is incorrect"
+                        else -> ApiErrorParser.parse(response, fallback = "Failed to change password")
+                    }
                     _uiState.value = _uiState.value.copy(
                         isChangingPassword = false,
-                        errorMessage = "Failed to change password",
+                        errorMessage = msg,
                     )
                 }
             } catch (e: Exception) {

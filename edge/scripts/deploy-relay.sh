@@ -119,15 +119,17 @@ Group=${RPI_USER}
 EnvironmentFile=${RPI_HOME}/iams-relay.env
 ExecStart=${RPI_HOME}/iams-relay-start.sh
 
-# Restart aggressively — relay must stay up
+# Restart always — the script handles its own backoff internally
 Restart=always
-RestartSec=3
-StartLimitInterval=120
-StartLimitBurst=20
+RestartSec=10
+StartLimitInterval=0
 
 # Resource limits
-MemoryLimit=256M
+MemoryMax=256M
 CPUQuota=80%
+
+# Kill any leftover FFmpeg processes on stop
+ExecStopPost=/usr/bin/killall -q ffmpeg || true
 
 # Logging
 StandardOutput=append:${RPI_HOME}/iams-relay.log

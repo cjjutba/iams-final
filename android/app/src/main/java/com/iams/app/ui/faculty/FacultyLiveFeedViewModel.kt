@@ -6,6 +6,13 @@ import com.iams.app.BuildConfig
 import com.iams.app.data.api.ApiService
 import com.iams.app.data.api.AttendanceWebSocketClient
 import com.iams.app.data.api.TokenManager
+import com.iams.app.data.sync.TimeSyncClient
+import com.iams.app.hybrid.FaceIdentityMatcher
+import com.iams.app.hybrid.HybridFallbackController
+import com.iams.app.hybrid.HybridMode
+import com.iams.app.hybrid.HybridTrack
+import com.iams.app.ui.debug.DiagnosticMetricsCollector
+import com.iams.app.webrtc.MlKitFace
 import okhttp3.OkHttpClient
 import com.iams.app.data.model.AttendanceSummaryMessage
 import com.iams.app.data.model.FrameUpdateMessage
@@ -17,9 +24,14 @@ import com.iams.app.data.model.StudentAttendanceStatus
 import com.iams.app.data.model.TrackInfo
 import android.util.Log
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -49,7 +61,9 @@ data class LiveFeedUiState(
 class FacultyLiveFeedViewModel @Inject constructor(
     private val apiService: ApiService,
     private val okHttpClient: OkHttpClient,
-    private val tokenManager: TokenManager
+    private val tokenManager: TokenManager,
+    private val matcher: FaceIdentityMatcher,
+    private val timeSync: TimeSyncClient,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LiveFeedUiState())
@@ -65,6 +79,34 @@ class FacultyLiveFeedViewModel @Inject constructor(
     val wsConnected: StateFlow<Boolean> = wsClient.isConnected
     val frameDimensions: StateFlow<Pair<Int, Int>> = wsClient.frameDimensions
 
+    // --- Hybrid detection state (master-plan §5, session 06) ---
+    // Serialises every matcher call onto one worker thread; matcher is not thread-safe.
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val matcherDispatcher = Dispatchers.Default.limitedParallelism(1)
+
+    /** ML Kit-positioned boxes fused with backend identities. Empty when hybrid disabled. */
+    val hybridTracks: StateFlow<List<HybridTrack>> = matcher.tracks
+
+    /** Effective ML Kit frame dimensions after rotation. Fed from the WebRTC sink. */
+    private val _mlkitFrameSize = MutableStateFlow(Pair(0, 0))
+    val mlkitFrameSize: StateFlow<Pair<Int, Int>> = _mlkitFrameSize.asStateFlow()
+
+    /** Time-sync passthroughs for the HUD (session 04). */
+    val timeSyncSkewMs: StateFlow<Long> = timeSync.skewMs
+    val timeSyncRttMs: StateFlow<Long> = timeSync.lastRttMs
+
+    // Fallback controller + HUD collector are ViewModel-owned (not Hilt).
+    private val fallback = HybridFallbackController(
+        matcher = matcher,
+        timeSync = timeSync,
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    )
+    val hybridMode: StateFlow<HybridMode> = fallback.mode
+
+    private val metricsCollector = DiagnosticMetricsCollector()
+    private val _hudSnapshot = MutableStateFlow(DiagnosticMetricsCollector.Snapshot.EMPTY)
+    val hudSnapshot: StateFlow<DiagnosticMetricsCollector.Snapshot> = _hudSnapshot.asStateFlow()
+
     private var initialized = false
 
     fun initialize(scheduleId: String, roomId: String) {
@@ -75,6 +117,10 @@ class FacultyLiveFeedViewModel @Inject constructor(
         // Start WebSocket immediately
         wsClient.connect(scheduleId)
         observeWebSocket()
+
+        if (BuildConfig.HYBRID_DETECTION_ENABLED) {
+            startHybridPipeline()
+        }
 
         // Check if session is already active
         viewModelScope.launch {
@@ -166,7 +212,7 @@ class FacultyLiveFeedViewModel @Inject constructor(
     }
 
     private fun observeWebSocket() {
-        // Observe frame updates for real-time stats
+        // Observe frame updates for real-time stats (and forward to matcher when hybrid on)
         viewModelScope.launch {
             wsClient.frameUpdate.collect { msg ->
                 if (msg != null) {
@@ -174,6 +220,14 @@ class FacultyLiveFeedViewModel @Inject constructor(
                         fps = msg.fps,
                         processingMs = msg.processingMs,
                     )
+                    if (BuildConfig.HYBRID_DETECTION_ENABLED) {
+                        val nowNs = System.nanoTime()
+                        fallback.reportBackendMessage(nowNs)
+                        metricsCollector.recordBackend(nowNs, msg.frameSequence)
+                        viewModelScope.launch(matcherDispatcher) {
+                            matcher.onBackendFrame(msg.tracks, msg.serverTimeMs, nowNs)
+                        }
+                    }
                 }
             }
         }
@@ -186,6 +240,59 @@ class FacultyLiveFeedViewModel @Inject constructor(
                 }
             }
         }
+
+        // Observe WS connection state — matcher + fallback need explicit hard events.
+        if (BuildConfig.HYBRID_DETECTION_ENABLED) {
+            viewModelScope.launch {
+                wsClient.isConnected.collect { connected ->
+                    if (connected) fallback.reportWsConnected()
+                    else fallback.reportWsDisconnected()
+                }
+            }
+        }
+    }
+
+    /**
+     * Bring up the hybrid pipeline: start time-sync polling, the fallback controller's ticker,
+     * and the HUD snapshot emitter. Called once per session from [initialize].
+     */
+    private fun startHybridPipeline() {
+        // Time-sync client talks to /api/v1/health/time via the shared OkHttpClient.
+        val baseUrl = "http://${BuildConfig.BACKEND_HOST}:${BuildConfig.BACKEND_PORT}"
+        timeSync.start(baseUrl)
+        fallback.start()
+
+        // 2Hz snapshot emitter — feeds the diagnostic HUD. Not CPU-intensive.
+        viewModelScope.launch {
+            while (isActive) {
+                _hudSnapshot.value = metricsCollector.snapshot(
+                    tracks = matcher.tracks.value,
+                    skewMs = timeSync.skewMs.value,
+                    rttMs = timeSync.lastRttMs.value,
+                    nowNs = System.nanoTime(),
+                )
+                delay(HUD_SNAPSHOT_INTERVAL_MS)
+            }
+        }
+    }
+
+    /** Called by [NativeWebRtcVideoPlayer]'s onMlKitFacesUpdate callback (session 02). */
+    fun onMlKitFaces(faces: List<MlKitFace>) {
+        if (!BuildConfig.HYBRID_DETECTION_ENABLED) return
+        val nowNs = System.nanoTime()
+        // Always report liveness so the fallback controller sees the sink is alive even if
+        // the face list is empty (covered-camera case must NOT trigger BACKEND_ONLY).
+        fallback.reportMlkitUpdate(nowNs)
+        metricsCollector.recordMlkit(nowNs)
+        viewModelScope.launch(matcherDispatcher) {
+            matcher.onMlKitUpdate(faces, nowNs)
+        }
+    }
+
+    /** Called by [NativeWebRtcVideoPlayer]'s onMlKitFrameSize callback (session 02). */
+    fun onMlKitFrameSize(width: Int, height: Int) {
+        if (!BuildConfig.HYBRID_DETECTION_ENABLED) return
+        _mlkitFrameSize.value = width to height
     }
 
     private fun updateFromAttendanceSummary(summary: AttendanceSummaryMessage) {
@@ -299,5 +406,14 @@ class FacultyLiveFeedViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         wsClient.destroy()
+        if (BuildConfig.HYBRID_DETECTION_ENABLED) {
+            fallback.stop()
+            timeSync.stop()
+            viewModelScope.launch(matcherDispatcher) { matcher.reset() }
+        }
+    }
+
+    companion object {
+        private const val HUD_SNAPSHOT_INTERVAL_MS = 500L
     }
 }

@@ -16,6 +16,7 @@ Replaces scan-count logic with continuous time tracking:
 """
 
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -72,6 +73,13 @@ class TrackPresenceService:
         self._schedule = None  # Cached schedule object
         self._early_leave_timeout: float = settings.EARLY_LEAVE_TIMEOUT  # per-schedule override
 
+        # Camera-offline pause state. When the pipeline detects the camera has
+        # been offline for a few seconds, it calls pause_absence_tracking().
+        # This records the pause start time so that upon resume we can shift
+        # every student's absent_since timer forward by the offline duration —
+        # preventing camera downtime from falsely triggering early-leave events.
+        self._paused_at: float | None = None
+
     def rebind_db(self, db: Session) -> None:
         """Swap the underlying DB session (for short-lived session pattern)."""
         self.db = db
@@ -90,6 +98,57 @@ class TrackPresenceService:
     def set_early_leave_timeout(self, seconds: float) -> None:
         """Update the early leave timeout (GIL-safe for mid-session changes)."""
         self._early_leave_timeout = seconds
+
+    def pause_absence_tracking(self, now_mono: float) -> None:
+        """Freeze absence timers for all tracked students (camera went offline).
+
+        Called by SessionPipeline when the camera has been offline for ~2
+        seconds. Stores the pause start time. When the camera comes back and
+        the next frame arrives, resume_absence_tracking() shifts every timer
+        forward by the offline duration so camera downtime is NOT counted as
+        student absence.
+
+        Idempotent — safe to call multiple times while already paused.
+        """
+        if self._paused_at is None:
+            self._paused_at = now_mono
+            logger.info(
+                "Presence tracking PAUSED for schedule %s (camera offline)",
+                self.schedule_id[:8],
+            )
+
+    def resume_absence_tracking(self, now_mono: float) -> None:
+        """Unfreeze absence timers after camera comes back online.
+
+        Shifts every student's absent_since and last_seen_time forward by the
+        pause duration so the early-leave timeout check (now_mono - absent_since)
+        effectively excludes the offline period. Also extends presence-start
+        timers so total_present_seconds doesn't double-count downtime.
+
+        Called automatically from process_track_frame() when a frame arrives
+        while paused.
+        """
+        if self._paused_at is None:
+            return
+        offline_duration = now_mono - self._paused_at
+        if offline_duration <= 0:
+            self._paused_at = None
+            return
+
+        for state in self._students.values():
+            if state.absent_since is not None:
+                state.absent_since += offline_duration
+            if state.last_seen_time is not None:
+                state.last_seen_time += offline_duration
+            if state.last_presence_start is not None:
+                state.last_presence_start += offline_duration
+
+        logger.info(
+            "Presence tracking RESUMED for schedule %s (camera back after %.1fs offline)",
+            self.schedule_id[:8],
+            offline_duration,
+        )
+        self._paused_at = None
 
     def start_session(self) -> None:
         """Load all enrolled students and create attendance records in batch.
@@ -317,6 +376,13 @@ class TrackPresenceService:
         """
         events: list[dict] = []
 
+        # Auto-resume absence tracking if we were paused (camera just came back online).
+        # This shifts all absent_since timers forward by the offline duration so we
+        # don't falsely trigger early_leave events for students who were present
+        # before the camera outage.
+        if self._paused_at is not None:
+            self.resume_absence_tracking(now_mono)
+
         # Collect recognized user_ids from this frame
         present_user_ids: set[str] = set()
         for track in track_frame.tracks:
@@ -380,7 +446,12 @@ class TrackPresenceService:
                         )
 
                     elif state.early_leave_flagged and not state.early_leave_returned:
-                        # Returned after early leave — restore status but keep flag for logging
+                        # Returned after early leave — restore status but keep flag for logging.
+                        # CRITICAL: compute absence duration BEFORE clearing absent_since,
+                        # otherwise the EarlyLeaveEvent update below stores None.
+                        absent_duration = None
+                        if state.absent_since is not None:
+                            absent_duration = int(now_mono - state.absent_since)
                         state.early_leave_returned = True
                         state.absent_since = None
                         state.last_presence_start = now_mono
@@ -394,11 +465,17 @@ class TrackPresenceService:
                             },
                         )
 
-                        # Persist return to EarlyLeaveEvent record
+                        # Persist return to EarlyLeaveEvent record.
+                        # Coerce string UUID → uuid.UUID for cross-DB compatibility.
+                        _att_uuid = (
+                            uuid.UUID(state.attendance_id)
+                            if isinstance(state.attendance_id, str)
+                            else state.attendance_id
+                        )
                         early_event = (
                             self.db.query(EarlyLeaveEvent)
                             .filter(
-                                EarlyLeaveEvent.attendance_id == state.attendance_id,
+                                EarlyLeaveEvent.attendance_id == _att_uuid,
                                 EarlyLeaveEvent.returned == False,
                             )
                             .order_by(desc(EarlyLeaveEvent.detected_at))
@@ -407,8 +484,8 @@ class TrackPresenceService:
                         if early_event:
                             early_event.returned = True
                             early_event.returned_at = datetime.now()
-                            if state.absent_since is not None:
-                                early_event.absence_duration_seconds = int(now_mono - state.absent_since)
+                            if absent_duration is not None:
+                                early_event.absence_duration_seconds = absent_duration
                             self.db.commit()
 
                         events.append(
@@ -465,8 +542,15 @@ class TrackPresenceService:
 
                             # Persist EarlyLeaveEvent to DB
                             consecutive_misses = int(absent_seconds / settings.SCAN_INTERVAL_SECONDS)
+                            # Coerce string UUID → uuid.UUID (SQLAlchemy UUID column on
+                            # SQLite requires object; PostgreSQL works with either).
+                            _attendance_uuid = (
+                                uuid.UUID(state.attendance_id)
+                                if isinstance(state.attendance_id, str)
+                                else state.attendance_id
+                            )
                             early_leave_event = EarlyLeaveEvent(
-                                attendance_id=state.attendance_id,
+                                attendance_id=_attendance_uuid,
                                 detected_at=datetime.now(),
                                 last_seen_at=(state.check_in_time if state.check_in_time else datetime.now()),
                                 consecutive_misses=max(1, consecutive_misses),
@@ -577,9 +661,14 @@ class TrackPresenceService:
         summary = {
             "total_students": len(self._students),
             "present_count": sum(
-                1 for s in self._students.values() if s.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
+                1
+                for s in self._students.values()
+                if s.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
+                and not (s.early_leave_flagged and not s.early_leave_returned)
             ),
-            "early_leave_count": sum(1 for s in self._students.values() if s.early_leave_flagged),
+            "early_leave_count": sum(
+                1 for s in self._students.values() if s.early_leave_flagged and not s.early_leave_returned
+            ),
             "absent_count": sum(1 for s in self._students.values() if s.status == AttendanceStatus.ABSENT),
         }
 
@@ -601,25 +690,27 @@ class TrackPresenceService:
                 # Still absent after early leave
                 early_leave.append(info)
             elif state.early_leave_flagged and state.early_leave_returned:
-                # Returned after early leave — show in both present/late AND early_leave_returned
+                # Returned after early leave — show in original category AND early_leave_returned
                 early_leave_returned.append(info)
                 if state.status == AttendanceStatus.LATE:
                     late.append(info)
-                    present.append(info)
                 elif state.status == AttendanceStatus.PRESENT:
                     present.append(info)
             elif state.status == AttendanceStatus.ABSENT:
                 absent.append(info)
             elif state.status == AttendanceStatus.LATE:
                 late.append(info)
-                present.append(info)
             elif state.status == AttendanceStatus.PRESENT:
                 present.append(info)
 
         return {
             "type": "attendance_summary",
             "schedule_id": self.schedule_id,
-            "present_count": len(present),
+            "present_count": len(present) + len(late),
+            "on_time_count": len(present),
+            "late_count": len(late),
+            "absent_count": len(absent),
+            "early_leave_count": len(early_leave),
             "total_enrolled": len(self._students),
             "present": present,
             "absent": absent,

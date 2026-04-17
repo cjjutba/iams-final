@@ -11,8 +11,10 @@ SOURCE="${CAMERA_RTSP_URL}"
 TARGET="${VPS_RTSP_URL}/${ROOM_ID}"
 MODE="${RELAY_MODE:-copy}"
 RETRY_DELAY=5
+MAX_RETRY_DELAY=60      # Cap backoff at 60 seconds
 WATCHDOG_INTERVAL=30    # Check every 30 seconds
 MIN_TX_BYTES=10000      # Minimum TX bytes per interval (stream should do ~50KB+/s)
+CONSECUTIVE_FAILURES=0
 
 FFMPEG_PID=""
 
@@ -84,13 +86,42 @@ run_ffmpeg() {
     FFMPEG_PID=$!
 }
 
-# Main loop
+# Wait for network to be fully up (WiFi may take a few seconds after boot)
+echo "IAMS Relay: Waiting for network..."
+for i in $(seq 1 30); do
+    if ping -c 1 -W 2 "${VPS_RTSP_URL#rtsp://}" 2>/dev/null | grep -q "1 received" 2>/dev/null; then
+        break
+    fi
+    # Fallback: just check if we have a default route
+    if ip route show default 2>/dev/null | grep -q "default"; then
+        break
+    fi
+    sleep 2
+done
+echo "IAMS Relay: Network ready"
+
+# Truncate log file if it's over 10MB to prevent filling the SD card
+LOG_FILE="${HOME}/iams-relay.log"
+if [ -f "${LOG_FILE}" ]; then
+    LOG_SIZE=$(stat -c%s "${LOG_FILE}" 2>/dev/null || stat -f%z "${LOG_FILE}" 2>/dev/null || echo "0")
+    if [ "${LOG_SIZE}" -gt 10485760 ]; then
+        tail -1000 "${LOG_FILE}" > "${LOG_FILE}.tmp" && mv "${LOG_FILE}.tmp" "${LOG_FILE}"
+        echo "IAMS Relay: Log truncated (was ${LOG_SIZE} bytes)"
+    fi
+fi
+
+# Main loop with exponential backoff
 while true; do
     run_ffmpeg
     echo "IAMS Relay: FFmpeg started (PID ${FFMPEG_PID})"
 
     # Give FFmpeg time to connect to camera + VPS before watchdog starts
     sleep 20
+
+    # If we got past the initial 20s, FFmpeg connected successfully — reset backoff
+    if kill -0 "${FFMPEG_PID}" 2>/dev/null; then
+        CONSECUTIVE_FAILURES=0
+    fi
 
     PREV_TX=$(get_tx_bytes)
 
@@ -112,10 +143,21 @@ while true; do
             wait "${FFMPEG_PID}" 2>/dev/null
             break
         fi
+
+        # Reset failure count — stream is actively transmitting
+        CONSECUTIVE_FAILURES=0
     done
 
     wait "${FFMPEG_PID}" 2>/dev/null
     EXIT_CODE=$?
-    echo "IAMS Relay: FFmpeg exited (code ${EXIT_CODE}), restarting in ${RETRY_DELAY}s..."
-    sleep "${RETRY_DELAY}"
+    CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
+
+    # Exponential backoff: 5s, 10s, 20s, 40s, capped at 60s
+    CURRENT_DELAY=$((RETRY_DELAY * (2 ** (CONSECUTIVE_FAILURES - 1))))
+    if [ "${CURRENT_DELAY}" -gt "${MAX_RETRY_DELAY}" ]; then
+        CURRENT_DELAY=${MAX_RETRY_DELAY}
+    fi
+
+    echo "IAMS Relay: FFmpeg exited (code ${EXIT_CODE}), attempt ${CONSECUTIVE_FAILURES}, retrying in ${CURRENT_DELAY}s..."
+    sleep "${CURRENT_DELAY}"
 done

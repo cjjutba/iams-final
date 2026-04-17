@@ -4,6 +4,11 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.hilt.android)
     alias(libs.plugins.ksp)
+    id("jacoco")
+}
+
+jacoco {
+    toolVersion = "0.8.11"
 }
 
 android {
@@ -27,11 +32,28 @@ android {
         buildConfigField("String", "BACKEND_PORT", "\"$port\"")
         buildConfigField("String", "MEDIAMTX_PORT", "\"$mtxPort\"")
         buildConfigField("String", "MEDIAMTX_WEBRTC_PORT", "\"$mtxWebrtcPort\"")
+
+        // Hybrid detection rollout (sessions 01-10). When true, the Faculty Live Feed
+        // uses ML Kit on-device for box positions + backend identities via the matcher.
+        // When false, falls back to the legacy InterpolatedTrackOverlay path.
+        buildConfigField("boolean", "HYBRID_DETECTION_ENABLED", "true")
     }
 
     buildTypes {
+        debug {
+            enableUnitTestCoverage = true
+        }
         release {
             isMinifyEnabled = false
+        }
+    }
+
+    testOptions {
+        unitTests.all {
+            it.extensions.configure(JacocoTaskExtension::class.java) {
+                isIncludeNoLocationClasses = true
+                excludes = listOf("jdk.internal.*")
+            }
         }
     }
 
@@ -104,4 +126,51 @@ dependencies {
 
     // WebRTC (native libwebrtc for WHEP playback)
     implementation(libs.stream.webrtc.android)
+
+    // Unit tests (com.iams.app.hybrid) — JVM, no Robolectric.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.0")
+    testImplementation("com.google.truth:truth:1.4.2")
+}
+
+// Line-coverage report for the hybrid matcher package.
+// Run: ./gradlew :app:jacocoTestReport
+tasks.register<JacocoReport>("jacocoTestReport") {
+    dependsOn("testDebugUnitTest")
+    group = "verification"
+    description = "Line coverage for com.iams.app.hybrid (matcher engine)."
+
+    reports {
+        xml.required.set(true)
+        html.required.set(true)
+        csv.required.set(false)
+    }
+
+    // Scope: classes owned by session 01 (matcher engine + IoU + shared types).
+    // Session 09 classes (HybridFallbackController / HybridMode / self-test) are excluded —
+    // their tests ship with Session 09, not here.
+    val hybridIncludes = listOf(
+        "com/iams/app/hybrid/FaceIdentityMatcher*.class",
+        "com/iams/app/hybrid/DefaultFaceIdentityMatcher*.class",
+        "com/iams/app/hybrid/IouMath*.class",
+        "com/iams/app/hybrid/HybridTrack*.class",
+        "com/iams/app/hybrid/HybridIdentity*.class",
+        "com/iams/app/hybrid/HybridSource*.class",
+        "com/iams/app/hybrid/MatcherConfig*.class",
+    )
+    val kotlinClasses = fileTree("${layout.buildDirectory.get()}/tmp/kotlin-classes/debug") {
+        include(hybridIncludes)
+    }
+    val javacClasses = fileTree("${layout.buildDirectory.get()}/intermediates/javac/debug/classes") {
+        include(hybridIncludes)
+    }
+    classDirectories.setFrom(files(kotlinClasses, javacClasses))
+    sourceDirectories.setFrom(files("src/main/java"))
+
+    executionData.setFrom(fileTree(layout.buildDirectory) {
+        include(
+            "outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec",
+            "jacoco/testDebugUnitTest.exec",
+        )
+    })
 }

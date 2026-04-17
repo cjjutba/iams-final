@@ -113,6 +113,12 @@ interface ApiService {
         @Query("filter") filter: String? = null,
     ): Response<List<AlertResponse>>
 
+    @Streaming
+    @GET("attendance/alerts/export/pdf")
+    suspend fun exportAlertsPdf(
+        @Query("filter") filter: String? = null,
+    ): Response<ResponseBody>
+
     // Student info (faculty viewing a student)
     @GET("auth/users/{userId}")
     suspend fun getUser(@Path("userId") userId: String): Response<UserResponse>

@@ -327,7 +327,7 @@
 
 **Faculty:** Gahisan, Maricon Denber (CpE)  
 **Room:** EB226  
-**Total Students:** 20
+**Total Students:** 21
 
 | No. | Name | Email | Birthdate | Student ID |
 |-----|------|-------|-----------|------------|
@@ -342,15 +342,16 @@
 | 9 | DAGUINOTAS, NENAFE RIL | Nenrildags@gmail.com | 01/15/02 | 21-A-00274 |
 | 10 | FUNDADOR, SANTA MAE GANTALAO | primotammyfundador21@gmail.com | 2000-04-21 | 21-B-00063 |
 | 11 | GUMLA, DESIREE SENARILLOS | desireegumla15@gmail.com | 2003-07-21 | 21-A-00693 |
-| 12 | LAMDAG, NINO ESPANOL | espanolnins@gmail.com | 2002-01-20 | 21-A-02433 |
-| 13 | MAGHINAY, GENTHLEY LAURE | genthleymaghinay@gmail.com | 2002-10-15 | 21-A-01603 |
-| 14 | MANUBAG, RHETT WAYNE | rmanubag308@gmail.com | 04/26/04 | 22-A-01261 |
-| 15 | MONOPOLLO, VIERNEL CAMPOMANES | viernelmonopollo@gmail.com | 02/18/02 | 21-A-01337 |
-| 16 | OPANO, KYLA MAE PATRICIA MONTEMAYOR | patriciaopano449@gmail.com | 04/19/05 | 22-A-00550 |
-| 17 | RUIZ, JANRISH GEORGE ABAD | janrishgeorger@gmail.com | 2002-10-14 | 21-A-00200 |
-| 18 | RULONA, RANIAN JAYSON | ranian.rulona14449@gmail.com | 03/08/04 | 22-A-00623 |
-| 19 | RUTA, IVY LEAH REDERA | ivyleahrederaruta@gmail.com | 2003-03-16 | 21-A-00260 |
-| 20 | TAMPUS, EMMAZEN FAYE ALAVAREN | emmazen.tampus@gmail.com | 09/22/03 | 22-A-00862 |
+| 12 | JUTBA, CHRISTIAN JERALD | cjjutbaofficial@gmail.com | 2003-01-13 | 21-A-02177 |
+| 13 | LAMDAG, NINO ESPANOL | espanolnins@gmail.com | 2002-01-20 | 21-A-02433 |
+| 14 | MAGHINAY, GENTHLEY LAURE | genthleymaghinay@gmail.com | 2002-10-15 | 21-A-01603 |
+| 15 | MANUBAG, RHETT WAYNE | rmanubag308@gmail.com | 04/26/04 | 22-A-01261 |
+| 16 | MONOPOLLO, VIERNEL CAMPOMANES | viernelmonopollo@gmail.com | 02/18/02 | 21-A-01337 |
+| 17 | OPANO, KYLA MAE PATRICIA MONTEMAYOR | patriciaopano449@gmail.com | 04/19/05 | 22-A-00550 |
+| 18 | RUIZ, JANRISH GEORGE ABAD | janrishgeorger@gmail.com | 2002-10-14 | 21-A-00200 |
+| 19 | RULONA, RANIAN JAYSON | ranian.rulona14449@gmail.com | 03/08/04 | 22-A-00623 |
+| 20 | RUTA, IVY LEAH REDERA | ivyleahrederaruta@gmail.com | 2003-03-16 | 21-A-00260 |
+| 21 | TAMPUS, EMMAZEN FAYE ALAVAREN | emmazen.tampus@gmail.com | 09/22/03 | 22-A-00862 |
 
 ---
 

@@ -3,12 +3,15 @@ package com.iams.app.ui.auth
 import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.iams.app.data.api.ApiErrorParser
 import com.iams.app.data.api.ApiService
 import com.iams.app.data.api.TokenManager
 import com.iams.app.data.model.RegisterRequest
 import com.iams.app.data.model.CheckStudentIdRequest
 import com.iams.app.data.model.VerifyStudentIdRequest
 import android.content.Context
+import com.iams.app.ui.utils.InputSanitizer
+import com.iams.app.ui.utils.InputValidation
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -84,7 +87,7 @@ class RegistrationViewModel @Inject constructor(
                 } else {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
-                        error = response.errorBody()?.string() ?: "Failed to check Student ID"
+                        error = ApiErrorParser.parse(response, fallback = "Failed to check Student ID")
                     )
                 }
             } catch (e: Exception) {
@@ -139,7 +142,7 @@ class RegistrationViewModel @Inject constructor(
                     val message = when (response.code()) {
                         404 -> "Student ID not found"
                         409 -> "Student already registered"
-                        else -> response.errorBody()?.string() ?: "Verification failed"
+                        else -> ApiErrorParser.parse(response, fallback = "Verification failed")
                     }
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
@@ -168,14 +171,29 @@ class RegistrationViewModel @Inject constructor(
             return
         }
 
+        // Final-gate validation — password MUST satisfy the unified policy even
+        // if Step 2 was bypassed or the holder was mutated elsewhere.
+        val sanitizedEmail = InputSanitizer.email(email)
+        val sanitizedPassword = InputSanitizer.password(password)
+        val emailErr = InputValidation.validateEmail(sanitizedEmail)
+        val passwordErr = InputValidation.validatePassword(sanitizedPassword)
+        if (emailErr != null) {
+            _uiState.value = _uiState.value.copy(error = emailErr)
+            return
+        }
+        if (passwordErr != null) {
+            _uiState.value = _uiState.value.copy(error = passwordErr)
+            return
+        }
+
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
 
             try {
                 val response = apiService.register(
                     RegisterRequest(
-                        email = email,
-                        password = password,
+                        email = sanitizedEmail,
+                        password = sanitizedPassword,
                         firstName = firstName,
                         lastName = lastName,
                         studentId = studentId,
@@ -203,8 +221,7 @@ class RegistrationViewModel @Inject constructor(
                 } else {
                     val message = when (response.code()) {
                         409 -> "An account with this email already exists"
-                        422 -> "Invalid input. Please check your details."
-                        else -> response.errorBody()?.string() ?: "Registration failed"
+                        else -> ApiErrorParser.parse(response, fallback = "Registration failed. Please try again.")
                     }
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
@@ -300,7 +317,10 @@ class RegistrationViewModel @Inject constructor(
                         uploadSuccess = true
                     )
                 } else {
-                    val message = response.errorBody()?.string() ?: "Face registration failed"
+                    val message = ApiErrorParser.parse(
+                        response,
+                        fallback = "Face registration failed. Please try again."
+                    )
                     _uiState.value = _uiState.value.copy(
                         isUploading = false,
                         uploadError = message

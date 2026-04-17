@@ -220,7 +220,9 @@ class FacultyHomeViewModel @Inject constructor(
         }
         wsClient?.connect(scheduleId)
 
-        // Observe attendance_summary from WebSocket for real-time updates
+        // Observe attendance_summary from WebSocket for real-time updates.
+        // "On Time" card surfaces total detected students (on-time + late) so a
+        // recognised face in Live Feed is instantly reflected here too.
         wsObserverJob = viewModelScope.launch {
             wsClient?.attendanceSummary?.collect { msg ->
                 if (msg != null) {
@@ -229,9 +231,9 @@ class FacultyHomeViewModel @Inject constructor(
                             scheduleId = msg.scheduleId,
                             totalEnrolled = msg.totalEnrolled,
                             presentCount = msg.presentCount,
-                            lateCount = msg.late?.size ?: 0,
-                            absentCount = msg.totalEnrolled - msg.presentCount - (msg.earlyLeave?.size ?: 0),
-                            earlyLeaveCount = msg.earlyLeave?.size ?: 0,
+                            lateCount = msg.lateCount,
+                            absentCount = msg.absentCount,
+                            earlyLeaveCount = msg.earlyLeaveCount,
                             sessionActive = true,
                             present = msg.present?.map {
                                 StudentAttendanceStatus(studentId = it.userId, studentName = it.name, status = "present")
@@ -251,12 +253,18 @@ class FacultyHomeViewModel @Inject constructor(
             }
         }
 
-        // One initial REST fetch so the UI isn't empty while waiting for the first WS message
+        // One initial REST fetch so the UI isn't empty while waiting for the first WS message.
+        // REST's `present_count` is strictly on-time; combine with `late_count` so the "On Time"
+        // card matches the WebSocket semantic (total detected).
         liveAttendanceJob = viewModelScope.launch {
             try {
                 val response = apiService.getLiveAttendance(scheduleId)
                 if (response.isSuccessful) {
-                    _uiState.value = _uiState.value.copy(liveAttendance = response.body())
+                    val body = response.body()
+                    val merged = body?.copy(
+                        presentCount = body.presentCount + body.lateCount
+                    )
+                    _uiState.value = _uiState.value.copy(liveAttendance = merged)
                 }
             } catch (_: Exception) {}
         }
