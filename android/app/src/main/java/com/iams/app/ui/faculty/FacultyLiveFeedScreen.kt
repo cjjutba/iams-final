@@ -798,9 +798,11 @@ fun FacultyLiveFeedScreen(
                                 }
                             }
                             if (unknownTracks.isNotEmpty()) {
-                                item { AttendanceSectionLabel("Unknown (${unknownTracks.size})", Color(0xFFFF9800)) }
+                                // Match the HybridTrackOverlay's red for "Unknown" so the
+                                // panel and the bounding box agree.
+                                item { AttendanceSectionLabel("Unknown (${unknownTracks.size})", Color(0xFFE53935)) }
                                 items(unknownTracks, key = { it.trackId }) { track ->
-                                    TrackRow(name = "Unknown", dotColor = Color(0xFFFF9800))
+                                    TrackRow(name = "Unknown", dotColor = Color(0xFFE53935))
                                     HorizontalDivider(color = Border, thickness = 0.5.dp)
                                 }
                             }
