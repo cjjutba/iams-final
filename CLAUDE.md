@@ -121,68 +121,185 @@ Only deploy when local testing is complete and you're ready for production.
 
 ## Switching Environments (Local ↔ Production)
 
-When the user says **"switch to local"** or **"switch to production"**, perform ALL steps below for that environment. Do not skip any step.
+There is **one branch** (`feat/cloud-based`). The same code targets both environments; the switch is purely a config-file swap driven by the commands below. Do not create environment-specific branches.
+
+> **Trigger phrases (exact):**
+> - "switch to local" → run [§Switch to Local](#switch-to-local-docker-desktop) top to bottom.
+> - "switch to production" → run [§Switch to Production](#switch-to-production-vps) top to bottom.
+>
+> Execute every step in order. Do not skip. If a step fails, stop and report — do not guess.
+
+### Config files and precedence (must understand before switching)
+
+| File | Committed? | Purpose | Who writes it |
+|------|-----------|---------|---------------|
+| `android/gradle.properties` | ✅ yes | Default Android build config (IP, ports) | Only when changing the shared default |
+| `android/local.properties` | ❌ gitignored | Per-machine override; Gradle reads this AND gradle.properties, with local.properties **winning** on any conflicting key | **Claude writes for "switch to local"**; leaves keys untouched for prod |
+| `admin/.env` | ❌ gitignored | Admin dev server (`npm run dev`) environment | **Claude writes for "switch to local"** |
+| `admin/.env.production` | ✅ yes | Admin production build (`npm run build`) environment | Only when changing production URLs |
+| `backend/.env` | ❌ gitignored | Backend local Docker environment | One-time setup |
+| `backend/.env.production` | ✅ yes | Backend VPS environment (used by `deploy.sh`) | Rarely |
+
+**Invariant:** `admin/.env.production` and `backend/.env.production` are the production sources of truth. Never point them at a local IP "just for a quick test". If you must test prod locally, override via `.env.local`.
+
+---
 
 ### Switch to Local (Docker Desktop)
 
-1. **Android app** — edit `android/gradle.properties`:
-   ```properties
-   IAMS_BACKEND_HOST=<USER_LAN_IP>
-   IAMS_BACKEND_PORT=8000
-   IAMS_MEDIAMTX_PORT=8554
-   IAMS_MEDIAMTX_WEBRTC_PORT=8889
-   ```
-   Ask the user for their LAN IP if unknown. Find it with `ipconfig getifaddr en0` (macOS) or `ipconfig` (Windows).
+Goal after this section: the Android app talks to `http://<this-mac-LAN-IP>:8000`, the admin dev server talks to the same, and Docker is running locally.
 
-2. **Admin portal** — edit `admin/.env`:
-   ```env
-   VITE_API_URL=http://<USER_LAN_IP>:8000/api/v1
-   VITE_WS_URL=ws://<USER_LAN_IP>:8000
-   ```
+**Step 1 — Detect this Mac's LAN IP.**
+```bash
+IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null)"
+echo "LAN IP: $IP"
+```
+- If empty, try `ifconfig | grep 'inet ' | grep -v 127.0.0.1` and pick the one on the local subnet.
+- If still unsure, ask the user.
 
-3. **Start Docker** — run `docker compose up -d` from project root.
+**Step 2 — Write `android/local.properties`.**
+This file is gitignored, so different Macs can keep their own copy without conflicting commits. Preserve any existing lines (e.g. `sdk.dir=...`) — only update IAMS_* keys.
 
-4. **Seed if needed** — `docker compose exec api-gateway python -m scripts.seed_data`
+Read the current contents first, then write:
+```properties
+# existing sdk.dir and other lines kept verbatim
+sdk.dir=<EXISTING VALUE>
 
-5. **Fix Room camera endpoints** — after seeding, the Room `camera_endpoint` values are `rtsp://mediamtx:8554/...` which doesn't resolve locally. Update them:
-   ```bash
-   # Get token
-   TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
-     -H "Content-Type: application/json" \
-     -d '{"identifier":"admin@admin.com","password":"123"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-   # Get room IDs
-   ROOMS=$(curl -s http://localhost:8000/api/v1/rooms/ -H "Authorization: Bearer $TOKEN")
-   # Update each room to use host.docker.internal
-   echo $ROOMS | python3 -c "
-   import sys,json
-   for r in json.load(sys.stdin):
-       print(r['id'], r['name'], r['camera_endpoint'])
-   "
-   # Then PATCH each room:
-   # curl -X PATCH http://localhost:8000/api/v1/rooms/<ID> -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"camera_endpoint":"rtsp://host.docker.internal:8554/eb226"}'
-   ```
+# IAMS backend (local override — gradle.properties is the prod default)
+IAMS_BACKEND_HOST=<IP from Step 1>
+IAMS_BACKEND_PORT=8000
+IAMS_MEDIAMTX_PORT=8554
+IAMS_MEDIAMTX_WEBRTC_PORT=8889
+```
 
-6. **Tell user** to rebuild the Android app in Android Studio after the config change.
+**Step 3 — Write `admin/.env`.**
+```env
+VITE_API_URL=http://<IP from Step 1>:8000/api/v1
+VITE_WS_URL=ws://<IP from Step 1>:8000
+
+# Supabase stays unchanged (used by email confirmation only)
+VITE_SUPABASE_URL=<copy from existing .env>
+VITE_SUPABASE_ANON_KEY=<copy from existing .env>
+```
+Preserve Supabase keys by reading the current file first.
+
+**Step 4 — Start Docker.**
+```bash
+docker compose up -d
+docker compose ps   # all services should be 'running' or 'healthy'
+```
+
+**Step 5 — Seed (only if user asks or DB is empty).**
+```bash
+docker compose exec api-gateway python -m scripts.seed_data
+```
+
+**Step 6 — Fix Room `camera_endpoint` values.**
+Seed writes `rtsp://mediamtx:8554/...`, which doesn't resolve outside Docker. Rewrite to `rtsp://host.docker.internal:8554/...`.
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"identifier":"admin@admin.com","password":"123"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# List rooms and their current endpoints
+curl -s http://localhost:8000/api/v1/rooms/ -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "
+import sys, json
+for r in json.load(sys.stdin):
+    print(r['id'], r['name'], r['camera_endpoint'])
+"
+
+# For each room whose camera_endpoint starts with rtsp://mediamtx:8554/, PATCH:
+# curl -X PATCH http://localhost:8000/api/v1/rooms/<UUID> \
+#   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+#   -d '{"camera_endpoint":"rtsp://host.docker.internal:8554/<streamKey>"}'
+```
+
+**Step 7 — Verify.**
+```bash
+curl http://localhost:8000/api/v1/health            # expect 200
+curl http://localhost:8000/api/v1/health/time       # expect {"server_time_ms": ...}
+```
+
+**Step 8 — Report to user.**
+Output (in plain text back to user):
+- LAN IP detected
+- Files written (paths only)
+- Docker status
+- "Rebuild the Android app in Android Studio to pick up the new IAMS_BACKEND_HOST."
+
+---
 
 ### Switch to Production (VPS)
 
-1. **Android app** — edit `android/gradle.properties`:
-   ```properties
-   IAMS_BACKEND_HOST=167.71.217.44
-   IAMS_BACKEND_PORT=80
-   IAMS_MEDIAMTX_PORT=8554
-   IAMS_MEDIAMTX_WEBRTC_PORT=8889
-   ```
+Goal: the Android app targets `http://167.71.217.44:80`, admin portal served from Vercel hits VPS at `167.71.217.44`, backend VPS stack is redeployed from this branch.
 
-2. **Admin portal** — edit `admin/.env`:
-   ```env
-   VITE_API_URL=/api/v1
-   VITE_WS_URL=ws://167.71.217.44
-   ```
+**Step 1 — Neutralise any local Android override.**
+`android/local.properties` takes precedence over `gradle.properties`. Read it; if it contains any `IAMS_BACKEND_HOST=`, `IAMS_BACKEND_PORT=`, `IAMS_MEDIAMTX_PORT=`, or `IAMS_MEDIAMTX_WEBRTC_PORT=` lines, **remove or comment them out** so the committed `gradle.properties` wins.
 
-3. **Deploy** — run `bash deploy/deploy.sh` from project root.
+**Step 2 — Confirm `android/gradle.properties` has production values.**
+```properties
+IAMS_BACKEND_HOST=167.71.217.44
+IAMS_BACKEND_PORT=80
+IAMS_MEDIAMTX_PORT=8554
+IAMS_MEDIAMTX_WEBRTC_PORT=8889
+```
+If different, update + commit. These are the committed defaults for a clean checkout.
 
-4. **Tell user** to rebuild the Android app in Android Studio after the config change.
+**Step 3 — Confirm `admin/.env.production` has production URLs.**
+```env
+VITE_API_URL=/api/v1
+VITE_WS_URL=ws://167.71.217.44
+```
+`npm run build` uses this file automatically. Do not write to `admin/.env` — that's local-dev only.
+
+**Step 4 — Deploy the VPS stack.**
+```bash
+bash deploy/deploy.sh
+```
+Wait for it to finish. Do NOT Ctrl-C.
+
+**Step 5 — Verify the VPS is healthy.**
+```bash
+curl http://167.71.217.44/api/v1/health             # expect 200
+curl http://167.71.217.44/api/v1/health/time        # expect epoch ms
+curl http://167.71.217.44/api/v1/docs               # expect swagger HTML
+```
+
+**Step 6 — Fix Room `camera_endpoint` on VPS (only after a reseed).**
+On the VPS, room endpoints must be `rtsp://mediamtx:8554/<streamKey>` (container-to-container name). A fresh seed already writes this correctly — verify with:
+```bash
+# From your Mac (uses production admin creds):
+TOKEN=$(curl -s -X POST http://167.71.217.44/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"identifier":"admin@admin.com","password":"123"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+curl -s http://167.71.217.44/api/v1/rooms/ -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+```
+Each `camera_endpoint` should read `rtsp://mediamtx:8554/<streamKey>`. If not, PATCH as in the local Step 6 but against `167.71.217.44`.
+
+**Step 7 — Report to user.**
+- `deploy.sh` succeeded / failed
+- Health endpoints OK
+- "Rebuild the Android APK in Android Studio with the now-production IAMS_BACKEND_HOST and install on any device that needs to hit the VPS."
+- Logs dashboard: `http://167.71.217.44:9999`.
+
+---
+
+### Key Differences (Local vs Production) — reference only
+
+| | Local | Production |
+|---|---|---|
+| Docker Compose | `docker-compose.yml` | `deploy/docker-compose.prod.yml` |
+| Backend .env | `backend/.env` | `backend/.env.production` |
+| DB credentials | `admin` / `123` | `iams` / `iams_prod_password` |
+| Redis | Password: `iams-redis-dev` | No password |
+| mediamtx from backend | `host.docker.internal:8554` | `mediamtx:8554` |
+| Room camera_endpoint | `rtsp://host.docker.internal:8554/...` | `rtsp://mediamtx:8554/...` |
+| API port | 8000 (direct) | 80 (nginx proxy) |
+| CORS | includes `localhost:5173` | includes `iams-thesis.vercel.app` |
+| PROCESSING_FPS | 20 (from `config.py` default) | 5 (from `backend/.env.production`) |
+| Admin URL | `http://<LAN_IP>:5173` (Vite dev) | `https://iams-thesis.vercel.app` (Vercel, pulls from `.env.production`) |
 
 ### Key Differences (Local vs Production)
 
