@@ -47,9 +47,9 @@ class Settings(BaseSettings):
     INSIGHTFACE_DET_THRESH: float = 0.3  # Detection confidence minimum (lowered for distant CCTV faces)
     FAISS_INDEX_PATH: str = "data/faiss/faces.index"
     RECOGNITION_THRESHOLD: float = (
-        0.45  # Cosine similarity threshold (CCTV-sim + adaptive enrollment pushes scores to 0.6-0.9)
+        0.38  # Cosine similarity threshold — CCTV cross-domain typically 0.35-0.55 without adaptive help
     )
-    RECOGNITION_MARGIN: float = 0.10  # Min gap between top-1 and top-2 scores
+    RECOGNITION_MARGIN: float = 0.06  # Min gap between top-1 and top-2 scores (reduced for similar-looking students)
     RECOGNITION_TOP_K: int = 3  # Number of neighbors to search in FAISS
     USE_GPU: bool = True  # Use GPU if available, fallback to CPU
     MIN_FACE_IMAGES: int = 3  # Minimum images for registration
@@ -76,9 +76,9 @@ class Settings(BaseSettings):
     # When a student is recognized with high confidence from CCTV, store that
     # real CCTV embedding in FAISS (RAM only, volatile) to boost future matches.
     ADAPTIVE_ENROLL_ENABLED: bool = True
-    ADAPTIVE_ENROLL_MIN_CONFIDENCE: float = 0.48  # Enroll any match above recognition threshold
-    ADAPTIVE_ENROLL_MAX_PER_USER: int = 5  # Max session embeddings per user (more = better pose coverage)
-    ADAPTIVE_ENROLL_COOLDOWN: float = 10.0  # Seconds between adaptive enrollments per user
+    ADAPTIVE_ENROLL_MIN_CONFIDENCE: float = 0.55  # Balance: strict enough to avoid poisoning, loose enough to close domain gap
+    ADAPTIVE_ENROLL_MAX_PER_USER: int = 3  # Max session embeddings per user (conservative to avoid corruption)
+    ADAPTIVE_ENROLL_COOLDOWN: float = 30.0  # Seconds between adaptive enrollments per user (was too aggressive)
 
     # Presence Tracking (legacy scan-based — kept for backward compatibility)
     SCAN_INTERVAL_SECONDS: int = 15  # How often to run presence scans
@@ -87,8 +87,8 @@ class Settings(BaseSettings):
     SESSION_BUFFER_MINUTES: int = 5  # Buffer before/after class for session
 
     # Real-Time Pipeline
-    PROCESSING_FPS: float = 10.0  # Frames/sec for realtime tracker loop (10fps = 100ms budget for 1280x720)
-    WS_BROADCAST_FPS: float = 10.0  # WebSocket broadcast rate
+    PROCESSING_FPS: float = 20.0  # Frames/sec for realtime tracker loop (20fps = 50ms budget for 1280x720)
+    WS_BROADCAST_FPS: float = 20.0  # WebSocket broadcast rate
 
     # ByteTrack / Track Lifecycle
     TRACK_LOST_TIMEOUT: float = 2.0  # Seconds before removing lost track (coasting period)
@@ -107,7 +107,7 @@ class Settings(BaseSettings):
     PRESENCE_FLUSH_INTERVAL: float = 10.0  # Seconds between DB presence flushes
 
     # Frame Grabber
-    FRAME_GRABBER_FPS: float = 10.0  # FFmpeg output frame rate (10fps for 1280x720 CPU budget)
+    FRAME_GRABBER_FPS: float = 20.0  # FFmpeg output frame rate (20fps for 1280x720 CPU budget)
     FRAME_GRABBER_WIDTH: int = 1280  # 720p — gives ~50-80px faces even on wide-angle lenses
     FRAME_GRABBER_HEIGHT: int = 720  # Consistent across all cameras
 

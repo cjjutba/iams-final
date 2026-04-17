@@ -9,6 +9,8 @@ import com.iams.app.data.model.RegisterRequest
 import com.iams.app.data.model.CheckStudentIdRequest
 import com.iams.app.data.model.VerifyStudentIdRequest
 import android.content.Context
+import com.iams.app.ui.utils.InputSanitizer
+import com.iams.app.ui.utils.InputValidation
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -168,14 +170,29 @@ class RegistrationViewModel @Inject constructor(
             return
         }
 
+        // Final-gate validation — password MUST satisfy the unified policy even
+        // if Step 2 was bypassed or the holder was mutated elsewhere.
+        val sanitizedEmail = InputSanitizer.email(email)
+        val sanitizedPassword = InputSanitizer.password(password)
+        val emailErr = InputValidation.validateEmail(sanitizedEmail)
+        val passwordErr = InputValidation.validatePassword(sanitizedPassword)
+        if (emailErr != null) {
+            _uiState.value = _uiState.value.copy(error = emailErr)
+            return
+        }
+        if (passwordErr != null) {
+            _uiState.value = _uiState.value.copy(error = passwordErr)
+            return
+        }
+
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
 
             try {
                 val response = apiService.register(
                     RegisterRequest(
-                        email = email,
-                        password = password,
+                        email = sanitizedEmail,
+                        password = sanitizedPassword,
                         firstName = firstName,
                         lastName = lastName,
                         studentId = studentId,

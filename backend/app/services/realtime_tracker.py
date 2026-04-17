@@ -361,9 +361,9 @@ class RealtimeTracker:
                 if age < 1.0:
                     retry_interval = 0.0  # Instant first attempt
                 elif age < 5.0:
-                    retry_interval = 0.5  # Every 500ms for first 5s
+                    retry_interval = 0.3  # Every 300ms for first 5s
                 else:
-                    retry_interval = 2.0  # Every 2s after that
+                    retry_interval = 1.0  # Every 1s after that
                 needs_recognition = (now - identity.last_verified) > retry_interval
             else:
                 # Recognized track: re-verify at interval, but stagger to avoid storms
@@ -606,64 +606,23 @@ class RealtimeTracker:
         return (identity.user_id, identity.name, identity.confidence, identity.recognition_status)
 
     def _get_or_create_identity(self, track_id: int, now: float, bbox: np.ndarray | None = None) -> TrackIdentity:
-        """Get existing identity or create a new one.
+        """Get existing identity or create a new one (always goes through FAISS).
 
-        For new tracks, checks the graveyard for a recently-expired recognized
-        track at a nearby position. If found, inherits the identity instantly
-        (skip buffering and FAISS search) — prevents recognized→unknown flicker
-        when ByteTrack creates a new track ID for the same person.
+        We NEVER blindly inherit identity from graveyard spatially — that caused
+        wrong identities to stick when person A leaves and person B enters the
+        same spot. Every new track must earn its identity through FAISS recognition.
+
+        The graveyard is kept only so that AFTER FAISS recognizes the new track,
+        we can verify the identity matches what was there before (future use).
         """
         if track_id not in self._identity_cache:
-            # Try spatial inheritance from graveyard
-            inherited = None
-            if bbox is not None and self._identity_graveyard:
-                norm_bbox = [
-                    float(bbox[0]) / self._frame_w,
-                    float(bbox[1]) / self._frame_h,
-                    float(bbox[2]) / self._frame_w,
-                    float(bbox[3]) / self._frame_h,
-                ]
-                best_iou = 0.0
-                best_idx = -1
-                for i, grave in enumerate(self._identity_graveyard):
-                    if grave.last_bbox is None:
-                        continue
-                    iou = self._compute_iou_norm(norm_bbox, grave.last_bbox)
-                    if iou > best_iou:
-                        best_iou = iou
-                        best_idx = i
-                if best_iou > 0.15 and best_idx >= 0:
-                    inherited = self._identity_graveyard.pop(best_idx)
-
-            if inherited is not None:
-                # Inherit identity from graveyard — instant recognition, no buffering
-                self._identity_cache[track_id] = TrackIdentity(
-                    track_id=track_id,
-                    user_id=inherited.user_id,
-                    name=inherited.name,
-                    confidence=inherited.confidence,
-                    first_seen=now,
-                    last_verified=now,
-                    last_seen=now,
-                    recognition_status="recognized",
-                    anchor_embedding=inherited.anchor_embedding,
-                    last_embedding=inherited.last_embedding,
-                )
-                logger.info(
-                    "Track %d inherited identity from graveyard: %s (IoU=%.2f)",
-                    track_id,
-                    inherited.name,
-                    best_iou,
-                )
-            else:
-                # Jitter last_verified so re-verifications are naturally staggered
-                jitter = random.uniform(0, settings.REVERIFY_INTERVAL)
-                self._identity_cache[track_id] = TrackIdentity(
-                    track_id=track_id,
-                    first_seen=now,
-                    last_seen=now,
-                    last_verified=now - jitter,
-                )
+            jitter = random.uniform(0, settings.REVERIFY_INTERVAL)
+            self._identity_cache[track_id] = TrackIdentity(
+                track_id=track_id,
+                first_seen=now,
+                last_seen=now,
+                last_verified=now - jitter,
+            )
         return self._identity_cache[track_id]
 
     def _resolve_name(self, user_id: str) -> str:
@@ -719,22 +678,71 @@ class RealtimeTracker:
             )
 
             if user_id is not None and not is_ambiguous:
-                identity.user_id = user_id
-                identity.confidence = confidence
-                identity.name = self._resolve_name(user_id)
-                identity.recognition_status = "recognized"
-                # Set anchor embedding for drift detection (fixed reference)
-                identity.anchor_embedding = search_embedding.copy()
-                identity.drift_strike_count = 0
-                logger.info(
-                    "Track %d recognized: %s (%.3f)",
-                    identity.track_id,
-                    identity.name,
-                    confidence,
+                # Check if this is an IDENTITY SWAP (FAISS returned a different user)
+                prev_user_id = identity.user_id
+                is_swap = (
+                    prev_user_id is not None
+                    and prev_user_id != user_id
+                    and identity.recognition_status == "recognized"
                 )
-                # Adaptive per-session enrollment
-                if settings.ADAPTIVE_ENROLL_ENABLED and confidence >= settings.ADAPTIVE_ENROLL_MIN_CONFIDENCE:
-                    self._try_adaptive_enroll(user_id, search_embedding, now)
+
+                if is_swap:
+                    # Only swap if new match is meaningfully better than current confidence.
+                    # This prevents oscillation between two similar-looking registered users.
+                    # Requires the new match to exceed current confidence by a margin.
+                    swap_margin = 0.05
+                    if confidence >= identity.confidence + swap_margin:
+                        logger.warning(
+                            "Track %d IDENTITY SWAP: %s (%.3f) -> %s (%.3f)",
+                            identity.track_id,
+                            identity.name,
+                            identity.confidence,
+                            self._resolve_name(user_id),
+                            confidence,
+                        )
+                        identity.user_id = user_id
+                        identity.confidence = confidence
+                        identity.name = self._resolve_name(user_id)
+                        identity.anchor_embedding = search_embedding.copy()
+                        identity.drift_strike_count = 0
+                        # Clear held identity since the old one was wrong
+                        identity.held_user_id = None
+                        identity.held_name = None
+                    else:
+                        # Ambiguous swap attempt — keep current identity but log it
+                        logger.debug(
+                            "Track %d ambiguous swap rejected: current=%s (%.3f) vs new=%s (%.3f)",
+                            identity.track_id,
+                            identity.name,
+                            identity.confidence,
+                            self._resolve_name(user_id),
+                            confidence,
+                        )
+                else:
+                    # Same user, confirming — update confidence and anchor
+                    identity.user_id = user_id
+                    identity.confidence = confidence
+                    identity.name = self._resolve_name(user_id)
+                    identity.recognition_status = "recognized"
+                    identity.anchor_embedding = search_embedding.copy()
+                    identity.drift_strike_count = 0
+                    if prev_user_id is None:
+                        logger.info(
+                            "Track %d recognized: %s (%.3f)",
+                            identity.track_id,
+                            identity.name,
+                            confidence,
+                        )
+                    # Adaptive enrollment — only after stable re-verification (prev_user_id == user_id).
+                    # This prevents poisoning FAISS from a single wrong first-recognition.
+                    # Requires: (1) already recognized as same user before (not first-time),
+                    #           (2) confidence >= ADAPTIVE_ENROLL_MIN_CONFIDENCE (0.55),
+                    #           (3) track has been alive for 10+ frames (~0.5s at 20fps).
+                    is_stable_reverify = (prev_user_id == user_id and identity.frames_seen >= 10)
+                    if (settings.ADAPTIVE_ENROLL_ENABLED
+                        and is_stable_reverify
+                        and confidence >= settings.ADAPTIVE_ENROLL_MIN_CONFIDENCE):
+                        self._try_adaptive_enroll(user_id, search_embedding, now)
             elif identity.recognition_status == "recognized":
                 # Already recognized — don't downgrade on a single bad frame
                 logger.debug(
@@ -823,7 +831,7 @@ class RealtimeTracker:
         return result
 
     def _expire_lost_tracks(self, now: float, active_track_ids: set[int] | None = None) -> None:
-        """Remove stale tracks from identity cache, moving recognized ones to graveyard."""
+        """Remove stale tracks from identity cache."""
         if active_track_ids is None:
             active_track_ids = set()
 
@@ -834,18 +842,8 @@ class RealtimeTracker:
             if tid not in active_track_ids and (now - identity.last_seen) > stale_threshold
         ]
         for tid in to_remove:
-            identity = self._identity_cache[tid]
-            # Move recognized tracks to graveyard for spatial inheritance
-            if identity.user_id is not None and identity.last_bbox is not None:
-                self._identity_graveyard.append(identity)
             del self._identity_cache[tid]
             self._prev_bboxes.pop(tid, None)
-
-        # Clean graveyard entries older than IDENTITY_HOLD_SECONDS
-        self._identity_graveyard = [
-            g for g in self._identity_graveyard
-            if (now - g.last_seen) < settings.IDENTITY_HOLD_SECONDS
-        ]
 
     @staticmethod
     def _compute_iou(box_a: np.ndarray, box_b: np.ndarray) -> float:

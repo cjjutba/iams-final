@@ -175,6 +175,12 @@ class SessionPipeline:
                     frame = self._grabber.grab()
                     if frame is None:
                         _consecutive_none += 1
+                        # Pause presence tracking after ~2s of missing frames so
+                        # camera downtime does NOT count as student absence.
+                        # resume_absence_tracking() fires automatically on next frame.
+                        if _consecutive_none == int(2.0 * settings.PROCESSING_FPS):
+                            if self._presence is not None:
+                                self._presence.pause_absence_tracking(time.monotonic())
                         # Log every 10s worth of missed frames (at PROCESSING_FPS)
                         if _consecutive_none == int(10 * settings.PROCESSING_FPS):
                             logger.warning(
@@ -244,8 +250,8 @@ class SessionPipeline:
                         logger.exception("Pipeline %s: error flushing presence", self.schedule_id[:8])
                     self._last_flush = now
 
-                # Periodic attendance summary (every 5s)
-                if (now - self._last_summary) >= 5.0:
+                # Periodic attendance summary (every 2s for real-time UI responsiveness)
+                if (now - self._last_summary) >= 2.0:
                     await self._broadcast_attendance_summary()
                     # Broadcast stream health so the app can show "camera offline"
                     await self._broadcast_stream_status(_consecutive_none > 0)

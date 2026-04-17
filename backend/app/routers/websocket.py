@@ -230,6 +230,18 @@ async def attendance_websocket(websocket: WebSocket, schedule_id: str):
     if ensure_fn is not None:
         asyncio.ensure_future(ensure_fn(schedule_id))
 
+    # Send current attendance summary immediately so the client shows fresh
+    # state on connect instead of waiting for the next periodic broadcast.
+    # This makes metric cards update instantly when a faculty opens the screen.
+    try:
+        pipelines = getattr(websocket.app.state, "session_pipelines", {})
+        pipeline = pipelines.get(schedule_id)
+        if pipeline is not None and pipeline._presence is not None:
+            summary = pipeline._presence.get_attendance_summary()
+            await websocket.send_text(json.dumps(summary))
+    except Exception:
+        logger.debug("Failed to send initial attendance summary", exc_info=True)
+
     try:
         while True:
             data = await websocket.receive_text()

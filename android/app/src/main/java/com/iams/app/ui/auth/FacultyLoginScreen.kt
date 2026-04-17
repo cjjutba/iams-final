@@ -78,7 +78,7 @@ fun FacultyLoginScreen(
         passwordError = pErr
         if (eErr != null || pErr != null) return
         focusManager.clearFocus()
-        viewModel.login(InputSanitizer.email(email), InputSanitizer.trimmed(password))
+        viewModel.login(InputSanitizer.email(email), InputSanitizer.password(password))
     }
 
     AuthLayout(

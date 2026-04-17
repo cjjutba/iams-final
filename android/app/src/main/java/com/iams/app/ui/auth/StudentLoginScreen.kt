@@ -91,7 +91,7 @@ fun StudentLoginScreen(
         passwordError = pwErr
         if (idErr != null || pwErr != null) return
         focusManager.clearFocus()
-        viewModel.login(InputSanitizer.studentId(studentId), InputSanitizer.trimmed(password))
+        viewModel.login(InputSanitizer.studentId(studentId), InputSanitizer.password(password))
     }
 
     AuthLayout(

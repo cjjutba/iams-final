@@ -430,7 +430,7 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(
             run_session_lifecycle_check,
             "interval",
-            seconds=30,
+            seconds=15,
             id="session_lifecycle_check",
             replace_existing=True,
             max_instances=1,

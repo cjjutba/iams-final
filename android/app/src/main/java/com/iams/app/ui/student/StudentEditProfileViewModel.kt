@@ -8,6 +8,8 @@ import com.iams.app.data.model.UpdateProfileRequest
 import com.iams.app.data.model.UserResponse
 import com.iams.app.ui.utils.InputSanitizer
 import com.iams.app.ui.utils.InputValidation
+import com.iams.app.ui.utils.PasswordEvaluation
+import com.iams.app.ui.utils.PasswordPolicy
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -41,7 +43,26 @@ data class EditProfileUiState(
     val currentPasswordError: String? = null,
     val newPasswordError: String? = null,
     val confirmPasswordError: String? = null,
-)
+
+    // Touched flags — errors are surfaced only once the user has interacted.
+    val newPasswordTouched: Boolean = false,
+    val confirmPasswordTouched: Boolean = false,
+) {
+    val passwordEvaluation: PasswordEvaluation
+        get() = PasswordPolicy.evaluate(newPassword)
+
+    val liveConfirmError: String?
+        get() = if (!confirmPasswordTouched || confirmPassword.isEmpty()) null
+        else if (newPassword != confirmPassword) "Passwords do not match"
+        else null
+
+    val canSubmitPassword: Boolean
+        get() = currentPassword.isNotBlank() &&
+            passwordEvaluation.isValid &&
+            confirmPassword.isNotEmpty() &&
+            newPassword == confirmPassword &&
+            !isChangingPassword
+}
 
 @HiltViewModel
 class StudentEditProfileViewModel @Inject constructor(
@@ -113,6 +134,7 @@ class StudentEditProfileViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(
             newPassword = value,
             newPasswordError = null,
+            newPasswordTouched = true,
             passwordError = null
         )
     }
@@ -121,6 +143,7 @@ class StudentEditProfileViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(
             confirmPassword = value,
             confirmPasswordError = null,
+            confirmPasswordTouched = true,
             passwordError = null
         )
     }
@@ -179,17 +202,28 @@ class StudentEditProfileViewModel @Inject constructor(
 
     fun changePassword() {
         val state = _uiState.value
+        val sanitizedNew = InputSanitizer.password(state.newPassword)
 
         // Validate
         val currentErr = InputValidation.validateRequired(state.currentPassword, "Current password")
-        val newErr = InputValidation.validatePassword(state.newPassword)
-        val confirmErr = InputValidation.validatePasswordMatch(state.newPassword, state.confirmPassword)
+        val newErr = InputValidation.validatePassword(sanitizedNew)
+        val confirmErr = InputValidation.validatePasswordMatch(sanitizedNew, state.confirmPassword)
 
         if (currentErr != null || newErr != null || confirmErr != null) {
             _uiState.value = state.copy(
                 currentPasswordError = currentErr,
                 newPasswordError = newErr,
-                confirmPasswordError = confirmErr
+                confirmPasswordError = confirmErr,
+                newPasswordTouched = true,
+                confirmPasswordTouched = true,
+            )
+            return
+        }
+
+        if (state.currentPassword == sanitizedNew) {
+            _uiState.value = state.copy(
+                newPasswordError = "New password must be different from current password",
+                newPasswordTouched = true,
             )
             return
         }
@@ -205,7 +239,7 @@ class StudentEditProfileViewModel @Inject constructor(
                 val response = apiService.changePassword(
                     ChangePasswordRequest(
                         oldPassword = state.currentPassword,
-                        newPassword = state.newPassword
+                        newPassword = sanitizedNew
                     )
                 )
 
@@ -215,12 +249,18 @@ class StudentEditProfileViewModel @Inject constructor(
                         passwordSuccess = "Password changed successfully",
                         currentPassword = "",
                         newPassword = "",
-                        confirmPassword = ""
+                        confirmPassword = "",
+                        newPasswordTouched = false,
+                        confirmPasswordTouched = false,
                     )
                 } else {
+                    val errorMsg = when (response.code()) {
+                        400, 401 -> "Current password is incorrect"
+                        else -> "Failed to change password"
+                    }
                     _uiState.value = _uiState.value.copy(
                         isChangingPassword = false,
-                        passwordError = "Failed to change password"
+                        passwordError = errorMsg
                     )
                 }
             } catch (e: Exception) {

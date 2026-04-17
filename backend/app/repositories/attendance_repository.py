@@ -8,6 +8,7 @@ import uuid
 from datetime import date
 
 from sqlalchemy import and_, case, func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.attendance_record import AttendanceRecord, AttendanceStatus
@@ -115,13 +116,17 @@ class AttendanceRepository:
 
     def create(self, attendance_data: dict) -> AttendanceRecord:
         """
-        Create new attendance record
+        Create new attendance record, or return existing if (student, schedule, date)
+        conflict with the unique constraint `uq_student_schedule_date`.
+
+        Uses PostgreSQL INSERT ... ON CONFLICT DO NOTHING to handle concurrent
+        pipeline starts gracefully without raising UniqueViolationError.
 
         Args:
             attendance_data: Attendance data dictionary
 
         Returns:
-            Created attendance record
+            Created attendance record, or existing one if a duplicate was attempted
         """
         # Convert string UUIDs to UUID objects
         data = attendance_data.copy()
@@ -130,11 +135,29 @@ class AttendanceRepository:
         if "schedule_id" in data and isinstance(data["schedule_id"], str):
             data["schedule_id"] = uuid.UUID(data["schedule_id"])
 
-        attendance = AttendanceRecord(**data)
-        self.db.add(attendance)
+        stmt = (
+            pg_insert(AttendanceRecord)
+            .values(**data)
+            .on_conflict_do_nothing(
+                index_elements=["student_id", "schedule_id", "date"]
+            )
+            .returning(AttendanceRecord.id)
+        )
+        result = self.db.execute(stmt)
+        row = result.first()
         self.db.commit()
-        self.db.refresh(attendance)
-        return attendance
+
+        if row is not None:
+            # Newly inserted — fetch full record with relationships loaded
+            return self.get_by_id(str(row.id))
+
+        # Conflict — fetch the existing record
+        existing = self.get_by_student_date(
+            str(data["student_id"]),
+            str(data["schedule_id"]),
+            data["date"],
+        )
+        return existing
 
     def update(self, attendance_id: str, update_data: dict) -> AttendanceRecord:
         """
