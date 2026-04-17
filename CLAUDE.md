@@ -33,7 +33,7 @@ mediamtx on VPS (RTSP ingest + WebRTC)
        │                           v
        │                 HybridTrackOverlay (draws boxes at ML Kit cadence, labels from backend)
        │
-       └──> Backend FrameGrabber (grabs frames at 20fps)
+       └──> Backend FrameGrabber (grabs frames at 10fps)
                  │
                  v
             SCRFD + ByteTrack + ArcFace → FAISS match → DB
@@ -47,7 +47,7 @@ mediamtx on VPS (RTSP ingest + WebRTC)
 **Three independent systems (hybrid — master-plan 2026-04-17):**
 1. **Video delivery** — mediamtx → WebRTC → phone (always smooth, no backend processing).
 2. **Face detection (position)** — ML Kit on phone, consuming WebRTC frames via `MlKitFrameSink`. ~15fps, zero network.
-3. **Face recognition (identity)** — Backend at 20fps: SCRFD + ByteTrack + ArcFace + FAISS → WebSocket → `FaceIdentityMatcher` on phone sticks names to ML Kit faces via IoU.
+3. **Face recognition (identity)** — Backend at 10fps (local dev; 5fps production): SCRFD + ByteTrack + ArcFace + FAISS → WebSocket → `FaceIdentityMatcher` on phone sticks names to ML Kit faces via IoU.
 
 The hybrid overlay is gated by `BuildConfig.HYBRID_DETECTION_ENABLED` (default on). When false, the app falls back to the legacy backend-authoritative `InterpolatedTrackOverlay`. `HybridFallbackController` automatically drops to the legacy path if the ML Kit sink stalls or to no-overlay if both legs go silent.
 
@@ -227,7 +227,7 @@ ffmpeg -stream_loop -1 -re -i test_video.mp4 -c:v libx264 -f rtsp rtsp://localho
 - **Tuning values:** see `docs/plans/2026-04-17-hybrid-detection/TUNING.md`.
 
 ### Continuous Presence Tracking
-- Backend runs real-time pipeline at 20fps during active sessions (see `backend/app/config.py::PROCESSING_FPS`)
+- Backend runs real-time pipeline at 10fps during active sessions by default (see `backend/app/config.py::PROCESSING_FPS`). Production env overrides to 5fps.
 - Configurable early-leave timeout per schedule (default from settings)
 - Presence score = (total_present / total_scans) × 100%
 

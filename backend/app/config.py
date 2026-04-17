@@ -87,8 +87,13 @@ class Settings(BaseSettings):
     SESSION_BUFFER_MINUTES: int = 5  # Buffer before/after class for session
 
     # Real-Time Pipeline
-    PROCESSING_FPS: float = 20.0  # Frames/sec for realtime tracker loop (20fps = 50ms budget for 1280x720)
-    WS_BROADCAST_FPS: float = 20.0  # WebSocket broadcast rate
+    # 10 fps gives a 100ms per-frame budget for SCRFD+ByteTrack+ArcFace on CPU.
+    # Since the Android app's MlKitFrameSink now owns 30fps box positions, the
+    # backend only needs to send identity refreshes often enough to feel live —
+    # 100ms cadence is well within perceptual tolerance and halves CPU pressure
+    # on Mac dev boxes. Production override in backend/.env.production=5.
+    PROCESSING_FPS: float = 10.0
+    WS_BROADCAST_FPS: float = 10.0  # WebSocket broadcast rate (one broadcast per processed frame)
 
     # ByteTrack / Track Lifecycle
     TRACK_LOST_TIMEOUT: float = 2.0  # Seconds before removing lost track (coasting period)
@@ -107,7 +112,10 @@ class Settings(BaseSettings):
     PRESENCE_FLUSH_INTERVAL: float = 10.0  # Seconds between DB presence flushes
 
     # Frame Grabber
-    FRAME_GRABBER_FPS: float = 20.0  # FFmpeg output frame rate (20fps for 1280x720 CPU budget)
+    # Match PROCESSING_FPS so FFmpeg doesn't decode frames the pipeline will drop.
+    # "More than 1000 frames duplicated" warnings in the logs indicate a mismatch —
+    # keep this equal to or slightly above PROCESSING_FPS.
+    FRAME_GRABBER_FPS: float = 10.0
     FRAME_GRABBER_WIDTH: int = 1280  # 720p — gives ~50-80px faces even on wide-angle lenses
     FRAME_GRABBER_HEIGHT: int = 720  # Consistent across all cameras
 
