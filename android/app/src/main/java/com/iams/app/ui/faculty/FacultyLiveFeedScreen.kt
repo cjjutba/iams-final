@@ -76,14 +76,20 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
+import com.iams.app.BuildConfig
 import com.iams.app.data.model.StudentAttendanceStatus
+import com.iams.app.hybrid.HybridMode
 import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.SkeletonBox
+import com.iams.app.ui.components.HybridTrackOverlay
 import com.iams.app.ui.components.InterpolatedTrackOverlay
 import com.iams.app.ui.components.NativeWebRtcVideoPlayer
 import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.debug.HybridDiagnosticHud
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import com.iams.app.ui.theme.AbsentBg
 import com.iams.app.ui.theme.AbsentFg
 import com.iams.app.ui.theme.Background
@@ -116,7 +122,14 @@ fun FacultyLiveFeedScreen(
     val uiState by viewModel.uiState.collectAsState()
     val tracks by viewModel.tracks.collectAsState()
     val wsConnected by viewModel.wsConnected.collectAsState()
+    val hybridTracks by viewModel.hybridTracks.collectAsState()
+    val hybridMode by viewModel.hybridMode.collectAsState()
+    val mlkitFrameSize by viewModel.mlkitFrameSize.collectAsState()
+    val hudSnapshot by viewModel.hudSnapshot.collectAsState()
     val spacing = IAMSThemeTokens.spacing
+
+    // Hybrid diagnostic HUD — visible by default in debug, toggled via long-press (session 08).
+    var hudVisible by remember { mutableStateOf(BuildConfig.DEBUG) }
 
     var activeTab by remember { mutableStateOf(PanelTab.DETECTED) }
     var showEarlyLeaveDialog by remember { mutableStateOf(false) }
@@ -408,15 +421,68 @@ fun FacultyLiveFeedScreen(
                             modifier = Modifier.fillMaxSize(),
                             onError = { error -> viewModel.onVideoError(error) },
                             onVideoReady = { isVideoReady = true },
+                            onMlKitFacesUpdate = viewModel::onMlKitFaces,
+                            onMlKitFrameSize = viewModel::onMlKitFrameSize,
+                            enableMlKit = BuildConfig.HYBRID_DETECTION_ENABLED,
                         )
 
-                        InterpolatedTrackOverlay(
-                            tracks = tracks,
-                            modifier = Modifier.fillMaxSize(),
-                            videoFrameWidth = frameDimensions.first.takeIf { it > 0 } ?: 896,
-                            videoFrameHeight = frameDimensions.second.takeIf { it > 0 } ?: 512,
-                            isVideoReady = isVideoReady,
-                        )
+                        // Overlay selection: hybrid (ML Kit boxes + backend names) vs legacy
+                        // (backend-authoritative interpolated boxes). The fallback controller
+                        // picks BACKEND_ONLY if ML Kit is silent >2s and OFFLINE if both legs
+                        // are silent — in which case we draw no overlay at all.
+                        val useHybridOverlay = BuildConfig.HYBRID_DETECTION_ENABLED &&
+                            hybridMode != HybridMode.BACKEND_ONLY &&
+                            hybridMode != HybridMode.OFFLINE
+                        val useLegacyOverlay = !BuildConfig.HYBRID_DETECTION_ENABLED ||
+                            hybridMode == HybridMode.BACKEND_ONLY
+
+                        if (useHybridOverlay) {
+                            // Prefer ML Kit's reported frame dimensions (post-rotation) so the
+                            // aspect-fit math matches the faces the sink actually saw. Fall back
+                            // to the backend-reported size or the 896x512 default if unknown.
+                            val effW = mlkitFrameSize.first
+                                .takeIf { it > 0 }
+                                ?: frameDimensions.first.takeIf { it > 0 }
+                                ?: 896
+                            val effH = mlkitFrameSize.second
+                                .takeIf { it > 0 }
+                                ?: frameDimensions.second.takeIf { it > 0 }
+                                ?: 512
+                            HybridTrackOverlay(
+                                tracks = hybridTracks,
+                                modifier = Modifier.fillMaxSize(),
+                                videoFrameWidth = effW,
+                                videoFrameHeight = effH,
+                                isVideoReady = isVideoReady,
+                            )
+                        } else if (useLegacyOverlay) {
+                            InterpolatedTrackOverlay(
+                                tracks = tracks,
+                                modifier = Modifier.fillMaxSize(),
+                                videoFrameWidth = frameDimensions.first.takeIf { it > 0 } ?: 896,
+                                videoFrameHeight = frameDimensions.second.takeIf { it > 0 } ?: 512,
+                                isVideoReady = isVideoReady,
+                            )
+                        }
+
+                        // Diagnostic HUD — only renders when hybrid is on AND the user hasn't
+                        // toggled it off. Long-press the video area to flip. Zero cost when hidden.
+                        if (BuildConfig.HYBRID_DETECTION_ENABLED) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .pointerInput(Unit) {
+                                        detectTapGestures(onLongPress = { hudVisible = !hudVisible })
+                                    },
+                            ) {
+                                if (hudVisible) {
+                                    HybridDiagnosticHud(
+                                        snapshot = hudSnapshot,
+                                        modifier = Modifier.align(Alignment.TopStart),
+                                    )
+                                }
+                            }
+                        }
 
                         // "Connecting..." overlay shown during WebRTC handshake
                         // (before first video frame arrives). Disappears when video is ready.

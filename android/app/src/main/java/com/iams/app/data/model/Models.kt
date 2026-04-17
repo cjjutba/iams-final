@@ -242,7 +242,10 @@ data class FrameUpdateMessage(
     @SerializedName("frame_size") val frameSize: List<Int>? = null,  // [width, height] from backend
     val tracks: List<TrackInfo>,
     val fps: Float,
-    @SerializedName("processing_ms") val processingMs: Float
+    @SerializedName("processing_ms") val processingMs: Float,
+    // Session 05 additions (backwards-compatible; nullable for legacy backends).
+    @SerializedName("server_time_ms") val serverTimeMs: Long? = null,
+    @SerializedName("frame_sequence") val frameSequence: Int? = null
 )
 
 /** attendance_summary message (every 5-10s from backend pipeline) */

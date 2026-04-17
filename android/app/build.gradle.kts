@@ -32,6 +32,11 @@ android {
         buildConfigField("String", "BACKEND_PORT", "\"$port\"")
         buildConfigField("String", "MEDIAMTX_PORT", "\"$mtxPort\"")
         buildConfigField("String", "MEDIAMTX_WEBRTC_PORT", "\"$mtxWebrtcPort\"")
+
+        // Hybrid detection rollout (sessions 01-10). When true, the Faculty Live Feed
+        // uses ML Kit on-device for box positions + backend identities via the matcher.
+        // When false, falls back to the legacy InterpolatedTrackOverlay path.
+        buildConfigField("boolean", "HYBRID_DETECTION_ENABLED", "true")
     }
 
     buildTypes {
