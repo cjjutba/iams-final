@@ -202,7 +202,8 @@ fun HybridTrackOverlay(
                         val (label, boxColor) = when {
                             track.identity.status == "recognized" &&
                                 !track.identity.name.isNullOrEmpty() ->
-                                track.identity.name!! to Color(0xFF4CAF50).copy(alpha = alpha)
+                                firstNameOnly(track.identity.name!!) to
+                                    Color(0xFF4CAF50).copy(alpha = alpha)
                             track.identity.status == "unknown" ->
                                 "Unknown" to Color(0xFFE53935).copy(alpha = alpha)
                             else ->
@@ -245,6 +246,18 @@ private class TrackRenderState(
     var lastSeenNs: Long,
     var fadingOut: Boolean = false,
 )
+
+/**
+ * Recognised labels show only the first whitespace-delimited token of the supplied
+ * name so the chip stays compact (e.g. "Juan Dela Cruz" → "Juan"). Falls back to the
+ * original string if it contains no whitespace — protects against single-word names.
+ */
+private fun firstNameOnly(fullName: String): String {
+    val trimmed = fullName.trim()
+    if (trimmed.isEmpty()) return trimmed
+    val first = trimmed.substringBefore(' ')
+    return if (first.isNotEmpty()) first else trimmed
+}
 
 /**
  * Copy of [InterpolatedTrackOverlay]'s drawNameLabel, extended with a `maxWidthPx`
