@@ -45,6 +45,7 @@ class SessionPipeline:
         self._last_flush: float = 0.0
         self._last_summary: float = 0.0
         self._frame_count: int = 0
+        self._frame_sequence: int = 0
 
         # Cached schedule metadata for notification context
         self._faculty_id: str | None = None
@@ -277,6 +278,7 @@ class SessionPipeline:
 
     async def _broadcast_frame_update(self, track_frame) -> None:
         """Send frame_update message to WebSocket clients."""
+        self._frame_sequence += 1
         try:
             from app.routers.websocket import ws_manager
 
@@ -299,6 +301,8 @@ class SessionPipeline:
                 {
                     "type": "frame_update",
                     "timestamp": track_frame.timestamp,
+                    "server_time_ms": int(time.time() * 1000),
+                    "frame_sequence": self._frame_sequence,
                     "frame_size": [settings.FRAME_GRABBER_WIDTH, settings.FRAME_GRABBER_HEIGHT],
                     "tracks": tracks_data,
                     "fps": round(track_frame.fps, 1),
