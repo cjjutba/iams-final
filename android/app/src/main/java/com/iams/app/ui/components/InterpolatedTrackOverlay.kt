@@ -23,19 +23,23 @@ private const val STALE_TIMEOUT_NS = 2_000_000_000L // 2s
 private const val IDENTITY_HOLD_NS = 3_000_000_000L // 3s
 
 /**
- * Fast lerp factor. 0.55 = move 55% toward target each frame at 60fps.
- * Reaches 95% of target in ~2 frames (~33ms) — feels instant but smooth.
- * No drift because we lerp toward a fixed backend position, not a predicted one.
+ * Correction lerp factor: how fast the current position snaps to the
+ * extrapolated target when a new WebSocket update corrects the prediction.
+ * 0.80 = snap 80% of the correction per frame at 60fps → reaches 95% in ~1 frame.
+ * High value is fine because extrapolation handles smooth movement; lerp only
+ * corrects prediction errors which should be small and applied instantly.
  */
-private const val LERP_FACTOR = 0.55f
+private const val LERP_FACTOR = 0.80f
 
 /**
- * Backend-authoritative face overlay with smooth tracking.
+ * Backend-authoritative face overlay with velocity extrapolation.
  *
  * All positions and identities come from the backend via WebSocket at ~10fps.
- * Fast lerp interpolation renders at 60fps for seamless box movement.
- * No velocity extrapolation — avoids drift. The box always converges to
- * exactly where SCRFD detected the face.
+ * Between updates, the overlay uses the backend-provided velocity vector to
+ * PREDICT where the face is moving (dead reckoning). When the next WebSocket
+ * update arrives, the target is corrected and lerp snaps to it.
+ *
+ * This eliminates the visible lag where boxes trail behind moving faces.
  *
  * Performance: Uses Modifier.drawWithCache to render at 60fps WITHOUT triggering
  * Compose recomposition. Only the draw phase runs each frame — no tree rebuild.
@@ -48,24 +52,20 @@ fun InterpolatedTrackOverlay(
     videoFrameHeight: Int = 0
 ) {
     val textMeasurer = rememberTextMeasurer()
-    // Plain map — NOT mutableStateMapOf (avoid Compose snapshot tracking overhead)
     val trackStates = remember { mutableMapOf<Int, TrackOverlayState>() }
     val coroutineScope = rememberCoroutineScope()
 
     // Invalidation trigger: incremented to force Canvas redraw without recomposition
     var drawTick by remember { mutableIntStateOf(0) }
 
-    // Drive continuous 60fps rendering for smooth lerp.
-    // withFrameNanos suspends until the next vsync, then we bump drawTick
-    // which invalidates the drawWithCache block — NO Compose recomposition.
+    // Drive continuous 60fps rendering
     LaunchedEffect(Unit) {
         while (true) {
             withFrameNanos { _ -> drawTick++ }
         }
     }
 
-    // Update target positions when new WebSocket data arrives.
-    // This runs at ~10fps (WebSocket rate), not 60fps.
+    // Update target positions when new WebSocket data arrives (~10fps).
     LaunchedEffect(tracks) {
         val now = System.nanoTime()
         val activeIds = tracks.map { it.trackId }.toSet()
@@ -87,17 +87,40 @@ fun InterpolatedTrackOverlay(
 
         for (track in tracks) {
             val existing = trackStates[track.trackId]
+
+            // Extract velocity (center+size space: [vCx, vCy, vW, vH] in normalized units/sec).
+            // Convert to corner-space velocity for x1,y1,x2,y2:
+            //   x1 = cx - w/2  →  vx1 = vCx - vW/2
+            //   y1 = cy - h/2  →  vy1 = vCy - vH/2
+            //   x2 = cx + w/2  →  vx2 = vCx + vW/2
+            //   y2 = cy + h/2  →  vy2 = vCy + vH/2
+            val vel = track.velocity
+            val vx1: Float; val vy1: Float; val vx2: Float; val vy2: Float
+            if (vel != null && vel.size >= 4) {
+                val vCx = vel[0]; val vCy = vel[1]; val vW = vel[2]; val vH = vel[3]
+                vx1 = vCx - vW / 2f
+                vy1 = vCy - vH / 2f
+                vx2 = vCx + vW / 2f
+                vy2 = vCy + vH / 2f
+            } else {
+                vx1 = 0f; vy1 = 0f; vx2 = 0f; vy2 = 0f
+            }
+
             if (existing != null) {
-                // Update target — lerp will smoothly move toward it
+                // Update authoritative target from backend
                 existing.targetX1 = track.bbox[0]
                 existing.targetY1 = track.bbox[1]
                 existing.targetX2 = track.bbox[2]
                 existing.targetY2 = track.bbox[3]
+                existing.velX1 = vx1
+                existing.velY1 = vy1
+                existing.velX2 = vx2
+                existing.velY2 = vy2
                 existing.lastUpdateNanos = now
                 existing.confidence = track.confidence
                 existing.isAlive = true
 
-                // Track the last time this track was recognized
+                // Identity hold logic
                 val isIncomingRecognized = track.status == "recognized"
                     && !track.name.isNullOrEmpty() && track.name != "Unknown"
                 if (isIncomingRecognized) {
@@ -105,8 +128,6 @@ fun InterpolatedTrackOverlay(
                     existing.lastRecognizedTimeNanos = now
                 }
 
-                // Identity hold: if backend says unknown but we saw recognized recently,
-                // keep showing the recognized identity (belt-and-suspenders with backend hold)
                 if (!isIncomingRecognized
                     && existing.lastRecognizedName != null
                     && (now - existing.lastRecognizedTimeNanos) < IDENTITY_HOLD_NS
@@ -134,6 +155,7 @@ fun InterpolatedTrackOverlay(
                     currentY1 = track.bbox[1],
                     currentX2 = track.bbox[2],
                     currentY2 = track.bbox[3],
+                    velX1 = vx1, velY1 = vy1, velX2 = vx2, velY2 = vy2,
                     lastUpdateNanos = now,
                     createdNanos = now,
                     alpha = Animatable(1f),
@@ -148,20 +170,16 @@ fun InterpolatedTrackOverlay(
         }
     }
 
-    // Use Spacer + drawWithCache: the draw block re-executes when drawTick changes
-    // but does NOT trigger Compose recomposition — only the draw phase runs.
     @Suppress("UNUSED_EXPRESSION")
     androidx.compose.foundation.layout.Spacer(
         modifier = modifier
             .fillMaxSize()
             .drawWithCache {
-                // Read drawTick inside cache block to invalidate on every frame
                 drawTick
 
                 val canvasW = size.width
                 val canvasH = size.height
 
-                // Compute aspect-fit crop offsets
                 val cropOffsetX: Float
                 val cropOffsetY: Float
                 val renderW: Float
@@ -196,20 +214,29 @@ fun InterpolatedTrackOverlay(
                         if (alpha < 0.01f) continue
                         if (state.status == "pending") continue
 
-                        // Grace period: don't show "Unknown" for brand-new tracks
                         val isRecognizedTrack = state.status == "recognized"
                             && !state.name.isNullOrEmpty() && state.name != "Unknown"
                         val trackAge = now - state.createdNanos
                         if (!isRecognizedTrack && trackAge < 800_000_000L) continue
 
-                        // Stale check
                         if (now - state.lastUpdateNanos > STALE_TIMEOUT_NS) continue
 
-                        // Fast lerp toward target
-                        state.currentX1 += (state.targetX1 - state.currentX1) * LERP_FACTOR
-                        state.currentY1 += (state.targetY1 - state.currentY1) * LERP_FACTOR
-                        state.currentX2 += (state.targetX2 - state.currentX2) * LERP_FACTOR
-                        state.currentY2 += (state.targetY2 - state.currentY2) * LERP_FACTOR
+                        // Dead reckoning: extrapolate target using velocity.
+                        // timeSinceUpdate = how long since last WebSocket position update.
+                        // Predict where the face IS NOW based on its velocity.
+                        val dtSeconds = (now - state.lastUpdateNanos).toFloat() / 1_000_000_000f
+                        val extraX1 = state.targetX1 + state.velX1 * dtSeconds
+                        val extraY1 = state.targetY1 + state.velY1 * dtSeconds
+                        val extraX2 = state.targetX2 + state.velX2 * dtSeconds
+                        val extraY2 = state.targetY2 + state.velY2 * dtSeconds
+
+                        // Lerp current position toward extrapolated target.
+                        // High lerp factor (0.80) snaps corrections fast since
+                        // extrapolation handles smooth movement prediction.
+                        state.currentX1 += (extraX1 - state.currentX1) * LERP_FACTOR
+                        state.currentY1 += (extraY1 - state.currentY1) * LERP_FACTOR
+                        state.currentX2 += (extraX2 - state.currentX2) * LERP_FACTOR
+                        state.currentY2 += (extraY2 - state.currentY2) * LERP_FACTOR
 
                         // Map to canvas coordinates
                         val left = state.currentX1 * renderW - cropOffsetX
@@ -253,6 +280,11 @@ private class TrackOverlayState(
     var currentY1: Float,
     var currentX2: Float,
     var currentY2: Float,
+    // Velocity in corner space (normalized units/second)
+    var velX1: Float,
+    var velY1: Float,
+    var velX2: Float,
+    var velY2: Float,
     var lastUpdateNanos: Long,
     val createdNanos: Long,
     val alpha: Animatable<Float, *>,

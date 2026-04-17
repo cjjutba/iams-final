@@ -577,9 +577,14 @@ class TrackPresenceService:
         summary = {
             "total_students": len(self._students),
             "present_count": sum(
-                1 for s in self._students.values() if s.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
+                1
+                for s in self._students.values()
+                if s.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
+                and not (s.early_leave_flagged and not s.early_leave_returned)
             ),
-            "early_leave_count": sum(1 for s in self._students.values() if s.early_leave_flagged),
+            "early_leave_count": sum(
+                1 for s in self._students.values() if s.early_leave_flagged and not s.early_leave_returned
+            ),
             "absent_count": sum(1 for s in self._students.values() if s.status == AttendanceStatus.ABSENT),
         }
 
@@ -601,25 +606,27 @@ class TrackPresenceService:
                 # Still absent after early leave
                 early_leave.append(info)
             elif state.early_leave_flagged and state.early_leave_returned:
-                # Returned after early leave — show in both present/late AND early_leave_returned
+                # Returned after early leave — show in original category AND early_leave_returned
                 early_leave_returned.append(info)
                 if state.status == AttendanceStatus.LATE:
                     late.append(info)
-                    present.append(info)
                 elif state.status == AttendanceStatus.PRESENT:
                     present.append(info)
             elif state.status == AttendanceStatus.ABSENT:
                 absent.append(info)
             elif state.status == AttendanceStatus.LATE:
                 late.append(info)
-                present.append(info)
             elif state.status == AttendanceStatus.PRESENT:
                 present.append(info)
 
         return {
             "type": "attendance_summary",
             "schedule_id": self.schedule_id,
-            "present_count": len(present),
+            "present_count": len(present) + len(late),
+            "on_time_count": len(present),
+            "late_count": len(late),
+            "absent_count": len(absent),
+            "early_leave_count": len(early_leave),
             "total_enrolled": len(self._students),
             "present": present,
             "absent": absent,

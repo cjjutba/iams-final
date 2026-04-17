@@ -2,7 +2,10 @@ package com.iams.app.ui.faculty
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.iams.app.BuildConfig
 import com.iams.app.data.api.ApiService
+import com.iams.app.data.api.AttendanceWebSocketClient
+import com.iams.app.data.api.TokenManager
 import com.iams.app.data.model.LiveAttendanceResponse
 import com.iams.app.data.model.StudentAttendanceStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -13,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import okhttp3.OkHttpClient
 import javax.inject.Inject
 
 data class FacultyLiveAttendanceUiState(
@@ -46,13 +50,17 @@ data class FacultyLiveAttendanceUiState(
 
 @HiltViewModel
 class FacultyLiveAttendanceViewModel @Inject constructor(
-    private val apiService: ApiService
+    private val apiService: ApiService,
+    private val tokenManager: TokenManager,
+    private val okHttpClient: OkHttpClient,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(FacultyLiveAttendanceUiState())
     val uiState: StateFlow<FacultyLiveAttendanceUiState> = _uiState.asStateFlow()
 
     private var pollingJob: Job? = null
+    private var wsClient: AttendanceWebSocketClient? = null
+    private var wsObserverJob: Job? = null
     private var currentScheduleId: String? = null
 
     fun initialize(scheduleId: String) {
@@ -61,6 +69,7 @@ class FacultyLiveAttendanceViewModel @Inject constructor(
         loadData(scheduleId)
         loadScheduleRoomId(scheduleId)
         checkSessionStatus(scheduleId)
+        startWebSocket(scheduleId)
         startPolling(scheduleId)
     }
 
@@ -119,6 +128,58 @@ class FacultyLiveAttendanceViewModel @Inject constructor(
                     )
                 }
             } catch (_: Exception) {}
+        }
+    }
+
+    private fun startWebSocket(scheduleId: String) {
+        wsObserverJob?.cancel()
+        wsClient?.disconnect()
+
+        wsClient = AttendanceWebSocketClient(
+            "ws://${BuildConfig.BACKEND_HOST}:${BuildConfig.BACKEND_PORT}/api/v1/ws",
+            okHttpClient,
+            { tokenManager.accessToken }
+        )
+        wsClient?.connect(scheduleId)
+
+        // Observe attendance_summary from WebSocket for real-time updates
+        wsObserverJob = viewModelScope.launch {
+            wsClient?.attendanceSummary?.collect { msg ->
+                if (msg != null) {
+                    // Build student list from WS summary lists
+                    val students = mutableListOf<StudentAttendanceStatus>()
+                    msg.present?.forEach {
+                        students.add(StudentAttendanceStatus(studentId = it.userId, studentName = it.name, status = "present"))
+                    }
+                    msg.late?.forEach {
+                        students.add(StudentAttendanceStatus(studentId = it.userId, studentName = it.name, status = "late"))
+                    }
+                    msg.earlyLeave?.forEach {
+                        students.add(StudentAttendanceStatus(studentId = it.userId, studentName = it.name, status = "early_leave"))
+                    }
+                    msg.earlyLeaveReturned?.forEach {
+                        students.add(StudentAttendanceStatus(studentId = it.userId, studentName = it.name, status = "returned"))
+                    }
+                    msg.absent?.forEach {
+                        students.add(StudentAttendanceStatus(studentId = it.userId, studentName = it.name, status = "absent"))
+                    }
+
+                    _uiState.value = _uiState.value.copy(
+                        liveAttendance = LiveAttendanceResponse(
+                            scheduleId = msg.scheduleId,
+                            totalEnrolled = msg.totalEnrolled,
+                            presentCount = msg.onTimeCount,
+                            lateCount = msg.lateCount,
+                            absentCount = msg.absentCount,
+                            earlyLeaveCount = msg.earlyLeaveCount,
+                            sessionActive = true,
+                            students = students,
+                        ),
+                        isConnected = true,
+                        isSessionActive = true,
+                    )
+                }
+            }
         }
     }
 
@@ -195,5 +256,7 @@ class FacultyLiveAttendanceViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         pollingJob?.cancel()
+        wsObserverJob?.cancel()
+        wsClient?.disconnect()
     }
 }

@@ -207,6 +207,10 @@ class SessionPipeline:
                             db.close()
 
                         # Handle events (check-in notifications, early leave alerts)
+                        if events:
+                            # Broadcast updated summary immediately on any status change
+                            await self._broadcast_attendance_summary()
+                            self._last_summary = time.monotonic()
                         for event in events:
                             await self._handle_event(event)
 
