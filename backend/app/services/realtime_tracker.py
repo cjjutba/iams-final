@@ -625,8 +625,16 @@ class RealtimeTracker:
             )
         return self._identity_cache[track_id]
 
-    def _resolve_name(self, user_id: str) -> str:
-        """Resolve display name for a user_id, with DB fallback for new registrations."""
+    def _resolve_name(self, user_id: str) -> str | None:
+        """Resolve display name for a user_id.
+
+        Returns the user's first_name if found (via in-memory map or DB fallback),
+        or None if the user row no longer exists. Returning None — not the literal
+        string "Unknown" — lets the caller distinguish "FAISS matched a stale vector
+        pointing to a deleted user" from "backend genuinely recognised a user named
+        Unknown". The former must become status='unknown'; the latter stays
+        status='recognized' with name='Unknown' (unlikely but representable).
+        """
         name = self._name_map.get(user_id)
         if name:
             return name
@@ -647,7 +655,7 @@ class RealtimeTracker:
         except Exception:
             logger.debug("DB lookup failed for user %s", user_id)
 
-        return "Unknown"
+        return None
 
     def _recognize_batch(
         self,
@@ -677,6 +685,19 @@ class RealtimeTracker:
                 "ACCEPT" if (user_id and not is_ambiguous) else "REJECT",
             )
 
+            # Guard: a FAISS hit whose user_id no longer exists in the DB is a stale
+            # embedding (e.g. orphaned adaptive vector after a user delete / reseed).
+            # Treat it exactly like a miss so the track is not marked 'recognized'
+            # and the client never shows a green box labelled 'Unknown'.
+            resolved_name = self._resolve_name(user_id) if user_id is not None else None
+            if user_id is not None and resolved_name is None:
+                logger.warning(
+                    "Track %d FAISS hit user_id=%s not in DB (orphaned embedding?)",
+                    identity.track_id,
+                    user_id[:8],
+                )
+                user_id = None
+
             if user_id is not None and not is_ambiguous:
                 # Check if this is an IDENTITY SWAP (FAISS returned a different user)
                 prev_user_id = identity.user_id
@@ -697,12 +718,12 @@ class RealtimeTracker:
                             identity.track_id,
                             identity.name,
                             identity.confidence,
-                            self._resolve_name(user_id),
+                            resolved_name,
                             confidence,
                         )
                         identity.user_id = user_id
                         identity.confidence = confidence
-                        identity.name = self._resolve_name(user_id)
+                        identity.name = resolved_name
                         identity.anchor_embedding = search_embedding.copy()
                         identity.drift_strike_count = 0
                         # Clear held identity since the old one was wrong
@@ -715,14 +736,14 @@ class RealtimeTracker:
                             identity.track_id,
                             identity.name,
                             identity.confidence,
-                            self._resolve_name(user_id),
+                            resolved_name,
                             confidence,
                         )
                 else:
                     # Same user, confirming — update confidence and anchor
                     identity.user_id = user_id
                     identity.confidence = confidence
-                    identity.name = self._resolve_name(user_id)
+                    identity.name = resolved_name
                     identity.recognition_status = "recognized"
                     identity.anchor_embedding = search_embedding.copy()
                     identity.drift_strike_count = 0
