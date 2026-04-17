@@ -190,17 +190,23 @@ fun HybridTrackOverlay(
                         val boxHeight = bottom - top
                         if (boxWidth < 2f || boxHeight < 2f) continue
 
-                        // Visual design: BOUND and COASTING share the same colour to avoid
-                        // box-flicker when the backend FPS < 10. The matcher still exposes the
-                        // distinction to telemetry (DiagnosticMetricsCollector) and to tests.
-                        val boxColor = when (track.source) {
-                            HybridSource.BOUND,
-                            HybridSource.COASTING ->
-                                Color(0xFF4CAF50).copy(alpha = alpha)
-                            HybridSource.MLKIT_ONLY ->
-                                Color(0xFFFF9800).copy(alpha = alpha)
-                            HybridSource.FALLBACK ->
-                                Color(0xFF2196F3).copy(alpha = alpha)
+                        // Label + colour are driven by the final *displayed* status so
+                        // they always agree, regardless of which matcher source produced
+                        // the track. Identity is strictly backend-authoritative:
+                        //   backend recognized → GREEN   + full name
+                        //   backend unknown    → RED     + "Unknown"
+                        //   anything else      → ORANGE  + "Detecting…"
+                        //     (MLKIT_ONLY, backend pending, FALLBACK — same UX: we have a
+                        //      face but no identity yet, so show the neutral "Detecting…"
+                        //      state while the backend catches up.)
+                        val (label, boxColor) = when {
+                            track.identity.status == "recognized" &&
+                                !track.identity.name.isNullOrEmpty() ->
+                                track.identity.name!! to Color(0xFF4CAF50).copy(alpha = alpha)
+                            track.identity.status == "unknown" ->
+                                "Unknown" to Color(0xFFE53935).copy(alpha = alpha)
+                            else ->
+                                "Detecting…" to Color(0xFFFF9800).copy(alpha = alpha)
                         }
 
                         drawRect(
@@ -210,13 +216,10 @@ fun HybridTrackOverlay(
                             style = Stroke(width = 2.5f),
                         )
 
-                        val label = when {
-                            track.identity.status == "recognized" &&
-                                !track.identity.name.isNullOrEmpty() ->
-                                track.identity.name!!
-                            track.source == HybridSource.MLKIT_ONLY -> "Detecting…"
-                            else -> "Unknown"
-                        }
+                        // Full-length label. Let it extend past the bounding-box width if
+                        // the name is longer; only cap at the canvas edge so it can't run
+                        // off-screen. This replaces the old `maxWidthPx = boxWidth` that
+                        // caused long names to render as "Chri…" / "Unk…" / "Det…".
                         drawNameLabel(
                             textMeasurer = textMeasurer,
                             label = label,
@@ -224,7 +227,7 @@ fun HybridTrackOverlay(
                             y = top,
                             color = boxColor,
                             alpha = alpha,
-                            maxWidthPx = boxWidth,
+                            maxWidthPx = (canvasW - left).coerceAtLeast(1f),
                         )
                     }
                 }
