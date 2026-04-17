@@ -64,8 +64,14 @@ enum class HybridSource {
 }
 
 data class MatcherConfig(
-    val iouBindThreshold: Float = 0.40f,
-    val iouReleaseThreshold: Float = 0.20f,
+    // Tuned for WAN operation (prod VPS @ 10fps broadcasts + ~50-150ms WAN latency).
+    // On LAN/local dev (20fps + ~5ms latency) 0.40 also worked but 0.20 is safer in
+    // both regimes. The greedy IoU assignment still picks the highest-IoU pair first,
+    // so lowering the floor doesn't cause swaps — it just lets delayed backend bboxes
+    // bind to ML Kit faces that have drifted a bit. See docs/plans/2026-04-17-hybrid-
+    // detection/TUNING.md §3 for the rationale.
+    val iouBindThreshold: Float = 0.20f,
+    val iouReleaseThreshold: Float = 0.15f,
     val identityHoldMs: Long = 3_000L,
     val firstBindGraceMs: Long = 500L,
     val maxClockSkewMs: Long = 1_500L,
