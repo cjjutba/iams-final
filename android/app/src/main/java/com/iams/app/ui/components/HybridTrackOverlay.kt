@@ -190,11 +190,13 @@ fun HybridTrackOverlay(
                         val boxHeight = bottom - top
                         if (boxWidth < 2f || boxHeight < 2f) continue
 
+                        // Visual design: BOUND and COASTING share the same colour to avoid
+                        // box-flicker when the backend FPS < 10. The matcher still exposes the
+                        // distinction to telemetry (DiagnosticMetricsCollector) and to tests.
                         val boxColor = when (track.source) {
-                            HybridSource.BOUND ->
-                                Color(0xFF4CAF50).copy(alpha = alpha)
+                            HybridSource.BOUND,
                             HybridSource.COASTING ->
-                                Color(0xFF8BC34A).copy(alpha = alpha * 0.9f)
+                                Color(0xFF4CAF50).copy(alpha = alpha)
                             HybridSource.MLKIT_ONLY ->
                                 Color(0xFFFF9800).copy(alpha = alpha)
                             HybridSource.FALLBACK ->

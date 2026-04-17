@@ -128,8 +128,10 @@ fun FacultyLiveFeedScreen(
     val hudSnapshot by viewModel.hudSnapshot.collectAsState()
     val spacing = IAMSThemeTokens.spacing
 
-    // Hybrid diagnostic HUD — visible by default in debug, toggled via long-press (session 08).
-    var hudVisible by remember { mutableStateOf(BuildConfig.DEBUG) }
+    // Hybrid diagnostic HUD — hidden by default; long-press the video to toggle.
+    // (Was on-by-default in debug but that cluttered the screen on low-spec devices —
+    //  opt-in avoids visual noise unless the user is actively debugging.)
+    var hudVisible by remember { mutableStateOf(false) }
 
     var activeTab by remember { mutableStateOf(PanelTab.DETECTED) }
     var showEarlyLeaveDialog by remember { mutableStateOf(false) }
