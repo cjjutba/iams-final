@@ -193,18 +193,28 @@ fun HybridTrackOverlay(
                         // Label + colour are driven by the final *displayed* status so
                         // they always agree, regardless of which matcher source produced
                         // the track. Identity is strictly backend-authoritative:
-                        //   backend recognized → GREEN   + full name
-                        //   backend unknown    → RED     + "Unknown"
-                        //   anything else      → ORANGE  + "Detecting…"
-                        //     (MLKIT_ONLY, backend pending, FALLBACK — same UX: we have a
-                        //      face but no identity yet, so show the neutral "Detecting…"
-                        //      state while the backend catches up.)
+                        //   backend recognized with a real name → GREEN  + first name
+                        //   backend unknown                     → RED    + "Unknown"
+                        //   anything else                       → ORANGE + "Detecting…"
+                        //
+                        // Defensive: if the backend reports status="recognized" but the
+                        // name is missing or is literally the placeholder string
+                        // "Unknown" (which happens when a stale FAISS vector matches a
+                        // deleted user), treat it as unknown. Otherwise we'd paint a
+                        // green box labelled "Unknown" — the exact bug reported after a
+                        // reseed with orphaned FAISS embeddings.
+                        val recognisedName = track.identity.name
+                            ?.takeIf {
+                                track.identity.status == "recognized" &&
+                                    it.isNotBlank() &&
+                                    !it.equals("Unknown", ignoreCase = true)
+                            }
                         val (label, boxColor) = when {
-                            track.identity.status == "recognized" &&
-                                !track.identity.name.isNullOrEmpty() ->
-                                firstNameOnly(track.identity.name!!) to
+                            recognisedName != null ->
+                                firstNameOnly(recognisedName) to
                                     Color(0xFF4CAF50).copy(alpha = alpha)
-                            track.identity.status == "unknown" ->
+                            track.identity.status == "unknown" ||
+                                track.identity.name.equals("Unknown", ignoreCase = true) ->
                                 "Unknown" to Color(0xFFE53935).copy(alpha = alpha)
                             else ->
                                 "Detecting…" to Color(0xFFFF9800).copy(alpha = alpha)

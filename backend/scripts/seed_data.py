@@ -54,6 +54,12 @@ MARKDOWN_PATH = (
 SEMESTER = "2nd"
 ACADEMIC_YEAR = "2025-2026"
 
+# Rolling 30-min test sessions on EB227 — lets us exercise the full
+# PRESENT/LATE/ABSENT/EARLY_LEAVE state machine all day long.
+# eb226 stays 24/7 for raw video/overlay debugging.
+ROLLING_SESSION_MINUTES = 30
+ROLLING_EARLY_LEAVE_TIMEOUT_MIN = 2  # 2 min continuous absence → EARLY_LEAVE
+
 # ─── Faculty Records (faculty_records table) ─────────────────────────────────
 
 FACULTY_RECORDS = [
@@ -90,9 +96,11 @@ ROOM_DEFS = [
 # day_of_week: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
 
 SCHEDULE_DEFS = [
-    # ── Test schedules (24/7 for testing) ────────────────────────────
+    # ── Test schedule: EB226 always-on (raw video / overlay debugging) ────
     ("TEST 226", "IAMS Test EB226 (24/7)", 4, "BSCPE", [0, 1, 2, 3, 4, 5, 6], time(0, 0), time(23, 59), "EB226", "faculty.eb226@gmail.com"),
-    ("TEST 227", "IAMS Test EB227 (24/7)", 4, "BSCPE", [0, 1, 2, 3, 4, 5, 6], time(0, 0), time(23, 59), "EB227", "faculty.eb227@gmail.com"),
+
+    # NOTE: EB227 rolling sessions are generated in _seed_schedules() below.
+    # 48 back-to-back 30-min sessions × 7 days = 336 rows.
 
     # ── Elumba ────────────────────────────────────────────────────────
     ("CpE 121",  "WEB Technologies (LEC)",              2, "BSCPE", [1, 3], time(7, 0),   time(8, 30),  "EB227", "ryan.elumba@jrmsu.edu.ph"),
@@ -120,7 +128,9 @@ SCHEDULE_DEFS = [
 SYSTEM_SETTINGS = [
     ("scan_interval_seconds", "15"),
     ("early_leave_threshold", "3"),
-    ("grace_period_minutes", "15"),
+    # 5-min grace pairs cleanly with 30-min rolling test sessions:
+    # first 5 min of session = PRESENT window, next 25 min = LATE window.
+    ("grace_period_minutes", "5"),
     ("recognition_threshold", "0.45"),
     ("session_buffer_minutes", "5"),
     ("academic_year", ACADEMIC_YEAR),
@@ -571,8 +581,59 @@ def _seed_schedules(db, faculty_map: dict[str, User], room_map: dict[str, Room])
                   f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')} "
                   f"in {room_name} [{fac_short}]")
 
+    # ── Rolling 30-min EB227 sessions (Mon–Sun, 48/day) ────────────────
+    rolling_total = _seed_rolling_eb227(db, faculty_map, room_map)
+    total += rolling_total
+    print(f"  Generated {rolling_total} rolling 30-min EB227 sessions "
+          f"({rolling_total // 7}/day × 7 days, 2-min early-leave timeout)")
+
     db.flush()
     return total
+
+
+def _seed_rolling_eb227(db, faculty_map: dict[str, User], room_map: dict[str, Room]) -> int:
+    """Generate back-to-back 30-min EB227 sessions covering 24h × 7 days.
+
+    Lets us exercise PRESENT/LATE/ABSENT/EARLY_LEAVE transitions any time of day.
+    With grace_period_minutes=5 and session=30min:
+      - first 5 min of session = PRESENT window
+      - 5–30 min                = LATE window
+      - 2 min continuous absence after check-in → EARLY_LEAVE
+    """
+    faculty = faculty_map["faculty.eb227@gmail.com"]
+    room = room_map["EB227"]
+
+    slots_per_day = (24 * 60) // ROLLING_SESSION_MINUTES  # 48
+    count = 0
+    for day_idx in range(7):
+        for slot in range(slots_per_day):
+            start_minutes = slot * ROLLING_SESSION_MINUTES
+            end_minutes = start_minutes + ROLLING_SESSION_MINUTES
+
+            start_t = time(start_minutes // 60, start_minutes % 60)
+            # Last slot ends at 23:59 instead of 24:00 (Time can't represent 24:00).
+            if end_minutes >= 24 * 60:
+                end_t = time(23, 59)
+            else:
+                end_t = time(end_minutes // 60, end_minutes % 60)
+
+            db.add(Schedule(
+                subject_code=f"EB227-{start_t.strftime('%H%M')}",
+                subject_name=f"IAMS Test EB227 Rolling ({start_t.strftime('%H:%M')}-{end_t.strftime('%H:%M')})",
+                faculty_id=faculty.id,
+                room_id=room.id,
+                day_of_week=day_idx,
+                start_time=start_t,
+                end_time=end_t,
+                semester=SEMESTER,
+                academic_year=ACADEMIC_YEAR,
+                target_course="BSCPE",
+                target_year_level=4,
+                early_leave_timeout_minutes=ROLLING_EARLY_LEAVE_TIMEOUT_MIN,
+                is_active=True,
+            ))
+            count += 1
+    return count
 
 
 def _seed_system_settings(db) -> None:

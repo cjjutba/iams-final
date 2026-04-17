@@ -30,14 +30,39 @@ class FaceIdentityMatcherTest {
     }
 
     @Test
-    fun noMlKitFacesEmitsEmptyList() {
+    fun noMlKitFacesEmitsEmptyListWhenBackendAlsoEmpty() {
         val clock = FakeClock()
         val m = DefaultFaceIdentityMatcher(clock = clock)
 
         m.onMlKitUpdate(emptyList(), clock())
-        m.onBackendFrame(listOf(backend(100, 0.1f, 0.1f, 0.3f, 0.3f)), null, clock())
+        m.onBackendFrame(emptyList(), null, clock())
 
         assertThat(m.tracks.value).isEmpty()
+    }
+
+    @Test
+    fun backendOnlyTrackEmitsWhenMlKitHasNoFace() {
+        val clock = FakeClock()
+        val m = DefaultFaceIdentityMatcher(clock = clock)
+
+        // ML Kit sees nothing, backend still reports a recognised face (e.g. ML Kit missed
+        // a profile shot SCRFD found). Must emit a BACKEND_ONLY track so the overlay stays
+        // in sync with the Detected tab.
+        m.onMlKitUpdate(emptyList(), clock())
+        m.onBackendFrame(
+            listOf(backend(100, 0.1f, 0.1f, 0.3f, 0.3f, name = "Alice", status = "recognized", userId = "u-1")),
+            null,
+            clock(),
+        )
+
+        val track = m.tracks.value.single()
+        assertThat(track.source).isEqualTo(HybridSource.BACKEND_ONLY)
+        assertThat(track.backendTrackId).isEqualTo(100)
+        assertThat(track.identity.name).isEqualTo("Alice")
+        assertThat(track.identity.status).isEqualTo("recognized")
+        // mlkitFaceId is a synthetic render key; must be in the negative half so it can't
+        // collide with real ML Kit ids on a future frame.
+        assertThat(track.mlkitFaceId).isLessThan(0)
     }
 
     @Test
@@ -101,22 +126,29 @@ class FaceIdentityMatcherTest {
     }
 
     @Test
-    fun iouBelowBindThresholdProducesNoBinding() {
+    fun iouBelowBindThresholdProducesSeparateMlkitAndBackendTracks() {
         val clock = FakeClock()
         val m = DefaultFaceIdentityMatcher(clock = clock)
 
-        m.onMlKitUpdate(listOf(mlkit(1, 0.0f, 0.0f, 0.20f, 0.20f)), clock())
-        // Mostly-disjoint backend bbox → IoU well below 0.40 threshold.
+        // Disjoint boxes so neither IoU thresholds trigger: no binding AND no spatial cover.
+        m.onMlKitUpdate(listOf(mlkit(1, 0.0f, 0.0f, 0.10f, 0.10f)), clock())
         m.onBackendFrame(
-            listOf(backend(100, 0.18f, 0.18f, 0.40f, 0.40f, name = "Alice", status = "recognized")),
+            listOf(backend(100, 0.80f, 0.80f, 0.95f, 0.95f, name = "Alice", status = "recognized")),
             null,
             clock(),
         )
 
-        val t = m.tracks.value.single()
-        assertThat(t.source).isEqualTo(HybridSource.MLKIT_ONLY)
-        assertThat(t.identity.name).isNull()
-        assertThat(t.backendTrackId).isNull()
+        val bySource = m.tracks.value.groupBy { it.source }
+        // ML Kit face emits as MLKIT_ONLY (no nearby backend track to bind).
+        val mlkit = bySource[HybridSource.MLKIT_ONLY]?.single()
+        assertThat(mlkit?.mlkitFaceId).isEqualTo(1)
+        assertThat(mlkit?.identity?.name).isNull()
+        assertThat(mlkit?.backendTrackId).isNull()
+
+        // Backend track emits as BACKEND_ONLY (no ML Kit face covers it).
+        val backendOnly = bySource[HybridSource.BACKEND_ONLY]?.single()
+        assertThat(backendOnly?.backendTrackId).isEqualTo(100)
+        assertThat(backendOnly?.identity?.name).isEqualTo("Alice")
     }
 
     @Test
@@ -270,11 +302,19 @@ class FaceIdentityMatcherTest {
         )
         assertThat(m.tracks.value.single().identity.name).isEqualTo("Alice")
 
-        // Face leaves the frame.
+        // Face leaves ML Kit's view. Backend still reports the track → emit as BACKEND_ONLY
+        // so the overlay continues to show the recognised identity until the backend drops
+        // it on its next frame.
         m.onMlKitUpdate(emptyList(), clock())
-        assertThat(m.tracks.value).isEmpty()
+        val afterDisappear = m.tracks.value.single()
+        assertThat(afterDisappear.source).isEqualTo(HybridSource.BACKEND_ONLY)
+        assertThat(afterDisappear.backendTrackId).isEqualTo(100)
+        assertThat(afterDisappear.identity.name).isEqualTo("Alice")
 
-        // Re-push the same ML Kit id without a new backend frame; binding must NOT reappear.
+        // Re-push the same ML Kit id without a new backend frame. The old binding was
+        // cleared when the face disappeared; spatial coverage now suppresses the
+        // BACKEND_ONLY emission so the user sees a single MLKIT_ONLY box at the ML Kit
+        // position (the next backend frame will rebind it via greedy IoU).
         m.onMlKitUpdate(listOf(mlkit(1, 0.1f, 0.1f, 0.3f, 0.3f)), clock())
         val after = m.tracks.value.single()
         assertThat(after.source).isEqualTo(HybridSource.MLKIT_ONLY)

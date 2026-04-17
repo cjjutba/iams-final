@@ -43,9 +43,23 @@ data class HybridIdentity(
 )
 
 enum class HybridSource {
+    /** ML Kit sees a face but the backend has not (yet) claimed it. Label: "Detecting…". */
     MLKIT_ONLY,
+
+    /** Backend track matched to an ML Kit face via IoU; identity is fresh. */
     BOUND,
+
+    /** Backend match has gone stale but is still within the identity-hold window. */
     COASTING,
+
+    /**
+     * Backend reported a face that no ML Kit face covers (out-of-frame for ML Kit, or
+     * ML Kit missed it on this cycle). Bbox comes from the backend. Ensures the overlay
+     * stays in sync with the "Detected" tab even when ML Kit and SCRFD disagree.
+     */
+    BACKEND_ONLY,
+
+    /** Backend WS is offline AND the track has no recent ML Kit evidence. Placeholder. */
     FALLBACK,
 }
 
