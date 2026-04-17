@@ -8,6 +8,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import com.iams.app.webrtc.MlKitFace
+import com.iams.app.webrtc.MlKitFrameSink
 import com.iams.app.webrtc.WhepClient
 import com.iams.app.webrtc.WhepConnectionState
 import java.util.concurrent.atomic.AtomicBoolean
@@ -42,19 +44,30 @@ private class FirstFrameDetector(
 /**
  * Native WebRTC video player using WHEP signaling with mediamtx.
  *
- * Uses SurfaceViewRenderer for reliable hardware-accelerated rendering.
+ * Uses SurfaceViewRenderer for reliable hardware-accelerated rendering and
+ * attaches [MlKitFrameSink] as a second sink on the same VideoTrack for
+ * on-device face detection (hybrid detection pipeline, session 02).
  *
  * @param onVideoReady Called exactly once when the first video frame is rendered.
  *                     Use this to synchronize overlays (bounding boxes, etc.)
  *                     with actual video display.
+ * @param onMlKitFacesUpdate Emits raw ML Kit detections (normalized bboxes)
+ *                           every time the sink finishes a frame (~15 fps).
+ *                           Parent composables feed this into FaceIdentityMatcher.
+ * @param onMlKitFrameSize Emits the effective (post-rotation) frame dimensions
+ *                         once per session so the overlay can aspect-fit align.
+ * @param enableMlKit When false the ML Kit sink is not allocated and no
+ *                    callbacks fire — legacy backend-authoritative rendering.
  */
 @Composable
 fun NativeWebRtcVideoPlayer(
     whepUrl: String,
     modifier: Modifier = Modifier,
-    onError: ((String) -> Unit)? = null,
-    additionalSink: VideoSink? = null,
-    onVideoReady: () -> Unit = {}
+    onError: (String) -> Unit = {},
+    onVideoReady: () -> Unit = {},
+    onMlKitFacesUpdate: (List<MlKitFace>) -> Unit = {},
+    onMlKitFrameSize: (Int, Int) -> Unit = { _, _ -> },
+    enableMlKit: Boolean = true,
 ) {
     val context = LocalContext.current
     val client = remember(whepUrl) {
@@ -72,6 +85,20 @@ fun NativeWebRtcVideoPlayer(
         }
     }
 
+    // ML Kit sink is allocated only when enabled — zero overhead in the legacy path.
+    val mlKitSink = remember(enableMlKit) {
+        if (enableMlKit) MlKitFrameSink() else null
+    }
+
+    // Pipe ML Kit StateFlows out via two separate LaunchedEffects so one
+    // stalling won't block the other.
+    LaunchedEffect(mlKitSink) {
+        mlKitSink?.faces?.collect { onMlKitFacesUpdate(it) }
+    }
+    LaunchedEffect(mlKitSink) {
+        mlKitSink?.frameSize?.collect { (w, h) -> onMlKitFrameSize(w, h) }
+    }
+
     // Start connection
     LaunchedEffect(client) {
         client.connect()
@@ -82,15 +109,7 @@ fun NativeWebRtcVideoPlayer(
         if (connectionState is WhepConnectionState.Failed) {
             val reason = (connectionState as WhepConnectionState.Failed).reason
             Log.e(TAG, "Connection failed: $reason")
-            onError?.invoke(reason)
-        }
-    }
-
-    // Cleanup
-    DisposableEffect(client) {
-        onDispose {
-            Log.i(TAG, "Releasing WhepClient")
-            client.release()
+            onError(reason)
         }
     }
 
@@ -98,8 +117,30 @@ fun NativeWebRtcVideoPlayer(
     val currentTrack = remember { mutableStateOf<VideoTrack?>(null) }
     val rendererRef = remember { mutableStateOf<SurfaceViewRenderer?>(null) }
 
-    // Manage sinks: renderer + first-frame detector + optional additional sink
-    LaunchedEffect(videoTrack, additionalSink) {
+    // Close the ML Kit sink BEFORE the SurfaceViewRenderer is released on
+    // dispose so the sink stops receiving frames first. Also detach from the
+    // current track to avoid the native layer pushing into a closed detector.
+    DisposableEffect(mlKitSink) {
+        onDispose {
+            mlKitSink?.let { sink ->
+                currentTrack.value?.let { track ->
+                    try { track.removeSink(sink) } catch (_: Exception) {}
+                }
+                sink.close()
+            }
+        }
+    }
+
+    // Cleanup WhepClient (releases PeerConnection + VideoTrack).
+    DisposableEffect(client) {
+        onDispose {
+            Log.i(TAG, "Releasing WhepClient")
+            client.release()
+        }
+    }
+
+    // Manage sinks: renderer + first-frame detector + optional ML Kit sink
+    LaunchedEffect(videoTrack, mlKitSink) {
         val renderer = rendererRef.value
         val oldTrack = currentTrack.value
         val newTrack = videoTrack
@@ -110,15 +151,15 @@ fun NativeWebRtcVideoPlayer(
                     try { oldTrack.removeSink(renderer) } catch (_: Exception) {}
                 }
                 try { oldTrack.removeSink(firstFrameDetector) } catch (_: Exception) {}
-                additionalSink?.let { try { oldTrack.removeSink(it) } catch (_: Exception) {} }
+                mlKitSink?.let { try { oldTrack.removeSink(it) } catch (_: Exception) {} }
             }
             if (newTrack != null) {
                 if (renderer != null) {
                     newTrack.addSink(renderer)
                 }
                 newTrack.addSink(firstFrameDetector)
-                additionalSink?.let { newTrack.addSink(it) }
-                Log.i(TAG, "Video sinks attached (additional=${additionalSink != null})")
+                mlKitSink?.let { newTrack.addSink(it) }
+                Log.i(TAG, "Video sinks attached (mlKit=${mlKitSink != null})")
             }
             currentTrack.value = newTrack
         }
@@ -139,7 +180,7 @@ fun NativeWebRtcVideoPlayer(
                     videoTrack?.let { track ->
                         track.addSink(this)
                         track.addSink(firstFrameDetector)
-                        additionalSink?.let { track.addSink(it) }
+                        mlKitSink?.let { track.addSink(it) }
                     }
                     currentTrack.value = videoTrack
                 }
@@ -149,7 +190,7 @@ fun NativeWebRtcVideoPlayer(
                 currentTrack.value?.let { track ->
                     track.removeSink(renderer)
                     try { track.removeSink(firstFrameDetector) } catch (_: Exception) {}
-                    additionalSink?.let { try { track.removeSink(it) } catch (_: Exception) {} }
+                    mlKitSink?.let { try { track.removeSink(it) } catch (_: Exception) {} }
                 }
                 currentTrack.value = null
                 rendererRef.value = null
