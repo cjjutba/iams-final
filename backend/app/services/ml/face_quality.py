@@ -109,11 +109,11 @@ def assess_recognition_quality(
         return False, 0.0
 
     blur = compute_blur_score(face_crop_bgr)
-    if blur < 15.0:
+    if blur < settings.QUALITY_BLUR_THRESHOLD:
         return False, blur
 
     brightness = compute_brightness(face_crop_bgr)
-    if brightness < 30.0 or brightness > 240.0:
+    if brightness < settings.QUALITY_BRIGHTNESS_MIN or brightness > settings.QUALITY_BRIGHTNESS_MAX:
         return False, blur
 
     return True, blur
