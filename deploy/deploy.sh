@@ -41,6 +41,14 @@ echo "[1b/5] Syncing database init scripts..."
 rsync -avz \
     "${PROJECT_DIR}/backend/db/" "${VPS_USER}@${VPS_IP}:${VPS_DIR}/backend/db/"
 
+# Step 1c: Sync student/faculty master roster (seed_data.py reads from this)
+# The api-gateway container mounts ../docs/data as /docs/data:ro, so seed_data.py
+# can pick up updates without rebuilding the image.
+echo "[1c/5] Syncing docs/data (student master roster)..."
+ssh "${VPS_USER}@${VPS_IP}" "mkdir -p ${VPS_DIR}/docs/data"
+rsync -avz --delete \
+    "${PROJECT_DIR}/docs/data/" "${VPS_USER}@${VPS_IP}:${VPS_DIR}/docs/data/"
+
 # Step 2: Sync admin dashboard code to VPS
 echo "[2/5] Syncing admin dashboard code to VPS..."
 rsync -avz --delete \

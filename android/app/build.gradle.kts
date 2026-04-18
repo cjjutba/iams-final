@@ -19,8 +19,9 @@ android {
         applicationId = "com.iams.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        // Overridable from CI: ./gradlew ... -PversionCode=42 -PversionName=1.0.42
+        versionCode = (project.findProperty("versionCode") as? String)?.toInt() ?: 1
+        versionName = (project.findProperty("versionName") as? String) ?: "1.0.0"
 
         // Configured via gradle.properties; override per-machine in local.properties
         val host = project.findProperty("IAMS_BACKEND_HOST") as? String ?: "192.168.88.254"
@@ -37,6 +38,28 @@ android {
         // uses ML Kit on-device for box positions + backend identities via the matcher.
         // When false, falls back to the legacy InterpolatedTrackOverlay path.
         buildConfigField("boolean", "HYBRID_DETECTION_ENABLED", "true")
+
+        // Restrict to arm64-v8a so the distributed APK fits under GitHub's 100 MiB
+        // per-file limit (Vercel pulls the file from the repo). All target phones
+        // (min SDK 26 / Android 8.0) are arm64.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+    }
+
+    // Release signing — populated from environment variables in CI (GitHub Secrets).
+    // Local builds without these env vars produce an unsigned release APK (won't install,
+    // but `assembleDebug` still works exactly as before).
+    signingConfigs {
+        create("release") {
+            val keystorePath = System.getenv("IAMS_KEYSTORE_PATH")
+            if (!keystorePath.isNullOrBlank()) {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("IAMS_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("IAMS_KEY_ALIAS")
+                keyPassword = System.getenv("IAMS_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
@@ -45,6 +68,11 @@ android {
         }
         release {
             isMinifyEnabled = false
+            // Only attach the signing config if the keystore was actually configured
+            // above — otherwise the build silently produces an unsigned APK.
+            if (signingConfigs.getByName("release").storeFile != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

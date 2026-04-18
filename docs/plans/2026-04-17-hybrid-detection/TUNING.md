@@ -66,6 +66,8 @@ Any value change must land in this table along with the code diff.
 | Date | Setting | Old | New | Why |
 |------|---------|-----|-----|-----|
 | 2026-04-17 | — | — | — | Baseline: values above are the initial ship. |
+| 2026-04-18 | `iouBindThreshold` | `0.40f` | `0.20f` | First real on-device run on production VPS showed boxes stuck on "Detecting…" even though the Detected panel had the correct identity. Root cause: at `PROCESSING_FPS=10` + ~50-150ms WAN latency, backend bboxes arrive ~100-250ms after ML Kit detected the same face. Even modest head motion in that window drops IoU below 0.40 → binding never forms. Lowering to 0.20 (matches the sticky-release floor) restores binding without enabling swaps — greedy assignment still picks the highest-IoU pair first. |
+| 2026-04-18 | `iouReleaseThreshold` | `0.20f` | `0.15f` | Paired with the bind change: keeps the release floor strictly below the bind floor so a freshly bound pair can't instantly release when IoU dips at the boundary. |
 
 ## 4. Validation status
 
