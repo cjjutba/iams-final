@@ -38,6 +38,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.iams.app.data.model.PresenceLogResponse
 import com.iams.app.ui.components.AttendanceStatus
+import com.iams.app.ui.utils.parseAttendanceStatus
 import com.iams.app.ui.components.CardSkeleton
 import com.iams.app.ui.components.IAMSBadge
 import com.iams.app.ui.components.IAMSButton
@@ -250,7 +251,7 @@ fun StudentAttendanceDetailScreen(
                         .padding(bottom = spacing.xxl),
                     contentAlignment = Alignment.Center
                 ) {
-                    IAMSBadge(status = parseStatus(attendance.status))
+                    IAMSBadge(status = parseAttendanceStatus(attendance.status))
                 }
 
                 // Stats row: Check-in time + Presence score
@@ -558,12 +559,3 @@ private fun formatDisplayTime(timeStr: String): String {
     }
 }
 
-private fun parseStatus(status: String): AttendanceStatus {
-    return when (status.lowercase()) {
-        "present" -> AttendanceStatus.PRESENT
-        "late" -> AttendanceStatus.LATE
-        "absent" -> AttendanceStatus.ABSENT
-        "early_leave" -> AttendanceStatus.EARLY_LEAVE
-        else -> AttendanceStatus.ABSENT
-    }
-}

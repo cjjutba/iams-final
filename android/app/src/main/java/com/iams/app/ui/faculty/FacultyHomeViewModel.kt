@@ -15,9 +15,12 @@ import com.iams.app.data.model.StudentAttendanceStatus
 import com.iams.app.data.model.UserResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import java.time.Duration
@@ -60,12 +63,80 @@ class FacultyHomeViewModel @Inject constructor(
     private var wsClient: AttendanceWebSocketClient? = null
     private var wsObserverJob: Job? = null
 
+    // Keeps `activeSessionIds` in sync with the backend's auto-start scheduler
+    // so a rolling session that flips from upcoming → active shows up as
+    // "Open Camera Feed" without the faculty needing to pull-to-refresh.
+    private var activeSessionsPollJob: Job? = null
+    private var sessionEventsJob: Job? = null
+
     private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
     private val shortTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
     init {
         loadData()
+        startActiveSessionsWatcher()
     }
+
+    /**
+     * Keep `activeSessionIds` fresh so the home screen instantly reflects
+     * backend auto-start events.
+     *
+     * Two layers:
+     * 1. **Push** — subscribe to the shared notification WebSocket. When the
+     *    backend emits a `session_start` / `session_end` toast (wired through
+     *    `notification_service.notify`), we immediately refetch the active
+     *    sessions list. Latency ≤ the WebSocket round trip.
+     * 2. **Poll** — every 30 s as a safety net in case the WS is disconnected
+     *    or a push is dropped (e.g. background / reconnect window).
+     */
+    private fun startActiveSessionsWatcher() {
+        // --- Push layer ---
+        val events = notificationService.events
+        if (events != null) {
+            sessionEventsJob?.cancel()
+            sessionEventsJob = viewModelScope.launch {
+                events.collectLatest { evt ->
+                    if (evt.notificationType == "session_start" ||
+                        evt.notificationType == "session_end"
+                    ) {
+                        refreshActiveSessions()
+                    }
+                }
+            }
+        }
+
+        // --- Poll layer (30 s) ---
+        activeSessionsPollJob?.cancel()
+        activeSessionsPollJob = viewModelScope.launch {
+            while (isActive) {
+                delay(30_000L)
+                refreshActiveSessions()
+            }
+        }
+    }
+
+    /**
+     * Fetch `/presence/active-sessions` and patch only `activeSessionIds`
+     * on the UI state — no loading spinner, no rerender of other fields.
+     *
+     * Safe to call any time; failures are swallowed so the poll loop keeps
+     * running through transient network errors.
+     */
+    private suspend fun refreshActiveSessions() {
+        try {
+            val response = apiService.getActiveSessions()
+            if (response.isSuccessful) {
+                val active = response.body()?.activeSessions ?: emptyList()
+                if (active != _uiState.value.activeSessionIds) {
+                    _uiState.value = _uiState.value.copy(activeSessionIds = active)
+                }
+            }
+        } catch (_: Exception) {
+            // Swallow — next tick will retry.
+        }
+    }
+
+    // (onCleared is merged below with the live-attendance/WS cleanup)
 
     fun loadData() {
         viewModelScope.launch {
@@ -380,6 +451,8 @@ class FacultyHomeViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
+        activeSessionsPollJob?.cancel()
+        sessionEventsJob?.cancel()
         liveAttendanceJob?.cancel()
         wsObserverJob?.cancel()
         wsClient?.destroy()

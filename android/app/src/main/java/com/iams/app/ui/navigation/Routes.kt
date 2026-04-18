@@ -35,6 +35,8 @@ object Routes {
     const val STUDENT_HOME = "student/home"
     const val STUDENT_SCHEDULE = "student/schedule"
     const val STUDENT_HISTORY = "student/history"
+    // Full pattern with optional query arg for deep-links from Analytics.
+    const val STUDENT_HISTORY_PATTERN = "student/history?scheduleId={scheduleId}"
     const val STUDENT_PROFILE = "student/profile"
 
     // Student (secondary screens)
@@ -84,6 +86,11 @@ object Routes {
 
     fun studentAttendanceDetail(attendanceId: String, scheduleId: String, date: String) =
         "student/attendance-detail/${Uri.encode(attendanceId)}/${Uri.encode(scheduleId)}/${Uri.encode(date)}"
+
+    /** Navigate to Student History optionally pre-filtered to a specific schedule. */
+    fun studentHistory(scheduleId: String? = null): String =
+        if (scheduleId.isNullOrBlank()) "student/history"
+        else "student/history?scheduleId=${Uri.encode(scheduleId)}"
 
     fun studentFaceRegister(mode: String) =
         "student/face-register/${Uri.encode(mode)}"

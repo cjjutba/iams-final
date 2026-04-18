@@ -7,8 +7,11 @@ import com.iams.app.data.api.NotificationService
 import com.iams.app.data.model.NotificationResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -34,6 +37,12 @@ class StudentNotificationsViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(NotificationsUiState())
     val uiState: StateFlow<NotificationsUiState> = _uiState.asStateFlow()
 
+    // One-shot error messages surfaced as snackbars/toasts by the screen.
+    // Previously, optimistic updates silently reverted on failure; the
+    // user had no way to tell their action failed.
+    private val _failureToasts = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val failureToasts: SharedFlow<String> = _failureToasts.asSharedFlow()
+
     private var wsJob: Job? = null
 
     val unreadCount: Int
@@ -48,9 +57,18 @@ class StudentNotificationsViewModel @Inject constructor(
     }
 
     /**
-     * Listen for real-time notification events on the shared WebSocket and
-     * silently re-fetch the list so the new row (with its real DB id +
-     * created_at) shows up at the top without a manual refresh.
+     * Listen for real-time notification events on the shared WebSocket.
+     *
+     * The `notify()` backend call has already persisted the DB row by the
+     * time the WS event lands on the client, but the event payload itself
+     * omits the row's canonical id / created_at. Rather than try to merge
+     * a half-populated row into the list (and risk key collisions with a
+     * future REST fetch), we issue a silent refetch so the list always
+     * reflects the canonical server state. The refetch is cheap.
+     *
+     * The real improvement over the old behaviour is that `isLoading`
+     * never flips, so the screen does not flash a spinner when a live
+     * event arrives.
      */
     private fun subscribeToLiveEvents() {
         val events = notificationService.events ?: return
@@ -125,12 +143,13 @@ class StudentNotificationsViewModel @Inject constructor(
                 if (response.isSuccessful) {
                     notificationService.decrementUnreadCount()
                 } else {
-                    // Revert optimistic update
+                    // Revert optimistic update + surface the failure.
                     _uiState.value = _uiState.value.copy(
                         notifications = _uiState.value.notifications.map {
                             if (it.id == notificationId) it.copy(read = false) else it
                         }
                     )
+                    _failureToasts.tryEmit("Couldn't mark as read. Try again.")
                 }
             } catch (_: Exception) {
                 _uiState.value = _uiState.value.copy(
@@ -138,6 +157,7 @@ class StudentNotificationsViewModel @Inject constructor(
                         if (it.id == notificationId) it.copy(read = false) else it
                     }
                 )
+                _failureToasts.tryEmit("Network error. Couldn't mark as read.")
             } finally {
                 _uiState.value = _uiState.value.copy(
                     markingReadIds = _uiState.value.markingReadIds - notificationId
@@ -160,9 +180,11 @@ class StudentNotificationsViewModel @Inject constructor(
                     notificationService.setUnreadCount(0)
                 } else {
                     loadNotifications(silent = true)
+                    _failureToasts.tryEmit("Couldn't mark all as read. Try again.")
                 }
             } catch (_: Exception) {
                 loadNotifications(silent = true)
+                _failureToasts.tryEmit("Network error. Couldn't mark all as read.")
             } finally {
                 _uiState.value = _uiState.value.copy(isMarkingAllRead = false)
             }
@@ -189,12 +211,14 @@ class StudentNotificationsViewModel @Inject constructor(
                         notifications = (_uiState.value.notifications + removed)
                             .sortedByDescending { it.createdAt }
                     )
+                    _failureToasts.tryEmit("Couldn't delete notification. Try again.")
                 }
             } catch (_: Exception) {
                 _uiState.value = _uiState.value.copy(
                     notifications = (_uiState.value.notifications + removed)
                         .sortedByDescending { it.createdAt }
                 )
+                _failureToasts.tryEmit("Network error. Couldn't delete notification.")
             } finally {
                 _uiState.value = _uiState.value.copy(
                     deletingIds = _uiState.value.deletingIds - notificationId
@@ -218,9 +242,11 @@ class StudentNotificationsViewModel @Inject constructor(
                     notificationService.setUnreadCount(0)
                 } else {
                     _uiState.value = _uiState.value.copy(notifications = backup)
+                    _failureToasts.tryEmit("Couldn't clear notifications. Try again.")
                 }
             } catch (_: Exception) {
                 _uiState.value = _uiState.value.copy(notifications = backup)
+                _failureToasts.tryEmit("Network error. Couldn't clear notifications.")
             } finally {
                 _uiState.value = _uiState.value.copy(isDeletingAll = false)
             }

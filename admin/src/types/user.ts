@@ -67,6 +67,7 @@ export interface StudentRecordWithStatus extends StudentRecordResponse {
 }
 
 export interface UpdateStudentRecord {
+  student_id?: string
   first_name?: string
   middle_name?: string
   last_name?: string

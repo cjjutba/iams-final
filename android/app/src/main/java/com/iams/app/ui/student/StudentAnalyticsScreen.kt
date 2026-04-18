@@ -2,6 +2,7 @@ package com.iams.app.ui.student
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -509,7 +510,15 @@ fun StudentAnalyticsScreen(
                     uiState.subjects.forEach { subject ->
                         SubjectCard(
                             subject = subject,
-                            modifier = Modifier.padding(bottom = spacing.md)
+                            modifier = Modifier.padding(bottom = spacing.md),
+                            // Drill-down: opens History pre-filtered to this
+                            // schedule so the student can see per-record
+                            // attendance behind the aggregate rate.
+                            onClick = {
+                                navController.navigate(
+                                    com.iams.app.ui.navigation.Routes.studentHistory(subject.scheduleId)
+                                )
+                            },
                         )
                     }
                 }
@@ -524,12 +533,17 @@ fun StudentAnalyticsScreen(
 @Composable
 private fun SubjectCard(
     subject: SubjectBreakdown,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
 ) {
     val spacing = IAMSThemeTokens.spacing
     val rate = subject.attendanceRate.roundToInt()
 
-    IAMSCard(modifier = modifier) {
+    val finalModifier = if (onClick != null) {
+        modifier.then(Modifier.clickable { onClick() })
+    } else modifier
+
+    IAMSCard(modifier = finalModifier) {
         // Header: subject name + rate
         Row(
             modifier = Modifier

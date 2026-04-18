@@ -240,7 +240,14 @@ class FacultyHistoryViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isExporting = true, error = null)
             try {
-                val scheduleIdsStr = state.selectedScheduleIds.joinToString(",")
+                // When every schedule is selected, send the "all" shortcut instead of a
+                // comma-joined UUID list — otherwise with a few hundred classes the
+                // query string blows past nginx's request-URI limit and we get a 414.
+                val scheduleIdsStr = if (state.selectAll) {
+                    "all"
+                } else {
+                    state.selectedScheduleIds.joinToString(",")
+                }
                 val startStr = state.startDate.format(dateFormatter)
                 val endStr = state.endDate.format(dateFormatter)
 

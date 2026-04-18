@@ -48,6 +48,11 @@ val EarlyLeaveBg = Color(0xFFFED7AA)
 val EarlyLeaveFg = Color(0xFF9A3412)
 val EarlyLeaveBorder = Color(0xFFFDBA74)
 
+// ── Status: Excused ─────────────────────────────────────────────────────
+val ExcusedBg = Color(0xFFDBEAFE)
+val ExcusedFg = Color(0xFF1E40AF)
+val ExcusedBorder = Color(0xFF93C5FD)
+
 // ── Status: Info ────────────────────────────────────────────────────────
 val InfoBg = Color(0xFFDBEAFE)
 val InfoFg = Color(0xFF1E40AF)

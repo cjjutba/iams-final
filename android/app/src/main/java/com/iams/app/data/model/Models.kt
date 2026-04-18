@@ -55,6 +55,7 @@ data class UserResponse(
     val email: String,
     @SerializedName("first_name") val firstName: String,
     @SerializedName("last_name") val lastName: String,
+    val phone: String? = null,
     val role: String,
     @SerializedName("student_id") val studentId: String?,
     @SerializedName("face_registered") val faceRegistered: Boolean?
@@ -135,6 +136,7 @@ data class AttendanceSummaryResponse(
     @SerializedName("present_count") val presentCount: Int,
     @SerializedName("absent_count") val absentCount: Int,
     @SerializedName("late_count") val lateCount: Int,
+    @SerializedName("early_leave_count") val earlyLeaveCount: Int = 0,
     @SerializedName("attendance_rate") val attendanceRate: Float
 )
 data class LiveAttendanceResponse(
@@ -401,6 +403,63 @@ data class NotificationEvent(
     @SerializedName("reference_type") val referenceType: String? = null,
     val timestamp: String? = null,
 )
+
+// === Real-time Student Attendance Events (mirrored on /ws/alerts/{user_id}) ===
+//
+// Fired whenever the backend transitions a student's attendance state
+// (check_in / early_leave / early_leave_return) for a class they are
+// enrolled in. Consumed by `StudentRealtimeService` / `NotificationService`
+// and merged into each student ViewModel's UI state in place — no refetch.
+sealed class StudentAttendanceEvent {
+    abstract val scheduleId: String
+    abstract val attendanceId: String
+    abstract val timestamp: String?
+
+    data class CheckIn(
+        override val scheduleId: String,
+        override val attendanceId: String,
+        val status: String,           // "present" or "late"
+        val checkInTime: String?,
+        val subjectCode: String? = null,
+        val subjectName: String? = null,
+        override val timestamp: String? = null,
+    ) : StudentAttendanceEvent()
+
+    data class EarlyLeave(
+        override val scheduleId: String,
+        override val attendanceId: String,
+        val subjectCode: String? = null,
+        val subjectName: String? = null,
+        override val timestamp: String? = null,
+    ) : StudentAttendanceEvent()
+
+    data class EarlyLeaveReturn(
+        override val scheduleId: String,
+        override val attendanceId: String,
+        val restoredStatus: String,   // "present" or "late"
+        val returnedAt: String?,
+        val subjectCode: String? = null,
+        val subjectName: String? = null,
+        override val timestamp: String? = null,
+    ) : StudentAttendanceEvent()
+
+    // Emitted by the service after a reconnect that outlasted the grace
+    // window — tells ViewModels to reconcile against the fresh snapshot
+    // rather than rely on the in-memory flow history. `records` is today's
+    // attendance slice pulled from `/attendance/me`.
+    data class SnapshotUpdate(
+        val records: List<AttendanceRecordResponse>,
+        override val scheduleId: String = "",
+        override val attendanceId: String = "",
+        override val timestamp: String? = null,
+    ) : StudentAttendanceEvent()
+}
+
+enum class RealtimeConnectionHealth {
+    CONNECTED,
+    RECONNECTING,
+    OFFLINE,
+}
 
 // === Faculty Analytics ===
 data class ClassOverview(

@@ -8,13 +8,17 @@ import com.iams.app.data.api.PendingFaceUploadManager
 import com.iams.app.data.api.TokenManager
 import com.iams.app.data.model.AttendanceRecordResponse
 import com.iams.app.data.model.AttendanceSummaryResponse
+import com.iams.app.data.model.RealtimeConnectionHealth
 import com.iams.app.data.model.ScheduleResponse
+import com.iams.app.data.model.StudentAttendanceEvent
 import com.iams.app.data.model.UserResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.Duration
 import java.time.LocalDate
@@ -52,8 +56,151 @@ class StudentHomeViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(StudentHomeUiState())
     val uiState: StateFlow<StudentHomeUiState> = _uiState.asStateFlow()
 
+    val connectionHealth: StateFlow<RealtimeConnectionHealth> =
+        notificationService.connectionHealth.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = notificationService.connectionHealth.value,
+        )
+
     init {
         loadData()
+        observeRealtimeEvents()
+    }
+
+    /**
+     * Subscribe to the per-user WebSocket event stream and merge incoming
+     * attendance state changes into `_uiState` without refetching. Pull-
+     * to-refresh stays as an escape hatch but is no longer required for
+     * correctness.
+     */
+    private fun observeRealtimeEvents() {
+        viewModelScope.launch {
+            notificationService.attendanceEvents.collect { event ->
+                when (event) {
+                    is StudentAttendanceEvent.CheckIn ->
+                        applyLiveStatus(event.scheduleId, event.attendanceId, event.status, event.checkInTime)
+                    is StudentAttendanceEvent.EarlyLeave ->
+                        applyLiveStatus(event.scheduleId, event.attendanceId, "early_leave", null)
+                    is StudentAttendanceEvent.EarlyLeaveReturn ->
+                        applyLiveStatus(event.scheduleId, event.attendanceId, event.restoredStatus, event.returnedAt)
+                    is StudentAttendanceEvent.SnapshotUpdate -> applySnapshot(event.records)
+                }
+            }
+        }
+    }
+
+    /**
+     * Apply a single attendance state change. Updates:
+     *  - `todayAttendanceMap` (source of truth for today's badges)
+     *  - `recentActivity` (merge-in-place if present, prepend if new)
+     *  - `attendanceSummary` counters (decrement ABSENT, bump the new bucket)
+     *
+     * Mutation only — no REST refresh — so the existing Compose recompose
+     * updates the badges in-place. `LazyColumn` `key={ it.id }` is already
+     * enforced on activity feed items.
+     */
+    private fun applyLiveStatus(
+        scheduleId: String,
+        attendanceId: String,
+        status: String,
+        checkInTime: String?,
+    ) {
+        val current = _uiState.value
+        val todayStr = LocalDate.now().toString()
+
+        val existingRecord = current.todayAttendanceMap[scheduleId]
+            ?: current.recentActivity.firstOrNull { it.id == attendanceId }
+
+        val updatedRecord = existingRecord?.copy(
+            status = status,
+            checkInTime = checkInTime ?: existingRecord.checkInTime,
+        ) ?: AttendanceRecordResponse(
+            id = attendanceId,
+            scheduleId = scheduleId,
+            studentId = tokenManager.userId,
+            studentName = null,
+            subjectCode = null,
+            status = status,
+            date = todayStr,
+            checkInTime = checkInTime,
+            presenceScore = null,
+            totalScans = null,
+            scansPresent = null,
+            remarks = null,
+        )
+
+        val newTodayMap = current.todayAttendanceMap.toMutableMap().apply {
+            put(scheduleId, updatedRecord)
+        }
+
+        val newRecent = current.recentActivity.toMutableList().apply {
+            val idx = indexOfFirst { it.id == attendanceId }
+            if (idx >= 0) {
+                set(idx, updatedRecord)
+            } else {
+                add(0, updatedRecord)
+            }
+        }
+
+        val previousStatus = existingRecord?.status
+        val newSummary = current.attendanceSummary?.let { summary ->
+            mergeSummary(summary, previousStatus, status)
+        }
+
+        _uiState.value = current.copy(
+            todayAttendanceMap = newTodayMap,
+            recentActivity = newRecent,
+            attendanceSummary = newSummary ?: current.attendanceSummary,
+        )
+    }
+
+    private fun applySnapshot(records: List<AttendanceRecordResponse>) {
+        val todayStr = LocalDate.now().toString()
+        val todayMap = records.filter { it.date == todayStr }.associateBy { it.scheduleId }
+        _uiState.value = _uiState.value.copy(todayAttendanceMap = todayMap)
+    }
+
+    private fun mergeSummary(
+        summary: AttendanceSummaryResponse,
+        oldStatus: String?,
+        newStatus: String,
+    ): AttendanceSummaryResponse {
+        fun bump(current: Int, delta: Int) = (current + delta).coerceAtLeast(0)
+        var present = summary.presentCount
+        var late = summary.lateCount
+        var absent = summary.absentCount
+        var earlyLeave = summary.earlyLeaveCount
+
+        // First-time check-in for a class that was counted absent.
+        if (oldStatus == null) {
+            absent = bump(absent, -1)
+        } else {
+            when (oldStatus.lowercase()) {
+                "present" -> present = bump(present, -1)
+                "late" -> late = bump(late, -1)
+                "absent" -> absent = bump(absent, -1)
+                "early_leave" -> earlyLeave = bump(earlyLeave, -1)
+            }
+        }
+        when (newStatus.lowercase()) {
+            "present" -> present = bump(present, 1)
+            "late" -> late = bump(late, 1)
+            "absent" -> absent = bump(absent, 1)
+            "early_leave" -> earlyLeave = bump(earlyLeave, 1)
+        }
+
+        val totalAttended = present + late
+        val attendanceRate = if (summary.totalClasses > 0) {
+            (totalAttended.toFloat() / summary.totalClasses) * 100f
+        } else 0f
+        return summary.copy(
+            presentCount = present,
+            lateCount = late,
+            absentCount = absent,
+            earlyLeaveCount = earlyLeave,
+            attendanceRate = attendanceRate,
+        )
     }
 
     fun loadData() {
@@ -86,10 +233,16 @@ class StudentHomeViewModel @Inject constructor(
 
                 val activityDeferred = async {
                     try {
-                        val response = apiService.getMyAttendance()
-                        if (response.isSuccessful) {
-                            (response.body() ?: emptyList()).take(5)
-                        } else emptyList()
+                        // Fetch a 30-day window — enough for the "Recent
+                        // Activity" feed while still covering every class
+                        // a student could have today (removes the old
+                        // hardcoded `take(5)` cap that dropped any 6th
+                        // class of the day from today's status map).
+                        val from = LocalDate.now().minusDays(30).toString()
+                        val to = LocalDate.now().toString()
+                        val response = apiService.getMyAttendance(from, to)
+                        if (response.isSuccessful) response.body() ?: emptyList()
+                        else emptyList()
                     } catch (_: Exception) { emptyList() }
                 }
 
@@ -289,6 +442,9 @@ class StudentHomeViewModel @Inject constructor(
 
     fun logout() {
         viewModelScope.launch {
+            tokenManager.isLoggingOut = true
+            // Stop WS before clearing tokens so reconnect doesn't null-race.
+            notificationService.disconnectAndAwait()
             try {
                 apiService.logout()
             } catch (_: Exception) {}

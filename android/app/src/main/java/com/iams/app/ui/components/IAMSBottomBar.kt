@@ -42,7 +42,19 @@ data class BottomNavTab(
     val label: String,
     val icon: ImageVector,
     val selectedIcon: ImageVector = icon,
+    /**
+     * Destination-route template used to match [NavController.currentDestination.route].
+     * For destinations with optional query args (e.g. `student/history?scheduleId={scheduleId}`),
+     * this must be the full template or the tab would never appear selected and the
+     * enclosing Scaffold would hide the bottom bar.
+     */
     val route: String,
+    /**
+     * Route actually passed to [NavController.navigate]. Defaults to [route] for plain
+     * routes, but destinations with templated args need a concrete path here (e.g.
+     * `student/history`) so the NavGraph resolves it with default/empty args.
+     */
+    val navRoute: String = route,
     val badgeCount: Int = 0,
 )
 
@@ -96,8 +108,8 @@ fun IAMSBottomBar(
                                 indication = null,
                                 onClick = {
                                     if (currentRoute != tab.route) {
-                                        navController.navigate(tab.route) {
-                                            popUpTo(tabs.first().route) { saveState = true }
+                                        navController.navigate(tab.navRoute) {
+                                            popUpTo(tabs.first().navRoute) { saveState = true }
                                             launchSingleTop = true
                                             restoreState = true
                                         }

@@ -91,7 +91,16 @@ fun IAMSNavHost() {
     val studentTabs = listOf(
         BottomNavTab("Home", Icons.Outlined.Home, Icons.Filled.Home, Routes.STUDENT_HOME),
         BottomNavTab("Schedule", Icons.Outlined.Schedule, Icons.Filled.Schedule, Routes.STUDENT_SCHEDULE),
-        BottomNavTab("History", Icons.Outlined.History, Icons.Filled.History, Routes.STUDENT_HISTORY),
+        // History's destination route is the templated pattern (optional `scheduleId`
+        // query arg), so we match against STUDENT_HISTORY_PATTERN while still
+        // navigating to the plain STUDENT_HISTORY path on tab click.
+        BottomNavTab(
+            label = "History",
+            icon = Icons.Outlined.History,
+            selectedIcon = Icons.Filled.History,
+            route = Routes.STUDENT_HISTORY_PATTERN,
+            navRoute = Routes.STUDENT_HISTORY,
+        ),
         BottomNavTab("Profile", Icons.Outlined.Person, Icons.Filled.Person, Routes.STUDENT_PROFILE),
     )
 
@@ -227,7 +236,16 @@ fun IAMSNavHost() {
                 StudentScheduleScreen(navController = navController)
             }
 
-            composable(Routes.STUDENT_HISTORY) {
+            composable(
+                route = Routes.STUDENT_HISTORY_PATTERN,
+                arguments = listOf(
+                    navArgument("scheduleId") {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    },
+                ),
+            ) {
                 StudentHistoryScreen(navController = navController)
             }
 

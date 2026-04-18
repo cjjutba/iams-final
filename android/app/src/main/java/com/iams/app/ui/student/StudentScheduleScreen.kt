@@ -12,8 +12,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -78,6 +76,7 @@ fun StudentScheduleScreen(
     viewModel: StudentScheduleViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val todayStatusByScheduleId by viewModel.todayStatusByScheduleId.collectAsState()
     val spacing = IAMSThemeTokens.spacing
     val toastState = LocalToastState.current
 
@@ -164,14 +163,16 @@ fun StudentScheduleScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = spacing.lg, vertical = spacing.lg),
-            horizontalArrangement = Arrangement.SpaceEvenly,
+            horizontalArrangement = Arrangement.spacedBy(spacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             DAYS.forEach { day ->
                 DayPill(
                     label = SHORT_DAY_NAMES[day],
                     isSelected = day == uiState.selectedDay,
                     isToday = day == todayBackend,
-                    onClick = { viewModel.selectDay(day) }
+                    onClick = { viewModel.selectDay(day) },
+                    modifier = Modifier.weight(1f),
                 )
             }
         }
@@ -211,8 +212,15 @@ fun StudentScheduleScreen(
                         Spacer(modifier = Modifier.height(spacing.sm))
                     }
                 } else if (daySchedules.isNotEmpty()) {
+                    // Only show today's live status; other days should fall
+                    // back to stored history (future UX enhancement) rather
+                    // than misrepresent a different day's status as today's.
+                    val showLiveStatus = uiState.selectedDay == (LocalDate.now().dayOfWeek.value - 1)
                     items(daySchedules, key = { it.id }) { schedule ->
-                        ScheduleCard(schedule = schedule)
+                        ScheduleCard(
+                            schedule = schedule,
+                            liveStatus = if (showLiveStatus) todayStatusByScheduleId[schedule.id] else null,
+                        )
                         Spacer(modifier = Modifier.height(spacing.sm))
                     }
                 } else if (!uiState.isLoading) {
@@ -232,16 +240,13 @@ private fun DayPill(
     label: String,
     isSelected: Boolean,
     isToday: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    val pillWidth = 56.dp
-    val pillHeight = 40.dp
-
     Box(
         contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .width(pillWidth)
-            .height(pillHeight)
+        modifier = modifier
+            .height(40.dp)
             .clip(RoundedCornerShape(9999.dp))
             .background(if (isSelected) Primary else Secondary)
             .clickable(onClick = onClick),
@@ -251,6 +256,9 @@ private fun DayPill(
             style = MaterialTheme.typography.bodySmall,
             fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
             color = if (isSelected) PrimaryForeground else TextSecondary,
+            maxLines = 1,
+            overflow = TextOverflow.Clip,
+            textAlign = TextAlign.Center,
         )
         // Today indicator dot at the bottom of the pill
         if (isToday && !isSelected) {
@@ -267,18 +275,32 @@ private fun DayPill(
 }
 
 @Composable
-private fun ScheduleCard(schedule: ScheduleResponse) {
+private fun ScheduleCard(
+    schedule: ScheduleResponse,
+    liveStatus: String? = null,
+) {
     val spacing = IAMSThemeTokens.spacing
 
     IAMSCard {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // Start time (bold)
-            Text(
-                text = formatTimeDisplay(schedule.startTime),
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Bold,
-                color = Primary
-            )
+            // Row 1: start time (bold) + today's status chip on the right
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = formatTimeDisplay(schedule.startTime),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = Primary
+                )
+                if (liveStatus != null) {
+                    com.iams.app.ui.components.IAMSBadge(
+                        status = com.iams.app.ui.utils.parseAttendanceStatus(liveStatus),
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(spacing.xs))
 

@@ -78,6 +78,10 @@ class FacultyProfileViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(isLoading = true)
             // Set flag FIRST so TokenAuthenticator stops refreshing
             tokenManager.isLoggingOut = true
+            // Stop the real-time WebSocket *before* clearing tokens — a
+            // pending reconnect coroutine reads `userId` / `accessToken`
+            // from TokenManager, so clearing tokens first can null-race it.
+            notificationService.disconnectAndAwait()
             tokenManager.clearTokens()
             // Fire-and-forget API logout (will fail since token is cleared, that's fine)
             try { apiService.logout() } catch (_: Exception) {}

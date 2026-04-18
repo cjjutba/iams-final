@@ -245,7 +245,12 @@ fun StudentEditProfileScreen(
                             modifier = Modifier.size(20.dp),
                             tint = TextTertiary
                         )
-                    }
+                    },
+                    // Only flag mismatch once the user leaves the field so
+                    // the error doesn't flash on every keystroke.
+                    onFocusChanged = { focused ->
+                        if (!focused) viewModel.markConfirmPasswordBlurred()
+                    },
                 )
 
                 if (uiState.confirmPassword.isNotEmpty()) {

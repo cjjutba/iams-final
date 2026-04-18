@@ -51,6 +51,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Select,
   SelectContent,
@@ -113,12 +114,67 @@ export default function StudentRecordDetailPage() {
   const enrollMutation = useEnrollStudent()
   const unenrollMutation = useUnenrollStudent()
   const [enrollDialogOpen, setEnrollDialogOpen] = useState(false)
+  const [selectedScheduleIds, setSelectedScheduleIds] = useState<Set<string>>(new Set())
+  const [bulkEnrolling, setBulkEnrolling] = useState(false)
   const [unenrollConfirm, setUnenrollConfirm] = useState<{ scheduleId: string; name: string } | null>(null)
 
   const enrolledScheduleIds = new Set((enrollments as Array<{ schedule_id: string }>).map((e) => e.schedule_id))
   const availableSchedules = allSchedules.filter((s) => s.is_active && !enrolledScheduleIds.has(s.id))
 
+  useEffect(() => {
+    if (!enrollDialogOpen) setSelectedScheduleIds(new Set())
+  }, [enrollDialogOpen])
+
+  function toggleScheduleSelected(id: string) {
+    setSelectedScheduleIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const allSelected =
+    availableSchedules.length > 0 &&
+    availableSchedules.every((s) => selectedScheduleIds.has(s.id))
+  const someSelected = selectedScheduleIds.size > 0 && !allSelected
+
+  function toggleSelectAll() {
+    if (allSelected) {
+      setSelectedScheduleIds(new Set())
+    } else {
+      setSelectedScheduleIds(new Set(availableSchedules.map((s) => s.id)))
+    }
+  }
+
+  async function handleBulkEnroll() {
+    if (!student?.user_id || selectedScheduleIds.size === 0) return
+    const studentUserId = student.user_id
+    const ids = Array.from(selectedScheduleIds)
+    setBulkEnrolling(true)
+    try {
+      const results = await Promise.allSettled(
+        ids.map((scheduleId) =>
+          enrollMutation.mutateAsync({ scheduleId, studentUserId }),
+        ),
+      )
+      const succeeded = results.filter((r) => r.status === 'fulfilled').length
+      const failed = results.length - succeeded
+      if (succeeded > 0) {
+        toast.success(`Enrolled in ${succeeded} schedule${succeeded === 1 ? '' : 's'}.`)
+      }
+      if (failed > 0) {
+        toast.error(`Failed to enroll in ${failed} schedule${failed === 1 ? '' : 's'}.`)
+      }
+      setSelectedScheduleIds(new Set())
+      if (failed === 0) setEnrollDialogOpen(false)
+    } finally {
+      setBulkEnrolling(false)
+    }
+  }
+
   const [form, setForm] = useState({
+    student_id: '',
     first_name: '',
     middle_name: '',
     last_name: '',
@@ -133,6 +189,7 @@ export default function StudentRecordDetailPage() {
     if (editOpen && student) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setForm({
+        student_id: student.student_id,
         first_name: student.first_name,
         middle_name: student.middle_name ?? '',
         last_name: student.last_name,
@@ -157,10 +214,17 @@ export default function StudentRecordDetailPage() {
       toast.error('First name and last name are required.')
       return
     }
+    const trimmedStudentId = form.student_id.trim().toUpperCase()
+    if (!trimmedStudentId) {
+      toast.error('Student ID is required.')
+      return
+    }
+    const idChanged = trimmedStudentId !== student.student_id
     try {
       await updateMutation.mutateAsync({
         studentId: student.student_id,
         data: {
+          student_id: idChanged ? trimmedStudentId : undefined,
           first_name: form.first_name,
           middle_name: form.middle_name || undefined,
           last_name: form.last_name,
@@ -174,6 +238,9 @@ export default function StudentRecordDetailPage() {
       })
       toast.success(`${form.first_name} ${form.last_name} has been updated.`)
       setEditOpen(false)
+      if (idChanged) {
+        navigate(`/students/${trimmedStudentId}`, { replace: true })
+      }
     } catch (err: unknown) {
       const e = err as { response?: { data?: { detail?: string } }; message?: string }
       const msg = e?.response?.data?.detail || e?.message || 'Failed to update'
@@ -512,40 +579,78 @@ export default function StudentRecordDetailPage() {
         <DialogContent className="sm:max-w-md max-h-[80vh]">
           <DialogHeader>
             <DialogTitle>Enroll in Schedule</DialogTitle>
-            <DialogDescription>Select a schedule to enroll {student.first_name} in.</DialogDescription>
+            <DialogDescription>
+              Select one or more schedules to enroll {student.first_name} in.
+            </DialogDescription>
           </DialogHeader>
+          {availableSchedules.length > 0 && (
+            <div className="flex items-center justify-between rounded-md border px-3 py-2">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <Checkbox
+                  checked={allSelected ? true : someSelected ? 'indeterminate' : false}
+                  onCheckedChange={toggleSelectAll}
+                  aria-label="Select all schedules"
+                />
+                <span className="text-sm font-medium">
+                  {allSelected ? 'Deselect all' : 'Select all'}
+                </span>
+              </label>
+              <span className="text-xs text-muted-foreground">
+                {selectedScheduleIds.size} of {availableSchedules.length} selected
+              </span>
+            </div>
+          )}
           <div className="max-h-[300px] overflow-y-auto space-y-1">
             {availableSchedules.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
                 {(enrollments as unknown[]).length > 0 ? 'Enrolled in all available schedules.' : 'No active schedules available.'}
               </p>
             ) : (
-              availableSchedules.map((s) => (
-                <div
-                  key={s.id}
-                  className="flex items-center justify-between rounded-md border px-3 py-2 hover:bg-accent cursor-pointer"
-                  onClick={() => {
-                    if (!student.user_id) return
-                    enrollMutation.mutate(
-                      { scheduleId: s.id, studentUserId: student.user_id },
-                      { onSuccess: () => toast.success(`Enrolled in ${s.subject_code}`) }
-                    )
-                  }}
-                >
-                  <div>
-                    <p className="text-sm font-medium">{s.subject_code} - {s.subject_name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][s.day_of_week]} {s.start_time?.slice(0,5)} - {s.end_time?.slice(0,5)}
-                      {s.faculty_name ? ` · ${s.faculty_name}` : ''}
-                    </p>
-                  </div>
-                  <Plus className="h-4 w-4 text-muted-foreground" />
-                </div>
-              ))
+              availableSchedules.map((s) => {
+                const checked = selectedScheduleIds.has(s.id)
+                return (
+                  <label
+                    key={s.id}
+                    className="flex items-center gap-3 rounded-md border px-3 py-2 hover:bg-accent cursor-pointer"
+                  >
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={() => toggleScheduleSelected(s.id)}
+                      aria-label={`Select ${s.subject_code}`}
+                    />
+                    <div className="flex-1">
+                      <p className="text-sm font-medium">{s.subject_code} - {s.subject_name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][s.day_of_week]} {s.start_time?.slice(0,5)} - {s.end_time?.slice(0,5)}
+                        {s.faculty_name ? ` · ${s.faculty_name}` : ''}
+                      </p>
+                    </div>
+                  </label>
+                )
+              })
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEnrollDialogOpen(false)}>Close</Button>
+            <Button
+              variant="outline"
+              onClick={() => setEnrollDialogOpen(false)}
+              disabled={bulkEnrolling}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleBulkEnroll}
+              disabled={selectedScheduleIds.size === 0 || bulkEnrolling}
+            >
+              {bulkEnrolling ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Enrolling...
+                </>
+              ) : (
+                `Enroll Selected${selectedScheduleIds.size > 0 ? ` (${selectedScheduleIds.size})` : ''}`
+              )}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -576,8 +681,18 @@ export default function StudentRecordDetailPage() {
 
           <form onSubmit={handleEditSubmit} className="space-y-4 py-2">
             <div className="space-y-1.5">
-              <Label htmlFor="edit_student_id">Student ID</Label>
-              <Input id="edit_student_id" value={student.student_id} disabled />
+              <Label htmlFor="edit_student_id">Student ID *</Label>
+              <Input
+                id="edit_student_id"
+                placeholder="21-A-012345"
+                value={form.student_id}
+                onChange={(e) => handleChange('student_id', e.target.value)}
+              />
+              {student.is_registered && form.student_id.trim().toUpperCase() !== student.student_id && (
+                <p className="text-xs text-muted-foreground">
+                  This student has an app account. Renaming will also update the linked user.
+                </p>
+              )}
             </div>
 
             <div className="grid grid-cols-3 gap-3">

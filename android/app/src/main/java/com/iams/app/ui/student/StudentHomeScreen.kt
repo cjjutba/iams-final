@@ -58,12 +58,15 @@ import com.iams.app.ui.components.AttendanceStatus
 import com.iams.app.ui.components.CardSkeleton
 import com.iams.app.ui.components.SkeletonBox
 import com.iams.app.ui.components.IAMSBadge
+import com.iams.app.ui.utils.parseAttendanceStatus
 import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.navigation.Routes
+import com.iams.app.ui.theme.AbsentBg
 import com.iams.app.ui.theme.AbsentFg
+import com.iams.app.ui.theme.LateBg
 import com.iams.app.ui.theme.Background
 import com.iams.app.ui.theme.Border
 import com.iams.app.ui.theme.IAMSThemeTokens
@@ -87,6 +90,7 @@ fun StudentHomeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val notifUnreadCount by viewModel.notificationService.unreadCount.collectAsState()
+    val connectionHealth by viewModel.connectionHealth.collectAsState()
     val spacing = IAMSThemeTokens.spacing
     val toastState = LocalToastState.current
 
@@ -156,6 +160,14 @@ fun StudentHomeScreen(
                 .fillMaxSize()
                 .padding(horizontal = spacing.lg),
         ) {
+            // ── Real-time connection banner ──
+            // Hidden when CONNECTED; surfaces reconnecting / offline so
+            // students know whether their attendance updates are live
+            // without having to guess or pull-to-refresh.
+            item {
+                RealtimeConnectionBanner(health = connectionHealth)
+            }
+
             // ── Header: greeting + notification bell + date ──
             item {
                 Spacer(modifier = Modifier.height(spacing.lg))
@@ -548,19 +560,12 @@ private fun CurrentClassCard(
                     )
                 }
 
-                // Attendance status indicator
+                // Attendance status indicator — always rendered as a
+                // colored pill so the visual cue matches the rest of the
+                // app (History, Detail, Activity feed) instead of a
+                // bespoke text-only variant that ignored EARLY_LEAVE.
                 if (todayStatus != null) {
-                    val (statusText, statusColor) = when (todayStatus.lowercase()) {
-                        "present" -> "Marked Present" to PresentFg
-                        "late" -> "Marked Late" to LateFg
-                        else -> "Marked ${todayStatus.replaceFirstChar { it.uppercase() }}" to TextSecondary
-                    }
-                    Text(
-                        text = statusText,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Medium,
-                        color = statusColor
-                    )
+                    IAMSBadge(status = parseAttendanceStatus(todayStatus))
                 }
             }
 
@@ -841,7 +846,7 @@ private fun ActivityFeedItem(
 ) {
     val spacing = IAMSThemeTokens.spacing
     val (subjectName, _) = viewModel.getScheduleInfoForRecord(record)
-    val status = parseStatus(record.status)
+    val status = parseAttendanceStatus(record.status)
 
     IAMSCard {
         Row(
@@ -886,12 +891,33 @@ private fun getDayName(backendDay: Int): String {
     return days.getOrElse(backendDay) { "" }
 }
 
-private fun parseStatus(status: String): AttendanceStatus {
-    return when (status.lowercase()) {
-        "present" -> AttendanceStatus.PRESENT
-        "late" -> AttendanceStatus.LATE
-        "absent" -> AttendanceStatus.ABSENT
-        "early_leave" -> AttendanceStatus.EARLY_LEAVE
-        else -> AttendanceStatus.ABSENT
+@Composable
+private fun RealtimeConnectionBanner(
+    health: com.iams.app.data.model.RealtimeConnectionHealth,
+) {
+    if (health == com.iams.app.data.model.RealtimeConnectionHealth.CONNECTED) return
+    val spacing = IAMSThemeTokens.spacing
+    val (text, bg, fg) = when (health) {
+        com.iams.app.data.model.RealtimeConnectionHealth.RECONNECTING ->
+            Triple("Reconnecting\u2026", LateBg, LateFg)
+        com.iams.app.data.model.RealtimeConnectionHealth.OFFLINE ->
+            Triple("Offline \u2014 updates paused", AbsentBg, AbsentFg)
+        else -> Triple("", Background, TextSecondary)
+    }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = spacing.sm),
+        color = bg,
+        shape = IAMSThemeTokens.radius.mdShape,
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = spacing.md, vertical = spacing.xs),
+            style = MaterialTheme.typography.bodySmall,
+            color = fg,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
+
