@@ -48,7 +48,17 @@ object ApiErrorParser {
                     detail.optString("msg").takeIf { it.isNotBlank() }?.let { return it }
                 }
             }
-            // Some services use {"message": "..."} or {"error": "..."}.
+            // IAMS custom exception envelope:
+            //   {"success": false, "error": {"code": "...", "message": "..."}}
+            // Drill into the nested error.message before the flat-key fallback.
+            val errorObj = parsed.optJSONObject("error")
+            if (errorObj != null) {
+                listOf("message", "msg", "detail").forEach { key ->
+                    val value = errorObj.optString(key)
+                    if (value.isNotBlank()) return value
+                }
+            }
+            // Flat services using {"message": "..."} or {"error": "..."} as a string.
             listOf("message", "error", "errorMessage").forEach { key ->
                 val value = parsed.optString(key)
                 if (value.isNotBlank()) return value

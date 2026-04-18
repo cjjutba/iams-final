@@ -92,13 +92,26 @@ class FaceRepository:
 
         Use when building a multi-row transaction (e.g. registration + embeddings).
         Caller is responsible for db.commit().
+
+        Idempotent on the user_id UNIQUE constraint: purges ANY prior row for
+        this user (active OR inactive) before inserting. Without this guard, a
+        previously-soft-deleted registration (is_active=false) blocks the new
+        INSERT with a `duplicate key value violates unique constraint` error.
+        Cascade delete removes associated face_embeddings rows automatically.
         """
-        existing = self.get_by_user(user_id)
-        if existing:
-            raise DuplicateError(f"User already has active face registration: {user_id}")
+        uid = uuid.UUID(user_id)
+        prior = (
+            self.db.query(FaceRegistration)
+            .filter(FaceRegistration.user_id == uid)
+            .all()
+        )
+        for row in prior:
+            self.db.delete(row)
+        if prior:
+            self.db.flush()  # ensure DELETEs happen before the INSERT in the same tx
 
         registration = FaceRegistration(
-            user_id=uuid.UUID(user_id), embedding_id=embedding_id, embedding_vector=embedding_vector
+            user_id=uid, embedding_id=embedding_id, embedding_vector=embedding_vector
         )
         self.db.add(registration)
         self.db.flush()  # Assign PK (id) without committing
