@@ -3,7 +3,7 @@
   "installCommand": "npm install",
   "outputDirectory": "dist",
   "rewrites": [
-    { "source": "/iams.apk", "destination": "http://167.71.217.44/iams.apk" },
+    { "source": "/iams.apk", "destination": "https://github.com/cjjutba/iams-final/releases/latest/download/iams.apk" },
     { "source": "/api/(.*)", "destination": "http://167.71.217.44/api/$1" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]

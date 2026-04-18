@@ -1,3 +1,11 @@
+# Android signing — never commit keystores or APKs.
+# The signed APK is built and published by .github/workflows/build-apk.yml
+# and lives only in GitHub Releases.
+*.jks
+*.keystore
+keystore.properties
+admin/public/iams.apk
+
 # Python
 __pycache__/
 *.py[cod]
