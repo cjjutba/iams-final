@@ -35,6 +35,21 @@ private const val MLKIT_ONLY_GRACE_NS = 800_000_000L
 private const val PRUNE_AFTER_NS = 500_000_000L
 
 /**
+ * Brand-new tracks render "Detecting…" (ORANGE) for this long before the backend's
+ * `status="unknown"` is trusted and the box flips RED. At 5 fps production broadcasts
+ * that is ~10 backend updates — plenty of time to surface a registered user as
+ * recognised before committing to "Unknown".
+ */
+private const val INITIAL_UNKNOWN_GRACE_NS = 2_000_000_000L
+
+/**
+ * If a track was recognised within this window, any subsequent `status="unknown"`
+ * from the backend is treated as a momentary re-verify dip and rendered "Detecting…"
+ * instead of flickering to RED.
+ */
+private const val POST_RECOGNIZED_STICKY_NS = 2_000_000_000L
+
+/**
  * Hybrid overlay: ML Kit owns positions, backend owns identities.
  *
  * Inputs come pre-matched via [HybridTrack]. The overlay is pure drawing code —
@@ -190,34 +205,53 @@ fun HybridTrackOverlay(
                         val boxHeight = bottom - top
                         if (boxWidth < 2f || boxHeight < 2f) continue
 
-                        // Two-state display:
-                        //   backend recognized with a real name → GREEN  + first name
-                        //   anything else                       → ORANGE + "Detecting…"
+                        // Three-state display driven by the backend's per-track status
+                        // and a confidence-gated grace so new or recently-recognised
+                        // faces never flicker RED:
                         //
-                        // We deliberately collapse the old RED "Unknown" branch into
-                        // "Detecting…". Declaring someone "Unknown" on a single low
-                        // confidence frame is misleading — a registered student whose
-                        // head tilts or whose face briefly dims momentarily scores below
-                        // RECOGNITION_THRESHOLD and would get painted Unknown for a
-                        // moment before being recognised again. Showing "Detecting…" is
-                        // always honest: it communicates "we see a face, we're still
-                        // deciding who it is" without committing to a wrong label.
+                        //   status="recognized" + real name → GREEN  + first name
+                        //   status="unknown" (outside grace) → RED   + "Unknown"
+                        //   everything else (pending, first ~2s of life, or within
+                        //   ~2s of a prior recognition) → ORANGE + "Detecting…"
                         //
-                        // Defensive: if the backend reports status="recognized" but the
-                        // name is missing or literally "Unknown" (stale FAISS vector to
-                        // a deleted user), we still fall through to "Detecting…" so the
-                        // user never sees green + "Unknown".
+                        // Rationale — faces always *start* in "Detecting…" and only
+                        // commit to RED "Unknown" once the backend has repeatedly
+                        // reported status="unknown" long enough to rule out a delayed
+                        // FAISS match. Registered users whose cosine similarity dips
+                        // below RECOGNITION_THRESHOLD mid-session remain ORANGE while
+                        // the backend re-verifies on a cleaner frame, so a known face
+                        // never flashes RED.
+                        //
+                        // Defensive: if status="recognized" but the name is missing or
+                        // literally "Unknown" (stale FAISS vector to a deleted user),
+                        // treat the track as unknown-eligible instead of green+"Unknown".
                         val recognisedName = track.identity.name
                             ?.takeIf {
                                 track.identity.status == "recognized" &&
                                     it.isNotBlank() &&
                                     !it.equals("Unknown", ignoreCase = true)
                             }
-                        val (label, boxColor) = if (recognisedName != null) {
-                            firstNameOnly(recognisedName) to
-                                Color(0xFF4CAF50).copy(alpha = alpha)
-                        } else {
-                            "Detecting…" to Color(0xFFFF9800).copy(alpha = alpha)
+                        val backendSaysUnknown = track.identity.status == "unknown" ||
+                            (track.identity.status == "recognized" &&
+                                (track.identity.name.isNullOrBlank() ||
+                                    track.identity.name.equals("Unknown", ignoreCase = true)))
+
+                        if (recognisedName != null) {
+                            state.lastRecognizedAtNs = now
+                        }
+                        val trackAgeNs = now - state.createdNs
+                        val withinInitialGrace = trackAgeNs < INITIAL_UNKNOWN_GRACE_NS
+                        val withinPostRecognizedSticky = state.lastRecognizedAtNs != 0L &&
+                            (now - state.lastRecognizedAtNs) < POST_RECOGNIZED_STICKY_NS
+
+                        val (label, boxColor) = when {
+                            recognisedName != null ->
+                                firstNameOnly(recognisedName) to
+                                    Color(0xFF4CAF50).copy(alpha = alpha)
+                            backendSaysUnknown && !withinInitialGrace && !withinPostRecognizedSticky ->
+                                "Unknown" to Color(0xFFE53935).copy(alpha = alpha)
+                            else ->
+                                "Detecting…" to Color(0xFFFF9800).copy(alpha = alpha)
                         }
 
                         drawRect(
@@ -254,6 +288,8 @@ private class TrackRenderState(
     val alpha: Animatable<Float, *>,
     val createdNs: Long,
     var lastSeenNs: Long,
+    /** Nanos of the most recent frame we rendered this track as "recognized" (0 = never). */
+    var lastRecognizedAtNs: Long = 0L,
     var fadingOut: Boolean = false,
 )
 

@@ -2,6 +2,26 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⛔ NON-NEGOTIABLE: Production-Only Workflow
+
+**This project runs fully on the VPS (`167.71.217.44`). There is NO local Docker workflow.**
+
+Claude **MUST NOT**:
+- Run `docker compose up`, `docker compose up -d`, `docker compose up --build`, or any command that would spin up local containers (api-gateway, postgres, redis, mediamtx) on this Mac.
+- Suggest "start the local stack" as a troubleshooting step.
+- Write to `backend/.env`, `admin/.env`, or `android/local.properties` to repoint anything at a local LAN IP.
+- Run `docker compose exec ...` against a local stack — there is no local stack.
+
+Claude **SHOULD**:
+- Edit code, commit, push, and when the user asks, deploy to the VPS via `bash deploy/deploy.sh`.
+- Run commands against the VPS using `curl http://167.71.217.44/...` or SSH to `root@167.71.217.44` when remote inspection is needed.
+- Tail VPS logs via Dozzle at `http://167.71.217.44:9999` or `ssh root@167.71.217.44 'docker logs -f iams-api-gateway'`.
+- Run local-only, non-container operations freely: `git`, `./gradlew` (Android), `npm run build` (admin), file edits, tests that don't require the stack.
+
+If a task seems to need the stack running (e.g. "verify this endpoint works"), verify against the VPS — don't bring up a local one. If the VPS doesn't yet have the change, the answer is `bash deploy/deploy.sh`, not `docker compose up`.
+
+If stale local containers already exist on this Mac (the Docker Desktop screenshot shows `iams-postgres`, `iams-redis`, `iams-api-gateway`), they are leftovers from an earlier local workflow. Do NOT restart them. If the user asks to clean up, run `docker compose down` (stops only, doesn't delete volumes) and confirm before removing volumes.
+
 ## Project Overview
 
 IAMS (Intelligent Attendance Monitoring System) is a CCTV-based facial recognition attendance system for JRMSU. It features:
@@ -10,7 +30,7 @@ IAMS (Intelligent Attendance Monitoring System) is a CCTV-based facial recogniti
 - FastAPI backend for face recognition (InsightFace ArcFace + FAISS) and attendance tracking
 - Kotlin Android app with ExoPlayer (video), ML Kit (on-device face detection), CameraX (face registration)
 - PostgreSQL database (runs on VPS via Docker)
-- React + Vite admin portal
+- React + Vite admin portal (served from Vercel, talks to VPS API)
 
 ## Architecture
 
@@ -33,7 +53,7 @@ mediamtx on VPS (RTSP ingest + WebRTC)
        │                           v
        │                 HybridTrackOverlay (draws boxes at ML Kit cadence, labels from backend)
        │
-       └──> Backend FrameGrabber (grabs frames at 20fps)
+       └──> Backend FrameGrabber (grabs frames at 5fps production)
                  │
                  v
             SCRFD + ByteTrack + ArcFace → FAISS match → DB
@@ -47,343 +67,185 @@ mediamtx on VPS (RTSP ingest + WebRTC)
 **Three independent systems (hybrid — master-plan 2026-04-17):**
 1. **Video delivery** — mediamtx → WebRTC → phone (always smooth, no backend processing).
 2. **Face detection (position)** — ML Kit on phone, consuming WebRTC frames via `MlKitFrameSink`. ~15fps, zero network.
-3. **Face recognition (identity)** — Backend at 20fps (local dev; 5fps production): SCRFD + ByteTrack + ArcFace + FAISS → WebSocket → `FaceIdentityMatcher` on phone sticks names to ML Kit faces via IoU.
+3. **Face recognition (identity)** — Backend at 5fps (production): SCRFD + ByteTrack + ArcFace + FAISS → WebSocket → `FaceIdentityMatcher` on phone sticks names to ML Kit faces via IoU.
 
 The hybrid overlay is gated by `BuildConfig.HYBRID_DETECTION_ENABLED` (default on). When false, the app falls back to the legacy backend-authoritative `InterpolatedTrackOverlay`. `HybridFallbackController` automatically drops to the legacy path if the ML Kit sink stalls or to no-overlay if both legs go silent.
 
-## Development Workflow — Local Docker Desktop
+## Development Workflow — VPS Only
 
-All development runs locally via Docker Desktop. The VPS at `167.71.217.44` is production only — do NOT deploy there during development.
+All code runs on the VPS. Claude's local role is to edit, commit, and deploy — not to run services.
 
-### Start Local Stack
+### Deploy code changes to VPS
 ```bash
-docker compose up -d           # Start all services (api-gateway, postgres, redis, mediamtx)
-docker compose up -d --build   # Rebuild after code changes
+bash deploy/deploy.sh
+```
+This rsyncs the repo, rebuilds the VPS containers, and restarts the stack. This is the ONLY way Claude should bring up containers.
+
+### Inspect the VPS stack
+
+From this Mac:
+```bash
+curl http://167.71.217.44/api/v1/health         # liveness
+curl http://167.71.217.44/api/v1/health/time    # epoch ms
+curl http://167.71.217.44/api/v1/docs           # swagger HTML
 ```
 
-### View Local Logs
+Live logs (browser): `http://167.71.217.44:9999` (Dozzle).
+
+SSH into the VPS for anything deeper:
 ```bash
-docker compose logs -f api-gateway    # Live backend logs
-docker compose logs --since 5m api-gateway  # Recent logs
+ssh root@167.71.217.44 'docker ps'
+ssh root@167.71.217.44 'docker logs --tail 200 iams-api-gateway'
+ssh root@167.71.217.44 'docker exec iams-postgres psql -U iams -d iams -c "SELECT count(*) FROM users;"'
 ```
 
-### Run Commands Locally
+### Database Reset & Seed (VPS)
+
+When the user asks to "seed the data" or "reset the database":
 ```bash
-docker compose exec api-gateway python -c 'print(1)'
-docker compose exec -it api-gateway python   # Interactive shell
+ssh root@167.71.217.44 'docker exec iams-api-gateway python -m scripts.seed_data'
 ```
 
-### Database Reset & Seed
-```bash
-docker compose exec api-gateway python -m scripts.seed_data
-```
-
-When asked to "seed the data" or "reset the database", run the command above.
-
-This wipes ALL data and reseeds from scratch: ~180 student records, 5 faculty accounts
+This wipes ALL data on the VPS and reseeds from scratch: ~180 student records, 5 faculty accounts
 (`faculty.eb226@gmail.com`, `faculty.eb227@gmail.com`, plus 3 real JRMSU instructors;
 all password `password123`), admin (`admin@admin.com` / `123`), rooms, schedules,
 and system settings.
 
-**Test schedules — REMOVE BEFORE PRODUCTION.** The seed script generates one
-synthetic schedule set used only for development:
+**Test schedules — REMOVE BEFORE FINAL PRODUCTION CUT.** The seed script generates one
+synthetic schedule set used only for thesis demo / development:
 
 - `EB226-HHMM` / `EB227-HHMM` — 672 rolling 30-min sessions total
   (48 slots/day × 7 days × 2 rooms) with a per-schedule
   `early_leave_timeout_minutes=2`. Exercises the full
   PRESENT / LATE / ABSENT / EARLY_LEAVE state machine on both rooms any time
-  of day. Previously EB226 was a single 24/7 "TEST 226" row, which made the
-  grace window and early-leave threshold produce meaningless numbers.
+  of day.
 
-For production, delete `_seed_rolling_sessions()` and the `ROLLING_ROOMS`
+For the final production cut, delete `_seed_rolling_sessions()` and the `ROLLING_ROOMS`
 list from [`backend/scripts/seed_data.py`](backend/scripts/seed_data.py).
 The real schedules are the 15 entries already in `SCHEDULE_DEFS` (Elumba /
 Gahisan / Lasco), sourced from
-[`docs/data/ListofStudents_All-Thesis-purposes-updated1.md`](docs/data/ListofStudents_All-Thesis-purposes-updated1.md)
-— which is also the canonical source for student records and faculty
-assignments.
-
-### Database Queries (Direct SQL)
-```bash
-docker compose exec postgres psql -U iams -d iams -c 'SELECT count(*) FROM users;'
-```
+[`docs/data/ListofStudents_All-Thesis-purposes-updated1.md`](docs/data/ListofStudents_All-Thesis-purposes-updated1.md).
 
 ### Testing
+Unit tests that don't need the live stack can run by reading code. There is no local docker stack to `pytest` against. If a test genuinely requires the stack, run it on the VPS:
 ```bash
-docker compose exec api-gateway python -m pytest tests/ -q
-docker compose exec api-gateway python -m pytest tests/ -q -k 'faiss or tracker'
+ssh root@167.71.217.44 'docker exec iams-api-gateway python -m pytest tests/ -q -k faiss'
 ```
 
-### Deploy to Production (VPS)
-```bash
-bash deploy/deploy.sh
-```
-Only deploy when local testing is complete and you're ready for production.
-
-## First-time Setup (fresh clone on a new Mac)
-
-A fresh `git clone` does NOT include any of the `.env` files (they're gitignored to keep machine-specific values and secrets out of shared history). Before running anything, bootstrap them from the committed `.example` files:
-
-```bash
-# From project root, on a brand-new clone:
-cp backend/.env.example            backend/.env               # local backend
-cp backend/.env.production.example backend/.env.production    # only if you deploy from this machine
-cp admin/.env.example              admin/.env                 # local admin dev (contains <YOUR_LAN_IP> placeholder)
-cp admin/.env.production.example   admin/.env.production      # admin production build
-cp edge/.env.example               edge/.env                  # only if you run the RPi edge locally
-```
-
-`android/local.properties` is created automatically the first time you open the project in Android Studio (for `sdk.dir`). The IAMS_BACKEND_HOST override is added by the "switch to local" protocol below.
-
-Once the placeholder `.env` files exist, run either:
-
-- **"switch to local"** — Claude fills in this Mac's LAN IP everywhere. See the §Switch to Local steps.
-- **"switch to production"** — Claude verifies production values and runs `bash deploy/deploy.sh`. See §Switch to Production.
-
-If a required `.example` file is missing, stop and report — the fix is to commit a new example in this project, not to guess values.
-
-## Switching Environments (Local ↔ Production)
-
-There is **one branch** (`feat/cloud-based`). The same code targets both environments; the switch is purely a config-file swap driven by the commands below. Do not create environment-specific branches.
-
-> **Trigger phrases (exact):**
-> - "switch to local" → run [§Switch to Local](#switch-to-local-docker-desktop) top to bottom.
-> - "switch to production" → run [§Switch to Production](#switch-to-production-vps) top to bottom.
->
-> Execute every step in order. Do not skip. If a step fails, stop and report — do not guess.
-
-### Config files and precedence (must understand before switching)
-
-| File | Committed? | Purpose | Who writes it |
-|------|-----------|---------|---------------|
-| `android/gradle.properties` | ✅ yes | Default Android build config (IP, ports) | Only when changing the shared default |
-| `android/local.properties` | ❌ gitignored | Per-machine override; Gradle reads this AND gradle.properties, with local.properties **winning** on any conflicting key | **Claude writes for "switch to local"**; leaves keys untouched for prod |
-| `admin/.env` | ❌ gitignored | Admin dev server (`npm run dev`) environment | **Claude writes for "switch to local"** |
-| `admin/.env.production` | ✅ yes | Admin production build (`npm run build`) environment | Only when changing production URLs |
-| `backend/.env` | ❌ gitignored | Backend local Docker environment | One-time setup |
-| `backend/.env.production` | ✅ yes | Backend VPS environment (used by `deploy.sh`) | Rarely |
-
-**Invariant:** `admin/.env.production` and `backend/.env.production` are the production sources of truth. Never point them at a local IP "just for a quick test". If you must test prod locally, override via `.env.local`.
-
----
-
-### Switch to Local (Docker Desktop)
-
-Goal after this section: the Android app talks to `http://<this-mac-LAN-IP>:8000`, the admin dev server talks to the same, and Docker is running locally.
-
-**Step 0 — Bootstrap env files from examples (only if missing).**
-Required because `docker-compose.yml` references `./backend/.env`, and a fresh clone has none of these files. Safe to re-run — `[ -f X ]` skips existing files.
-```bash
-[ -f backend/.env ]            || cp backend/.env.example backend/.env
-[ -f admin/.env ]              || cp admin/.env.example admin/.env
-[ -f admin/.env.production ]   || cp admin/.env.production.example admin/.env.production
-[ -f android/local.properties ] || printf "sdk.dir=%s\n" "$HOME/Library/Android/sdk" > android/local.properties
-```
-After this step every file that later steps touch is guaranteed to exist.
-
-**Step 1 — Detect this Mac's LAN IP.**
-```bash
-IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null)"
-echo "LAN IP: $IP"
-```
-- If empty, try `ifconfig | grep 'inet ' | grep -v 127.0.0.1` and pick the one on the local subnet.
-- If still unsure, ask the user.
-
-**Step 2 — Write `android/local.properties`.**
-This file is gitignored, so different Macs can keep their own copy without conflicting commits. Preserve any existing lines (e.g. `sdk.dir=...`) — only update IAMS_* keys.
-
-Read the current contents first, then write:
-```properties
-# existing sdk.dir and other lines kept verbatim
-sdk.dir=<EXISTING VALUE>
-
-# IAMS backend (local override — gradle.properties is the prod default)
-IAMS_BACKEND_HOST=<IP from Step 1>
-IAMS_BACKEND_PORT=8000
-IAMS_MEDIAMTX_PORT=8554
-IAMS_MEDIAMTX_WEBRTC_PORT=8889
-```
-
-**Step 3 — Write `admin/.env`.**
-If the file does not exist yet (fresh clone), bootstrap it first:
-```bash
-[ -f admin/.env ] || cp admin/.env.example admin/.env
-```
-Then substitute the two URL lines (leave the Supabase keys below untouched):
-```env
-VITE_API_URL=http://<IP from Step 1>:8000/api/v1
-VITE_WS_URL=ws://<IP from Step 1>:8000
-
-# Supabase keys come from admin/.env.example — already committed, never change
-VITE_SUPABASE_URL=https://fspnxqmewtxmuyqqwwni.supabase.co
-VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-```
-
-**Step 4 — Start Docker.**
-```bash
-docker compose up -d
-docker compose ps   # all services should be 'running' or 'healthy'
-```
-
-**Step 5 — Seed (only if user asks or DB is empty).**
-```bash
-docker compose exec api-gateway python -m scripts.seed_data
-```
-
-**Step 6 — Fix Room `camera_endpoint` values.**
-Seed writes `rtsp://mediamtx:8554/...`, which doesn't resolve outside Docker. Rewrite to `rtsp://host.docker.internal:8554/...`.
-```bash
-TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"identifier":"admin@admin.com","password":"123"}' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-
-# List rooms and their current endpoints
-curl -s http://localhost:8000/api/v1/rooms/ -H "Authorization: Bearer $TOKEN" \
-  | python3 -c "
-import sys, json
-for r in json.load(sys.stdin):
-    print(r['id'], r['name'], r['camera_endpoint'])
-"
-
-# For each room whose camera_endpoint starts with rtsp://mediamtx:8554/, PATCH:
-# curl -X PATCH http://localhost:8000/api/v1/rooms/<UUID> \
-#   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-#   -d '{"camera_endpoint":"rtsp://host.docker.internal:8554/<streamKey>"}'
-```
-
-**Step 7 — Verify.**
-```bash
-curl http://localhost:8000/api/v1/health            # expect 200
-curl http://localhost:8000/api/v1/health/time       # expect {"server_time_ms": ...}
-```
-
-**Step 8 — Report to user.**
-Output (in plain text back to user):
-- LAN IP detected
-- Files written (paths only)
-- Docker status
-- "Rebuild the Android app in Android Studio to pick up the new IAMS_BACKEND_HOST."
-
----
-
-### Switch to Production (VPS)
-
-Goal: the Android app targets `http://167.71.217.44:80`, admin portal served from Vercel hits VPS at `167.71.217.44`, backend VPS stack is redeployed from this branch.
-
-**Step 0 — Bootstrap committed examples on a fresh clone (only if missing).**
-`deploy/deploy.sh` rsyncs the repo to the VPS with `--exclude '.env' --exclude '.env.production'` for the backend, so the VPS keeps its own backend secrets. This machine only needs `admin/.env.production` populated so any later `npm run build` of the admin portal uses the right URLs.
-```bash
-[ -f admin/.env.production ] || cp admin/.env.production.example admin/.env.production
-```
-
-**Step 1 — Neutralise any local Android override.**
-`android/local.properties` takes precedence over `gradle.properties`. Read it; if it contains any `IAMS_BACKEND_HOST=`, `IAMS_BACKEND_PORT=`, `IAMS_MEDIAMTX_PORT=`, or `IAMS_MEDIAMTX_WEBRTC_PORT=` lines, **remove or comment them out** so the committed `gradle.properties` wins.
-
-**Step 2 — Confirm `android/gradle.properties` has production values.**
-```properties
-IAMS_BACKEND_HOST=167.71.217.44
-IAMS_BACKEND_PORT=80
-IAMS_MEDIAMTX_PORT=8554
-IAMS_MEDIAMTX_WEBRTC_PORT=8889
-```
-If different, update + commit. These are the committed defaults for a clean checkout.
-
-**Step 3 — Confirm `admin/.env.production` has production URLs.**
-```env
-VITE_API_URL=/api/v1
-VITE_WS_URL=ws://167.71.217.44
-```
-`npm run build` uses this file automatically. Do not write to `admin/.env` — that's local-dev only.
-
-**Step 4 — Deploy the VPS stack.**
-```bash
-bash deploy/deploy.sh
-```
-Wait for it to finish. Do NOT Ctrl-C.
-
-Prerequisite: this Mac must have SSH access to the VPS. The script rsyncs files via SSH to `root@167.71.217.44`. If you see `Permission denied (publickey)` or `Host key verification failed`, the SSH key on this Mac is not yet authorised — ask the user to install their `id_ed25519` (or equivalent) private key at `~/.ssh/` and re-run. Do NOT try to work around it; deploying with broken SSH can half-ship a release.
-
-**Step 5 — Verify the VPS is healthy.**
-```bash
-curl http://167.71.217.44/api/v1/health             # expect 200
-curl http://167.71.217.44/api/v1/health/time        # expect epoch ms
-curl http://167.71.217.44/api/v1/docs               # expect swagger HTML
-```
-
-**Step 6 — Fix Room `camera_endpoint` on VPS (only after a reseed).**
-On the VPS, room endpoints must be `rtsp://mediamtx:8554/<streamKey>` (container-to-container name). A fresh seed already writes this correctly — verify with:
-```bash
-# From your Mac (uses production admin creds):
-TOKEN=$(curl -s -X POST http://167.71.217.44/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"identifier":"admin@admin.com","password":"123"}' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-curl -s http://167.71.217.44/api/v1/rooms/ -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
-```
-Each `camera_endpoint` should read `rtsp://mediamtx:8554/<streamKey>`. If not, PATCH as in the local Step 6 but against `167.71.217.44`.
-
-**Step 7 — Report to user.**
-- `deploy.sh` succeeded / failed
-- Health endpoints OK
-- "Rebuild the Android APK in Android Studio with the now-production IAMS_BACKEND_HOST and install on any device that needs to hit the VPS."
-- Logs dashboard: `http://167.71.217.44:9999`.
-
----
-
-### Key Differences (Local vs Production) — reference only
-
-| | Local | Production |
-|---|---|---|
-| Docker Compose | `docker-compose.yml` | `deploy/docker-compose.prod.yml` |
-| Backend .env | `backend/.env` | `backend/.env.production` |
-| DB credentials | `admin` / `123` | `iams` / `iams_prod_password` |
-| Redis | Password: `iams-redis-dev` | No password |
-| mediamtx from backend | `host.docker.internal:8554` | `mediamtx:8554` |
-| Room camera_endpoint | `rtsp://host.docker.internal:8554/...` | `rtsp://mediamtx:8554/...` |
-| API port | 8000 (direct) | 80 (nginx proxy) |
-| CORS | includes `localhost:5173` | includes `iams-thesis.vercel.app` |
-| PROCESSING_FPS | 20 (from `config.py` default) | 5 (from `backend/.env.production`) |
-| Admin URL | `http://<LAN_IP>:5173` (Vite dev) | `https://iams-thesis.vercel.app` (Vercel, pulls from `.env.production`) |
-
-### Key Differences (Local vs Production)
-
-| | Local | Production |
-|---|---|---|
-| Docker Compose | `docker-compose.yml` | `deploy/docker-compose.prod.yml` |
-| Backend .env | `backend/.env` | `backend/.env.production` |
-| DB credentials | `admin` / `123` | `iams` / `iams_prod_password` |
-| Redis | Password: `iams-redis-dev` | No password |
-| mediamtx from backend | `host.docker.internal:8554` | `mediamtx:8554` |
-| Room camera_endpoint | `rtsp://host.docker.internal:8554/...` | `rtsp://mediamtx:8554/...` |
-| API port | 8000 (direct) | 80 (nginx proxy) |
-| CORS | includes `localhost:5173` | includes `iams-thesis.vercel.app` |
-
-### Edge Device (Raspberry Pi)
-```bash
-cd edge
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-python run.py
-```
-The RPi only runs an FFmpeg relay — no ML, no face detection.
-
-### Kotlin Android App
+### Kotlin Android App (builds locally, targets VPS)
 ```bash
 cd android
 ./gradlew assembleDebug        # Build debug APK
 ./gradlew installDebug         # Install on connected device/emulator
 ```
 Open in Android Studio for development. Requires Android SDK 35, min SDK 26.
+The committed `android/gradle.properties` already points at the VPS — no local override needed.
 
-### Local RTSP Testing (without real camera)
+### Admin Portal (builds locally, deploys on Vercel)
 ```bash
-# Fake RTSP source from webcam
-ffmpeg -f avfoundation -i "0" -c:v libx264 -f rtsp rtsp://localhost:8554/test/raw
-
-# Or loop a video file
-ffmpeg -stream_loop -1 -re -i test_video.mp4 -c:v libx264 -f rtsp rtsp://localhost:8554/test/raw
+cd admin
+npm install
+npm run build                  # uses admin/.env.production → VPS
 ```
+Deployed via Vercel from `admin/.env.production`. Do NOT run `npm run dev` expecting a local backend — the local backend no longer exists.
+
+### Edge Device (Raspberry Pi, separate deploy)
+```bash
+cd edge
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+python run.py
+```
+The RPi only runs an FFmpeg relay — no ML, no face detection. Deployed to the physical RPi, not this Mac.
+
+## First-time Setup (fresh clone on a new Mac)
+
+A fresh `git clone` does NOT include `.env` files (they're gitignored). On a fresh clone, only `admin/.env.production` needs to exist locally so `npm run build` of the admin portal picks up the right URLs:
+
+```bash
+[ -f admin/.env.production ] || cp admin/.env.production.example admin/.env.production
+```
+
+`android/local.properties` is created automatically the first time you open the project in Android Studio (for `sdk.dir`). Do NOT add `IAMS_BACKEND_HOST=...` overrides — the committed `android/gradle.properties` already targets the VPS.
+
+You do NOT need `backend/.env` or `admin/.env` on this machine. Those exist for a local Docker stack that this project no longer uses.
+
+## Canonical Production Config
+
+One branch (`feat/cloud-based`) targets production.
+
+| File | Committed? | Purpose |
+|------|-----------|---------|
+| `android/gradle.properties` | ✅ yes | Android build config — points at VPS (`167.71.217.44:80`) |
+| `android/local.properties` | ❌ gitignored | Per-machine — sdk.dir only; MUST NOT contain IAMS_* overrides |
+| `admin/.env.production` | ✅ yes | Admin build config — points at VPS |
+| `backend/.env.production` | ✅ yes | Backend VPS environment (used by `deploy.sh`) |
+
+### Expected production values
+
+`android/gradle.properties`:
+```properties
+IAMS_BACKEND_HOST=167.71.217.44
+IAMS_BACKEND_PORT=80
+IAMS_MEDIAMTX_PORT=8554
+IAMS_MEDIAMTX_WEBRTC_PORT=8889
+```
+
+`admin/.env.production`:
+```env
+VITE_API_URL=/api/v1
+VITE_WS_URL=ws://167.71.217.44
+```
+
+**Invariant:** These files ARE the production source of truth. Do not edit them to "quickly test locally" — there is no local.
+
+## Deploy Protocol (VPS)
+
+**Trigger phrase:** "deploy" or "push to production" → run the steps below top to bottom. If a step fails, stop and report — do not guess.
+
+**Step 1 — Confirm no stray Android override.**
+Read `android/local.properties`. If it contains any `IAMS_BACKEND_HOST=`, `IAMS_BACKEND_PORT=`, `IAMS_MEDIAMTX_PORT=`, or `IAMS_MEDIAMTX_WEBRTC_PORT=` lines, remove or comment them out so `gradle.properties` wins.
+
+**Step 2 — Confirm `android/gradle.properties` has production values** (above).
+
+**Step 3 — Confirm `admin/.env.production` has production URLs** (above).
+
+**Step 4 — Deploy.**
+```bash
+bash deploy/deploy.sh
+```
+Wait for it to finish. Do NOT Ctrl-C.
+
+Prerequisite: SSH access to `root@167.71.217.44`. If you see `Permission denied (publickey)` or `Host key verification failed`, stop and ask the user — do NOT try to work around it.
+
+**Step 5 — Verify.**
+```bash
+curl http://167.71.217.44/api/v1/health             # expect 200
+curl http://167.71.217.44/api/v1/health/time        # expect epoch ms
+curl http://167.71.217.44/api/v1/docs               # expect swagger HTML
+```
+
+**Step 6 — Verify Room `camera_endpoint` on VPS (only after a reseed).**
+On the VPS, endpoints must be `rtsp://mediamtx:8554/<streamKey>`:
+```bash
+TOKEN=$(curl -s -X POST http://167.71.217.44/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"identifier":"admin@admin.com","password":"123"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+curl -s http://167.71.217.44/api/v1/rooms/ -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+```
+If any endpoint is wrong, PATCH it:
+```bash
+curl -X PATCH http://167.71.217.44/api/v1/rooms/<UUID> \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"camera_endpoint":"rtsp://mediamtx:8554/<streamKey>"}'
+```
+
+**Step 7 — Report to user.**
+- `deploy.sh` succeeded / failed
+- Health endpoints OK
+- "Rebuild the Android APK in Android Studio and install on any device that needs the new build."
+- Logs dashboard: `http://167.71.217.44:9999`.
 
 ## Key Technical Details
 
@@ -400,21 +262,21 @@ ffmpeg -stream_loop -1 -re -i test_video.mp4 -c:v libx264 -f rtsp rtsp://localho
 
 ### Hybrid Detection (gated by BuildConfig.HYBRID_DETECTION_ENABLED)
 - **ML Kit (phone):** ~15 fps detection, instant local bounding boxes.
-- **Backend (20 fps):** SCRFD + ByteTrack + ArcFace + FAISS; broadcasts `{track_id, bbox, name, server_time_ms, frame_sequence}` over WebSocket.
+- **Backend (5 fps production):** SCRFD + ByteTrack + ArcFace + FAISS; broadcasts `{track_id, bbox, name, server_time_ms, frame_sequence}` over WebSocket.
 - **Matcher (phone):** greedy IoU assignment with sticky release threshold and identity-hold TTL; swap-prevention logic stops name-flipping when two faces cluster.
 - **Fallback:** `HybridFallbackController` monitors ML Kit + WebSocket liveness. Modes: `HYBRID` / `BACKEND_ONLY` / `DEGRADED` / `OFFLINE`. The screen picks the right overlay per mode automatically.
 - **Diagnostic HUD:** long-press the video area in debug builds to toggle a live FPS/skew/binding-count overlay.
 - **Tuning values:** see `docs/plans/2026-04-17-hybrid-detection/TUNING.md`.
 
 ### Continuous Presence Tracking
-- Backend runs real-time pipeline at 20fps during active sessions by default (see `backend/app/config.py::PROCESSING_FPS`). Production env overrides to 5fps.
-- Configurable early-leave timeout per schedule (default from settings)
-- Presence score = (total_present / total_scans) × 100%
+- Backend runs real-time pipeline at 5fps during active sessions on VPS (see `backend/.env.production::PROCESSING_FPS`).
+- Configurable early-leave timeout per schedule (default from settings).
+- Presence score = (total_present / total_scans) × 100%.
 
 ### FAISS Index
 - `IndexFlatIP` with 512-dim ArcFace embeddings
 - Cosine similarity via inner product on L2-normalized vectors
-- Persisted to `data/faiss/faces.index`
+- Persisted to `data/faiss/faces.index` inside the `iams-api-gateway` container on the VPS.
 
 ## Backend Structure
 
@@ -430,7 +292,7 @@ backend/app/
 ├── services/
 │   ├── auth_service.py
 │   ├── face_service.py          # SCRFD + ArcFace + FAISS (register + recognize)
-│   ├── realtime_tracker.py      # ByteTrack + cached ArcFace recognition (10fps)
+│   ├── realtime_tracker.py      # ByteTrack + cached ArcFace recognition
 │   ├── realtime_pipeline.py     # Session pipeline orchestrator (frame → track → broadcast)
 │   ├── track_presence_service.py # Presence tracking, early-leave detection
 │   ├── attendance_engine.py     # Legacy single-frame scanner
@@ -486,8 +348,8 @@ admin/
 │   ├── services/          # API client (Axios)
 │   ├── stores/            # Zustand state management
 │   └── hooks/             # Custom React hooks
-├── .env                   # VITE_API_URL, VITE_WS_URL (points to VPS)
-└── vite.config.ts         # Dev server proxy config
+├── .env.production        # VITE_API_URL, VITE_WS_URL (points at VPS)
+└── vite.config.ts
 ```
 
 **Tech Stack:** React 19 + Vite + TypeScript, Radix UI + Tailwind CSS, TanStack Query, Zustand, Recharts
@@ -506,7 +368,7 @@ admin/
 
 ## API Conventions
 
-- Base URL: `/api/v1`
+- Base URL: `http://167.71.217.44/api/v1`
 - Auth: `Authorization: Bearer <jwt_token>`
 - WebSocket: `/api/v1/ws/attendance/{schedule_id}` (scan results with normalized bbox)
 - WebSocket: `/api/v1/ws/alerts/{user_id}` (early-leave alerts)
@@ -535,22 +397,11 @@ Bbox coordinates are normalized (0-1). The Kotlin app matches them to ML Kit det
 
 **Faculty:** Pre-seeded accounts only. Login → view today's classes → open Live Feed (ExoPlayer + ML Kit + attendance panel)
 
-## Environment Variables
-
-Backend env vars are in `backend/.env` (local) and VPS `/opt/iams/deploy/.env` (production).
-Key variables:
-```
-DATABASE_URL=postgresql://iams:password@postgres:5432/iams
-JWT_SECRET_KEY=xxxxx...
-REDIS_URL=redis://:iams-redis-dev@redis:6379/0
-RESEND_API_KEY=xxxxx...     # Email service
-```
-
 ## VPS Infrastructure (DigitalOcean)
 
 **IP:** `167.71.217.44` — all services run here.
 
-### Production stack (Docker Compose)
+### Production stack (Docker Compose — on VPS only)
 | Container | Image | Purpose |
 |-----------|-------|---------|
 | `iams-api-gateway` | Custom (Python 3.11) | FastAPI + attendance engine |
@@ -573,13 +424,9 @@ RESEND_API_KEY=xxxxx...     # Email service
 bash deploy/deploy.sh
 ```
 
-### What triggers a deploy
-Do NOT auto-deploy to VPS during development. All backend changes are tested locally via Docker Desktop.
-Only deploy to VPS when the user explicitly says they're ready for production.
-
 ## Plan Mode: Lesson Capture
 
-Every plan must end with a `## Lessons` section containing insights discovered during planning — things like "never do X", "Y breaks because Z", or "always check W first". These are written in the plan file during planning (read-only is fine — it's part of the plan).
+Every plan must end with a `## Lessons` section containing insights discovered during planning — things like "never do X", "Y breaks because Z", or "always check W first". These are written in the plan file during planning.
 
 **After exiting plan mode**, the first execution step is always: write any lessons from the plan's `## Lessons` section to `memory/lessons.md`. This ensures planning insights survive into execution and future sessions.
 

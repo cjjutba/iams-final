@@ -3,7 +3,9 @@ package com.iams.app.ui.student
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiService
+import com.iams.app.data.api.NotificationService
 import com.iams.app.data.model.StudentAnalyticsDashboard
+import com.iams.app.data.model.StudentAttendanceEvent
 import com.iams.app.data.model.SubjectBreakdown
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.async
@@ -23,7 +25,8 @@ data class StudentAnalyticsUiState(
 
 @HiltViewModel
 class StudentAnalyticsViewModel @Inject constructor(
-    private val apiService: ApiService
+    private val apiService: ApiService,
+    private val notificationService: NotificationService,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(StudentAnalyticsUiState())
@@ -31,11 +34,31 @@ class StudentAnalyticsViewModel @Inject constructor(
 
     init {
         loadAnalytics()
+        observeRealtimeEvents()
     }
 
-    fun loadAnalytics() {
+    /**
+     * Analytics is aggregation, so a single state change is best served
+     * by a silent refetch rather than trying to re-derive the aggregates
+     * locally. Endpoints are cheap (two small JSON payloads) and events
+     * are rare (once per class session per day).
+     */
+    private fun observeRealtimeEvents() {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(error = null)
+            notificationService.attendanceEvents.collect { event ->
+                if (event is StudentAttendanceEvent.CheckIn ||
+                    event is StudentAttendanceEvent.EarlyLeave ||
+                    event is StudentAttendanceEvent.EarlyLeaveReturn
+                ) {
+                    loadAnalytics(silent = true)
+                }
+            }
+        }
+    }
+
+    fun loadAnalytics(silent: Boolean = false) {
+        viewModelScope.launch {
+            if (!silent) _uiState.value = _uiState.value.copy(error = null)
 
             try {
                 val dashboardDeferred = async { apiService.getStudentAnalyticsDashboard() }
@@ -51,9 +74,9 @@ class StudentAnalyticsViewModel @Inject constructor(
                         dashboard = dashboardResponse.body(),
                         subjects = if (subjectsResponse.isSuccessful) {
                             subjectsResponse.body() ?: emptyList()
-                        } else emptyList()
+                        } else _uiState.value.subjects
                     )
-                } else {
+                } else if (!silent) {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
                         isRefreshing = false,
@@ -61,11 +84,13 @@ class StudentAnalyticsViewModel @Inject constructor(
                     )
                 }
             } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    isRefreshing = false,
-                    error = "Failed to load analytics data."
-                )
+                if (!silent) {
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        isRefreshing = false,
+                        error = "Failed to load analytics data."
+                    )
+                }
             }
         }
     }

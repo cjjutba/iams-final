@@ -165,7 +165,7 @@ interface ApiService {
     suspend fun deleteAllNotifications(): Response<MessageResponse>
 
     // Profile
-    @PUT("auth/profile")
+    @PATCH("auth/profile")
     suspend fun updateProfile(@Body request: UpdateProfileRequest): Response<UserResponse>
 
     // Manual Attendance Entry

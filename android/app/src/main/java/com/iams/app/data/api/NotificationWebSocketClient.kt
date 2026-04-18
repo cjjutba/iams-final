@@ -2,8 +2,10 @@ package com.iams.app.data.api
 
 import android.util.Log
 import com.google.gson.Gson
+import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.iams.app.data.model.NotificationEvent
+import com.iams.app.data.model.StudentAttendanceEvent
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,24 +19,31 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 
 /**
- * WebSocket client for real-time notification delivery.
+ * WebSocket client for `/api/v1/ws/alerts/{user_id}?token={jwt}`.
  *
- * Connects to `/api/v1/ws/alerts/{user_id}?token={jwt}` and emits
- * [NotificationEvent] instances via a [SharedFlow] (each event processed once).
+ * Dispatches incoming messages by their top-level `type` envelope:
+ * - `type: "notification"` → [notificationEvents] as [NotificationEvent]
+ * - `type: "attendance_event"` → [attendanceEvents] as [StudentAttendanceEvent]
+ * - anything else → logged and ignored (forward-compat)
  *
- * Auto-reconnects with exponential backoff using coroutines.
+ * Auto-reconnects with exponential backoff using coroutines. The client is
+ * safe to reconnect repeatedly; each `connect()` call cancels any prior
+ * reconnect attempt and starts fresh.
  *
- * @param baseUrl        WebSocket base URL (e.g. ws://host:port/api/v1/ws)
- * @param client         Shared OkHttpClient instance (do NOT shut down in destroy)
- * @param tokenProvider  Lambda returning the current JWT access token, or null
- * @param userIdProvider Lambda returning the current user ID, or null
+ * @param baseUrl         WebSocket base URL (e.g. ws://host:port/api/v1/ws)
+ * @param client          Shared OkHttpClient instance
+ * @param tokenProvider   Lambda returning the current JWT access token, or null
+ * @param userIdProvider  Lambda returning the current user ID, or null
+ * @param onConnected     Called on every successful connect/reconnect. Passed
+ *                        `disconnectedForMillis` so callers can decide whether
+ *                        to fire a catch-up refresh (0 on first connect).
  */
 class NotificationWebSocketClient(
     private val baseUrl: String,
     private val client: OkHttpClient,
     private val tokenProvider: () -> String?,
     private val userIdProvider: () -> String?,
-    private val onConnected: (() -> Unit)? = null,
+    private val onConnected: ((disconnectedForMillis: Long) -> Unit)? = null,
 ) {
 
     companion object {
@@ -48,13 +57,22 @@ class NotificationWebSocketClient(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var reconnectJob: Job? = null
     private var reconnectDelay = INITIAL_RECONNECT_DELAY
+    private var lastDisconnectMillis: Long = 0L
 
-    // Notification events — SharedFlow so each event is processed once (no replay)
-    private val _events = MutableSharedFlow<NotificationEvent>(
+    private val _notificationEvents = MutableSharedFlow<NotificationEvent>(
         replay = 0,
         extraBufferCapacity = 20,
     )
-    val events: SharedFlow<NotificationEvent> = _events.asSharedFlow()
+    val notificationEvents: SharedFlow<NotificationEvent> = _notificationEvents.asSharedFlow()
+
+    /** Back-compat alias. Existing callers collect `client.events`. */
+    val events: SharedFlow<NotificationEvent> get() = notificationEvents
+
+    private val _attendanceEvents = MutableSharedFlow<StudentAttendanceEvent>(
+        replay = 0,
+        extraBufferCapacity = 32,
+    )
+    val attendanceEvents: SharedFlow<StudentAttendanceEvent> = _attendanceEvents.asSharedFlow()
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected = _isConnected.asStateFlow()
@@ -90,42 +108,96 @@ class NotificationWebSocketClient(
             override fun onOpen(ws: WebSocket, response: Response) {
                 _isConnected.value = true
                 reconnectDelay = INITIAL_RECONNECT_DELAY
-                Log.i(TAG, "Connected to alerts for user $userId")
-                // Sync state on every connect/reconnect
-                onConnected?.invoke()
+                val gap = if (lastDisconnectMillis > 0L) {
+                    System.currentTimeMillis() - lastDisconnectMillis
+                } else 0L
+                lastDisconnectMillis = 0L
+                Log.i(TAG, "Connected to alerts for user $userId (gap=${gap}ms)")
+                onConnected?.invoke(gap)
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
                 if (text == "pong") return
                 try {
                     val json = JsonParser.parseString(text).asJsonObject
-                    val type = json.get("type")?.asString
-                    if (type == null) {
-                        Log.w(TAG, "Received message without type field")
-                        return
+                    when (val type = json.get("type")?.asString) {
+                        "notification" -> dispatchNotification(text)
+                        "attendance_event" -> dispatchAttendanceEvent(json)
+                        null -> Log.w(TAG, "Message without type field ignored")
+                        else -> Log.d(TAG, "Ignoring unknown envelope type=$type")
                     }
-
-                    val event = gson.fromJson(text, NotificationEvent::class.java)
-                    // Emit to SharedFlow — if buffer is full, drop oldest
-                    _events.tryEmit(event)
-                    Log.d(TAG, "Notification event: ${event.title}")
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to parse notification message: ${e.message}")
+                    Log.e(TAG, "Failed to parse WS message: ${e.message}")
                 }
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
                 _isConnected.value = false
+                if (lastDisconnectMillis == 0L) lastDisconnectMillis = System.currentTimeMillis()
                 Log.i(TAG, "WebSocket closed: $reason")
                 scheduleReconnect()
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
                 _isConnected.value = false
+                if (lastDisconnectMillis == 0L) lastDisconnectMillis = System.currentTimeMillis()
                 Log.w(TAG, "WebSocket failure: ${t.message}")
                 scheduleReconnect()
             }
         })
+    }
+
+    private fun dispatchNotification(raw: String) {
+        runCatching {
+            val event = gson.fromJson(raw, NotificationEvent::class.java)
+            _notificationEvents.tryEmit(event)
+            Log.d(TAG, "Notification event: ${event.title}")
+        }.onFailure {
+            Log.e(TAG, "Failed to parse notification: ${it.message}")
+        }
+    }
+
+    private fun dispatchAttendanceEvent(json: JsonObject) {
+        val eventName = json.get("event")?.asString ?: return
+        val scheduleId = json.get("schedule_id")?.asString ?: return
+        val attendanceId = json.get("attendance_id")?.asString ?: return
+        val subjectCode = json.get("subject_code")?.takeUnless { it.isJsonNull }?.asString
+        val subjectName = json.get("subject_name")?.takeUnless { it.isJsonNull }?.asString
+        val timestamp = json.get("timestamp")?.takeUnless { it.isJsonNull }?.asString
+
+        val event: StudentAttendanceEvent = when (eventName) {
+            "check_in" -> StudentAttendanceEvent.CheckIn(
+                scheduleId = scheduleId,
+                attendanceId = attendanceId,
+                status = json.get("status")?.takeUnless { it.isJsonNull }?.asString ?: "present",
+                checkInTime = json.get("check_in_time")?.takeUnless { it.isJsonNull }?.asString,
+                subjectCode = subjectCode,
+                subjectName = subjectName,
+                timestamp = timestamp,
+            )
+            "early_leave" -> StudentAttendanceEvent.EarlyLeave(
+                scheduleId = scheduleId,
+                attendanceId = attendanceId,
+                subjectCode = subjectCode,
+                subjectName = subjectName,
+                timestamp = timestamp,
+            )
+            "early_leave_return" -> StudentAttendanceEvent.EarlyLeaveReturn(
+                scheduleId = scheduleId,
+                attendanceId = attendanceId,
+                restoredStatus = json.get("status")?.takeUnless { it.isJsonNull }?.asString ?: "present",
+                returnedAt = json.get("check_in_time")?.takeUnless { it.isJsonNull }?.asString,
+                subjectCode = subjectCode,
+                subjectName = subjectName,
+                timestamp = timestamp,
+            )
+            else -> {
+                Log.d(TAG, "Unknown attendance_event.event=$eventName ignored")
+                return
+            }
+        }
+        _attendanceEvents.tryEmit(event)
+        Log.d(TAG, "Attendance event: $eventName schedule=${scheduleId.take(8)}")
     }
 
     private fun scheduleReconnect() {
@@ -145,6 +217,21 @@ class NotificationWebSocketClient(
         webSocket?.close(1000, "Closing")
         webSocket = null
         _isConnected.value = false
+    }
+
+    /**
+     * Stop the client and wait for any in-flight reconnect coroutine to
+     * finish. Call this on logout *before* clearing the TokenManager so the
+     * reconnect job cannot race and read null credentials.
+     */
+    suspend fun disconnectAndAwait() {
+        val job = reconnectJob
+        reconnectJob = null
+        job?.cancel()
+        webSocket?.close(1000, "Closing")
+        webSocket = null
+        _isConnected.value = false
+        job?.join()
     }
 
     fun destroy() {

@@ -7,8 +7,10 @@ import com.iams.app.data.api.NotificationService
 import com.iams.app.data.model.ScheduleResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import javax.inject.Inject
@@ -38,8 +40,25 @@ class StudentScheduleViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(StudentScheduleUiState())
     val uiState: StateFlow<StudentScheduleUiState> = _uiState.asStateFlow()
 
+    /**
+     * Live `schedule_id -> status` map for today, fed by [NotificationService]
+     * (seeded on connect from `/attendance/me` and patched on each
+     * attendance_event). The Schedule screen shows a status chip on each
+     * class row for the selected day *if* that day is today and a status
+     * exists — this is the only source for that chip.
+     */
+    val todayStatusByScheduleId: StateFlow<Map<String, String>> =
+        notificationService.todayStatusByScheduleId.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = notificationService.todayStatusByScheduleId.value,
+        )
+
     init {
         loadSchedules()
+        // Best-effort seed of today's map in case the WS has not
+        // connected yet when the screen opens.
+        viewModelScope.launch { notificationService.refreshTodaySnapshot() }
     }
 
     fun loadSchedules() {

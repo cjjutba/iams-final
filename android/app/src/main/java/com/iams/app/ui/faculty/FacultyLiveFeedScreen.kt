@@ -112,6 +112,26 @@ import com.iams.app.ui.theme.TextTertiary
  */
 private enum class PanelTab { DETECTED, ATTENDANCE }
 
+/**
+ * Render "Detecting…" (exclude from the Unknown panel section) for at least this
+ * long after a backend track is first observed. Mirrors [HybridTrackOverlay]'s
+ * INITIAL_UNKNOWN_GRACE_NS so overlay and panel tell the same story.
+ */
+private const val INITIAL_UNKNOWN_GRACE_MS = 2_000L
+
+/**
+ * Within this window of a prior `status="recognized"` reading, transient
+ * `status="unknown"` reports are suppressed from the Unknown section (treated as
+ * re-verify flicker). Mirrors [HybridTrackOverlay]'s POST_RECOGNIZED_STICKY_NS.
+ */
+private const val POST_RECOGNIZED_STICKY_MS = 2_000L
+
+/** Per-trackId timestamps used to gate the Unknown-section grace window. */
+private class TrackDisplayTimestamps(
+    val firstSeenAtMs: Long,
+    var lastRecognizedAtMs: Long = 0L,
+)
+
 @Composable
 fun FacultyLiveFeedScreen(
     navController: NavController,
@@ -747,15 +767,41 @@ fun FacultyLiveFeedScreen(
                     }
                 }
 
-                // Cache filtered track lists outside LazyColumn (composable scope).
-                // Gated on isVideoReady — panels must stay in sync with the video feed
-                // so detections aren't shown while the stream is still connecting.
-                val recognizedTracks = remember(tracks, isVideoReady) {
-                    if (!isVideoReady) emptyList()
-                    else tracks.filter { it.status == "recognized" && it.name != null }
+                // Unknown detections are deferred for a grace window so a newly-seen or
+                // recently-recognised face never momentarily appears in the "Unknown"
+                // section before the backend commits to its verdict — mirrors the
+                // same logic in [HybridTrackOverlay]. State is keyed by backend
+                // trackId and pruned when the track stops being reported.
+                val trackTimestamps = remember { mutableMapOf<Int, TrackDisplayTimestamps>() }
+                LaunchedEffect(tracks) {
+                    val now = System.currentTimeMillis()
+                    val liveIds = tracks.mapTo(HashSet()) { it.trackId }
+                    trackTimestamps.keys.retainAll(liveIds)
+                    for (track in tracks) {
+                        val entry = trackTimestamps.getOrPut(track.trackId) {
+                            TrackDisplayTimestamps(firstSeenAtMs = now)
+                        }
+                        if (track.status == "recognized" && track.name != null) {
+                            entry.lastRecognizedAtMs = now
+                        }
+                    }
                 }
-                val unknownTracks = remember(tracks, isVideoReady) {
-                    if (!isVideoReady) emptyList() else tracks.filter { it.status == "unknown" }
+
+                val recognizedTracks = if (!isVideoReady) emptyList()
+                else tracks.filter { it.status == "recognized" && it.name != null }
+
+                val unknownTracks = if (!isVideoReady) emptyList()
+                else {
+                    val nowMs = System.currentTimeMillis()
+                    tracks.filter { track ->
+                        if (track.status != "unknown") return@filter false
+                        val ts = trackTimestamps[track.trackId] ?: return@filter false
+                        val age = nowMs - ts.firstSeenAtMs
+                        val sinceRecognized = if (ts.lastRecognizedAtMs == 0L) Long.MAX_VALUE
+                            else nowMs - ts.lastRecognizedAtMs
+                        age >= INITIAL_UNKNOWN_GRACE_MS &&
+                            sinceRecognized >= POST_RECOGNIZED_STICKY_MS
+                    }
                 }
 
                 // Attendance list
@@ -798,15 +844,17 @@ fun FacultyLiveFeedScreen(
                                 }
                             }
                             if (unknownTracks.isNotEmpty()) {
-                                // Panel + overlay both use "Detecting…" (orange) for any
-                                // track that isn't a confirmed recognition. We never
-                                // declare someone "Unknown" — a momentarily dim or
-                                // angled registered face should not flip to a misleading
-                                // red label; it stays "Detecting…" until the backend
-                                // re-verifies on a cleaner frame.
-                                item { AttendanceSectionLabel("Detecting (${unknownTracks.size})", Color(0xFFFF9800)) }
+                                // Only tracks the backend has positively classified as
+                                // status="unknown" land here (filtered above). These are
+                                // faces with no FAISS match — render them RED so the
+                                // panel agrees with the HybridTrackOverlay "Unknown"
+                                // bounding box. Tracks still re-verifying (status=
+                                // "pending") are shown on the overlay as ORANGE
+                                // "Detecting…" and intentionally do not appear in this
+                                // panel to avoid flicker between Recognized / Unknown.
+                                item { AttendanceSectionLabel("Unknown (${unknownTracks.size})", Color(0xFFE53935)) }
                                 items(unknownTracks, key = { it.trackId }) { track ->
-                                    TrackRow(name = "Detecting…", dotColor = Color(0xFFFF9800))
+                                    TrackRow(name = "Unknown", dotColor = Color(0xFFE53935))
                                     HorizontalDivider(color = Border, thickness = 0.5.dp)
                                 }
                             }

@@ -88,6 +88,16 @@ fun StudentNotificationsScreen(
     val uiState by viewModel.uiState.collectAsState()
     val spacing = IAMSThemeTokens.spacing
     var showMenu by remember { mutableStateOf(false) }
+    val toastState = com.iams.app.ui.components.LocalToastState.current
+
+    // Surface any optimistic-update failure as an error toast — previously
+    // the revert was silent and the user had no way to know their tap
+    // didn't stick.
+    LaunchedEffect(viewModel) {
+        viewModel.failureToasts.collect { msg ->
+            toastState.showToast(msg, com.iams.app.ui.components.ToastType.ERROR)
+        }
+    }
 
     val unreadNotifications = uiState.notifications.filter { !it.read }
     val readNotifications = uiState.notifications.filter { it.read }

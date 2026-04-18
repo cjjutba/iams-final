@@ -329,6 +329,19 @@ fun StudentProfileScreen(
                         HorizontalDivider(thickness = 1.dp, color = Border)
                         Spacer(modifier = Modifier.height(spacing.xxl))
 
+                        // ── Face registration status ──
+                        // Previously the ViewModel loaded `faceRegistered`
+                        // but never displayed it — students had no way to
+                        // tell if their face was captured or needed setup.
+                        InfoRow(
+                            label = "Face Registration",
+                            value = if (uiState.faceRegistered) "Registered" else "Not registered",
+                        )
+
+                        Spacer(modifier = Modifier.height(spacing.xxl))
+                        HorizontalDivider(thickness = 1.dp, color = Border)
+                        Spacer(modifier = Modifier.height(spacing.xxl))
+
                         // ── Action items ──
                         Column(modifier = Modifier.fillMaxWidth()) {
                             ActionItem(
@@ -338,7 +351,7 @@ fun StudentProfileScreen(
                             )
                             ActionItem(
                                 icon = Icons.Default.CameraAlt,
-                                label = "Re-register Face",
+                                label = if (uiState.faceRegistered) "Re-register Face" else "Register Face",
                                 onClick = { navController.navigate(Routes.studentFaceRegister("reregister")) }
                             )
                             ActionItem(

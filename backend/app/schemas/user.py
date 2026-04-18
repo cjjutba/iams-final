@@ -136,6 +136,7 @@ class StudentRecordWithStatusResponse(StudentRecordResponse):
 class UpdateStudentRecord(BaseModel):
     """Update student record request (all fields optional)"""
 
+    student_id: str | None = Field(None, min_length=1, max_length=50)
     first_name: str | None = Field(None, min_length=1, max_length=100)
     middle_name: str | None = Field(None, max_length=100)
     last_name: str | None = Field(None, min_length=1, max_length=100)

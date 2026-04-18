@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiErrorParser
 import com.iams.app.data.api.ApiService
+import com.iams.app.data.api.NotificationService
 import com.iams.app.data.api.TokenManager
 import com.iams.app.data.model.LoginRequest
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -25,6 +26,7 @@ data class LoginUiState(
 class LoginViewModel @Inject constructor(
     private val apiService: ApiService,
     private val tokenManager: TokenManager,
+    private val notificationService: NotificationService,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LoginUiState())
@@ -48,6 +50,11 @@ class LoginViewModel @Inject constructor(
                         role = body.user.role,
                         userId = body.user.id
                     )
+
+                    // Open the per-user real-time WebSocket now that tokens
+                    // are persisted. Idempotent — safe to call if already
+                    // connected (closes the stale client first).
+                    notificationService.connect()
 
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,

@@ -317,6 +317,7 @@ async def lifespan(app: FastAPI):
                             schedule_id=sid,
                             grabber=grabber,
                             db_factory=SessionLocal,
+                            room_id=room_id,
                         )
                         await pipeline.start()
                         app.state.session_pipelines[sid] = pipeline
@@ -394,9 +395,23 @@ async def lifespan(app: FastAPI):
                         db.close()
                     logger.info(f"[lifecycle] Ended session for {subject_code} ({sid})")
 
-                    # Stop FrameGrabber
+                    # Stop FrameGrabber — but only if no other active pipeline
+                    # is still using the same room's grabber. This is the
+                    # "seamless handoff" guard: back-to-back rolling sessions
+                    # in the same classroom previously killed the grabber out
+                    # from under the next pipeline, starving it of frames and
+                    # leaving the UI stuck on "Detecting…".
                     frame_grabbers = app.state.frame_grabbers
-                    if room_id in frame_grabbers:
+                    still_used = any(
+                        getattr(p, "room_id", None) == room_id
+                        for p in app.state.session_pipelines.values()
+                    )
+                    if still_used:
+                        logger.info(
+                            f"[lifecycle] Keeping FrameGrabber for room {room_id} alive — "
+                            f"next session already streaming"
+                        )
+                    elif room_id in frame_grabbers:
                         frame_grabbers[room_id].stop()
                         del frame_grabbers[room_id]
                         logger.info(f"[lifecycle] Stopped FrameGrabber for room {room_id}")
@@ -637,6 +652,7 @@ async def lifespan(app: FastAPI):
                     schedule_id=sid,
                     grabber=grabber,
                     db_factory=SessionLocal,
+                    room_id=room_id,
                 )
                 await pipeline.start()
                 app.state.session_pipelines[sid] = pipeline

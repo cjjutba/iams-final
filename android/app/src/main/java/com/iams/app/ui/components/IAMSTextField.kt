@@ -57,6 +57,10 @@ fun IAMSTextField(
     trailingIcon: @Composable (() -> Unit)? = null,
     maxLength: Int? = null,
     supportingText: String? = null,
+    // Optional — fired whenever focus enters or leaves the field. Used by
+    // the edit-profile confirm-password field to gate live mismatch errors
+    // until the user has committed their typing.
+    onFocusChanged: ((Boolean) -> Unit)? = null,
 ) {
     val radius = IAMSThemeTokens.radius
     val layout = IAMSThemeTokens.layout
@@ -101,7 +105,10 @@ fun IAMSTextField(
                 .clip(radius.mdShape)
                 .background(InputBackground)
                 .border(1.dp, borderColor, radius.mdShape)
-                .onFocusChanged { isFocused = it.isFocused },
+                .onFocusChanged {
+                    isFocused = it.isFocused
+                    onFocusChanged?.invoke(it.isFocused)
+                },
             enabled = enabled,
             singleLine = singleLine,
             textStyle = MaterialTheme.typography.bodyLarge.copy(color = TextPrimary),

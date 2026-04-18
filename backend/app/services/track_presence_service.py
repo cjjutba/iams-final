@@ -435,6 +435,7 @@ class TrackPresenceService:
                                 "student_name": state.name,
                                 "status": new_status.value,
                                 "check_in_time": now_dt.isoformat(),
+                                "attendance_id": state.attendance_id,
                             }
                         )
 
@@ -495,6 +496,7 @@ class TrackPresenceService:
                                 "student_name": state.name,
                                 "restored_status": restored_status.value,
                                 "returned_at": datetime.now().isoformat(),
+                                "attendance_id": state.attendance_id,
                             }
                         )
                         logger.info("Student %s returned after early leave, restored to %s", sid, restored_status.value)

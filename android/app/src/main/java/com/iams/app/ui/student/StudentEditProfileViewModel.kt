@@ -48,12 +48,16 @@ data class EditProfileUiState(
     // Touched flags — errors are surfaced only once the user has interacted.
     val newPasswordTouched: Boolean = false,
     val confirmPasswordTouched: Boolean = false,
+    // Blur flag — live mismatch error is suppressed until the user has
+    // moved focus off the confirm field, so it doesn't flicker on every
+    // keystroke mid-typing.
+    val confirmPasswordBlurred: Boolean = false,
 ) {
     val passwordEvaluation: PasswordEvaluation
         get() = PasswordPolicy.evaluate(newPassword)
 
     val liveConfirmError: String?
-        get() = if (!confirmPasswordTouched || confirmPassword.isEmpty()) null
+        get() = if (!confirmPasswordBlurred || confirmPassword.isEmpty()) null
         else if (newPassword != confirmPassword) "Passwords do not match"
         else null
 
@@ -89,7 +93,7 @@ class StudentEditProfileViewModel @Inject constructor(
                         isRefreshing = false,
                         user = user,
                         email = user?.email ?: "",
-                        phone = "", // Phone is not in UserResponse; leave blank
+                        phone = user?.phone ?: "",
                     )
                 } else {
                     _uiState.value = _uiState.value.copy(
@@ -149,6 +153,13 @@ class StudentEditProfileViewModel @Inject constructor(
         )
     }
 
+    /** Call from the confirm-password field's `onFocusChanged` when it loses focus. */
+    fun markConfirmPasswordBlurred() {
+        if (!_uiState.value.confirmPasswordBlurred) {
+            _uiState.value = _uiState.value.copy(confirmPasswordBlurred = true)
+        }
+    }
+
     // --- Save Profile ---
 
     fun saveProfile() {
@@ -179,10 +190,13 @@ class StudentEditProfileViewModel @Inject constructor(
                 )
 
                 if (response.isSuccessful) {
+                    val updated = response.body()
                     _uiState.value = _uiState.value.copy(
                         isSavingProfile = false,
                         profileSuccess = "Profile updated successfully",
-                        user = response.body() ?: _uiState.value.user
+                        user = updated ?: _uiState.value.user,
+                        email = updated?.email ?: _uiState.value.email,
+                        phone = updated?.phone ?: _uiState.value.phone,
                     )
                 } else {
                     _uiState.value = _uiState.value.copy(
@@ -253,6 +267,7 @@ class StudentEditProfileViewModel @Inject constructor(
                         confirmPassword = "",
                         newPasswordTouched = false,
                         confirmPasswordTouched = false,
+                        confirmPasswordBlurred = false,
                     )
                 } else {
                     val errorMsg = when (response.code()) {

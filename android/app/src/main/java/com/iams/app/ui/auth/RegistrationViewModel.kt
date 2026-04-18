@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiErrorParser
 import com.iams.app.data.api.ApiService
+import com.iams.app.data.api.NotificationService
 import com.iams.app.data.api.TokenManager
 import com.iams.app.data.model.RegisterRequest
 import com.iams.app.data.model.CheckStudentIdRequest
@@ -50,6 +51,7 @@ data class RegistrationUiState(
 class RegistrationViewModel @Inject constructor(
     private val apiService: ApiService,
     private val tokenManager: TokenManager,
+    private val notificationService: NotificationService,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
@@ -212,6 +214,10 @@ class RegistrationViewModel @Inject constructor(
                             role = "STUDENT",
                             userId = body.user?.id ?: ""
                         )
+                        // Start the per-user real-time WebSocket now that
+                        // tokens are persisted, so face-registration and
+                        // landing-screen flows have live state from t=0.
+                        notificationService.connect()
                     }
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,

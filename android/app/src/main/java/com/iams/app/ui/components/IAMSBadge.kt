@@ -19,6 +19,9 @@ import com.iams.app.ui.theme.AbsentFg
 import com.iams.app.ui.theme.EarlyLeaveBg
 import com.iams.app.ui.theme.EarlyLeaveBorder
 import com.iams.app.ui.theme.EarlyLeaveFg
+import com.iams.app.ui.theme.ExcusedBg
+import com.iams.app.ui.theme.ExcusedBorder
+import com.iams.app.ui.theme.ExcusedFg
 import com.iams.app.ui.theme.LateBg
 import com.iams.app.ui.theme.LateBorder
 import com.iams.app.ui.theme.LateFg
@@ -26,7 +29,7 @@ import com.iams.app.ui.theme.PresentBg
 import com.iams.app.ui.theme.PresentBorder
 import com.iams.app.ui.theme.PresentFg
 
-enum class AttendanceStatus { PRESENT, LATE, ABSENT, EARLY_LEAVE }
+enum class AttendanceStatus { PRESENT, LATE, ABSENT, EARLY_LEAVE, EXCUSED }
 
 data class StatusColors(
     val bg: Color,
@@ -39,6 +42,7 @@ fun attendanceStatusColors(status: AttendanceStatus): StatusColors = when (statu
     AttendanceStatus.LATE -> StatusColors(LateBg, LateFg, LateBorder)
     AttendanceStatus.ABSENT -> StatusColors(AbsentBg, AbsentFg, AbsentBorder)
     AttendanceStatus.EARLY_LEAVE -> StatusColors(EarlyLeaveBg, EarlyLeaveFg, EarlyLeaveBorder)
+    AttendanceStatus.EXCUSED -> StatusColors(ExcusedBg, ExcusedFg, ExcusedBorder)
 }
 
 fun attendanceStatusLabel(status: AttendanceStatus): String = when (status) {
@@ -46,6 +50,7 @@ fun attendanceStatusLabel(status: AttendanceStatus): String = when (status) {
     AttendanceStatus.LATE -> "Late"
     AttendanceStatus.ABSENT -> "Absent"
     AttendanceStatus.EARLY_LEAVE -> "Early Leave"
+    AttendanceStatus.EXCUSED -> "Excused"
 }
 
 @Composable

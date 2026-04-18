@@ -239,6 +239,23 @@ class UserService:
         if "birthdate" in update_data and update_data["birthdate"]:
             update_data["birthdate"] = date.fromisoformat(update_data["birthdate"])
 
+        # Handle student_id rename: must update linked user row too, and
+        # reject collisions with another existing student.
+        new_student_id = update_data.pop("student_id", None)
+        if new_student_id is not None:
+            new_normalized = new_student_id.strip().upper()
+            if new_normalized != normalized:
+                if self.student_record_repo.exists(new_normalized):
+                    raise ValidationError(
+                        f"Student ID {new_normalized} already exists in the registry"
+                    )
+                update_data["student_id"] = new_normalized
+                # Cascade to linked user account, if any.
+                linked_user = self.user_repo.get_by_student_id(normalized)
+                if linked_user:
+                    linked_user.student_id = new_normalized
+                    self.db.flush()
+
         record = self.student_record_repo.update(normalized, update_data)
         self.db.commit()
         logger.info(f"Updated student record: {normalized}")

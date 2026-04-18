@@ -10,6 +10,7 @@ At 15fps on M5 MacBook Pro: ~15ms processing per frame, ~50ms headroom.
 import asyncio
 import logging
 import time
+from datetime import datetime
 
 from app.config import settings
 from app.services import session_manager
@@ -19,6 +20,12 @@ from app.services.track_presence_service import TrackPresenceService
 
 logger = logging.getLogger(__name__)
 
+# Guard against pipeline re-detections firing the same student-facing
+# `attendance_event` twice in quick succession. Keyed on
+# (user_id, event, attendance_id); values are monotonic seconds.
+_ATTENDANCE_EVENT_DEDUP: dict[tuple[str, str, str], float] = {}
+_ATTENDANCE_EVENT_DEDUP_WINDOW_SECONDS = 60.0
+
 
 class SessionPipeline:
     """Real-time processing pipeline for one attendance session.
@@ -27,6 +34,11 @@ class SessionPipeline:
         schedule_id: Schedule UUID for this session.
         grabber: FrameGrabber for the room's RTSP stream.
         db_factory: Callable that returns a new DB session.
+        room_id: Room UUID — used by the lifecycle scheduler to decide
+            whether a FrameGrabber can be torn down at session end. When
+            another active pipeline still references the same room, the
+            grabber is kept alive so back-to-back rolling sessions in the
+            same classroom transition without a "no frames" gap.
     """
 
     def __init__(
@@ -34,8 +46,10 @@ class SessionPipeline:
         schedule_id: str,
         grabber: FrameGrabber,
         db_factory,
+        room_id: str | None = None,
     ) -> None:
         self.schedule_id = schedule_id
+        self.room_id = room_id
         self._grabber = grabber
         self._db_factory = db_factory
         self._stop_event = asyncio.Event()
@@ -376,11 +390,91 @@ class SessionPipeline:
                     },
                 )
 
+            # Fan out a student-facing `attendance_event` on the per-user
+            # alert channel. This is what drives the Kotlin student app's
+            # real-time UI without needing a per-schedule subscription.
+            await self._broadcast_student_attendance_event(event_type, event)
+
         except Exception:
             logger.debug("Event broadcast failed: %s", event_type, exc_info=True)
 
         # Send in-app / email notifications (fire-and-forget, never breaks pipeline)
         await self._send_event_notifications(event)
+
+    async def _broadcast_student_attendance_event(
+        self,
+        event_type: str | None,
+        event: dict,
+    ) -> None:
+        """Mirror a check_in/early_leave/early_leave_return onto the affected
+        student's `/ws/alerts/{user_id}` channel so the student app gets a
+        live state-change event without subscribing to the per-schedule
+        firehose.
+
+        Dedup key: (student_id, event_type, attendance_id). A 60s window
+        survives transient re-detections (the pipeline may flip the same
+        track on/off across a few frames before ByteTrack stabilises it).
+        """
+        if event_type not in {"check_in", "early_leave", "early_leave_return"}:
+            return
+
+        student_id = event.get("student_id")
+        if not student_id:
+            return
+
+        attendance_id = event.get("attendance_id")
+        if not attendance_id:
+            # Without attendance_id we can't correlate on the client, so skip.
+            return
+
+        dedup_key = (str(student_id), event_type, str(attendance_id))
+        now_mono = time.monotonic()
+        last = _ATTENDANCE_EVENT_DEDUP.get(dedup_key)
+        if last is not None and (now_mono - last) < _ATTENDANCE_EVENT_DEDUP_WINDOW_SECONDS:
+            return
+        _ATTENDANCE_EVENT_DEDUP[dedup_key] = now_mono
+
+        # Opportunistic prune to keep the dict bounded.
+        if len(_ATTENDANCE_EVENT_DEDUP) > 512:
+            cutoff = now_mono - _ATTENDANCE_EVENT_DEDUP_WINDOW_SECONDS
+            for k, v in list(_ATTENDANCE_EVENT_DEDUP.items()):
+                if v < cutoff:
+                    _ATTENDANCE_EVENT_DEDUP.pop(k, None)
+
+        if event_type == "check_in":
+            status_value = event.get("status")
+            check_in_time = event.get("check_in_time")
+        elif event_type == "early_leave":
+            status_value = "early_leave"
+            check_in_time = event.get("check_in_time")
+        else:  # early_leave_return
+            status_value = event.get("restored_status")
+            check_in_time = event.get("returned_at")
+
+        payload = {
+            "type": "attendance_event",
+            "event": event_type,
+            "schedule_id": self.schedule_id,
+            "attendance_id": str(attendance_id),
+            "student_id": str(student_id),
+            "status": status_value,
+            "check_in_time": check_in_time,
+            "subject_code": self._subject_code,
+            "subject_name": self._subject_name,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+        try:
+            from app.routers.websocket import ws_manager
+
+            await ws_manager.broadcast_alert(str(student_id), payload)
+        except Exception:
+            logger.debug(
+                "attendance_event broadcast failed: %s / %s",
+                event_type,
+                student_id,
+                exc_info=True,
+            )
 
     async def _send_event_notifications(self, event: dict) -> None:
         """Send in-app and email notifications for pipeline events.

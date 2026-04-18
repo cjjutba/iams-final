@@ -44,6 +44,7 @@ import com.iams.app.data.model.AttendanceRecordResponse
 import com.iams.app.ui.components.LocalToastState
 import com.iams.app.ui.components.ToastType
 import com.iams.app.ui.components.AttendanceStatus
+import com.iams.app.ui.utils.parseAttendanceStatus
 import com.iams.app.ui.components.IAMSBadge
 import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.components.IAMSButtonSize
@@ -68,7 +69,7 @@ import java.util.Locale
 
 private data class FilterOption(
     val label: String,
-    val value: String, // "all", "present", "late", "absent"
+    val value: String, // "all" / "present" / "late" / "absent" / "early_leave"
 )
 
 private val FILTERS = listOf(
@@ -76,6 +77,7 @@ private val FILTERS = listOf(
     FilterOption("Present", "present"),
     FilterOption("Late", "late"),
     FilterOption("Absent", "absent"),
+    FilterOption("Early Leave", "early_leave"),
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -378,16 +380,6 @@ private fun HistoryEmptyState(formattedMonth: String) {
 }
 
 // ── Utility functions ──
-
-private fun parseAttendanceStatus(status: String): AttendanceStatus {
-    return when (status.lowercase()) {
-        "present" -> AttendanceStatus.PRESENT
-        "late" -> AttendanceStatus.LATE
-        "absent" -> AttendanceStatus.ABSENT
-        "early_leave" -> AttendanceStatus.EARLY_LEAVE
-        else -> AttendanceStatus.ABSENT
-    }
-}
 
 /**
  * Format "YYYY-MM-DD" to "EEEE, MMM d" (e.g., "Monday, Mar 15")

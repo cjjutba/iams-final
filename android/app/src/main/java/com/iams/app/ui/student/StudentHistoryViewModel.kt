@@ -1,10 +1,12 @@
 package com.iams.app.ui.student
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiService
 import com.iams.app.data.api.NotificationService
 import com.iams.app.data.model.AttendanceRecordResponse
+import com.iams.app.data.model.StudentAttendanceEvent
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,25 +24,110 @@ data class StudentHistoryUiState(
     val error: String? = null,
     val records: List<AttendanceRecordResponse> = emptyList(),
     val selectedMonth: YearMonth = YearMonth.now(),
-    val selectedFilter: String = "all", // "all", "present", "late", "absent"
+    // "all" / "present" / "late" / "absent" / "early_leave".
+    val selectedFilter: String = "all",
 )
+
+// Valid filter options for the status-pill row. Matches the backend
+// enum `AttendanceStatus` values (lower-cased).
+val STUDENT_HISTORY_FILTERS = listOf("all", "present", "late", "absent", "early_leave")
 
 @HiltViewModel
 class StudentHistoryViewModel @Inject constructor(
     private val apiService: ApiService,
     val notificationService: NotificationService,
+    savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
+
+    // Optional pre-filter by schedule (driven from Analytics subject drill-down).
+    private val scheduleIdFilter: String? = savedStateHandle["scheduleId"]
 
     private val _uiState = MutableStateFlow(StudentHistoryUiState())
     val uiState: StateFlow<StudentHistoryUiState> = _uiState.asStateFlow()
 
     init {
         loadHistory()
+        observeRealtimeEvents()
     }
 
-    fun loadHistory() {
+    /**
+     * Merge incoming live attendance events into the current month's list
+     * instead of refetching. Only applies to events whose date falls in
+     * the currently-displayed month — a CheckIn for today while the user
+     * is browsing last month won't mutate anything they're looking at.
+     */
+    private fun observeRealtimeEvents() {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+            notificationService.attendanceEvents.collect { event ->
+                when (event) {
+                    is StudentAttendanceEvent.CheckIn ->
+                        applyEvent(event.attendanceId, event.scheduleId, event.status, event.checkInTime)
+                    is StudentAttendanceEvent.EarlyLeave ->
+                        applyEvent(event.attendanceId, event.scheduleId, "early_leave", null)
+                    is StudentAttendanceEvent.EarlyLeaveReturn ->
+                        applyEvent(event.attendanceId, event.scheduleId, event.restoredStatus, event.returnedAt)
+                    is StudentAttendanceEvent.SnapshotUpdate -> {
+                        // Reconcile any missed events during a reconnect
+                        // gap by rerunning the month fetch silently.
+                        if (_uiState.value.selectedMonth == YearMonth.now()) {
+                            loadHistory(silent = true)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun applyEvent(
+        attendanceId: String,
+        scheduleId: String,
+        status: String,
+        checkInTime: String?,
+    ) {
+        val state = _uiState.value
+        val displayMonth = state.selectedMonth
+        val today = LocalDate.now()
+        // Only mutate if the event happened in the month the user is
+        // currently viewing. Otherwise the refetch on re-navigation will
+        // pick it up naturally.
+        if (YearMonth.from(today) != displayMonth) return
+
+        val existing = state.records.firstOrNull { it.id == attendanceId }
+        val merged = if (existing != null) {
+            existing.copy(
+                status = status,
+                checkInTime = checkInTime ?: existing.checkInTime,
+            )
+        } else {
+            AttendanceRecordResponse(
+                id = attendanceId,
+                scheduleId = scheduleId,
+                studentId = null,
+                studentName = null,
+                subjectCode = null,
+                status = status,
+                date = today.toString(),
+                checkInTime = checkInTime,
+                presenceScore = null,
+                totalScans = null,
+                scansPresent = null,
+                remarks = null,
+            )
+        }
+
+        val newRecords = if (existing != null) {
+            state.records.map { if (it.id == attendanceId) merged else it }
+        } else {
+            (state.records + merged).sortedByDescending { it.date }
+        }
+        _uiState.value = state.copy(records = newRecords)
+    }
+
+    fun loadHistory(silent: Boolean = false) {
+        viewModelScope.launch {
+            if (!silent) {
+                _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+            }
 
             try {
                 val month = _uiState.value.selectedMonth
@@ -59,7 +146,7 @@ class StudentHistoryViewModel @Inject constructor(
                         isRefreshing = false,
                         records = records.sortedByDescending { it.date }
                     )
-                } else {
+                } else if (!silent) {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
                         isRefreshing = false,
@@ -67,11 +154,13 @@ class StudentHistoryViewModel @Inject constructor(
                     )
                 }
             } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    isRefreshing = false,
-                    error = "Network error. Please check your connection."
-                )
+                if (!silent) {
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        isRefreshing = false,
+                        error = "Network error. Please check your connection."
+                    )
+                }
             }
         }
     }
@@ -109,12 +198,18 @@ class StudentHistoryViewModel @Inject constructor(
      */
     fun getFilteredRecords(): List<AttendanceRecordResponse> {
         val state = _uiState.value
-        return if (state.selectedFilter == "all") {
+        val statusFiltered = if (state.selectedFilter == "all") {
             state.records
         } else {
             state.records.filter { it.status.equals(state.selectedFilter, ignoreCase = true) }
         }
+        // Apply the optional schedule pre-filter from the deep-link.
+        return if (scheduleIdFilter.isNullOrBlank()) statusFiltered
+        else statusFiltered.filter { it.scheduleId == scheduleIdFilter }
     }
+
+    /** Returns the optional pre-filter schedule id so the UI can surface it. */
+    fun getScheduleFilter(): String? = scheduleIdFilter
 
     /**
      * Format the selected month as "MMMM yyyy"

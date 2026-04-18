@@ -4,8 +4,10 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiService
+import com.iams.app.data.api.NotificationService
 import com.iams.app.data.model.AttendanceRecordResponse
 import com.iams.app.data.model.PresenceLogResponse
+import com.iams.app.data.model.StudentAttendanceEvent
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,6 +26,7 @@ data class AttendanceDetailUiState(
 @HiltViewModel
 class StudentAttendanceDetailViewModel @Inject constructor(
     private val apiService: ApiService,
+    private val notificationService: NotificationService,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -36,6 +39,63 @@ class StudentAttendanceDetailViewModel @Inject constructor(
 
     init {
         loadDetails()
+        observeRealtimeEvents()
+    }
+
+    /**
+     * Merge live attendance events into the currently-open record. If the
+     * event refers to the same `attendance_id` we're showing, update
+     * `status` and `checkInTime` in place — no refetch.
+     *
+     * Presence logs arrive on a different pipeline and are flushed to the
+     * DB every ~10s; we trigger a silent refetch for those since backend
+     * doesn't stream individual log rows.
+     */
+    private fun observeRealtimeEvents() {
+        viewModelScope.launch {
+            notificationService.attendanceEvents.collect { event ->
+                when (event) {
+                    is StudentAttendanceEvent.CheckIn ->
+                        applyStatus(event.attendanceId, event.scheduleId, event.status, event.checkInTime)
+                    is StudentAttendanceEvent.EarlyLeave ->
+                        applyStatus(event.attendanceId, event.scheduleId, "early_leave", null)
+                    is StudentAttendanceEvent.EarlyLeaveReturn ->
+                        applyStatus(event.attendanceId, event.scheduleId, event.restoredStatus, event.returnedAt)
+                    is StudentAttendanceEvent.SnapshotUpdate -> { /* handled via loadDetails on resume */ }
+                }
+            }
+        }
+    }
+
+    private fun applyStatus(
+        eventAttendanceId: String,
+        eventScheduleId: String,
+        status: String,
+        checkInTime: String?,
+    ) {
+        val current = _uiState.value.attendance ?: return
+        val isSame = current.id == eventAttendanceId ||
+            (current.scheduleId == eventScheduleId && current.id == eventAttendanceId)
+        if (!isSame) return
+        _uiState.value = _uiState.value.copy(
+            attendance = current.copy(
+                status = status,
+                checkInTime = checkInTime ?: current.checkInTime,
+            ),
+        )
+        // Presence logs are server-side timer flushes — a lightweight
+        // refetch keeps the timeline fresh without waiting for the user
+        // to pull-to-refresh.
+        viewModelScope.launch {
+            runCatching { apiService.getPresenceLogs(current.id) }
+                .onSuccess { resp ->
+                    if (resp.isSuccessful) {
+                        _uiState.value = _uiState.value.copy(
+                            logs = resp.body() ?: _uiState.value.logs,
+                        )
+                    }
+                }
+        }
     }
 
     fun loadDetails(silent: Boolean = false) {

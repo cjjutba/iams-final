@@ -136,6 +136,7 @@ async def start_session(
                             schedule_id=body.schedule_id,
                             grabber=grabber,
                             db_factory=SessionLocal,
+                            room_id=room_id,
                         )
                         await pipeline.start()
                         session_pipelines[body.schedule_id] = pipeline
