@@ -70,7 +70,13 @@ class MlKitFrameSink : VideoSink, Closeable {
             .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
             .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
             .setContourMode(FaceDetectorOptions.CONTOUR_MODE_NONE)
-            .setMinFaceSize(0.15f)
+            // 0.15 (15% of frame width) is ML Kit's own default and makes sense for
+            // selfie-camera usage. For wide-angle CCTV feeds, a typical student face
+            // occupies 5-10% of the frame, so 0.15 filters them out entirely — the
+            // hybrid matcher then has nothing to bind backend identities to and has
+            // to fall back to BACKEND_ONLY tracks. 0.05 is the minimum that reliably
+            // tracks faces without producing spurious detections on background noise.
+            .setMinFaceSize(0.05f)
             .enableTracking()
             .build()
     )
