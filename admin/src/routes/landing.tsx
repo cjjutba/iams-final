@@ -1,7 +1,10 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { UserPlus, ScanFace, CalendarCheck, Download } from 'lucide-react'
+import { UserPlus, ScanFace, CalendarCheck, Download, QrCode } from 'lucide-react'
+import { QRCodeSVG } from 'qrcode.react'
 import { Button } from '@/components/ui/button'
+
+const SITE_URL = 'https://iams-thesis.vercel.app/'
 
 const steps = [
   {
@@ -45,7 +48,25 @@ export default function LandingPage() {
             Intelligent Attendance Monitoring System
           </p>
 
-          <div className="mt-8 w-full max-w-[240px]">
+          {/* QR code — desktop only; phones tap the button below instead */}
+          <div className="mt-7 hidden sm:flex sm:flex-col sm:items-center">
+            <div className="rounded-xl border border-border bg-white p-3 shadow-sm">
+              <QRCodeSVG
+                value={SITE_URL}
+                size={168}
+                level="M"
+                marginSize={0}
+                fgColor="#000000"
+                bgColor="#FFFFFF"
+              />
+            </div>
+            <p className="mt-3 flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.15em] text-muted-foreground">
+              <QrCode className="h-3 w-3" />
+              Scan to download
+            </p>
+          </div>
+
+          <div className="mt-7 w-full max-w-[240px] sm:mt-5">
             <Button
               asChild
               className="h-12 w-full gap-2 text-sm font-semibold uppercase tracking-wide"
