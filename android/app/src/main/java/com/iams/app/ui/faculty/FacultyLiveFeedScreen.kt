@@ -798,11 +798,15 @@ fun FacultyLiveFeedScreen(
                                 }
                             }
                             if (unknownTracks.isNotEmpty()) {
-                                // Match the HybridTrackOverlay's red for "Unknown" so the
-                                // panel and the bounding box agree.
-                                item { AttendanceSectionLabel("Unknown (${unknownTracks.size})", Color(0xFFE53935)) }
+                                // Panel + overlay both use "Detecting…" (orange) for any
+                                // track that isn't a confirmed recognition. We never
+                                // declare someone "Unknown" — a momentarily dim or
+                                // angled registered face should not flip to a misleading
+                                // red label; it stays "Detecting…" until the backend
+                                // re-verifies on a cleaner frame.
+                                item { AttendanceSectionLabel("Detecting (${unknownTracks.size})", Color(0xFFFF9800)) }
                                 items(unknownTracks, key = { it.trackId }) { track ->
-                                    TrackRow(name = "Unknown", dotColor = Color(0xFFE53935))
+                                    TrackRow(name = "Detecting…", dotColor = Color(0xFFFF9800))
                                     HorizontalDivider(color = Border, thickness = 0.5.dp)
                                 }
                             }

@@ -190,34 +190,34 @@ fun HybridTrackOverlay(
                         val boxHeight = bottom - top
                         if (boxWidth < 2f || boxHeight < 2f) continue
 
-                        // Label + colour are driven by the final *displayed* status so
-                        // they always agree, regardless of which matcher source produced
-                        // the track. Identity is strictly backend-authoritative:
+                        // Two-state display:
                         //   backend recognized with a real name → GREEN  + first name
-                        //   backend unknown                     → RED    + "Unknown"
                         //   anything else                       → ORANGE + "Detecting…"
                         //
+                        // We deliberately collapse the old RED "Unknown" branch into
+                        // "Detecting…". Declaring someone "Unknown" on a single low
+                        // confidence frame is misleading — a registered student whose
+                        // head tilts or whose face briefly dims momentarily scores below
+                        // RECOGNITION_THRESHOLD and would get painted Unknown for a
+                        // moment before being recognised again. Showing "Detecting…" is
+                        // always honest: it communicates "we see a face, we're still
+                        // deciding who it is" without committing to a wrong label.
+                        //
                         // Defensive: if the backend reports status="recognized" but the
-                        // name is missing or is literally the placeholder string
-                        // "Unknown" (which happens when a stale FAISS vector matches a
-                        // deleted user), treat it as unknown. Otherwise we'd paint a
-                        // green box labelled "Unknown" — the exact bug reported after a
-                        // reseed with orphaned FAISS embeddings.
+                        // name is missing or literally "Unknown" (stale FAISS vector to
+                        // a deleted user), we still fall through to "Detecting…" so the
+                        // user never sees green + "Unknown".
                         val recognisedName = track.identity.name
                             ?.takeIf {
                                 track.identity.status == "recognized" &&
                                     it.isNotBlank() &&
                                     !it.equals("Unknown", ignoreCase = true)
                             }
-                        val (label, boxColor) = when {
-                            recognisedName != null ->
-                                firstNameOnly(recognisedName) to
-                                    Color(0xFF4CAF50).copy(alpha = alpha)
-                            track.identity.status == "unknown" ||
-                                track.identity.name.equals("Unknown", ignoreCase = true) ->
-                                "Unknown" to Color(0xFFE53935).copy(alpha = alpha)
-                            else ->
-                                "Detecting…" to Color(0xFFFF9800).copy(alpha = alpha)
+                        val (label, boxColor) = if (recognisedName != null) {
+                            firstNameOnly(recognisedName) to
+                                Color(0xFF4CAF50).copy(alpha = alpha)
+                        } else {
+                            "Detecting…" to Color(0xFFFF9800).copy(alpha = alpha)
                         }
 
                         drawRect(
