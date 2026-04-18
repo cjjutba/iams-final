@@ -170,6 +170,16 @@ There is **one branch** (`feat/cloud-based`). The same code targets both environ
 
 Goal after this section: the Android app talks to `http://<this-mac-LAN-IP>:8000`, the admin dev server talks to the same, and Docker is running locally.
 
+**Step 0 — Bootstrap env files from examples (only if missing).**
+Required because `docker-compose.yml` references `./backend/.env`, and a fresh clone has none of these files. Safe to re-run — `[ -f X ]` skips existing files.
+```bash
+[ -f backend/.env ]            || cp backend/.env.example backend/.env
+[ -f admin/.env ]              || cp admin/.env.example admin/.env
+[ -f admin/.env.production ]   || cp admin/.env.production.example admin/.env.production
+[ -f android/local.properties ] || printf "sdk.dir=%s\n" "$HOME/Library/Android/sdk" > android/local.properties
+```
+After this step every file that later steps touch is guaranteed to exist.
+
 **Step 1 — Detect this Mac's LAN IP.**
 ```bash
 IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null)"
@@ -260,6 +270,12 @@ Output (in plain text back to user):
 
 Goal: the Android app targets `http://167.71.217.44:80`, admin portal served from Vercel hits VPS at `167.71.217.44`, backend VPS stack is redeployed from this branch.
 
+**Step 0 — Bootstrap committed examples on a fresh clone (only if missing).**
+`deploy/deploy.sh` rsyncs the repo to the VPS with `--exclude '.env' --exclude '.env.production'` for the backend, so the VPS keeps its own backend secrets. This machine only needs `admin/.env.production` populated so any later `npm run build` of the admin portal uses the right URLs.
+```bash
+[ -f admin/.env.production ] || cp admin/.env.production.example admin/.env.production
+```
+
 **Step 1 — Neutralise any local Android override.**
 `android/local.properties` takes precedence over `gradle.properties`. Read it; if it contains any `IAMS_BACKEND_HOST=`, `IAMS_BACKEND_PORT=`, `IAMS_MEDIAMTX_PORT=`, or `IAMS_MEDIAMTX_WEBRTC_PORT=` lines, **remove or comment them out** so the committed `gradle.properties` wins.
 
@@ -284,6 +300,8 @@ VITE_WS_URL=ws://167.71.217.44
 bash deploy/deploy.sh
 ```
 Wait for it to finish. Do NOT Ctrl-C.
+
+Prerequisite: this Mac must have SSH access to the VPS. The script rsyncs files via SSH to `root@167.71.217.44`. If you see `Permission denied (publickey)` or `Host key verification failed`, the SSH key on this Mac is not yet authorised — ask the user to install their `id_ed25519` (or equivalent) private key at `~/.ssh/` and re-run. Do NOT try to work around it; deploying with broken SSH can half-ship a release.
 
 **Step 5 — Verify the VPS is healthy.**
 ```bash
