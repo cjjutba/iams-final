@@ -603,9 +603,13 @@ class FaceIdentityMatcherTest {
 
     @Test
     fun matcherConfigDefaultsMatchContract() {
+        // These mirror docs/plans/2026-04-17-hybrid-detection/TUNING.md §3.
+        // Bind/release lowered from 0.40/0.20 to 0.20/0.15 on 2026-04-18 for WAN
+        // operation at PROCESSING_FPS=5-10 where backend bboxes arrive ~100-250ms
+        // after ML Kit saw the same face.
         val cfg = MatcherConfig()
-        assertThat(cfg.iouBindThreshold).isEqualTo(0.40f)
-        assertThat(cfg.iouReleaseThreshold).isEqualTo(0.20f)
+        assertThat(cfg.iouBindThreshold).isEqualTo(0.20f)
+        assertThat(cfg.iouReleaseThreshold).isEqualTo(0.15f)
         assertThat(cfg.identityHoldMs).isEqualTo(3_000L)
         assertThat(cfg.firstBindGraceMs).isEqualTo(500L)
         assertThat(cfg.maxClockSkewMs).isEqualTo(1_500L)

@@ -25,7 +25,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
-import androidx.compose.ui.graphics.Color
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
@@ -61,7 +60,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
-import com.iams.app.data.model.LiveAttendanceResponse
 import com.iams.app.data.model.ScheduleResponse
 import com.iams.app.ui.components.CardSkeleton
 import com.iams.app.ui.components.SkeletonBox
@@ -71,11 +69,9 @@ import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
 import com.iams.app.ui.navigation.Routes
-import com.iams.app.ui.theme.AbsentFg
 import com.iams.app.ui.theme.Background
 import com.iams.app.ui.theme.Border
 import com.iams.app.ui.theme.IAMSThemeTokens
-import com.iams.app.ui.theme.LateFg
 import com.iams.app.ui.theme.PresentBorder
 import com.iams.app.ui.theme.PresentFg
 import com.iams.app.ui.theme.Secondary
@@ -240,7 +236,6 @@ fun FacultyHomeScreen(
                         if (sessionActive) {
                             ActiveSessionHeroCard(
                                 schedule = currentClass,
-                                liveAttendance = uiState.liveAttendance,
                                 elapsedMinutes = viewModel.getElapsedMinutes(currentClass),
                                 sessionLoading = uiState.sessionLoading,
                                 onEndSession = { showEndDialog = true },
@@ -356,7 +351,6 @@ fun FacultyHomeScreen(
 @Composable
 private fun ActiveSessionHeroCard(
     schedule: ScheduleResponse,
-    liveAttendance: LiveAttendanceResponse?,
     elapsedMinutes: Long,
     sessionLoading: Boolean,
     onEndSession: () -> Unit,
@@ -427,37 +421,6 @@ private fun ActiveSessionHeroCard(
 
             Spacer(modifier = Modifier.height(spacing.lg))
 
-            // Stats row: Present / Absent / Late — consistent height
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(spacing.sm)
-            ) {
-                val totalEnrolled = liveAttendance?.totalEnrolled
-                StatBox(
-                    count = liveAttendance?.presentCount,
-                    subtitle = if (totalEnrolled != null) "/$totalEnrolled" else null,
-                    label = "On Time",
-                    color = PresentFg,
-                    modifier = Modifier.weight(1f)
-                )
-                StatBox(
-                    count = liveAttendance?.absentCount,
-                    subtitle = null,
-                    label = "Absent",
-                    color = AbsentFg,
-                    modifier = Modifier.weight(1f)
-                )
-                StatBox(
-                    count = liveAttendance?.lateCount,
-                    subtitle = null,
-                    label = "Late",
-                    color = LateFg,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(spacing.lg))
-
             // Action buttons: Camera Feed (primary) + End Class (secondary) + Settings gear
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -505,50 +468,6 @@ private fun ActiveSessionHeroCard(
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun StatBox(
-    count: Int?,
-    subtitle: String?,
-    label: String,
-    color: Color,
-    modifier: Modifier = Modifier
-) {
-    val spacing = IAMSThemeTokens.spacing
-    val radius = IAMSThemeTokens.radius
-
-    Surface(
-        modifier = modifier,
-        shape = radius.smShape,
-        color = Secondary,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = spacing.md, vertical = spacing.md),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = count?.toString() ?: "\u2014",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = color
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodySmall,
-                color = TextSecondary
-            )
-            // Always render subtitle line for consistent height
-            Text(
-                text = subtitle ?: "",
-                style = MaterialTheme.typography.bodySmall,
-                color = TextTertiary
-            )
         }
     }
 }

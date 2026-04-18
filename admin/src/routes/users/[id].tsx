@@ -17,6 +17,7 @@ import {
   Mail,
   Calendar,
   IdCard,
+  BookOpen,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -48,6 +49,7 @@ import {
   useDeactivateUser,
   useReactivateUser,
   useDeregisterFace,
+  useSchedules,
 } from '@/hooks/use-queries'
 import type { UserRole, AttendanceRecord } from '@/types'
 import { formatStatus } from '@/types/attendance'
@@ -93,6 +95,12 @@ export default function UserDetailPage() {
     id!,
     !!user && user.role === 'student',
   )
+
+  const { data: allSchedules = [], isLoading: schedulesLoading } = useSchedules()
+  const facultySchedules =
+    user?.role === 'faculty'
+      ? allSchedules.filter((s) => s.faculty_id === user.id)
+      : []
 
   const [editOpen, setEditOpen] = useState(false)
   const [deactivateOpen, setDeactivateOpen] = useState(false)
@@ -399,6 +407,52 @@ export default function UserDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      {user.role === 'faculty' && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <BookOpen className="h-5 w-5" />
+              Handled Schedules ({facultySchedules.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {schedulesLoading ? (
+              <Skeleton className="h-24 w-full" />
+            ) : facultySchedules.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No schedules assigned to this faculty.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {facultySchedules.map((s) => (
+                  <div
+                    key={s.id}
+                    className="flex cursor-pointer items-center justify-between rounded-md border px-4 py-3 hover:bg-accent"
+                    onClick={() => navigate(`/schedules/${s.id}`)}
+                  >
+                    <div>
+                      <p className="text-sm font-medium">
+                        {s.subject_code} - {s.subject_name}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][s.day_of_week]}{' '}
+                        {s.start_time?.slice(0, 5)} - {s.end_time?.slice(0, 5)}
+                        {s.room?.name ? ` · ${s.room.name}` : ''}
+                      </p>
+                    </div>
+                    {!s.is_active && (
+                      <Badge variant="outline" className="ml-2">
+                        Inactive
+                      </Badge>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {user.role === 'student' && (
         <div>

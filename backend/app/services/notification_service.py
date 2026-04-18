@@ -10,7 +10,7 @@ coordinates three delivery channels:
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -35,6 +35,7 @@ async def notify(
     send_email: bool = False,
     email_template: str | None = None,
     email_context: dict | None = None,
+    dedup_window_seconds: int = 0,
 ):
     """
     Send a notification through all applicable channels.
@@ -53,7 +54,35 @@ async def notify(
         send_email: Whether this trigger can produce an email.
         email_template: Template name for ``EmailService`` (e.g. ``check_in``).
         email_context: Template variables dict.
+        dedup_window_seconds: If >0, skip delivery (DB + WS + email) when a
+            notification of the same ``notification_type`` (and
+            ``reference_id`` if provided) already exists for this user within
+            the last N seconds. Prevents duplicate toasts from restart /
+            self-heal cycles.
     """
+
+    repo = NotificationRepository(db)
+
+    # ── 0. Dedup — short-circuit repeats of the same event ───────
+    if dedup_window_seconds > 0:
+        try:
+            if repo.exists_recent(
+                user_id=user_id,
+                notification_type=notification_type,
+                within_seconds=dedup_window_seconds,
+                reference_id=reference_id,
+            ):
+                logger.debug(
+                    "notify(): deduped %s for user=%s ref=%s within %ss",
+                    notification_type,
+                    user_id,
+                    reference_id,
+                    dedup_window_seconds,
+                )
+                return
+        except Exception:
+            # Dedup check is best-effort — never block delivery on it.
+            logger.exception("notify(): dedup check failed, falling through")
 
     # ── 1. Check user preference ─────────────────────────────────
     if preference_key:
@@ -64,7 +93,6 @@ async def notify(
 
     # ── 2. Create DB row (always) ────────────────────────────────
     try:
-        repo = NotificationRepository(db)
         repo.create(
             {
                 "user_id": user_id,
@@ -92,7 +120,7 @@ async def notify(
                 "message": message,
                 "reference_id": reference_id,
                 "reference_type": reference_type,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )
     except Exception:

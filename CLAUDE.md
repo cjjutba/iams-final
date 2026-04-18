@@ -85,17 +85,18 @@ This wipes ALL data and reseeds from scratch: ~180 student records, 5 faculty ac
 all password `password123`), admin (`admin@admin.com` / `123`), rooms, schedules,
 and system settings.
 
-**Test schedules — REMOVE BEFORE PRODUCTION.** The seed script generates two
-synthetic schedule sets used only for development:
+**Test schedules — REMOVE BEFORE PRODUCTION.** The seed script generates one
+synthetic schedule set used only for development:
 
-- `TEST 226` — EB226 always-on (00:00–23:59 every day) for raw video / hybrid
-  overlay debugging.
-- `EB227-HHMM` — 336 rolling 30-min EB227 sessions (48/day × 7 days) with a
-  per-schedule `early_leave_timeout_minutes=2` so we can exercise
-  PRESENT / LATE / ABSENT / EARLY_LEAVE transitions any time of day.
+- `EB226-HHMM` / `EB227-HHMM` — 672 rolling 30-min sessions total
+  (48 slots/day × 7 days × 2 rooms) with a per-schedule
+  `early_leave_timeout_minutes=2`. Exercises the full
+  PRESENT / LATE / ABSENT / EARLY_LEAVE state machine on both rooms any time
+  of day. Previously EB226 was a single 24/7 "TEST 226" row, which made the
+  grace window and early-leave threshold produce meaningless numbers.
 
-For production, delete `_seed_rolling_eb227()` and the `TEST 226` row from
-`SCHEDULE_DEFS` in [`backend/scripts/seed_data.py`](backend/scripts/seed_data.py).
+For production, delete `_seed_rolling_sessions()` and the `ROLLING_ROOMS`
+list from [`backend/scripts/seed_data.py`](backend/scripts/seed_data.py).
 The real schedules are the 15 entries already in `SCHEDULE_DEFS` (Elumba /
 Gahisan / Lasco), sourced from
 [`docs/data/ListofStudents_All-Thesis-purposes-updated1.md`](docs/data/ListofStudents_All-Thesis-purposes-updated1.md)

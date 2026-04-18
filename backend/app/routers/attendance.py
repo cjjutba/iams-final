@@ -407,11 +407,23 @@ def get_schedule_attendance_summary(
 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
 
-    # Default date range
-    if not start_date:
-        start_date = datetime.now().date().replace(month=8, day=1)  # Default to August 1
+    # Default date range: current semester to today.
+    # If the caller omits start_date, we default to the semester start so the
+    # summary covers "this semester so far" regardless of what month it's run
+    # in. Previously this hard-coded August 1, which produced a future start
+    # date (and therefore an empty result) any time it was called before
+    # August — e.g. during the 2nd semester in April.
     if not end_date:
         end_date = datetime.now().date()
+    if not start_date:
+        # 1st sem ≈ Aug–Dec, 2nd sem ≈ Jan–May, midyear ≈ Jun–Jul.
+        today = end_date
+        if today.month >= 8:
+            start_date = today.replace(month=8, day=1)
+        elif today.month >= 1 and today.month <= 5:
+            start_date = today.replace(month=1, day=1)
+        else:
+            start_date = today.replace(month=6, day=1)
 
     # Get all records in range
     records = attendance_repo.get_by_schedule_date_range(schedule_id, start_date, end_date)

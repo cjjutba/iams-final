@@ -339,6 +339,13 @@ async def lifespan(app: FastAPI):
                                     f"{subject_code} session has started.",
                                     "session_start",
                                     toast_type="info",
+                                    reference_id=str(sid),
+                                    reference_type="schedule",
+                                    # Suppress repeat "Session Started" for the
+                                    # same schedule within 5 min — covers
+                                    # pipeline self-heal restarts and back-to-back
+                                    # 30-min rolling test sessions re-firing.
+                                    dedup_window_seconds=300,
                                 )
                             if student_ids:
                                 await _notify_many(
@@ -348,6 +355,9 @@ async def lifespan(app: FastAPI):
                                     f"{subject_code} is now in session.",
                                     "session_start",
                                     toast_type="info",
+                                    reference_id=str(sid),
+                                    reference_type="schedule",
+                                    dedup_window_seconds=300,
                                 )
                         finally:
                             db.close()

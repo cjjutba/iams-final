@@ -8,7 +8,7 @@ but never propagated so the scheduler stays healthy.
 """
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import func
 
@@ -16,6 +16,12 @@ from app.config import settings
 from app.database import SessionLocal
 
 logger = logging.getLogger(__name__)
+
+
+def _utcnow() -> datetime:
+    """Timezone-aware UTC now — used when comparing against
+    ``notifications.created_at`` which is now a TIMESTAMPTZ column."""
+    return datetime.now(timezone.utc)
 
 
 # =====================================================================
@@ -369,7 +375,7 @@ async def run_low_attendance_check() -> None:
     try:
         today = date.today()
         window_start = today - timedelta(days=settings.LOW_ATTENDANCE_CHECK_WINDOW_DAYS)
-        renotify_cutoff = datetime.now() - timedelta(days=settings.LOW_ATTENDANCE_RENOTIFY_DAYS)
+        renotify_cutoff = _utcnow() - timedelta(days=settings.LOW_ATTENDANCE_RENOTIFY_DAYS)
 
         # Active schedules with enrollments
         schedules = db.query(Schedule).filter(Schedule.is_active).all()
@@ -681,7 +687,7 @@ async def run_notification_cleanup() -> None:
 
     db = SessionLocal()
     try:
-        cutoff = datetime.now() - timedelta(days=settings.NOTIFICATION_RETENTION_DAYS)
+        cutoff = _utcnow() - timedelta(days=settings.NOTIFICATION_RETENTION_DAYS)
 
         count = (
             db.query(Notification)

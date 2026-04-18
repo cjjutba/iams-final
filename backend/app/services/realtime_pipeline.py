@@ -449,6 +449,9 @@ class SessionPipeline:
                         },
                         reference_id=attendance_id,
                         reference_type="early_leave",
+                        # Dedup per (user, attendance row): guards against
+                        # transient pipeline re-detections firing the alert twice.
+                        dedup_window_seconds=300,
                     )
 
                 # Student notification
@@ -472,6 +475,7 @@ class SessionPipeline:
                         },
                         reference_id=attendance_id,
                         reference_type="early_leave",
+                        dedup_window_seconds=300,
                     )
 
             elif event_type == "early_leave_return":

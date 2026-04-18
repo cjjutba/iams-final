@@ -5,13 +5,19 @@ Represents in-app notifications for users (attendance alerts, system messages, e
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from app.database import Base
+
+
+def _utcnow() -> datetime:
+    """Timezone-aware UTC now. Used as default for notification timestamps so
+    the column ALWAYS stores an explicit offset — no naive-vs-aware ambiguity."""
+    return datetime.now(timezone.utc)
 
 
 class Notification(Base):
@@ -48,14 +54,15 @@ class Notification(Base):
 
     # Read status
     read = Column(Boolean, default=False, nullable=False)
-    read_at = Column(DateTime, nullable=True)
+    read_at = Column(DateTime(timezone=True), nullable=True)
 
     # Optional reference to related entity
     reference_id = Column(String(255), nullable=True)
     reference_type = Column(String(50), nullable=True)
 
-    # Timestamps
-    created_at = Column(DateTime, default=lambda: datetime.now(), nullable=False, index=True)
+    # Timestamps — stored with timezone so mobile clients can parse them as
+    # true UTC instants regardless of what TZ the backend host runs in.
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False, index=True)
 
     # Relationships
     user = relationship("User", foreign_keys=[user_id], back_populates="notifications")
