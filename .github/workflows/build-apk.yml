@@ -16,18 +16,25 @@ on:
     paths:
       - 'android/**'
       - '.github/workflows/build-apk.yml'
+  pull_request:
+    branches: [main]
+    # No paths filter — PRs always run this check so branch protection can
+    # require it without docs-only PRs getting stuck waiting on a check that
+    # would otherwise be skipped.
   workflow_dispatch:
 
-# Avoid two builds racing to publish the same release tag if commits land quickly.
+# Avoid two builds racing to publish the same release tag on rapid pushes;
+# for PRs, cancel stale runs when new commits arrive.
 concurrency:
   group: build-apk-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: write  # needed to create releases and upload assets
 
 jobs:
   build:
+    name: Build APK
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -129,7 +136,20 @@ jobs:
           BUILD_TOOLS="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1)"
           "$BUILD_TOOLS/apksigner" verify --verbose release/iams.apk
 
+      - name: Upload APK as workflow artifact
+        # Lets PR reviewers download and test the candidate APK from the run
+        # summary page before merging.
+        uses: actions/upload-artifact@v4
+        with:
+          name: iams-apk-${{ steps.version.outputs.versionName }}
+          path: release/iams.apk
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Publish GitHub Release
+        # Only publish when merged to main — PR builds and manual reruns from
+        # other branches just verify the build, they don't ship to users.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
