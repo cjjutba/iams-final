@@ -161,8 +161,10 @@ cmd_local() {
   echo ""
   echo "Next steps:"
   echo "  1. Start local Docker stack:  ./scripts/dev-up.sh"
-  echo "  2. Rebuild Android APK:        cd android && ./gradlew installDebug"
+  echo "  2. Rebuild Android APK:        cd android && ./gradlew clean installDebug"
+  echo "     (use 'clean' — plain installDebug can reuse stale BuildConfig, see CLAUDE.md)"
   echo "  3. Run admin dev server:       cd admin && npm run dev"
+  echo "     → Open http://localhost:5173 (NOT https://iams-thesis.vercel.app — Vercel always hits VPS)"
   echo "  4. Ensure physical Android device is on the same WiFi as this Mac (${lan_ip%.*}.x)."
 
   warn_local_overrides
@@ -197,7 +199,8 @@ cmd_production() {
   echo ""
   echo "Next steps:"
   echo "  1. (Optional) Stop local Docker:  ./scripts/dev-down.sh"
-  echo "  2. Rebuild Android APK:            cd android && ./gradlew installDebug"
+  echo "  2. Rebuild Android APK:            cd android && ./gradlew clean installDebug"
+  echo "     (use 'clean' — plain installDebug can reuse stale BuildConfig, see CLAUDE.md)"
   echo "  3. Admin is live at:               https://iams-thesis.vercel.app"
   echo "  4. Verify API:                     curl http://${VPS_IP}/api/v1/health"
 

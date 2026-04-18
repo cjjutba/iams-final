@@ -106,6 +106,14 @@ fun FacultyHomeScreen(
     val currentClass = viewModel.getCurrentClass()
     val sessionActive = currentClass?.let { viewModel.isSessionActive(it.id) } ?: false
     val otherSchedules = uiState.todaySchedules.filter { it.id != currentClass?.id }
+    // Split today's other classes by time-state so the home page leads with
+    // what's coming up next and pushes already-finished sessions below it.
+    val upcomingSchedules = otherSchedules
+        .filter { viewModel.getScheduleTimeState(it) != ScheduleTimeState.COMPLETED }
+        .sortedBy { it.startTime }
+    val completedSchedules = otherSchedules
+        .filter { viewModel.getScheduleTimeState(it) == ScheduleTimeState.COMPLETED }
+        .sortedByDescending { it.startTime }
 
     var showEndDialog by remember { mutableStateOf(false) }
     var showEarlyLeaveConfig by remember { mutableStateOf(false) }
@@ -261,36 +269,29 @@ fun FacultyHomeScreen(
                     }
                 }
 
-                // Section title: "Today's Classes"
-                item {
-                    Spacer(modifier = Modifier.height(spacing.xxl))
-                    Text(
-                        text = if (uiState.initialLoadDone)
-                            "Today's Classes (${uiState.todaySchedules.size})"
-                        else
-                            "Today's Classes",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = TextPrimary,
-                        modifier = Modifier.padding(
-                            horizontal = spacing.screenPadding,
-                            vertical = 0.dp
-                        )
-                    )
-                    Spacer(modifier = Modifier.height(spacing.lg))
-                }
-
-                // Skeleton loaders for schedule list
+                // Skeleton loaders for schedule list (initial load)
                 if (!uiState.initialLoadDone) {
+                    item {
+                        Spacer(modifier = Modifier.height(spacing.xxl))
+                        Text(
+                            text = "Upcoming",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TextPrimary,
+                            modifier = Modifier.padding(horizontal = spacing.screenPadding)
+                        )
+                        Spacer(modifier = Modifier.height(spacing.lg))
+                    }
                     items(2) {
                         CardSkeleton(modifier = Modifier.padding(horizontal = spacing.screenPadding))
                         Spacer(modifier = Modifier.height(spacing.sm))
                     }
                 }
 
-                // Today's schedule cards or empty state
+                // Empty state — no classes scheduled today at all
                 if (uiState.initialLoadDone && uiState.todaySchedules.isEmpty()) {
                     item {
+                        Spacer(modifier = Modifier.height(spacing.xxl))
                         EmptyScheduleState(
                             totalSchedules = uiState.allSchedules.size,
                             modifier = Modifier.padding(horizontal = spacing.screenPadding)
@@ -298,6 +299,7 @@ fun FacultyHomeScreen(
                     }
                 } else if (uiState.initialLoadDone && otherSchedules.isEmpty() && currentClass != null) {
                     item {
+                        Spacer(modifier = Modifier.height(spacing.xxl))
                         Text(
                             text = "This is your only class today.",
                             style = MaterialTheme.typography.bodyMedium,
@@ -308,8 +310,50 @@ fun FacultyHomeScreen(
                                 .padding(vertical = spacing.xl)
                         )
                     }
-                } else if (uiState.initialLoadDone) {
-                    items(otherSchedules) { schedule ->
+                }
+
+                // ── Upcoming section ──
+                if (uiState.initialLoadDone && upcomingSchedules.isNotEmpty()) {
+                    item {
+                        Spacer(modifier = Modifier.height(spacing.xxl))
+                        Text(
+                            text = "Upcoming (${upcomingSchedules.size})",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TextPrimary,
+                            modifier = Modifier.padding(horizontal = spacing.screenPadding)
+                        )
+                        Spacer(modifier = Modifier.height(spacing.lg))
+                    }
+                    items(upcomingSchedules, key = { "upcoming-${it.id}" }) { schedule ->
+                        TodayScheduleCard(
+                            schedule = schedule,
+                            timeState = viewModel.getScheduleTimeState(schedule),
+                            minutesUntilStart = viewModel.getMinutesUntilStart(schedule),
+                            formatTime = { viewModel.formatTime(it) },
+                            modifier = Modifier.padding(
+                                horizontal = spacing.screenPadding,
+                                vertical = 0.dp
+                            )
+                        )
+                        Spacer(modifier = Modifier.height(spacing.sm))
+                    }
+                }
+
+                // ── Completed section ──
+                if (uiState.initialLoadDone && completedSchedules.isNotEmpty()) {
+                    item {
+                        Spacer(modifier = Modifier.height(spacing.xxl))
+                        Text(
+                            text = "Completed (${completedSchedules.size})",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TextPrimary,
+                            modifier = Modifier.padding(horizontal = spacing.screenPadding)
+                        )
+                        Spacer(modifier = Modifier.height(spacing.lg))
+                    }
+                    items(completedSchedules, key = { "completed-${it.id}" }) { schedule ->
                         TodayScheduleCard(
                             schedule = schedule,
                             timeState = viewModel.getScheduleTimeState(schedule),
@@ -330,7 +374,7 @@ fun FacultyHomeScreen(
                         Spacer(modifier = Modifier.height(spacing.lg))
                         DaySummaryRow(
                             totalClasses = uiState.todaySchedules.size,
-                            nextUpcoming = otherSchedules.firstOrNull {
+                            nextUpcoming = upcomingSchedules.firstOrNull {
                                 viewModel.getScheduleTimeState(it) == ScheduleTimeState.UPCOMING
                             },
                             formatTime = { viewModel.formatTime(it) },
