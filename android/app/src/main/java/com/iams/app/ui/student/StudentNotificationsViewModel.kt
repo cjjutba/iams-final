@@ -6,9 +6,11 @@ import com.iams.app.data.api.ApiService
 import com.iams.app.data.api.NotificationService
 import com.iams.app.data.model.NotificationResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -32,6 +34,8 @@ class StudentNotificationsViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(NotificationsUiState())
     val uiState: StateFlow<NotificationsUiState> = _uiState.asStateFlow()
 
+    private var wsJob: Job? = null
+
     val unreadCount: Int
         get() = _uiState.value.notifications.count { !it.read }
 
@@ -40,6 +44,27 @@ class StudentNotificationsViewModel @Inject constructor(
 
     init {
         loadNotifications()
+        subscribeToLiveEvents()
+    }
+
+    /**
+     * Listen for real-time notification events on the shared WebSocket and
+     * silently re-fetch the list so the new row (with its real DB id +
+     * created_at) shows up at the top without a manual refresh.
+     */
+    private fun subscribeToLiveEvents() {
+        val events = notificationService.events ?: return
+        wsJob?.cancel()
+        wsJob = viewModelScope.launch {
+            events.collectLatest {
+                loadNotifications(silent = true)
+            }
+        }
+    }
+
+    override fun onCleared() {
+        wsJob?.cancel()
+        super.onCleared()
     }
 
     fun loadNotifications(silent: Boolean = false) {

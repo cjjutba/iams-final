@@ -5,12 +5,17 @@ Data access layer for Notification operations.
 """
 
 import uuid as _uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
 from app.models.notification import Notification
 from app.utils.exceptions import NotFoundError
+
+
+def _utcnow() -> datetime:
+    """Timezone-aware UTC now — mirrors the model default."""
+    return datetime.now(timezone.utc)
 
 
 def _to_uuid(value: str) -> _uuid.UUID:
@@ -76,6 +81,37 @@ class NotificationRepository:
         self.db.refresh(notification)
         return notification
 
+    def exists_recent(
+        self,
+        user_id: str,
+        notification_type: str,
+        within_seconds: int,
+        reference_id: str | None = None,
+    ) -> bool:
+        """Return True if a matching notification was created within the window.
+
+        Used by ``notification_service.notify()`` to throttle duplicate alerts
+        (e.g. the auto-start scheduler emitting ``Session Started`` for
+        ``TEST 226`` every time the pipeline self-heals).
+
+        Args:
+            user_id: Recipient UUID.
+            notification_type: Type tag to match (e.g. ``session_start``).
+            within_seconds: Lookback window in seconds.
+            reference_id: If provided, must also match on reference_id.
+        """
+        if within_seconds <= 0:
+            return False
+        cutoff = _utcnow() - timedelta(seconds=within_seconds)
+        q = self.db.query(Notification).filter(
+            Notification.user_id == _to_uuid(user_id),
+            Notification.type == notification_type,
+            Notification.created_at >= cutoff,
+        )
+        if reference_id is not None:
+            q = q.filter(Notification.reference_id == reference_id)
+        return self.db.query(q.exists()).scalar() is True
+
     def mark_as_read(self, notification_id: str) -> Notification:
         """
         Mark a notification as read
@@ -94,7 +130,7 @@ class NotificationRepository:
             raise NotFoundError(f"Notification not found: {notification_id}")
 
         notification.read = True
-        notification.read_at = datetime.utcnow()
+        notification.read_at = _utcnow()
         self.db.commit()
         self.db.refresh(notification)
         return notification
@@ -109,7 +145,7 @@ class NotificationRepository:
         Returns:
             Number of notifications updated
         """
-        now = datetime.utcnow()
+        now = _utcnow()
         count = (
             self.db.query(Notification)
             .filter(Notification.user_id == _to_uuid(user_id), Notification.read.is_(False))

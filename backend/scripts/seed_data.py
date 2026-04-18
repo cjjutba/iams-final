@@ -7,7 +7,8 @@ Wipes ALL data and reseeds the database from scratch with:
   - 2 faculty user accounts (faculty.eb226@gmail.com, faculty.eb227@gmail.com)
   - 1 admin account (admin@admin.com / 123)
   - 2 rooms (EB226, EB227)
-  - All class schedules (2 test 24/7 + 15 real courses)
+  - All class schedules (15 real courses + 672 rolling 30-min test sessions
+    on EB226 and EB227 — 48 slots/day × 7 days × 2 rooms)
   - System settings
   - Faculty notifications
 
@@ -54,11 +55,20 @@ MARKDOWN_PATH = (
 SEMESTER = "2nd"
 ACADEMIC_YEAR = "2025-2026"
 
-# Rolling 30-min test sessions on EB227 — lets us exercise the full
-# PRESENT/LATE/ABSENT/EARLY_LEAVE state machine all day long.
-# eb226 stays 24/7 for raw video/overlay debugging.
+# Rolling 30-min test sessions on EB226 + EB227 — lets us exercise the full
+# PRESENT/LATE/ABSENT/EARLY_LEAVE state machine all day long on BOTH rooms.
+# (Previously only EB227 had rolling sessions; EB226 was a single 24/7 row,
+# which produced nonsensical presence scores — see "TEST 226 semantics" note
+# in docs. Both rooms now share identical rollover behaviour.)
 ROLLING_SESSION_MINUTES = 30
 ROLLING_EARLY_LEAVE_TIMEOUT_MIN = 2  # 2 min continuous absence → EARLY_LEAVE
+
+# Rooms that get 336 back-to-back rolling test sessions generated at seed time.
+# (room_name, faculty_email) — order controls seed output order.
+ROLLING_ROOMS = [
+    ("EB226", "faculty.eb226@gmail.com"),
+    ("EB227", "faculty.eb227@gmail.com"),
+]
 
 # ─── Faculty Records (faculty_records table) ─────────────────────────────────
 
@@ -96,11 +106,10 @@ ROOM_DEFS = [
 # day_of_week: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
 
 SCHEDULE_DEFS = [
-    # ── Test schedule: EB226 always-on (raw video / overlay debugging) ────
-    ("TEST 226", "IAMS Test EB226 (24/7)", 4, "BSCPE", [0, 1, 2, 3, 4, 5, 6], time(0, 0), time(23, 59), "EB226", "faculty.eb226@gmail.com"),
-
-    # NOTE: EB227 rolling sessions are generated in _seed_schedules() below.
-    # 48 back-to-back 30-min sessions × 7 days = 336 rows.
+    # NOTE: Rolling 30-min sessions for EB226 AND EB227 are generated in
+    # _seed_schedules() below (48 back-to-back slots × 7 days × 2 rooms = 672
+    # rows). This replaces the old "TEST 226" 24/7 row, which made the grace
+    # window and 3-miss early-leave threshold produce meaningless numbers.
 
     # ── Elumba ────────────────────────────────────────────────────────
     ("CpE 121",  "WEB Technologies (LEC)",              2, "BSCPE", [1, 3], time(7, 0),   time(8, 30),  "EB227", "ryan.elumba@jrmsu.edu.ph"),
@@ -138,84 +147,12 @@ SYSTEM_SETTINGS = [
 ]
 
 # ─── Notification Templates ──────────────────────────────────────────────────
-
-NOTIFICATION_DEFS = [
-    {
-        "title": "Welcome to IAMS",
-        "message": "Your faculty account has been set up. Students will appear in your class roster as they register through the mobile app.",
-        "type": "system",
-        "read": False,
-        "created_at": datetime(2026, 2, 10, 8, 0),
-    },
-    {
-        "title": "Classes Configured",
-        "message": "Your class schedules have been configured for rooms EB226 and EB227 in the Engineering Building.",
-        "type": "system",
-        "read": True,
-        "read_at": datetime(2026, 2, 10, 9, 0),
-        "created_at": datetime(2026, 2, 10, 8, 30),
-    },
-    {
-        "title": "System Ready",
-        "message": "The IAMS attendance monitoring system is ready. The camera will automatically detect and track student attendance during class hours.",
-        "type": "system",
-        "read": False,
-        "created_at": datetime(2026, 2, 11, 7, 0),
-    },
-    {
-        "title": "Student Registration Open",
-        "message": "Students can now register via the IAMS mobile app using their university Student ID. Registered students will be auto-enrolled in your classes based on their course and year level.",
-        "type": "system",
-        "read": False,
-        "created_at": datetime(2026, 2, 11, 8, 0),
-    },
-    {
-        "title": "Camera Setup Reminder",
-        "message": "Please ensure the camera is positioned correctly and connected to the local network. Contact the admin if you need assistance.",
-        "type": "alert",
-        "read": False,
-        "created_at": datetime(2026, 2, 12, 7, 0),
-    },
-]
-
-ADMIN_NOTIFICATION_DEFS = [
-    {
-        "title": "Welcome to IAMS Admin",
-        "message": "Your admin account is set up. Manage users, rooms, schedules, and monitor system status from this dashboard.",
-        "type": "system",
-        "read": False,
-        "created_at": datetime(2026, 2, 10, 8, 0),
-    },
-    {
-        "title": "System Configuration Complete",
-        "message": "IAMS has been configured with 2 rooms (EB226, EB227), faculty accounts, and class schedules for the current semester.",
-        "type": "system",
-        "read": True,
-        "read_at": datetime(2026, 2, 10, 9, 0),
-        "created_at": datetime(2026, 2, 10, 8, 30),
-    },
-    {
-        "title": "Attendance System Active",
-        "message": "The facial recognition attendance system is online. Cameras in EB226 and EB227 are connected and scanning.",
-        "type": "system",
-        "read": False,
-        "created_at": datetime(2026, 2, 11, 7, 0),
-    },
-    {
-        "title": "Student Registration Open",
-        "message": "Students can now self-register via the IAMS mobile app. Monitor registration progress from the Users page.",
-        "type": "system",
-        "read": False,
-        "created_at": datetime(2026, 2, 11, 8, 0),
-    },
-    {
-        "title": "Weekly Digest Available",
-        "message": "Your first weekly attendance summary is ready. Review overall attendance rates and flagged students from the Analytics page.",
-        "type": "alert",
-        "read": False,
-        "created_at": datetime(2026, 2, 17, 7, 0),
-    },
-]
+# Notifications are generated at runtime by the system (session start, early
+# leave, digests, etc.). The seed script no longer inserts fake in-app
+# notifications — those polluted the inbox and made relative timestamps
+# ("Just now" vs. "Feb 11, 2026") misleading because they weren't real events.
+NOTIFICATION_DEFS: list[dict] = []
+ADMIN_NOTIFICATION_DEFS: list[dict] = []
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -581,27 +518,39 @@ def _seed_schedules(db, faculty_map: dict[str, User], room_map: dict[str, Room])
                   f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')} "
                   f"in {room_name} [{fac_short}]")
 
-    # ── Rolling 30-min EB227 sessions (Mon–Sun, 48/day) ────────────────
-    rolling_total = _seed_rolling_eb227(db, faculty_map, room_map)
-    total += rolling_total
-    print(f"  Generated {rolling_total} rolling 30-min EB227 sessions "
-          f"({rolling_total // 7}/day × 7 days, 2-min early-leave timeout)")
+    # ── Rolling 30-min sessions for EB226 + EB227 (Mon–Sun, 48/day) ────
+    for room_name, faculty_email in ROLLING_ROOMS:
+        rolling_total = _seed_rolling_sessions(
+            db, faculty_map, room_map, room_name, faculty_email
+        )
+        total += rolling_total
+        print(f"  Generated {rolling_total} rolling 30-min {room_name} sessions "
+              f"({rolling_total // 7}/day × 7 days, 2-min early-leave timeout)")
 
     db.flush()
     return total
 
 
-def _seed_rolling_eb227(db, faculty_map: dict[str, User], room_map: dict[str, Room]) -> int:
-    """Generate back-to-back 30-min EB227 sessions covering 24h × 7 days.
+def _seed_rolling_sessions(
+    db,
+    faculty_map: dict[str, User],
+    room_map: dict[str, Room],
+    room_name: str,
+    faculty_email: str,
+) -> int:
+    """Generate back-to-back 30-min test sessions covering 24h × 7 days for one room.
 
     Lets us exercise PRESENT/LATE/ABSENT/EARLY_LEAVE transitions any time of day.
     With grace_period_minutes=5 and session=30min:
       - first 5 min of session = PRESENT window
-      - 5–30 min                = LATE window
+      - 5–30 min               = LATE window
       - 2 min continuous absence after check-in → EARLY_LEAVE
+
+    Subject codes are prefixed with the room name (e.g. "EB226-0900") so both
+    rooms can coexist without conflicting schedule identifiers.
     """
-    faculty = faculty_map["faculty.eb227@gmail.com"]
-    room = room_map["EB227"]
+    faculty = faculty_map[faculty_email]
+    room = room_map[room_name]
 
     slots_per_day = (24 * 60) // ROLLING_SESSION_MINUTES  # 48
     count = 0
@@ -618,8 +567,11 @@ def _seed_rolling_eb227(db, faculty_map: dict[str, User], room_map: dict[str, Ro
                 end_t = time(end_minutes // 60, end_minutes % 60)
 
             db.add(Schedule(
-                subject_code=f"EB227-{start_t.strftime('%H%M')}",
-                subject_name=f"IAMS Test EB227 Rolling ({start_t.strftime('%H:%M')}-{end_t.strftime('%H:%M')})",
+                subject_code=f"{room_name}-{start_t.strftime('%H%M')}",
+                subject_name=(
+                    f"IAMS Test {room_name} Rolling "
+                    f"({start_t.strftime('%H:%M')}-{end_t.strftime('%H:%M')})"
+                ),
                 faculty_id=faculty.id,
                 room_id=room.id,
                 day_of_week=day_idx,
@@ -646,7 +598,13 @@ def _seed_system_settings(db) -> None:
 
 
 def _seed_notifications(db, faculty_map: dict[str, User], admin: User) -> None:
-    """Seed faculty + admin notifications."""
+    """Seed faculty + admin notifications.
+
+    Currently no-op — notifications are emitted by the running backend
+    (session start, early leave, digests, …) not by the seed. Kept as a
+    pass-through hook so dev fixtures can be re-added here without touching
+    the main seed() flow.
+    """
     print("\n[8/8] Creating notifications...")
     faculty = faculty_map["faculty.eb226@gmail.com"]
     for notif in NOTIFICATION_DEFS:
@@ -655,9 +613,12 @@ def _seed_notifications(db, faculty_map: dict[str, User], admin: User) -> None:
         db.add(Notification(user_id=admin.id, **notif))
     db.flush()
     total = len(NOTIFICATION_DEFS) + len(ADMIN_NOTIFICATION_DEFS)
-    print(f"  Created {len(NOTIFICATION_DEFS)} notifications for {faculty.email}")
-    print(f"  Created {len(ADMIN_NOTIFICATION_DEFS)} notifications for admin@admin.com")
-    print(f"  Total: {total}")
+    if total == 0:
+        print("  (skipped — runtime-only; no dev fixtures configured)")
+    else:
+        print(f"  Created {len(NOTIFICATION_DEFS)} notifications for {faculty.email}")
+        print(f"  Created {len(ADMIN_NOTIFICATION_DEFS)} notifications for admin@admin.com")
+        print(f"  Total: {total}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
