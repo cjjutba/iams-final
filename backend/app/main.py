@@ -343,8 +343,8 @@ async def lifespan(app: FastAPI):
                                     reference_type="schedule",
                                     # Suppress repeat "Session Started" for the
                                     # same schedule within 5 min — covers
-                                    # pipeline self-heal restarts and the
-                                    # 24/7 TEST 226 dev schedule re-firing.
+                                    # pipeline self-heal restarts and back-to-back
+                                    # 30-min rolling test sessions re-firing.
                                     dedup_window_seconds=300,
                                 )
                             if student_ids:
