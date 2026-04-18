@@ -119,6 +119,28 @@ bash deploy/deploy.sh
 ```
 Only deploy when local testing is complete and you're ready for production.
 
+## First-time Setup (fresh clone on a new Mac)
+
+A fresh `git clone` does NOT include any of the `.env` files (they're gitignored to keep machine-specific values and secrets out of shared history). Before running anything, bootstrap them from the committed `.example` files:
+
+```bash
+# From project root, on a brand-new clone:
+cp backend/.env.example            backend/.env               # local backend
+cp backend/.env.production.example backend/.env.production    # only if you deploy from this machine
+cp admin/.env.example              admin/.env                 # local admin dev (contains <YOUR_LAN_IP> placeholder)
+cp admin/.env.production.example   admin/.env.production      # admin production build
+cp edge/.env.example               edge/.env                  # only if you run the RPi edge locally
+```
+
+`android/local.properties` is created automatically the first time you open the project in Android Studio (for `sdk.dir`). The IAMS_BACKEND_HOST override is added by the "switch to local" protocol below.
+
+Once the placeholder `.env` files exist, run either:
+
+- **"switch to local"** — Claude fills in this Mac's LAN IP everywhere. See the §Switch to Local steps.
+- **"switch to production"** — Claude verifies production values and runs `bash deploy/deploy.sh`. See §Switch to Production.
+
+If a required `.example` file is missing, stop and report — the fix is to commit a new example in this project, not to guess values.
+
 ## Switching Environments (Local ↔ Production)
 
 There is **one branch** (`feat/cloud-based`). The same code targets both environments; the switch is purely a config-file swap driven by the commands below. Do not create environment-specific branches.
@@ -172,15 +194,19 @@ IAMS_MEDIAMTX_WEBRTC_PORT=8889
 ```
 
 **Step 3 — Write `admin/.env`.**
+If the file does not exist yet (fresh clone), bootstrap it first:
+```bash
+[ -f admin/.env ] || cp admin/.env.example admin/.env
+```
+Then substitute the two URL lines (leave the Supabase keys below untouched):
 ```env
 VITE_API_URL=http://<IP from Step 1>:8000/api/v1
 VITE_WS_URL=ws://<IP from Step 1>:8000
 
-# Supabase stays unchanged (used by email confirmation only)
-VITE_SUPABASE_URL=<copy from existing .env>
-VITE_SUPABASE_ANON_KEY=<copy from existing .env>
+# Supabase keys come from admin/.env.example — already committed, never change
+VITE_SUPABASE_URL=https://fspnxqmewtxmuyqqwwni.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 ```
-Preserve Supabase keys by reading the current file first.
 
 **Step 4 — Start Docker.**
 ```bash
