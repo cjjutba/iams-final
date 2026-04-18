@@ -48,7 +48,6 @@ import com.iams.app.ui.components.IAMSButton
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.Primary
 import com.iams.app.ui.theme.TextSecondary
-import com.iams.app.ui.theme.TextTertiary
 
 private enum class Phase { INTRO, SCANNING }
 
@@ -100,7 +99,9 @@ fun RegisterStep3Screen(
 
     when (phase) {
         // ═══════════════════════════════════════════════════════════
-        // INTRO — "Set up Face ID" screen matching RN design
+        // INTRO — face enrollment landing screen. No skip affordance:
+        // attendance recognition only works when every student has a
+        // FAISS embedding on file, so enrollment is mandatory here.
         // ═══════════════════════════════════════════════════════════
         Phase.INTRO -> {
             FaceRegistrationIntro(
@@ -112,14 +113,6 @@ fun RegisterStep3Screen(
                         permissionLauncher.launch(Manifest.permission.CAMERA)
                     }
                 },
-                onSkip = if (isStandalone) {
-                    { navController.popBackStack() }
-                } else {
-                    {
-                        viewModel.clearCapturedFaces()
-                        navController.navigate(Routes.REGISTER_REVIEW_INNER)
-                    }
-                }
             )
         }
 
@@ -149,13 +142,14 @@ fun RegisterStep3Screen(
 }
 
 // ── Intro Screen ─────────────────────────────────────────────────
-// Matches the React Native "Set up Face ID" intro phase
+// Landing phase for face enrollment. Students must proceed via "Get
+// started" — no skip path is offered because classroom attendance
+// recognition requires a registered embedding.
 
 @Composable
 private fun FaceRegistrationIntro(
     onBack: () -> Unit,
     onGetStarted: () -> Unit,
-    onSkip: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -256,7 +250,7 @@ private fun FaceRegistrationIntro(
             Spacer(modifier = Modifier.height(36.dp))
 
             Text(
-                text = "Set up Face ID",
+                text = "Register your face",
                 style = MaterialTheme.typography.headlineLarge,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center,
@@ -266,38 +260,18 @@ private fun FaceRegistrationIntro(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Scan your face to verify your identity",
+                text = "We'll use your face so classroom cameras can recognize you and mark your attendance automatically",
                 style = MaterialTheme.typography.bodyLarge,
                 textAlign = TextAlign.Center,
                 color = TextSecondary
             )
         }
 
-        // Bottom buttons
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            IAMSButton(
-                text = "Get started",
-                onClick = onGetStarted,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Text(
-                text = "Not now",
-                style = MaterialTheme.typography.bodyLarge,
-                color = TextTertiary,
-                modifier = Modifier
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onSkip
-                    )
-                    .padding(vertical = 8.dp)
-            )
-        }
+        // Bottom button — face enrollment is required to continue.
+        IAMSButton(
+            text = "Get started",
+            onClick = onGetStarted,
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
