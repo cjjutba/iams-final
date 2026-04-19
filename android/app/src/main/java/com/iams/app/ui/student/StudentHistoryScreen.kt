@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -215,14 +217,18 @@ fun StudentHistoryScreen(
                 }
             }
 
-            // Status filter pills
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = spacing.lg),
-                horizontalArrangement = Arrangement.spacedBy(spacing.sm)
+            // Status filter pills — horizontally scrollable so long labels
+            // ("Early Leave") never wrap onto two lines and new filters can be
+            // added without re-tuning the layout. Matches the day-pill row on
+            // the Schedule screen for visual consistency (LazyRow + intrinsic
+            // width pills + contentPadding on the edges).
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = spacing.lg),
+                horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                FILTERS.forEach { filter ->
+                items(FILTERS, key = { it.value }) { filter ->
                     FilterPill(
                         label = filter.label,
                         isSelected = filter.value == uiState.selectedFilter,
@@ -315,39 +321,30 @@ private fun HistoryRecordCard(record: AttendanceRecordResponse) {
 
     IAMSCard {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // Date
-            Text(
-                text = formatDateForHistory(record.date),
-                style = MaterialTheme.typography.bodySmall,
-                color = TextTertiary
-            )
-
-            Spacer(modifier = Modifier.height(spacing.xs))
-
-            // Check-in time
-            if (!record.checkInTime.isNullOrBlank()) {
+            // Top row: date on the left, status badge pinned top-right.
+            // Top-aligned so a wrapped date never pushes the badge down.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
                 Text(
-                    text = "Check-in: ${formatTimeForDisplay(record.checkInTime)}",
+                    text = formatDateForHistory(record.date),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextTertiary,
+                    modifier = Modifier.weight(1f),
+                )
+                IAMSBadge(status = status)
+            }
+
+            // Check-in time on its own line — formatted, not raw ISO.
+            if (!record.checkInTime.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(spacing.xs))
+                Text(
+                    text = "Check-in: ${formatCheckInForDisplay(record.checkInTime)}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = TextSecondary
                 )
-                Spacer(modifier = Modifier.height(spacing.sm))
-            }
-
-            // Status badge + presence score
-            Row(
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IAMSBadge(status = status)
-
-                if (record.presenceScore != null) {
-                    Spacer(modifier = Modifier.width(spacing.sm))
-                    Text(
-                        text = "${String.format("%.1f", record.presenceScore)}% present",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary
-                    )
-                }
             }
         }
     }
@@ -394,18 +391,40 @@ private fun formatDateForHistory(date: String): String {
 }
 
 /**
- * Format "HH:MM:SS" or "HH:MM" to "h:mm AM/PM"
+ * Render a backend `check_in_time` string as "h:mm AM/PM" for the card.
+ *
+ * Backend serialises `check_in_time` via Pydantic `datetime.isoformat()`, so
+ * the string can arrive in several shapes:
+ *   - ISO local datetime: "2026-04-19T07:35:05.477623"  (most common)
+ *   - ISO UTC:           "2026-04-19T07:35:05.477623Z"
+ *   - ISO with offset:   "2026-04-19T07:35:05+08:00"
+ *   - Bare time (legacy): "07:35:05" or "07:35"
+ *
+ * The formatter below tries them in that order. Anything it can't parse is
+ * returned unchanged so the UI never renders a blank cell.
  */
-private fun formatTimeForDisplay(time: String): String {
-    return try {
-        val parts = time.split(":")
-        val hours = parts[0].toInt()
-        val minutes = parts[1].toInt()
-        val period = if (hours >= 12) "PM" else "AM"
-        val displayHours = if (hours % 12 == 0) 12 else hours % 12
-        val displayMinutes = minutes.toString().padStart(2, '0')
-        "$displayHours:$displayMinutes $period"
-    } catch (_: Exception) {
-        time
+private fun formatCheckInForDisplay(raw: String): String {
+    val prettyTime = DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault())
+
+    // Case 1: ISO offset/zoned datetime — convert to device local before formatting.
+    runCatching { java.time.OffsetDateTime.parse(raw) }.getOrNull()?.let { odt ->
+        return odt.atZoneSameInstant(java.time.ZoneId.systemDefault())
+            .format(prettyTime)
     }
+
+    // Case 2: ISO local datetime (no tz suffix) — backend stores naive datetimes
+    // that already represent local wall-clock time, so no conversion is applied.
+    runCatching { java.time.LocalDateTime.parse(raw) }.getOrNull()?.let { ldt ->
+        return ldt.toLocalTime().format(prettyTime)
+    }
+
+    // Case 3: Bare "HH:MM:SS" or "HH:MM" string.
+    runCatching {
+        val parts = raw.split(":")
+        val h = parts[0].toInt()
+        val m = parts[1].toInt()
+        return java.time.LocalTime.of(h, m).format(prettyTime)
+    }
+
+    return raw
 }

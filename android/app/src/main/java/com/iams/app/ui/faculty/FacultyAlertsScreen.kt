@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -174,13 +175,18 @@ private fun FilterBar(
 ) {
     val spacing = IAMSThemeTokens.spacing
 
-    Row(
+    // Horizontally scrollable filter row — mirrors the Schedule screen's day
+    // pills so labels like "This Week" never wrap, and adding more filters
+    // later is a no-op on layout.
+    LazyRow(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = spacing.lg, vertical = spacing.lg),
+            .padding(vertical = spacing.lg),
+        contentPadding = PaddingValues(horizontal = spacing.lg),
         horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        AlertFilter.entries.forEach { filter ->
+        items(AlertFilter.entries, key = { it.value }) { filter ->
             val isSelected = filter == selectedFilter
             Box(
                 contentAlignment = Alignment.Center,

@@ -205,26 +205,26 @@ fun HybridTrackOverlay(
                         val boxHeight = bottom - top
                         if (boxWidth < 2f || boxHeight < 2f) continue
 
-                        // Three-state display driven by the backend's per-track status
-                        // and a confidence-gated grace so new or recently-recognised
-                        // faces never flicker RED:
+                        // Three-state display. The backend now emits an explicit
+                        // `recognition_state` field ("recognized" | "warming_up" |
+                        // "unknown") that gates the overlay colour/label. The
+                        // phone-side time grace below is only used as a fallback
+                        // when the backend is an older build that doesn't send
+                        // the field (nullable in TrackInfo for backward compat).
                         //
-                        //   status="recognized" + real name → GREEN  + first name
-                        //   status="unknown" (outside grace) → RED   + "Unknown"
-                        //   everything else (pending, first ~2s of life, or within
-                        //   ~2s of a prior recognition) → ORANGE + "Detecting…"
+                        // Rationale — the time grace alone was only 2 s, which
+                        // expired long before FAISS finished its warm-up retries
+                        // for faces whose cosine hovered near RECOGNITION_THRESHOLD.
+                        // The backend-driven signal holds "warming_up" until
+                        // UNKNOWN_CONFIRM_ATTEMPTS consecutive misses *and* a
+                        // best-seen cosine comfortably below threshold accumulate
+                        // — so registered users never flash red and genuine
+                        // strangers still get flagged within ~10-15 s.
                         //
-                        // Rationale — faces always *start* in "Detecting…" and only
-                        // commit to RED "Unknown" once the backend has repeatedly
-                        // reported status="unknown" long enough to rule out a delayed
-                        // FAISS match. Registered users whose cosine similarity dips
-                        // below RECOGNITION_THRESHOLD mid-session remain ORANGE while
-                        // the backend re-verifies on a cleaner frame, so a known face
-                        // never flashes RED.
-                        //
-                        // Defensive: if status="recognized" but the name is missing or
-                        // literally "Unknown" (stale FAISS vector to a deleted user),
-                        // treat the track as unknown-eligible instead of green+"Unknown".
+                        // Defensive: if status="recognized" but the name is missing
+                        // or literally "Unknown" (stale FAISS vector to a deleted
+                        // user), treat the track as unknown-eligible rather than
+                        // rendering a green box labelled "Unknown".
                         val recognisedName = track.identity.name
                             ?.takeIf {
                                 track.identity.status == "recognized" &&
@@ -244,13 +244,29 @@ fun HybridTrackOverlay(
                         val withinPostRecognizedSticky = state.lastRecognizedAtNs != 0L &&
                             (now - state.lastRecognizedAtNs) < POST_RECOGNIZED_STICKY_NS
 
-                        val (label, boxColor) = when {
-                            recognisedName != null ->
-                                firstNameOnly(recognisedName) to
+                        // Resolve the display verdict. Preference order:
+                        //   1. Backend tri-state (`recognition_state`) when present.
+                        //   2. Legacy time-grace fallback for older backends.
+                        val backendState = track.identity.recognitionState
+                        val verdict = when (backendState) {
+                            "recognized" -> if (recognisedName != null) Verdict.RECOGNIZED else Verdict.WARMING
+                            "warming_up" -> Verdict.WARMING
+                            "unknown" -> Verdict.UNKNOWN
+                            else -> when {
+                                recognisedName != null -> Verdict.RECOGNIZED
+                                backendSaysUnknown && !withinInitialGrace && !withinPostRecognizedSticky ->
+                                    Verdict.UNKNOWN
+                                else -> Verdict.WARMING
+                            }
+                        }
+
+                        val (label, boxColor) = when (verdict) {
+                            Verdict.RECOGNIZED ->
+                                firstNameOnly(recognisedName ?: track.identity.name.orEmpty()) to
                                     Color(0xFF4CAF50).copy(alpha = alpha)
-                            backendSaysUnknown && !withinInitialGrace && !withinPostRecognizedSticky ->
+                            Verdict.UNKNOWN ->
                                 "Unknown" to Color(0xFFE53935).copy(alpha = alpha)
-                            else ->
+                            Verdict.WARMING ->
                                 "Detecting…" to Color(0xFFFF9800).copy(alpha = alpha)
                         }
 
@@ -292,6 +308,9 @@ private class TrackRenderState(
     var lastRecognizedAtNs: Long = 0L,
     var fadingOut: Boolean = false,
 )
+
+/** Final colour/label verdict for one track in one render frame. */
+private enum class Verdict { RECOGNIZED, WARMING, UNKNOWN }
 
 /**
  * Recognised labels show only the first whitespace-delimited token of the supplied

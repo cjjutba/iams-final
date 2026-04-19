@@ -40,6 +40,12 @@ data class HybridIdentity(
     val name: String?,
     val confidence: Float,
     val status: String,
+    /**
+     * Tri-state overlay signal from the backend: `"recognized"` | `"warming_up"` |
+     * `"unknown"`. Null when the backend is an older build that doesn't emit the
+     * field (the overlay falls back to a time-based grace window in that case).
+     */
+    val recognitionState: String? = null,
 )
 
 enum class HybridSource {

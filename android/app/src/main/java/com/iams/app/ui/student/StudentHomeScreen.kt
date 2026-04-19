@@ -147,10 +147,13 @@ fun StudentHomeScreen(
 
     val currentClass = uiState.currentClass
     val otherSchedules = uiState.todaySchedules.filter { it.id != currentClass?.id }
-    // Split today's other classes by time-state so the home page leads with
-    // what's coming up next and pushes already-finished sessions below it.
+    // "Upcoming" means strictly future — schedules whose start time has not
+    // arrived yet. ACTIVE sessions other than `currentClass` (e.g. overlapping
+    // rolling test sessions) are intentionally excluded: the user reserves
+    // this section for classes that are coming up next, not for anything
+    // already in progress. Completed classes get their own section below.
     val upcomingSchedules = otherSchedules
-        .filter { viewModel.getScheduleTimeState(it) != ScheduleTimeState.COMPLETED }
+        .filter { viewModel.getScheduleTimeState(it) == ScheduleTimeState.UPCOMING }
         .sortedBy { it.startTime }
     val completedSchedules = otherSchedules
         .filter { viewModel.getScheduleTimeState(it) == ScheduleTimeState.COMPLETED }
