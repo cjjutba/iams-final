@@ -28,12 +28,17 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.iams.app.data.model.AttendanceRecordResponse
+import com.iams.app.data.model.ScheduleResponse
 import com.iams.app.ui.components.LocalToastState
 import com.iams.app.ui.components.ToastType
 import com.iams.app.ui.components.AttendanceStatus
@@ -92,11 +98,25 @@ fun StudentHistoryScreen(
     val spacing = IAMSThemeTokens.spacing
     val toastState = LocalToastState.current
 
+    // Currently-tapped record for the details sheet (null = sheet closed).
+    var selectedRecord by remember { mutableStateOf<AttendanceRecordResponse?>(null) }
+
     LaunchedEffect(uiState.error) {
         uiState.error?.let {
             toastState.showToast(it, ToastType.ERROR)
             viewModel.clearError()
         }
+    }
+
+    // Slide-up details sheet — rendered at the end of the composition so it
+    // overlays the list. The sheet reads the cached schedule map on the VM
+    // to enrich the record with subject / room / faculty / scheduled time.
+    selectedRecord?.let { record ->
+        HistoryRecordDetailSheet(
+            record = record,
+            schedule = viewModel.getScheduleFor(record),
+            onDismiss = { selectedRecord = null },
+        )
     }
 
     // Error state (no cached data)
@@ -275,7 +295,10 @@ fun StudentHistoryScreen(
                     }
                 } else if (filteredRecords.isNotEmpty()) {
                     items(filteredRecords, key = { it.id }) { record ->
-                        HistoryRecordCard(record = record)
+                        HistoryRecordCard(
+                            record = record,
+                            onClick = { selectedRecord = record },
+                        )
                         Spacer(modifier = Modifier.height(spacing.md))
                     }
                 } else if (!uiState.isLoading) {
@@ -315,11 +338,14 @@ private fun FilterPill(
 }
 
 @Composable
-private fun HistoryRecordCard(record: AttendanceRecordResponse) {
+private fun HistoryRecordCard(
+    record: AttendanceRecordResponse,
+    onClick: () -> Unit,
+) {
     val spacing = IAMSThemeTokens.spacing
     val status = parseAttendanceStatus(record.status)
 
-    IAMSCard {
+    IAMSCard(onClick = onClick) {
         Column(modifier = Modifier.fillMaxWidth()) {
             // Top row: date on the left, status badge pinned top-right.
             // Top-aligned so a wrapped date never pushes the badge down.
@@ -347,6 +373,124 @@ private fun HistoryRecordCard(record: AttendanceRecordResponse) {
                 )
             }
         }
+    }
+}
+
+/**
+ * Slide-up details sheet for one attendance record. Intentionally shows only
+ * descriptive metadata (subject / room / faculty / scheduled time / check-in
+ * / remarks) — no presence percentage, no scan counts, no metric chips —
+ * because the History screen is a lookup of "what happened", not a stats page.
+ *
+ * Implemented with Material 3 [ModalBottomSheet] so the user stays on the
+ * History list. Dismissal is via the default drag-down gesture or tapping the
+ * scrim; both route to `onDismiss`.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HistoryRecordDetailSheet(
+    record: AttendanceRecordResponse,
+    schedule: ScheduleResponse?,
+    onDismiss: () -> Unit,
+) {
+    val spacing = IAMSThemeTokens.spacing
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val status = parseAttendanceStatus(record.status)
+
+    val fallbackSubjectName = record.subjectCode ?: "Attendance Record"
+    val subjectName = schedule?.subjectName ?: fallbackSubjectName
+    val subjectCode = schedule?.subjectCode ?: record.subjectCode
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Background,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = spacing.lg,
+                    end = spacing.lg,
+                    bottom = spacing.xl,
+                ),
+        ) {
+            // Header: subject + subject code + status badge
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = subjectName,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimary,
+                    )
+                    if (!subjectCode.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = subjectCode,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextTertiary,
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(spacing.sm))
+                IAMSBadge(status = status)
+            }
+
+            Spacer(modifier = Modifier.height(spacing.lg))
+            HorizontalDivider(thickness = 1.dp, color = Border)
+            Spacer(modifier = Modifier.height(spacing.lg))
+
+            // Detail rows — only shown when the underlying field is available.
+            DetailRow(label = "Date", value = formatFullDateForDetail(record.date))
+
+            if (schedule != null) {
+                DetailRow(
+                    label = "Scheduled",
+                    value = formatScheduledTimeRange(schedule.startTime, schedule.endTime),
+                )
+                if (!schedule.roomName.isNullOrBlank()) {
+                    DetailRow(label = "Room", value = schedule.roomName)
+                }
+                if (!schedule.facultyName.isNullOrBlank()) {
+                    DetailRow(label = "Faculty", value = schedule.facultyName)
+                }
+            }
+
+            if (!record.checkInTime.isNullOrBlank()) {
+                DetailRow(
+                    label = "Check-in",
+                    value = formatCheckInForDisplay(record.checkInTime),
+                )
+            }
+
+            if (!record.remarks.isNullOrBlank()) {
+                DetailRow(label = "Remarks", value = record.remarks)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetailRow(label: String, value: String) {
+    val spacing = IAMSThemeTokens.spacing
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = spacing.xs)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = TextTertiary,
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = TextPrimary,
+        )
     }
 }
 
@@ -388,6 +532,39 @@ private fun formatDateForHistory(date: String): String {
     } catch (_: Exception) {
         date
     }
+}
+
+/**
+ * Format "YYYY-MM-DD" to "EEEE, MMMM d, yyyy" (e.g. "Sunday, April 19, 2026")
+ * for the details sheet, where there's room for the full form unlike the
+ * compact card.
+ */
+private fun formatFullDateForDetail(date: String): String {
+    return try {
+        LocalDate.parse(date).format(
+            DateTimeFormatter.ofPattern("EEEE, MMMM d, yyyy", Locale.getDefault())
+        )
+    } catch (_: Exception) {
+        date
+    }
+}
+
+/**
+ * Render a schedule's "HH:MM(:SS)" start/end pair as "h:mm AM – h:mm AM" for
+ * the details sheet. Falls back to the raw values if either side can't be
+ * parsed — better to show something slightly ugly than a blank row.
+ */
+private fun formatScheduledTimeRange(startTime: String, endTime: String): String {
+    val fmt = DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault())
+    val start = runCatching {
+        val parts = startTime.split(":")
+        java.time.LocalTime.of(parts[0].toInt(), parts[1].toInt()).format(fmt)
+    }.getOrDefault(startTime)
+    val end = runCatching {
+        val parts = endTime.split(":")
+        java.time.LocalTime.of(parts[0].toInt(), parts[1].toInt()).format(fmt)
+    }.getOrDefault(endTime)
+    return "$start \u2013 $end"
 }
 
 /**
