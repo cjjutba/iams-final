@@ -305,6 +305,10 @@ class SessionPipeline:
                     "confidence": t.confidence,
                     "user_id": t.user_id,
                     "status": t.status,
+                    # Tri-state signal consumed by the phone overlay. "warming_up"
+                    # renders as "Detecting…" (orange) instead of a misleading red
+                    # "Unknown" while FAISS works through the warm-up window.
+                    "recognition_state": t.recognition_state,
                     "is_active": True,  # All broadcast tracks are currently active
                 }
                 for t in track_frame.tracks

@@ -2,25 +2,119 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## ⛔ NON-NEGOTIABLE: Production-Only Workflow
+## ⛔ Environment Mode (Local / Production)
 
-**This project runs fully on the VPS (`167.71.217.44`). There is NO local Docker workflow.**
+**Default mode: PRODUCTION (VPS `167.71.217.44`).** Code changes, admin portal (Vercel),
+and Android builds all point here unless explicitly switched.
+
+**Switching is done with a single script — never by hand-editing config files.**
+
+```bash
+./scripts/switch-env.sh status        # Show current mode
+./scripts/switch-env.sh local         # Point Android + admin at local Docker stack
+./scripts/switch-env.sh production    # Point Android + admin back at VPS
+```
+
+The script edits [android/gradle.properties](android/gradle.properties),
+[admin/.env.production](admin/.env.production), and [admin/vite.config.ts](admin/vite.config.ts)
+atomically, auto-detects your Mac's LAN IP for local mode (so a physical Android
+device on the same WiFi can reach the backend), and preserves unrelated keys
+(Supabase VITE_* vars, etc.).
 
 Claude **MUST NOT**:
-- Run `docker compose up`, `docker compose up -d`, `docker compose up --build`, or any command that would spin up local containers (api-gateway, postgres, redis, mediamtx) on this Mac.
-- Suggest "start the local stack" as a troubleshooting step.
-- Write to `backend/.env`, `admin/.env`, or `android/local.properties` to repoint anything at a local LAN IP.
-- Run `docker compose exec ...` against a local stack — there is no local stack.
+- Hand-edit [android/gradle.properties](android/gradle.properties), [admin/.env.production](admin/.env.production), [admin/.env](admin/.env), [admin/vite.config.ts](admin/vite.config.ts), or `android/local.properties` to change environment. Always use `./scripts/switch-env.sh`. This guarantees identical results across machines and fresh Claude sessions.
+- Run raw `docker compose up`, `docker compose up -d`, `docker compose up --build`, or `docker compose exec ...` directly. Use [scripts/dev-up.sh](scripts/dev-up.sh) (it auto-configures mediamtx with the LAN IP) and [scripts/dev-down.sh](scripts/dev-down.sh).
+- Run `./scripts/dev-down.sh` on "switch to production" — leave local Docker running for fast switch-back. Only stop it when the user asks explicitly.
 
 Claude **SHOULD**:
-- Edit code, commit, push, and when the user asks, deploy to the VPS via `bash deploy/deploy.sh`.
-- Run commands against the VPS using `curl http://167.71.217.44/...` or SSH to `root@167.71.217.44` when remote inspection is needed.
-- Tail VPS logs via Dozzle at `http://167.71.217.44:9999` or `ssh root@167.71.217.44 'docker logs -f iams-api-gateway'`.
-- Run local-only, non-container operations freely: `git`, `./gradlew` (Android), `npm run build` (admin), file edits, tests that don't require the stack.
+- In PRODUCTION mode: verify against the VPS (`curl http://167.71.217.44/...`, Dozzle at `http://167.71.217.44:9999`, `ssh root@167.71.217.44 'docker logs -f iams-api-gateway'`). Deploy code via `bash deploy/deploy.sh`.
+- In LOCAL mode: verify against `http://localhost:8000/...`. Deploy = restart container via `./scripts/dev-up.sh` (it's `docker compose up --build -d`, so idempotent).
+- Run local-only, non-container operations freely in either mode: `git`, `./gradlew` (Android), `npm run build`, file edits, tests that don't require the stack.
 
-If a task seems to need the stack running (e.g. "verify this endpoint works"), verify against the VPS — don't bring up a local one. If the VPS doesn't yet have the change, the answer is `bash deploy/deploy.sh`, not `docker compose up`.
+## Switch Protocol
 
-If stale local containers already exist on this Mac (the Docker Desktop screenshot shows `iams-postgres`, `iams-redis`, `iams-api-gateway`), they are leftovers from an earlier local workflow. Do NOT restart them. If the user asks to clean up, run `docker compose down` (stops only, doesn't delete volumes) and confirm before removing volumes.
+When the user says **"switch to local"**, Claude runs these steps in order without
+further prompting:
+
+1. `./scripts/switch-env.sh status` — report pre-switch mode.
+2. `./scripts/switch-env.sh local` — capture output verbatim.
+3. `./scripts/dev-up.sh` — foreground, wait for completion. Reports the LAN IP it bound mediamtx to.
+4. Check `admin/node_modules`; if missing, `cd admin && npm install`. Then check port 5173 with `lsof -ti :5173`; if nothing is listening, start `cd admin && npm run dev` with `run_in_background: true`. If something is already on 5173, skip (Vite is already up).
+5. `cd android && ./gradlew clean installDebug` — foreground. **Use `clean` on every environment switch**, not incremental. Gradle's BuildConfig generation task sometimes reports UP-TO-DATE even after `gradle.properties` changes, which silently packages the APK with the previous mode's BACKEND_HOST (confirmed 2026-04-18: a switch-local followed by plain `installDebug` produced an APK still pointing at the VPS). If this step fails with "no connected devices", "ANDROID_HOME not set", or similar environment errors, report the specific failure and tell the user to attach a device or rebuild in Android Studio. Do **NOT** retry; do **NOT** roll back the config switch.
+6. `curl -fsS http://localhost:8000/api/v1/health` — verify backend is up.
+7. Report: current mode, Docker health, admin dev URL (`http://localhost:5173`), APK install status, API health check.
+
+When the user says **"switch to production"**, Claude runs these steps in order:
+
+1. `./scripts/switch-env.sh status` — report pre-switch mode.
+2. `./scripts/switch-env.sh production` — capture output.
+3. `curl -fsS http://167.71.217.44/api/v1/health` — verify VPS is up.
+4. Report: current mode, VPS health, admin URL (`https://iams-thesis.vercel.app`), reminder to rebuild the APK if the user needs the new build on device.
+5. Do **NOT** run `./scripts/dev-down.sh`. Leave local Docker running for a fast switch-back; the user can stop it manually (`./scripts/dev-down.sh`) when they want a clean slate.
+6. Do **NOT** run `bash deploy/deploy.sh`. "Switch to production" points clients at the VPS; it does not deploy code changes. Deploying is a separate, explicit "deploy" or "push to production" command.
+
+Half-switched states are valid. If step 5 of "switch to local" fails (no Android
+device attached), configs are already flipped and Docker is already up — the user
+can attach a device later and re-run `./gradlew installDebug`. Do NOT roll back
+on partial failure.
+
+## Switch Protocol — Complete File Index
+
+This is the authoritative list of every file that affects which backend the IAMS
+clients talk to. Claude must not hand-edit any of these; [scripts/switch-env.sh](scripts/switch-env.sh)
+owns all mutations.
+
+### A. Toggled by `scripts/switch-env.sh` (3 files)
+
+| File | Key(s) | PROD value | LOCAL value |
+|------|--------|-----------|-------------|
+| [android/gradle.properties](android/gradle.properties) | `IAMS_BACKEND_HOST` | `167.71.217.44` | auto-detected Mac LAN IP (e.g. `192.168.88.13`) |
+| | `IAMS_BACKEND_PORT` | `80` | `8000` |
+| | `IAMS_MEDIAMTX_PORT` | `8554` | `8554` (same) |
+| | `IAMS_MEDIAMTX_WEBRTC_PORT` | `8889` | `8889` (same) |
+| [admin/.env.production](admin/.env.production) | `VITE_API_URL` | `/api/v1` | `http://localhost:8000/api/v1` |
+| | `VITE_WS_URL` | `ws://167.71.217.44` | `ws://localhost:8000` |
+| | `VITE_SUPABASE_*` | (preserved) | (preserved) |
+| [admin/vite.config.ts](admin/vite.config.ts) | proxy `/api` target | `http://167.71.217.44` | `http://localhost:8000` |
+| | proxy `/api/v1/ws` target | `ws://167.71.217.44` | `ws://localhost:8000` |
+
+### B. Intentionally NOT toggled (behavior varies by mode via other mechanisms)
+
+| File | Why not toggled |
+|------|-----------------|
+| [admin/vercel.json](admin/vercel.json) | Rewrite `/api/*` → `http://167.71.217.44/api/*` is for the **Vercel-hosted admin only** (`iams-thesis.vercel.app`). Vercel cannot reach a Mac's local Docker; the Vercel tier is always production. For local admin dev, use `npm run dev` on `localhost:5173` (Vite proxy handles routing, toggled by switch-env). |
+| [backend/.env](backend/.env) | Used only by the local Docker api-gateway. Internal Docker DNS (`postgres`, `redis`, `host.docker.internal`) — location-specific, not mode-specific. |
+| [backend/.env.production](backend/.env.production) | Used only by the VPS api-gateway. Lives on the VPS at `/opt/iams/backend/.env.production` (gitignored from `deploy.sh` rsync). Not relevant to local. |
+| [docker-compose.yml](docker-compose.yml) | Local Docker service definitions + `environment:` overrides (e.g. `MEDIAMTX_EXTERNAL=true`). Only runs locally; VPS uses `docker-compose.prod.yml`. |
+| [deploy/mediamtx.dev.yml](deploy/mediamtx.dev.yml) | Local mediamtx config. `dev-up.sh` patches `webrtcAdditionalHosts` with the detected Mac LAN IP automatically. |
+| [deploy/mediamtx.yml](deploy/mediamtx.yml) | VPS mediamtx config. Irrelevant to local. |
+| [android/local.properties](android/local.properties) | Per-machine, gitignored. Must contain **only** `sdk.dir`; `IAMS_*` overrides would shadow `gradle.properties` and silently defeat the switch. `switch-env.sh` warns if it finds any. |
+| [android/app/build.gradle.kts](android/app/build.gradle.kts) | Reads `IAMS_*` via `project.findProperty()` — no hardcoded values (only fallbacks for when `gradle.properties` is missing keys). |
+| [admin/.env](admin/.env) | Dev-server env. Uses relative URLs (`/api/v1`) + empty WS URL — routing is handled by Vite proxy in `vite.config.ts` (which IS toggled). No changes needed. |
+| [admin/.env.production.example](admin/.env.production.example) | Template only; never read by builds. |
+
+### C. What the switch script explicitly checks/warns about
+
+- **macOS guard** — exits with error on non-Darwin (all IAMS dev machines are Macs).
+- **LAN IP detection** — tries `en0` then `en1`; errors if both empty.
+- **Android `local.properties` override detection** — grep for uncommented `IAMS_*` lines; warns that they'd shadow `gradle.properties`.
+- **Supabase key preservation** — only rewrites `VITE_API_URL` and `VITE_WS_URL` in `admin/.env.production`; other keys are untouched.
+
+### D. Mode-specific admin URLs (important for testing)
+
+| Mode | URL to open in browser | What it hits |
+|------|------------------------|--------------|
+| LOCAL | `http://localhost:5173` (via `npm run dev`) | local Docker backend at `localhost:8000` (via Vite proxy) |
+| PRODUCTION | `https://iams-thesis.vercel.app` (Vercel-hosted) | VPS at `167.71.217.44` (via Vercel rewrite) |
+| Either mode | `http://localhost:5173` (after `npm run build`-and-`preview`) | whichever backend `.env.production` points at |
+
+**Do NOT attempt** to open `https://iams-thesis.vercel.app` while in LOCAL mode expecting it to hit local Docker — Vercel's network cannot reach your Mac. Use `localhost:5173` for local testing.
+
+### E. Mode-specific Android device requirements
+
+- **LOCAL mode:** physical Android device **must** be on the same WiFi as the Mac (same `192.168.x.x` subnet as the detected LAN IP). Emulator would need `10.0.2.2` instead, which is currently unsupported by the script — add emulator support later if needed.
+- **PRODUCTION mode:** device can be on any network with internet access.
+- **After every `./scripts/switch-env.sh <mode>`, always rebuild the APK with `./gradlew clean installDebug`.** Incremental `installDebug` can silently reuse stale `BuildConfig.java` (documented 2026-04-18).
 
 ## Project Overview
 
@@ -71,9 +165,14 @@ mediamtx on VPS (RTSP ingest + WebRTC)
 
 The hybrid overlay is gated by `BuildConfig.HYBRID_DETECTION_ENABLED` (default on). When false, the app falls back to the legacy backend-authoritative `InterpolatedTrackOverlay`. `HybridFallbackController` automatically drops to the legacy path if the ML Kit sink stalls or to no-overlay if both legs go silent.
 
-## Development Workflow — VPS Only
+## Development Workflow
 
-All code runs on the VPS. Claude's local role is to edit, commit, and deploy — not to run services.
+In **PRODUCTION mode** (default), code runs on the VPS. Claude's local role is to
+edit, commit, and deploy. In **LOCAL mode**, the full stack runs on this Mac via
+Docker Desktop, reached at the LAN IP for physical devices.
+
+Swap modes with `./scripts/switch-env.sh {local|production}` — see the "Switch
+Protocol" section above for the full recipe.
 
 ### Deploy code changes to VPS
 ```bash
@@ -127,27 +226,33 @@ Gahisan / Lasco), sourced from
 [`docs/data/ListofStudents_All-Thesis-purposes-updated1.md`](docs/data/ListofStudents_All-Thesis-purposes-updated1.md).
 
 ### Testing
-Unit tests that don't need the live stack can run by reading code. There is no local docker stack to `pytest` against. If a test genuinely requires the stack, run it on the VPS:
-```bash
-ssh root@167.71.217.44 'docker exec iams-api-gateway python -m pytest tests/ -q -k faiss'
-```
+Unit tests that don't need a live stack can run against a read of the code. If a
+test requires the stack:
+- **LOCAL mode:** `docker exec iams-api-gateway python -m pytest tests/ -q -k faiss`.
+- **PRODUCTION mode:** `ssh root@167.71.217.44 'docker exec iams-api-gateway python -m pytest tests/ -q -k faiss'`.
 
-### Kotlin Android App (builds locally, targets VPS)
+### Kotlin Android App (builds locally, targets whichever mode is active)
 ```bash
 cd android
 ./gradlew assembleDebug        # Build debug APK
 ./gradlew installDebug         # Install on connected device/emulator
 ```
 Open in Android Studio for development. Requires Android SDK 35, min SDK 26.
-The committed `android/gradle.properties` already points at the VPS — no local override needed.
+The committed `android/gradle.properties` points at whichever environment was last
+set by `./scripts/switch-env.sh`. For LOCAL mode, the script writes the Mac's LAN
+IP so a physical device on the same WiFi can reach the backend.
 
-### Admin Portal (builds locally, deploys on Vercel)
+### Admin Portal
 ```bash
 cd admin
 npm install
-npm run build                  # uses admin/.env.production → VPS
+npm run dev                    # LOCAL mode: dev server at http://localhost:5173, proxies to local Docker
+npm run build                  # PRODUCTION mode: static build for Vercel deploy
 ```
-Deployed via Vercel from `admin/.env.production`. Do NOT run `npm run dev` expecting a local backend — the local backend no longer exists.
+Vercel deploys `admin/.env.production` automatically. In LOCAL mode, use `npm run dev`
+and let Vite's proxy (now pointed at `http://localhost:8000`) handle API calls —
+don't try to serve the Vercel build from localhost because HTTPS→HTTP mixed content
+will break. In PRODUCTION mode, the Vercel-hosted admin is the source of truth.
 
 ### Edge Device (Raspberry Pi, separate deploy)
 ```bash
@@ -160,28 +265,43 @@ The RPi only runs an FFmpeg relay — no ML, no face detection. Deployed to the 
 
 ## First-time Setup (fresh clone on a new Mac)
 
-A fresh `git clone` does NOT include `.env` files (they're gitignored). On a fresh clone, only `admin/.env.production` needs to exist locally so `npm run build` of the admin portal picks up the right URLs:
+A fresh `git clone` does NOT include `.env` files (they're gitignored). Minimum
+needed locally:
 
 ```bash
+# Admin (required for npm run build AND for switch-env.sh to rewrite)
 [ -f admin/.env.production ] || cp admin/.env.production.example admin/.env.production
+
+# Backend (only if you plan to run LOCAL mode)
+[ -f backend/.env ] || cp backend/.env.example backend/.env
 ```
 
-`android/local.properties` is created automatically the first time you open the project in Android Studio (for `sdk.dir`). Do NOT add `IAMS_BACKEND_HOST=...` overrides — the committed `android/gradle.properties` already targets the VPS.
+`android/local.properties` is created automatically the first time you open the
+project in Android Studio (for `sdk.dir`). Do NOT add `IAMS_BACKEND_HOST=...`
+overrides — `./scripts/switch-env.sh` manages `android/gradle.properties` directly,
+and `local.properties` entries would silently override it.
 
-You do NOT need `backend/.env` or `admin/.env` on this machine. Those exist for a local Docker stack that this project no longer uses.
+Default mode after a fresh clone is whatever is committed on `feat/cloud-based`
+(PRODUCTION → VPS). Run `./scripts/switch-env.sh status` to confirm, then
+`./scripts/switch-env.sh local` if you want the local stack.
 
 ## Canonical Production Config
 
-One branch (`feat/cloud-based`) targets production.
+`feat/cloud-based` is the production branch. The committed values of the files below
+are always the PRODUCTION snapshot. `./scripts/switch-env.sh local` mutates them
+in-place; `./scripts/switch-env.sh production` restores them. **Never commit a
+local-mutated version of these files.**
 
 | File | Committed? | Purpose |
 |------|-----------|---------|
-| `android/gradle.properties` | ✅ yes | Android build config — points at VPS (`167.71.217.44:80`) |
+| `android/gradle.properties` | ✅ yes | Android build config — PRODUCTION values committed, mutated by switch-env |
 | `android/local.properties` | ❌ gitignored | Per-machine — sdk.dir only; MUST NOT contain IAMS_* overrides |
-| `admin/.env.production` | ✅ yes | Admin build config — points at VPS |
-| `backend/.env.production` | ✅ yes | Backend VPS environment (used by `deploy.sh`) |
+| `admin/.env.production` | ✅ yes | Admin build config — PRODUCTION values committed, mutated by switch-env (Supabase keys preserved across switches) |
+| `admin/vite.config.ts` | ✅ yes | Vite dev proxy — PRODUCTION target committed, mutated by switch-env |
+| `backend/.env.production` | ✅ yes | Backend VPS environment (used by `deploy.sh`) — NOT toggled |
+| `backend/.env` | ❌ gitignored | Backend LOCAL Docker environment — NOT toggled (stays local-tuned) |
 
-### Expected production values
+### Expected PRODUCTION values (committed snapshot)
 
 `android/gradle.properties`:
 ```properties
@@ -195,9 +315,23 @@ IAMS_MEDIAMTX_WEBRTC_PORT=8889
 ```env
 VITE_API_URL=/api/v1
 VITE_WS_URL=ws://167.71.217.44
+# (Supabase keys below — preserved across switch-env runs)
 ```
 
-**Invariant:** These files ARE the production source of truth. Do not edit them to "quickly test locally" — there is no local.
+`admin/vite.config.ts` (proxy targets):
+```ts
+'/api/v1/ws': { target: 'ws://167.71.217.44', ws: true, changeOrigin: true }
+'/api':       { target: 'http://167.71.217.44', changeOrigin: true }
+```
+
+### Expected LOCAL values (after `./scripts/switch-env.sh local`)
+
+Same files, but with host → auto-detected Mac LAN IP, port → `8000`, Vite proxies
+→ `http://localhost:8000` / `ws://localhost:8000`. Run `./scripts/switch-env.sh status`
+any time to confirm current mode.
+
+**Invariant:** When committing, always run `./scripts/switch-env.sh production`
+first to ensure the committed snapshot is PRODUCTION.
 
 ## Deploy Protocol (VPS)
 

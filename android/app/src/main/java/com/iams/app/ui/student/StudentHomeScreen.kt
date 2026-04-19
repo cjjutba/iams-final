@@ -147,6 +147,17 @@ fun StudentHomeScreen(
 
     val currentClass = uiState.currentClass
     val otherSchedules = uiState.todaySchedules.filter { it.id != currentClass?.id }
+    // "Upcoming" means strictly future — schedules whose start time has not
+    // arrived yet. ACTIVE sessions other than `currentClass` (e.g. overlapping
+    // rolling test sessions) are intentionally excluded: the user reserves
+    // this section for classes that are coming up next, not for anything
+    // already in progress. Completed classes get their own section below.
+    val upcomingSchedules = otherSchedules
+        .filter { viewModel.getScheduleTimeState(it) == ScheduleTimeState.UPCOMING }
+        .sortedBy { it.startTime }
+    val completedSchedules = otherSchedules
+        .filter { viewModel.getScheduleTimeState(it) == ScheduleTimeState.COMPLETED }
+        .sortedByDescending { it.startTime }
 
     PullToRefreshBox(
         isRefreshing = uiState.isRefreshing,
@@ -297,28 +308,29 @@ fun StudentHomeScreen(
                 }
             }
 
-            // ── Section title: Today's Classes ──
-            item {
-                Spacer(modifier = Modifier.height(spacing.xxl))
-                Text(
-                    text = if (!uiState.isLoading)
-                        "Today's Classes (${uiState.todaySchedules.size})"
-                    else
-                        "Today's Classes",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Primary
-                )
-                Spacer(modifier = Modifier.height(spacing.lg))
+            // ── Loading header placeholder ──
+            if (uiState.isLoading) {
+                item {
+                    Spacer(modifier = Modifier.height(spacing.xxl))
+                    Text(
+                        text = "Upcoming",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Primary
+                    )
+                    Spacer(modifier = Modifier.height(spacing.lg))
+                }
             }
 
-            // ── Today's schedule cards (deduplicated) ──
+            // ── Empty / single-class fallbacks ──
             if (!uiState.isLoading && uiState.todaySchedules.isEmpty()) {
                 item {
+                    Spacer(modifier = Modifier.height(spacing.xxl))
                     EmptyScheduleState(viewModel = viewModel)
                 }
             } else if (!uiState.isLoading && otherSchedules.isEmpty() && currentClass != null) {
                 item {
+                    Spacer(modifier = Modifier.height(spacing.xxl))
                     Text(
                         text = "This is your only class today.",
                         style = MaterialTheme.typography.bodyMedium,
@@ -329,8 +341,45 @@ fun StudentHomeScreen(
                             .padding(vertical = spacing.xl)
                     )
                 }
-            } else if (!uiState.isLoading) {
-                items(otherSchedules, key = { it.id }) { schedule ->
+            }
+
+            // ── Upcoming section ──
+            if (!uiState.isLoading && upcomingSchedules.isNotEmpty()) {
+                item {
+                    Spacer(modifier = Modifier.height(spacing.xxl))
+                    Text(
+                        text = "Upcoming (${upcomingSchedules.size})",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Primary
+                    )
+                    Spacer(modifier = Modifier.height(spacing.lg))
+                }
+                items(upcomingSchedules, key = { "upcoming-${it.id}" }) { schedule ->
+                    TodayScheduleCard(
+                        schedule = schedule,
+                        timeState = viewModel.getScheduleTimeState(schedule),
+                        minutesUntilStart = viewModel.getMinutesUntilStart(schedule),
+                        todayStatus = viewModel.getTodayStatus(schedule.id),
+                        formatTime = { viewModel.formatTime(it) }
+                    )
+                    Spacer(modifier = Modifier.height(spacing.sm))
+                }
+            }
+
+            // ── Completed section ──
+            if (!uiState.isLoading && completedSchedules.isNotEmpty()) {
+                item {
+                    Spacer(modifier = Modifier.height(spacing.xxl))
+                    Text(
+                        text = "Completed (${completedSchedules.size})",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Primary
+                    )
+                    Spacer(modifier = Modifier.height(spacing.lg))
+                }
+                items(completedSchedules, key = { "completed-${it.id}" }) { schedule ->
                     TodayScheduleCard(
                         schedule = schedule,
                         timeState = viewModel.getScheduleTimeState(schedule),

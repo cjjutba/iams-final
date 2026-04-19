@@ -56,3 +56,6 @@ val ExcusedBorder = Color(0xFF93C5FD)
 // ── Status: Info ────────────────────────────────────────────────────────
 val InfoBg = Color(0xFFDBEAFE)
 val InfoFg = Color(0xFF1E40AF)
+
+// ── Links ───────────────────────────────────────────────────────────────
+val LinkBlue = Color(0xFF2563EB)

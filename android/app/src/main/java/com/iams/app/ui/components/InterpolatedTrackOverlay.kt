@@ -134,9 +134,13 @@ fun InterpolatedTrackOverlay(
                 ) {
                     existing.name = existing.lastRecognizedName
                     existing.status = "recognized"
+                    // Keep recognition_state consistent with the held status so
+                    // the label still renders the held name, not "Unknown".
+                    existing.recognitionState = "recognized"
                 } else {
                     existing.name = track.name
                     existing.status = track.status
+                    existing.recognitionState = track.recognitionState
                 }
 
                 if (existing.alpha.value < 1f) {
@@ -157,6 +161,7 @@ fun InterpolatedTrackOverlay(
                     name = track.name,
                     confidence = track.confidence,
                     status = track.status,
+                    recognitionState = track.recognitionState,
                     lastRecognizedName = if (isNewRecognized) track.name else null,
                     lastRecognizedTimeNanos = if (isNewRecognized) now else 0L,
                 )
@@ -238,10 +243,22 @@ fun InterpolatedTrackOverlay(
 
                         val isRecognized = state.status == "recognized"
                             && !state.name.isNullOrEmpty() && state.name != "Unknown"
-                        val boxColor = if (isRecognized) {
-                            Color(0xFF4CAF50).copy(alpha = alpha)
-                        } else {
-                            Color(0xFFFF9800).copy(alpha = alpha)
+
+                        // Tri-state verdict (matches HybridTrackOverlay semantics so
+                        // the two overlays render the same labels/colors). Falls
+                        // back to the legacy "green or orange-Unknown" rendering if
+                        // the backend doesn't emit recognition_state yet.
+                        val backendState = state.recognitionState
+                        val (label, boxColor) = when {
+                            isRecognized ->
+                                state.name!! to Color(0xFF4CAF50).copy(alpha = alpha)
+                            backendState == "warming_up" ->
+                                "Detecting…" to Color(0xFFFF9800).copy(alpha = alpha)
+                            backendState == "unknown" ->
+                                "Unknown" to Color(0xFFE53935).copy(alpha = alpha)
+                            else ->
+                                // Legacy fallback for older backends without tri-state.
+                                "Unknown" to Color(0xFFFF9800).copy(alpha = alpha)
                         }
 
                         drawRect(
@@ -251,7 +268,6 @@ fun InterpolatedTrackOverlay(
                             style = Stroke(width = 2.5f)
                         )
 
-                        val label = if (isRecognized) state.name!! else "Unknown"
                         drawNameLabel(textMeasurer, label, left, top, boxColor, alpha)
                     }
                 }
@@ -276,6 +292,12 @@ private class TrackOverlayState(
     var name: String?,
     var confidence: Float,
     var status: String,
+    /**
+     * Tri-state verdict from the backend. Null when the backend is an older build
+     * that doesn't emit `recognition_state`; callers then fall back to the
+     * legacy status-only rendering (orange + "Unknown" label).
+     */
+    var recognitionState: String? = null,
     var isAlive: Boolean = true,
     var deathTimeNanos: Long = 0L,
     var lastRecognizedName: String? = null,

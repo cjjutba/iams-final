@@ -109,6 +109,22 @@ class Settings(BaseSettings):
     # Identity Hold (sticky identity)
     IDENTITY_HOLD_SECONDS: float = 3.0  # Keep showing recognized identity during drift re-verification
 
+    # Tri-state recognition gating (scan_result.recognition_state broadcast field).
+    # After UNKNOWN_CONFIRM_ATTEMPTS consecutive FAISS misses on the same track AND
+    # the best-seen cosine score stayed below RECOGNITION_THRESHOLD - UNKNOWN_CONFIRM_MARGIN,
+    # the track commits to `recognition_state="unknown"` (red "Unknown" on the phone).
+    # Below that — or while the peak score is near threshold — the track stays in
+    # `recognition_state="warming_up"` so the overlay shows "Detecting…" (orange) instead
+    # of misleadingly flashing "Unknown" for a registered user whose first few frames
+    # happened to be blurry, off-axis, or shadowed.
+    #
+    # At PROCESSING_FPS=5 with graduated retries (instant / 0.3s / 1s), 15 attempts
+    # corresponds to roughly 12-15 seconds before committing to "Unknown" — long
+    # enough for almost any registered face to land a clean match, short enough that
+    # a truly unauthorised face still gets red-flagged quickly.
+    UNKNOWN_CONFIRM_ATTEMPTS: int = 15
+    UNKNOWN_CONFIRM_MARGIN: float = 0.05
+
     # Track-Based Presence
     EARLY_LEAVE_TIMEOUT: float = 300.0  # Fallback: 5 min absent before early-leave alert (per-schedule override in DB)
     PRESENCE_FLUSH_INTERVAL: float = 10.0  # Seconds between DB presence flushes

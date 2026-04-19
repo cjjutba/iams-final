@@ -30,9 +30,13 @@ export default function AnalyticsPage() {
 
   const trendData = Array.isArray(trendRaw)
     ? trendRaw.map((d: Record<string, unknown>) => ({
-        date: d.date as string,
+        date: new Date(d.date as string).toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+        }),
         present: (d.present ?? d.present_count ?? 0) as number,
         late: (d.late ?? d.late_count ?? 0) as number,
+        early_leave: (d.early_leave ?? d.early_leave_count ?? 0) as number,
         absent: (d.absent ?? d.absent_count ?? 0) as number,
       }))
     : []
@@ -134,6 +138,7 @@ export default function AnalyticsPage() {
             lines={[
               { key: 'present', label: 'Present', color: 'var(--color-chart-1)' },
               { key: 'late', label: 'Late', color: 'var(--color-chart-3)' },
+              { key: 'early_leave', label: 'Early Leave', color: 'var(--color-chart-4)' },
               { key: 'absent', label: 'Absent', color: 'var(--color-chart-5)' },
             ]}
             height={320}

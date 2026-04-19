@@ -234,7 +234,13 @@ data class TrackInfo(
     val name: String?,
     val confidence: Float,
     @SerializedName("user_id") val userId: String?,
-    val status: String  // "recognized" | "unknown" | "pending"
+    val status: String,  // "recognized" | "unknown" | "pending"  (legacy — kept for backward compat)
+    // Tri-state signal (added 2026-04-19). "warming_up" means the backend has
+    // detected a face but hasn't yet accumulated enough FAISS evidence to call
+    // it "unknown", so the overlay should render "Detecting…" (orange) rather
+    // than a premature "Unknown" (red). Nullable for backward compatibility
+    // with older backends that don't emit this field.
+    @SerializedName("recognition_state") val recognitionState: String? = null
 )
 
 /** frame_update message (at ~15fps from backend pipeline) */

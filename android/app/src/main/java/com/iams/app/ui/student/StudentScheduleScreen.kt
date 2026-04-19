@@ -11,9 +11,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -156,23 +161,32 @@ fun StudentScheduleScreen(
                 },
             )
 
-        // Day selector
+        // Day selector — horizontally scrollable pill row.
+        // Pills keep their intrinsic width so longer labels never get clipped
+        // and narrow phones can swipe to reach the last day.
         val todayBackend = LocalDate.now().dayOfWeek.value - 1
+        val dayListState = rememberLazyListState()
+        LaunchedEffect(uiState.selectedDay) {
+            // Center the selected day so today/Sun/Sat are never hidden behind
+            // the screen edge after the user (or the VM) flips selection.
+            dayListState.animateScrollToItem(uiState.selectedDay)
+        }
 
-        Row(
+        LazyRow(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = spacing.lg, vertical = spacing.lg),
+                .padding(vertical = spacing.lg),
+            state = dayListState,
+            contentPadding = PaddingValues(horizontal = spacing.lg),
             horizontalArrangement = Arrangement.spacedBy(spacing.xs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            DAYS.forEach { day ->
+            itemsIndexed(DAYS) { _, day ->
                 DayPill(
                     label = SHORT_DAY_NAMES[day],
                     isSelected = day == uiState.selectedDay,
                     isToday = day == todayBackend,
                     onClick = { viewModel.selectDay(day) },
-                    modifier = Modifier.weight(1f),
                 )
             }
         }
@@ -247,9 +261,14 @@ private fun DayPill(
         contentAlignment = Alignment.Center,
         modifier = modifier
             .height(40.dp)
+            // Intrinsic width with a sensible floor so 3-letter labels look
+            // tappable without forcing every pill to the same size — the
+            // LazyRow handles overflow with horizontal scroll.
+            .widthIn(min = 56.dp)
             .clip(RoundedCornerShape(9999.dp))
             .background(if (isSelected) Primary else Secondary)
-            .clickable(onClick = onClick),
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp),
     ) {
         Text(
             text = label,

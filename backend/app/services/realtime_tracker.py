@@ -73,6 +73,11 @@ class TrackIdentity:
     held_name: str | None = None
     held_confidence: float = 0.0
     held_at: float = 0.0  # When identity was saved for hold
+    # Tri-state warm-up gating — see settings.UNKNOWN_CONFIRM_* and docstring on
+    # _derive_recognition_state below. The client uses these to render
+    # "Detecting…" instead of a premature "Unknown" while FAISS warms up.
+    unknown_attempts: int = 0  # Consecutive FAISS misses since last hit
+    best_score_seen: float = 0.0  # Peak cosine similarity across all FAISS attempts
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,8 +90,12 @@ class TrackResult:
     user_id: str | None
     name: str | None
     confidence: float
-    status: str  # "recognized" | "unknown" | "pending"
+    status: str  # "recognized" | "unknown" | "pending"  (legacy — kept for backward compat)
     is_active: bool  # True if matched to a detection this frame
+    # Tri-state gating for the client overlay. "recognized" and "warming_up" both
+    # prevent a red "Unknown" from flashing before the backend is confident. Only
+    # "unknown" commits to the red label.
+    recognition_state: str = "warming_up"  # "recognized" | "warming_up" | "unknown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,6 +343,11 @@ class RealtimeTracker:
                         identity.is_static = False
                         identity.drift_strike_count = 0
                         identity.anchor_embedding = None
+                        # Warm-up gate also resets so the post-drift re-recognition
+                        # goes back through "warming_up" instead of skipping straight
+                        # to "unknown" on the first re-verify miss.
+                        identity.unknown_attempts = 0
+                        identity.best_score_seen = 0.0
                     else:
                         logger.debug(
                             "Track %d drift strike %d/%d (sim=%.2f)",
@@ -416,11 +430,12 @@ class RealtimeTracker:
                             velocity = [0.0, 0.0, 0.0, 0.0]
                         self._prev_bboxes[track_id] = [cx, cy, w, h]
                         identity.last_bbox = norm_bbox
-                        d_uid, d_name, d_conf, d_status = self._get_display_identity(track_id, now)
+                        d_uid, d_name, d_conf, d_status, d_state = self._get_display_identity(track_id, now)
                         results.append(TrackResult(
                             track_id=track_id, bbox=norm_bbox, velocity=velocity,
                             user_id=d_uid, name=d_name, confidence=d_conf,
                             status=d_status, is_active=True,
+                            recognition_state=d_state,
                         ))
                         continue
 
@@ -465,7 +480,7 @@ class RealtimeTracker:
 
             # Apply identity hold: show held identity during hold window
             # so the frontend never sees recognized → unknown flicker
-            d_uid, d_name, d_conf, d_status = self._get_display_identity(track_id, now)
+            d_uid, d_name, d_conf, d_status, d_state = self._get_display_identity(track_id, now)
 
             results.append(
                 TrackResult(
@@ -477,6 +492,7 @@ class RealtimeTracker:
                     confidence=d_conf,
                     status=d_status,
                     is_active=True,
+                    recognition_state=d_state,
                 )
             )
 
@@ -492,7 +508,7 @@ class RealtimeTracker:
             if age > settings.TRACK_LOST_TIMEOUT:
                 continue  # Too old, let it expire
 
-            d_uid, d_name, d_conf, d_status = self._get_display_identity(tid, now)
+            d_uid, d_name, d_conf, d_status, d_state = self._get_display_identity(tid, now)
             if d_status != "recognized":
                 continue  # Only coast recognized (or held) tracks
 
@@ -506,6 +522,7 @@ class RealtimeTracker:
                     confidence=d_conf,
                     status=d_status,
                     is_active=False,  # Not detected this frame, coasting
+                    recognition_state=d_state,
                 )
             )
 
@@ -517,7 +534,7 @@ class RealtimeTracker:
             updated: list[TrackResult] = []
             for r in results:
                 if r.track_id in self._identity_cache:
-                    d_uid, d_name, d_conf, d_status = self._get_display_identity(r.track_id, now)
+                    d_uid, d_name, d_conf, d_status, d_state = self._get_display_identity(r.track_id, now)
                     updated.append(TrackResult(
                         track_id=r.track_id,
                         bbox=r.bbox,
@@ -527,6 +544,7 @@ class RealtimeTracker:
                         confidence=d_conf,
                         status=d_status,
                         is_active=r.is_active,
+                        recognition_state=d_state,
                     ))
                 else:
                     updated.append(r)
@@ -590,11 +608,19 @@ class RealtimeTracker:
     # Internals
     # ------------------------------------------------------------------
 
-    def _get_display_identity(self, track_id: int, now: float) -> tuple[str | None, str | None, float, str]:
-        """Return (user_id, name, confidence, status) with identity hold applied.
+    def _get_display_identity(
+        self, track_id: int, now: float
+    ) -> tuple[str | None, str | None, float, str, str]:
+        """Return (user_id, name, confidence, status, recognition_state) with hold applied.
 
-        If the track is pending/unknown but was recently recognized,
-        return the held identity so the frontend never sees a flicker.
+        ``status`` is the legacy per-track state — "pending" | "recognized" | "unknown".
+        Kept for backward compatibility with older clients that ignore
+        ``recognition_state``.
+
+        ``recognition_state`` is the tri-state the new client consumes — see
+        :py:meth:`_derive_recognition_state`. A "held" track is always reported as
+        ``recognition_state="recognized"`` so the phone keeps the green box during
+        brief drift re-verification.
         """
         identity = self._identity_cache[track_id]
         if (
@@ -602,8 +628,52 @@ class RealtimeTracker:
             and identity.held_user_id is not None
             and (now - identity.held_at) < settings.IDENTITY_HOLD_SECONDS
         ):
-            return (identity.held_user_id, identity.held_name, identity.held_confidence, "recognized")
-        return (identity.user_id, identity.name, identity.confidence, identity.recognition_status)
+            return (
+                identity.held_user_id,
+                identity.held_name,
+                identity.held_confidence,
+                "recognized",
+                "recognized",
+            )
+        recognition_state = self._derive_recognition_state(identity)
+        return (
+            identity.user_id,
+            identity.name,
+            identity.confidence,
+            identity.recognition_status,
+            recognition_state,
+        )
+
+    @staticmethod
+    def _derive_recognition_state(identity: TrackIdentity) -> str:
+        """Collapse the tracker's internal bookkeeping into a three-value signal
+        for the overlay: ``"recognized"`` | ``"warming_up"`` | ``"unknown"``.
+
+        Rules (evaluated top to bottom):
+
+        1. ``recognition_status == "recognized"`` → ``"recognized"``.
+        2. The track has been FAISS-rejected at least ``UNKNOWN_CONFIRM_ATTEMPTS``
+           times **and** its best-seen cosine score is comfortably below
+           ``RECOGNITION_THRESHOLD - UNKNOWN_CONFIRM_MARGIN`` → ``"unknown"``.
+           Both clauses matter: a face hovering near threshold (e.g. peak 0.36 with
+           threshold 0.38) stays in ``"warming_up"`` longer on the theory that a
+           cleaner frame is likely imminent, while a face that has never produced a
+           score above, say, 0.20 is clearly not enrolled and earns the red label
+           quickly.
+        3. Everything else (including fresh ``"pending"`` tracks and ``"unknown"``
+           tracks still inside the confirm window) → ``"warming_up"`` so the
+           overlay renders the neutral "Detecting…" label.
+        """
+        if identity.recognition_status == "recognized":
+            return "recognized"
+        confirm_attempts = settings.UNKNOWN_CONFIRM_ATTEMPTS
+        score_ceiling = settings.RECOGNITION_THRESHOLD - settings.UNKNOWN_CONFIRM_MARGIN
+        if (
+            identity.unknown_attempts >= confirm_attempts
+            and identity.best_score_seen < score_ceiling
+        ):
+            return "unknown"
+        return "warming_up"
 
     def _get_or_create_identity(self, track_id: int, now: float, bbox: np.ndarray | None = None) -> TrackIdentity:
         """Get existing identity or create a new one (always goes through FAISS).
@@ -676,6 +746,13 @@ class RealtimeTracker:
             confidence = result.get("confidence", 0.0)
             is_ambiguous = result.get("is_ambiguous", False)
 
+            # Track peak cosine across the entire life of this track, not just
+            # accepted matches. Feeds the _derive_recognition_state gate so faces
+            # that keep scoring near threshold stay "warming_up" instead of
+            # flipping to "unknown" the moment UNKNOWN_CONFIRM_ATTEMPTS is hit.
+            if confidence > identity.best_score_seen:
+                identity.best_score_seen = float(confidence)
+
             logger.debug(
                 "[TRACK-SCORE] track=%d user=%s confidence=%.4f ambiguous=%s status=%s",
                 identity.track_id,
@@ -747,6 +824,9 @@ class RealtimeTracker:
                     identity.recognition_status = "recognized"
                     identity.anchor_embedding = search_embedding.copy()
                     identity.drift_strike_count = 0
+                    # Clear the warm-up counter — a successful match means any
+                    # past misses were noise, not evidence of a stranger.
+                    identity.unknown_attempts = 0
                     if prev_user_id is None:
                         logger.info(
                             "Track %d recognized: %s (%.3f)",
@@ -765,7 +845,9 @@ class RealtimeTracker:
                         and confidence >= settings.ADAPTIVE_ENROLL_MIN_CONFIDENCE):
                         self._try_adaptive_enroll(user_id, search_embedding, now)
             elif identity.recognition_status == "recognized":
-                # Already recognized — don't downgrade on a single bad frame
+                # Already recognized — don't downgrade on a single bad frame.
+                # Do not bump unknown_attempts either: a re-verify dip on a known
+                # track is not evidence that the face is a stranger.
                 logger.debug(
                     "Track %d re-verify missed (score=%.3f), keeping %s",
                     identity.track_id,
@@ -773,12 +855,17 @@ class RealtimeTracker:
                     identity.name,
                 )
             else:
+                # Pending or previously unknown track produced another miss.
+                # Accumulate evidence toward committing to recognition_state="unknown".
                 identity.recognition_status = "unknown"
                 identity.confidence = confidence
+                identity.unknown_attempts += 1
                 logger.debug(
-                    "Track %d unknown (score=%.3f, user=%s, ambiguous=%s)",
+                    "Track %d unknown (score=%.3f peak=%.3f attempts=%d user=%s ambiguous=%s)",
                     identity.track_id,
                     confidence,
+                    identity.best_score_seen,
+                    identity.unknown_attempts,
                     user_id,
                     is_ambiguous,
                 )

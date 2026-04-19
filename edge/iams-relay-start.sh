@@ -2,18 +2,50 @@
 # IAMS Relay startup script — reads env vars and builds FFmpeg command.
 # Supports RELAY_MODE=copy (default) or RELAY_MODE=transcode.
 #
-# Includes:
-# - Automatic reconnection on FFmpeg exit
-# - Watchdog that kills FFmpeg if network TX stops (stream died silently)
+# Hardening (2026-04-19) — three independent stall detectors, any one of which
+# will force FFmpeg to exit so systemd (+ this script's retry loop) can restart:
+#
+#   1. FFmpeg `-rw_timeout 15s` on the RTSP output. If a TCP write to mediamtx
+#      blocks for >15s, FFmpeg errors out and exits.
+#
+#   2. Per-socket state check. Every 15s, `ss` is queried for FFmpeg's output
+#      socket to VPS:8554. If the state is not ESTAB (e.g. CLOSE-WAIT, which
+#      is what silently broke EB227 for 19h on 2026-04-18), we kill FFmpeg.
+#      This catches the case where mediamtx sent FIN but FFmpeg's socket layer
+#      never noticed.
+#
+#   3. Per-socket bytes_sent delta. If the TCP socket is ESTAB but FFmpeg
+#      isn't actually pushing bytes through it (~50KB+/s expected from a copy
+#      passthrough of the Reolink sub stream), kill FFmpeg.
+#
+# The old wlan0 tx_bytes watchdog was dropped because background traffic (SSH,
+# mDNS, NTP) masked stalled streams — exactly how the 19h outage went
+# undetected on EB227.
 set -uo pipefail
 
 SOURCE="${CAMERA_RTSP_URL}"
 TARGET="${VPS_RTSP_URL}/${ROOM_ID}"
 MODE="${RELAY_MODE:-copy}"
+
+# Parse host/port from VPS_RTSP_URL=rtsp://HOST:PORT
+VPS_HOSTPORT="${VPS_RTSP_URL#rtsp://}"
+VPS_HOSTPORT="${VPS_HOSTPORT%%/*}"
+VPS_HOST="${VPS_HOSTPORT%%:*}"
+VPS_PORT="${VPS_HOSTPORT##*:}"
+# Fallback if no port was specified
+if [ "${VPS_PORT}" = "${VPS_HOSTPORT}" ] || [ -z "${VPS_PORT}" ]; then
+    VPS_PORT="8554"
+fi
+
 RETRY_DELAY=5
-MAX_RETRY_DELAY=60      # Cap backoff at 60 seconds
-WATCHDOG_INTERVAL=30    # Check every 30 seconds
-MIN_TX_BYTES=10000      # Minimum TX bytes per interval (stream should do ~50KB+/s)
+MAX_RETRY_DELAY=60                    # Cap backoff at 60 seconds
+WATCHDOG_INTERVAL=15                  # Check every 15 seconds
+MIN_OUTPUT_BYTES_PER_INTERVAL=5000    # ~333 B/s floor (sub-stream idle scenes
+                                      # observed at ~5 KB/s, so this leaves
+                                      # plenty of headroom against false kills)
+STALL_STRIKES_TO_KILL=2               # Need 2 consecutive low-byte intervals
+                                      # (≥30s of no useful TX) before killing
+RW_TIMEOUT_USEC=15000000              # 15s — FFmpeg exits if TCP write blocks
 CONSECUTIVE_FAILURES=0
 
 FFMPEG_PID=""
@@ -26,8 +58,31 @@ cleanup() {
 }
 trap cleanup EXIT
 
-get_tx_bytes() {
-    cat /sys/class/net/wlan0/statistics/tx_bytes 2>/dev/null || echo "0"
+# Returns 0 (healthy) if FFmpeg's output socket to VPS:PORT is in ESTAB state,
+# 1 otherwise. Non-ESTAB states include CLOSE-WAIT, FIN-WAIT-*, LAST-ACK, and
+# "socket not found" — all of which mean the publish is broken.
+check_output_socket_estab() {
+    local state
+    state=$(ss -tnp state all 2>/dev/null \
+            | awk -v pid="pid=${FFMPEG_PID}," -v port=":${VPS_PORT}" '
+                $0 ~ pid && $5 ~ port"$" { print $1; exit }')
+    [ "${state}" = "ESTAB" ]
+}
+
+# Emits the TCP_INFO bytes_sent counter for FFmpeg's output socket, or "0" if
+# the socket can't be located. Used to detect ESTAB-but-stalled writes.
+get_output_bytes_sent() {
+    ss -tnpi state all 2>/dev/null \
+        | awk -v pid="pid=${FFMPEG_PID}," -v port=":${VPS_PORT}" '
+            $0 ~ pid && $5 ~ port"$" { found=1; next }
+            found {
+                n = match($0, /bytes_sent:[0-9]+/)
+                if (n > 0) {
+                    print substr($0, RSTART+11, RLENGTH-11)
+                    exit
+                }
+            }
+            END { if (!found) print "0" }'
 }
 
 run_ffmpeg() {
@@ -60,6 +115,7 @@ run_ffmpeg() {
             -r "${FPS}" \
             -g "${GOP}" \
             -an \
+            -rw_timeout "${RW_TIMEOUT_USEC}" \
             -f rtsp \
             -rtsp_transport tcp \
             -muxdelay 0 \
@@ -78,6 +134,7 @@ run_ffmpeg() {
             -i "${SOURCE}" \
             -c copy \
             -an \
+            -rw_timeout "${RW_TIMEOUT_USEC}" \
             -f rtsp \
             -rtsp_transport tcp \
             -muxdelay 0 \
@@ -89,16 +146,15 @@ run_ffmpeg() {
 # Wait for network to be fully up (WiFi may take a few seconds after boot)
 echo "IAMS Relay: Waiting for network..."
 for i in $(seq 1 30); do
-    if ping -c 1 -W 2 "${VPS_RTSP_URL#rtsp://}" 2>/dev/null | grep -q "1 received" 2>/dev/null; then
+    if ping -c 1 -W 2 "${VPS_HOST}" 2>/dev/null | grep -q "1 received" 2>/dev/null; then
         break
     fi
-    # Fallback: just check if we have a default route
     if ip route show default 2>/dev/null | grep -q "default"; then
         break
     fi
     sleep 2
 done
-echo "IAMS Relay: Network ready"
+echo "IAMS Relay: Network ready (VPS ${VPS_HOST}:${VPS_PORT})"
 
 # Truncate log file if it's over 10MB to prevent filling the SD card
 LOG_FILE="${HOME}/iams-relay.log"
@@ -118,14 +174,14 @@ while true; do
     # Give FFmpeg time to connect to camera + VPS before watchdog starts
     sleep 20
 
-    # If we got past the initial 20s, FFmpeg connected successfully — reset backoff
     if kill -0 "${FFMPEG_PID}" 2>/dev/null; then
         CONSECUTIVE_FAILURES=0
     fi
 
-    PREV_TX=$(get_tx_bytes)
+    PREV_SENT=$(get_output_bytes_sent)
+    STALL_STRIKES=0
 
-    # Watchdog loop — monitors TX bytes to detect silent stream death
+    # Watchdog — precise per-socket health check
     while kill -0 "${FFMPEG_PID}" 2>/dev/null; do
         sleep "${WATCHDOG_INTERVAL}"
 
@@ -133,19 +189,35 @@ while true; do
             break
         fi
 
-        CURR_TX=$(get_tx_bytes)
-        TX_DIFF=$((CURR_TX - PREV_TX))
-        PREV_TX=${CURR_TX}
-
-        if [ "${TX_DIFF}" -lt "${MIN_TX_BYTES}" ]; then
-            echo "IAMS Relay: Watchdog — TX stalled (${TX_DIFF} bytes in ${WATCHDOG_INTERVAL}s), restarting"
+        # Check 1: output socket must be ESTAB (catches CLOSE-WAIT stalls
+        # like the EB227 19h outage on 2026-04-18). Fires immediately — any
+        # non-ESTAB state on the publish socket is never recoverable.
+        if ! check_output_socket_estab; then
+            echo "IAMS Relay: Watchdog — output socket to ${VPS_HOST}:${VPS_PORT} not ESTAB, restarting FFmpeg"
             kill "${FFMPEG_PID}" 2>/dev/null
             wait "${FFMPEG_PID}" 2>/dev/null
             break
         fi
 
-        # Reset failure count — stream is actively transmitting
-        CONSECUTIVE_FAILURES=0
+        # Check 2: bytes_sent must advance (catches ESTAB-but-no-data stalls).
+        # Requires STALL_STRIKES_TO_KILL consecutive low intervals before
+        # firing, so brief I-frame gaps don't cause false kills.
+        CURR_SENT=$(get_output_bytes_sent)
+        SENT_DIFF=$(( CURR_SENT - PREV_SENT ))
+        PREV_SENT=${CURR_SENT}
+
+        if [ "${SENT_DIFF}" -lt "${MIN_OUTPUT_BYTES_PER_INTERVAL}" ]; then
+            STALL_STRIKES=$(( STALL_STRIKES + 1 ))
+            echo "IAMS Relay: Watchdog — low TX (${SENT_DIFF} bytes in ${WATCHDOG_INTERVAL}s), strike ${STALL_STRIKES}/${STALL_STRIKES_TO_KILL}"
+            if [ "${STALL_STRIKES}" -ge "${STALL_STRIKES_TO_KILL}" ]; then
+                echo "IAMS Relay: Watchdog — output TX stalled, restarting FFmpeg"
+                kill "${FFMPEG_PID}" 2>/dev/null
+                wait "${FFMPEG_PID}" 2>/dev/null
+                break
+            fi
+        else
+            STALL_STRIKES=0
+        fi
     done
 
     wait "${FFMPEG_PID}" 2>/dev/null

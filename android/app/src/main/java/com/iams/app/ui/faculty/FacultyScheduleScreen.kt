@@ -15,7 +15,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -77,14 +81,26 @@ fun FacultyScheduleScreen(
             },
         )
 
-        // Day selector
-        Row(
+        // Day selector — horizontally scrollable pill row.
+        // Pills keep their intrinsic width so longer labels never get clipped
+        // and narrow phones can swipe to reach the last day.
+        val dayListState = rememberLazyListState()
+        LaunchedEffect(uiState.selectedDay) {
+            // Center the selected day so today/Sun/Sat are never hidden behind
+            // the screen edge after the user (or the VM) flips selection.
+            dayListState.animateScrollToItem(uiState.selectedDay)
+        }
+
+        LazyRow(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = spacing.lg, vertical = spacing.lg),
-            horizontalArrangement = Arrangement.SpaceEvenly,
+                .padding(vertical = spacing.lg),
+            state = dayListState,
+            contentPadding = PaddingValues(horizontal = spacing.lg),
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            DAY_LABELS.forEachIndexed { index, label ->
+            itemsIndexed(DAY_LABELS) { index, label ->
                 DayButton(
                     label = label,
                     isSelected = index == uiState.selectedDay,

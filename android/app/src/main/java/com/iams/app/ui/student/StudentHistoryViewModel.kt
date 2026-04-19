@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.iams.app.data.api.ApiService
 import com.iams.app.data.api.NotificationService
 import com.iams.app.data.model.AttendanceRecordResponse
+import com.iams.app.data.model.ScheduleResponse
 import com.iams.app.data.model.StudentAttendanceEvent
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,6 +24,10 @@ data class StudentHistoryUiState(
     val isRefreshing: Boolean = false,
     val error: String? = null,
     val records: List<AttendanceRecordResponse> = emptyList(),
+    // Cached lookup so the details sheet can enrich a record with its schedule's
+    // subject name, room, faculty, and scheduled time without another round trip
+    // when the user taps a card.
+    val schedulesById: Map<String, ScheduleResponse> = emptyMap(),
     val selectedMonth: YearMonth = YearMonth.now(),
     // "all" / "present" / "late" / "absent" / "early_leave".
     val selectedFilter: String = "all",
@@ -47,7 +52,31 @@ class StudentHistoryViewModel @Inject constructor(
 
     init {
         loadHistory()
+        loadSchedules()
         observeRealtimeEvents()
+    }
+
+    /**
+     * One-shot fetch of the student's enrolled schedules so the details bottom
+     * sheet can render subject name / room / faculty / scheduled time without
+     * an extra API round trip per tap. Failures are swallowed — the sheet
+     * degrades gracefully to raw record fields if the lookup is empty.
+     */
+    private fun loadSchedules() {
+        viewModelScope.launch {
+            runCatching { apiService.getMySchedules() }
+                .mapCatching { response ->
+                    if (response.isSuccessful) response.body().orEmpty() else emptyList()
+                }
+                .onSuccess { schedules ->
+                    _uiState.value = _uiState.value.copy(
+                        schedulesById = schedules.associateBy { it.id }
+                    )
+                }
+                // No onFailure handler: an offline schedule fetch shouldn't
+                // override the visible records error state; the details sheet
+                // just shows fewer fields.
+        }
     }
 
     /**
@@ -118,7 +147,7 @@ class StudentHistoryViewModel @Inject constructor(
         val newRecords = if (existing != null) {
             state.records.map { if (it.id == attendanceId) merged else it }
         } else {
-            (state.records + merged).sortedByDescending { it.date }
+            (state.records + merged).sortedHistoryDescending()
         }
         _uiState.value = state.copy(records = newRecords)
     }
@@ -144,7 +173,7 @@ class StudentHistoryViewModel @Inject constructor(
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
                         isRefreshing = false,
-                        records = records.sortedByDescending { it.date }
+                        records = records.sortedHistoryDescending()
                     )
                 } else if (!silent) {
                     _uiState.value = _uiState.value.copy(
@@ -212,10 +241,35 @@ class StudentHistoryViewModel @Inject constructor(
     fun getScheduleFilter(): String? = scheduleIdFilter
 
     /**
+     * Look up the schedule associated with a history record so the details
+     * sheet can surface the subject, room, faculty, and scheduled time.
+     * Returns `null` if schedules haven't loaded yet or the record's
+     * `scheduleId` doesn't match any of the student's enrolled classes
+     * (e.g. after an enrollment change — legitimate historical records
+     * stay visible, they just show less enriched metadata).
+     */
+    fun getScheduleFor(record: AttendanceRecordResponse): ScheduleResponse? {
+        return _uiState.value.schedulesById[record.scheduleId]
+    }
+
+    /**
      * Format the selected month as "MMMM yyyy"
      */
     fun getFormattedMonth(): String {
         val formatter = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault())
         return _uiState.value.selectedMonth.format(formatter)
     }
+}
+
+/**
+ * Descending order by date primary, check-in time secondary. Records that have
+ * no check-in time (pure "absent" rows inserted after the session ended) sink
+ * to the bottom of their day so the newest event always leads the list — this
+ * fixes the mixed 07:35 → 08:21 → 08:32 → 07:45 ordering the user saw when
+ * multiple rolling sessions completed on the same day.
+ */
+private fun List<AttendanceRecordResponse>.sortedHistoryDescending(): List<AttendanceRecordResponse> {
+    val comparator = compareByDescending<AttendanceRecordResponse> { it.date }
+        .thenByDescending { it.checkInTime.orEmpty() }
+    return this.sortedWith(comparator)
 }

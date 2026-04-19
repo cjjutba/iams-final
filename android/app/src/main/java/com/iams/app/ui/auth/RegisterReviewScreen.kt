@@ -29,18 +29,26 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.iams.app.ui.components.AuthLayout
 import com.iams.app.ui.components.IAMSButton
+import com.iams.app.ui.components.LegalDocument
+import com.iams.app.ui.components.LegalDocumentSheet
 import com.iams.app.ui.components.LocalToastState
 import com.iams.app.ui.components.ToastState
 import com.iams.app.ui.components.ToastType
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.Border
+import com.iams.app.ui.theme.LinkBlue
 import com.iams.app.ui.theme.PresentFg
 import com.iams.app.ui.theme.Primary
 import com.iams.app.ui.theme.TextSecondary
@@ -62,6 +70,7 @@ fun RegisterReviewScreen(
     val toastState = LocalToastState.current
     val hasFaces = uiState.capturedFaces.isNotEmpty()
     var isAgreed by remember { mutableStateOf(false) }
+    var activeLegalDoc by remember { mutableStateOf<LegalDocument?>(null) }
 
     // Read registration data from holder (set in Step 2)
     val regData = RegistrationDataHolder
@@ -182,26 +191,60 @@ fun RegisterReviewScreen(
 
         // ── Terms Checkbox ───────────────────────────────
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = { isAgreed = !isAgreed }
-                ),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.Top
         ) {
             Icon(
                 imageVector = if (isAgreed) Icons.Filled.CheckBox else Icons.Filled.CheckBoxOutlineBlank,
                 contentDescription = if (isAgreed) "Agreed" else "Not agreed",
-                modifier = Modifier.size(22.dp),
+                modifier = Modifier
+                    .size(22.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = { isAgreed = !isAgreed }
+                    ),
                 tint = if (isAgreed) Primary else TextTertiary
             )
             Spacer(modifier = Modifier.width(12.dp))
+
+            val linkStyles = TextLinkStyles(
+                style = SpanStyle(color = LinkBlue, fontWeight = FontWeight.Medium)
+            )
+            val agreementText = buildAnnotatedString {
+                append("I agree to the ")
+                withLink(
+                    LinkAnnotation.Clickable(
+                        tag = "terms",
+                        styles = linkStyles,
+                        linkInteractionListener = {
+                            activeLegalDoc = LegalDocument.TERMS_OF_SERVICE
+                        }
+                    )
+                ) { append("Terms of Service") }
+                append(" and ")
+                withLink(
+                    LinkAnnotation.Clickable(
+                        tag = "privacy",
+                        styles = linkStyles,
+                        linkInteractionListener = {
+                            activeLegalDoc = LegalDocument.PRIVACY_POLICY
+                        }
+                    )
+                ) { append("Privacy Policy") }
+            }
             Text(
-                text = "I agree to the Terms of Service and Privacy Policy",
+                text = agreementText,
                 style = MaterialTheme.typography.bodySmall,
                 color = TextSecondary
+            )
+        }
+
+        // ── Terms / Privacy slide-up sheet ────────────────
+        activeLegalDoc?.let { doc ->
+            LegalDocumentSheet(
+                document = doc,
+                onDismiss = { activeLegalDoc = null }
             )
         }
 

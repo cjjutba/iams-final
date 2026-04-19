@@ -295,10 +295,12 @@ def get_daily_trend(
     db: Session = Depends(get_db),
 ):
     """
-    Daily attendance counts (present/late/absent) for the last N days.
-    Used by the admin dashboard line chart.
+    Daily attendance counts (present/late/absent/early_leave) for the last N days.
+    Returns a continuous series — every day in the window is included (zero-filled)
+    so the line chart renders without gaps.
     """
-    cutoff = date.today() - timedelta(days=days)
+    today = date.today()
+    cutoff = today - timedelta(days=days - 1)
 
     rows = (
         db.query(
@@ -311,18 +313,25 @@ def get_daily_trend(
         .all()
     )
 
-    # Aggregate by date
-    daily: dict[date, dict[str, int]] = {}
+    def _empty() -> dict[str, int]:
+        return {"present": 0, "late": 0, "absent": 0, "early_leave": 0}
+
+    # Pre-seed every date in the window so the trend has no gaps
+    daily: dict[date, dict[str, int]] = {
+        cutoff + timedelta(days=i): _empty() for i in range(days)
+    }
+
     for r in rows:
-        d = r.date
-        if d not in daily:
-            daily[d] = {"present": 0, "late": 0, "absent": 0}
+        if r.date not in daily:
+            daily[r.date] = _empty()
         if r.status == AttendanceStatus.PRESENT:
-            daily[d]["present"] += r.cnt
+            daily[r.date]["present"] += r.cnt
         elif r.status == AttendanceStatus.LATE:
-            daily[d]["late"] += r.cnt
+            daily[r.date]["late"] += r.cnt
         elif r.status == AttendanceStatus.ABSENT:
-            daily[d]["absent"] += r.cnt
+            daily[r.date]["absent"] += r.cnt
+        elif r.status == AttendanceStatus.EARLY_LEAVE:
+            daily[r.date]["early_leave"] += r.cnt
 
     result = sorted(
         [{"date": d.isoformat(), **counts} for d, counts in daily.items()],

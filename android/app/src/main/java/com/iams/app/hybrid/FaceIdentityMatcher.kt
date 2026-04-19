@@ -163,6 +163,7 @@ class DefaultFaceIdentityMatcher(
             name = bt.name,
             confidence = bt.confidence,
             status = bt.status,
+            recognitionState = bt.recognitionState,
         )
         val existing = bindingsByMlkitId[mlkitId]
         when {
@@ -278,6 +279,7 @@ class DefaultFaceIdentityMatcher(
                         name = bt.name,
                         confidence = bt.confidence,
                         status = bt.status,
+                        recognitionState = bt.recognitionState,
                     ),
                     lastBoundAtNs = 0L,
                     source = HybridSource.BACKEND_ONLY,

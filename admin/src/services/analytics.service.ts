@@ -29,6 +29,7 @@ export interface DailyTrendItem {
   present: number
   late: number
   absent: number
+  early_leave: number
 }
 
 export interface WeekdayBreakdownItem {
