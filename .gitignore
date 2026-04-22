@@ -65,15 +65,6 @@ data/uploads/*
 Thumbs.db
 nul
 
-# Flutter
-mobile/.dart_tool/
-mobile/.packages
-mobile/.pub-cache/
-mobile/.pub/
-mobile/build/
-mobile/*.iml
-mobile/.metadata
-
 # Testing
 .coverage
 htmlcov/

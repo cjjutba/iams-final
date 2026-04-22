@@ -40,6 +40,20 @@ class FrameGrabber:
         fps:           FFmpeg output frame rate. Default from settings.
     """
 
+    # Reconnect backoff when FFmpeg keeps failing to open the stream
+    # (e.g. mediamtx returns 404 because no publisher is pushing).
+    # Index by consecutive-failure count; last entry is the cap.
+    _BACKOFF_SCHEDULE: tuple[float, ...] = (2.0, 5.0, 10.0, 20.0, 30.0)
+
+    # Stderr patterns produced by FFmpeg when the RTSP endpoint has no
+    # active publisher. Each FFmpeg spawn prints all four — we collapse
+    # the whole cluster into a single "publisher offline" warning.
+    _OFFLINE_STDERR_PATTERNS: tuple[str, ...] = (
+        "404 Not Found",
+        "method DESCRIBE failed",
+        "Error opening input",
+    )
+
     def __init__(
         self,
         rtsp_url: str,
@@ -58,6 +72,11 @@ class FrameGrabber:
         self._lock = threading.Lock()
         self._latest_frame: np.ndarray | None = None
         self._frame_time: float = 0.0
+
+        # Failure tracking for backoff + deduped offline logging.
+        # Shared across reconnects (each reconnect spawns a new stderr thread).
+        self._consecutive_failures: int = 0
+        self._publisher_offline_logged: bool = False
 
         self._stop_event = threading.Event()
         self._process: subprocess.Popen | None = None
@@ -149,7 +168,13 @@ class FrameGrabber:
                 stderr=subprocess.PIPE,
                 bufsize=self._frame_bytes,  # buffer exactly 1 frame — minimizes latency
             )
-            logger.info("FFmpeg started for %s (pid=%d)", self._url, proc.pid)
+            # Keep the "started" log at debug during reconnect storms so a
+            # camera-offline condition doesn't spam this line every backoff cycle.
+            if self._consecutive_failures == 0:
+                logger.info("FFmpeg started for %s (pid=%d)", self._url, proc.pid)
+            else:
+                logger.debug("FFmpeg retry spawn for %s (pid=%d, attempt=%d)",
+                             self._url, proc.pid, self._consecutive_failures + 1)
             # Drain stderr in a background thread so we can log FFmpeg errors
             threading.Thread(target=self._drain_stderr, args=(proc,), daemon=True, name="ffmpeg-stderr").start()
             return proc
@@ -175,20 +200,49 @@ class FrameGrabber:
             self._process = None
 
     def _drain_stderr(self, proc: subprocess.Popen) -> None:
-        """Read FFmpeg stderr and log warnings/errors."""
+        """Read FFmpeg stderr and log warnings/errors.
+
+        Errors that indicate "no RTSP publisher" (mediamtx 404) are collapsed
+        into a single ``publisher offline`` warning per outage — otherwise the
+        4 error lines FFmpeg prints per failed DESCRIBE would be emitted every
+        backoff cycle and drown the rest of the log.
+        """
         try:
             for line in proc.stderr:
                 msg = line.decode("utf-8", errors="replace").strip()
-                if msg:
-                    logger.warning("FFmpeg [%s]: %s", self._url, msg)
+                if not msg:
+                    continue
+                is_offline_noise = any(p in msg for p in self._OFFLINE_STDERR_PATTERNS)
+                if is_offline_noise:
+                    if not self._publisher_offline_logged:
+                        logger.warning(
+                            "Publisher offline for %s (mediamtx returned 404 — "
+                            "no active RTSP publisher). Suppressing further "
+                            "FFmpeg noise until frames resume.",
+                            self._url,
+                        )
+                        self._publisher_offline_logged = True
+                    continue
+                logger.warning("FFmpeg [%s]: %s", self._url, msg)
         except Exception:
             pass  # process died, nothing to drain
 
     def _reconnect(self) -> None:
         """Kill current FFmpeg and start a fresh one."""
-        logger.info("Reconnecting FFmpeg for %s", self._url)
+        # Keep the "reconnecting" log at debug during a publisher-offline storm;
+        # we already logged the offline condition once in _drain_stderr.
+        if self._consecutive_failures == 0:
+            logger.info("Reconnecting FFmpeg for %s", self._url)
+        else:
+            logger.debug("Reconnecting FFmpeg for %s (attempt=%d)",
+                         self._url, self._consecutive_failures + 1)
         self._kill_ffmpeg()
         self._process = self._start_ffmpeg()
+
+    def _backoff_delay(self) -> float:
+        """Delay before the next reconnect attempt based on consecutive failures."""
+        idx = min(self._consecutive_failures, len(self._BACKOFF_SCHEDULE) - 1)
+        return self._BACKOFF_SCHEDULE[idx]
 
     def _read_exactly(self, n: int) -> bytes | None:
         """Read exactly n bytes from FFmpeg stdout, or None on EOF."""
@@ -209,8 +263,11 @@ class FrameGrabber:
 
         while not self._stop_event.is_set():
             if self._process is None or self._process.poll() is not None:
-                # FFmpeg not running — wait and reconnect
-                self._stop_event.wait(2.0)
+                # FFmpeg exited (or never started). Back off before retrying
+                # so a 404-returning mediamtx doesn't burn CPU + spam logs.
+                delay = self._backoff_delay()
+                self._consecutive_failures += 1
+                self._stop_event.wait(delay)
                 if not self._stop_event.is_set():
                     with self._lock:
                         self._reconnect()
@@ -218,8 +275,11 @@ class FrameGrabber:
 
             data = self._read_exactly(self._frame_bytes)
             if data is None or len(data) < self._frame_bytes:
-                # EOF or short read — FFmpeg died
-                self._stop_event.wait(1.0)
+                # EOF or short read — FFmpeg died. Apply backoff here too,
+                # same reasoning as above.
+                delay = self._backoff_delay()
+                self._consecutive_failures += 1
+                self._stop_event.wait(delay)
                 if not self._stop_event.is_set():
                     with self._lock:
                         self._reconnect()
@@ -228,6 +288,17 @@ class FrameGrabber:
             frames_read += 1
             if frames_read <= warmup_frames:
                 continue
+
+            # Successful read — reset failure state and announce recovery
+            # if we were previously in an offline state.
+            if self._consecutive_failures > 0 or self._publisher_offline_logged:
+                logger.info(
+                    "Publisher online for %s (recovered after %d failed attempts)",
+                    self._url,
+                    self._consecutive_failures,
+                )
+            self._consecutive_failures = 0
+            self._publisher_offline_logged = False
 
             frame = np.frombuffer(data, dtype=np.uint8).reshape((self._height, self._width, 3))
 

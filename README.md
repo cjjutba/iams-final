@@ -14,7 +14,7 @@ A CCTV-based facial recognition attendance system built for Jose Rizal Memorial 
 - [System Components](#system-components)
   - [Backend (FastAPI)](#backend-fastapi)
   - [Edge Device (Raspberry Pi)](#edge-device-raspberry-pi)
-  - [Mobile App (React Native)](#mobile-app-react-native)
+  - [Android App (Kotlin)](#android-app-kotlin)
   - [Admin Dashboard (React)](#admin-dashboard-react)
 - [Face Recognition Pipeline](#face-recognition-pipeline)
 - [Presence Tracking & Early-Leave Detection](#presence-tracking--early-leave-detection)
@@ -31,7 +31,7 @@ A CCTV-based facial recognition attendance system built for Jose Rizal Memorial 
 
 ## Overview
 
-IAMS replaces manual roll calls with an automated system: a Raspberry Pi camera watches the classroom, detects faces with MediaPipe, and sends them to the backend. The backend recognizes faces with InsightFace (ArcFace), tracks presence every 60 seconds, and fires alerts when a student leaves early. Faculty and students interact with the system through native mobile apps; admins use a web dashboard.
+IAMS replaces manual roll calls with an automated system: a Raspberry Pi camera watches the classroom, detects faces with MediaPipe, and sends them to the backend. The backend recognizes faces with InsightFace (ArcFace), tracks presence every 60 seconds, and fires alerts when a student leaves early. Faculty and students interact with the system through a native Android app (Kotlin + Jetpack Compose); admins use a web dashboard.
 
 **Pilot target:** JRMSU Computer Engineering classrooms. Students use their own phones.
 
@@ -89,9 +89,9 @@ IAMS replaces manual roll calls with an automated system: a Raspberry Pi camera 
                     ┌─────────────┘               └──────────────┐
                     ▼                                             ▼
         ┌──────────────────────┐                ┌──────────────────────────┐
-        │  Supabase (managed)  │                │  React Native Mobile App │
-        │  PostgreSQL + Auth   │                │  • Student app           │
-        │  (cloud hosted)      │                │  • Faculty app           │
+        │  Supabase (managed)  │                │  Native Android App      │
+        │  PostgreSQL + Auth   │                │  (Kotlin + Compose)      │
+        │  (cloud hosted)      │                │  • Student + Faculty     │
         └──────────────────────┘                └──────────────────────────┘
                                                 ┌──────────────────────────┐
                                                 │  Admin Dashboard (React) │
@@ -158,7 +158,7 @@ IAMS replaces manual roll calls with an automated system: a Raspberry Pi camera 
 | Auth | Custom JWT (HS256) · bcrypt · GoTrue Admin API (Supabase) |
 | Cache / pub-sub | Redis 7 (hiredis) |
 | Video streaming | mediamtx (RTSP→WHEP) · Coturn (TURN) · FFmpeg (HLS fallback) |
-| Mobile | React Native (Expo) · TypeScript · Zustand · React Hook Form + Zod |
+| Android app | Kotlin · Jetpack Compose · Material 3 · ExoPlayer (Media3) · ML Kit Face Detection · CameraX · Retrofit + OkHttp · Hilt · Navigation Compose · DataStore |
 | Admin dashboard | React 18 · Vite · TypeScript · shadcn/ui · TanStack Query · Recharts |
 | Deployment | Docker + Docker Compose · Nginx · DigitalOcean VPS · Certbot (HTTPS) |
 | Email | Resend API |
@@ -203,20 +203,24 @@ iams/
 │   ├── scripts/              # Utility scripts
 │   └── requirements.txt
 │
-├── mobile/                   # React Native app (Expo)
-│   ├── src/
-│   │   ├── screens/
-│   │   │   ├── auth/         # Login, register (3 steps), email verify, reset password
-│   │   │   ├── student/      # Home, history, schedule, notifications, profile, face register
-│   │   │   ├── faculty/      # Home, live attendance, alerts, reports, analytics, profile
-│   │   │   └── onboarding/   # Splash, welcome, onboarding slides
-│   │   ├── navigation/       # Stack + bottom tab navigators
-│   │   ├── services/         # API clients (Axios)
-│   │   ├── stores/           # Zustand state (auth, attendance, notifications)
-│   │   ├── hooks/            # Custom hooks (useAuth, useWebSocket, etc.)
-│   │   └── types/            # TypeScript interfaces
-│   ├── android/
-│   └── package.json
+├── android/                  # Native Android app (Kotlin + Jetpack Compose)
+│   ├── app/
+│   │   └── src/main/java/com/iams/app/
+│   │       ├── IAMSApplication.kt       # @HiltAndroidApp
+│   │       ├── MainActivity.kt          # Single-activity host
+│   │       ├── di/NetworkModule.kt      # Hilt: Retrofit, OkHttp, ApiService
+│   │       ├── data/
+│   │       │   ├── api/                 # ApiService, AuthInterceptor, TokenManager, WebSocket
+│   │       │   └── model/Models.kt      # Data classes (API DTOs)
+│   │       └── ui/
+│   │           ├── theme/               # Material 3 monochrome theme
+│   │           ├── navigation/          # Routes, NavHost, NavViewModel
+│   │           ├── components/          # RtspVideoPlayer, ML Kit processor, overlays, etc.
+│   │           ├── auth/                # Login, registration (4 steps), email verification
+│   │           ├── student/             # Home, schedule, history, profile
+│   │           └── faculty/             # Home, live feed (WebRTC + ML Kit), reports, profile
+│   ├── gradle.properties                # IAMS_BACKEND_HOST/PORT (managed by scripts/switch-env.sh)
+│   └── build.gradle.kts
 │
 ├── admin/                    # Admin dashboard (React + Vite)
 │   ├── src/
@@ -238,7 +242,7 @@ iams/
 │
 ├── docs/
 │   ├── main/                 # Architecture, API reference, database schema, implementation, etc.
-│   └── screens/              # Mobile screen list (35 screens)
+│   └── screens/              # Android screen list and navigation flow
 │
 ├── docker-compose.yml        # Local development compose
 └── CLAUDE.md                 # Claude Code project instructions
@@ -346,62 +350,27 @@ LOG_LEVEL=INFO
 
 ---
 
-### Mobile App (React Native)
+### Android App (Kotlin)
 
-Built with Expo (React Native + TypeScript). Separate navigation stacks for students and faculty.
+Native Android app built with Kotlin + Jetpack Compose (Material 3). Single `MainActivity` (`@AndroidEntryPoint`) hosts a Navigation Compose graph with separate flows for students and faculty.
 
-**Student screens (9 screens):**
+**Student flow:** Home dashboard, schedule, attendance history, profile. Self-registration wizard (verify Student ID → create account → email verification → CameraX capture of 3–5 face angles → review + submit).
 
-| Screen | Purpose |
-|--------|---------|
-| `StudentHomeScreen` | Dashboard with today's attendance summary and active session status |
-| `StudentHistoryScreen` | Historical attendance records with filter |
-| `StudentScheduleScreen` | Enrolled class schedule |
-| `StudentNotificationsScreen` | In-app notifications (early-leave alerts, digests) |
-| `StudentProfileScreen` | View profile, face registration status |
-| `StudentEditProfileScreen` | Update personal info |
-| `StudentFaceRegisterScreen` | Capture 3–5 face angles for registration |
-| `StudentAnalyticsScreen` | Personal attendance rates and trends |
-| `StudentAttendanceDetailScreen` | Per-class attendance detail |
+**Faculty flow:** Home with today's classes, Live Feed screen (the crown jewel — ExoPlayer WebRTC video + on-device ML Kit face detection + backend identity overlay), reports, profile. Faculty accounts are pre-seeded (no self-registration).
 
-**Faculty screens (13 screens):**
+**Hybrid detection on the Live Feed screen (gated by `BuildConfig.HYBRID_DETECTION_ENABLED`):**
 
-| Screen | Purpose |
-|--------|---------|
-| `FacultyHomeScreen` | Active sessions overview, quick access to live attendance |
-| `FacultyLiveAttendanceScreen` | Real-time student presence list for active session |
-| `FacultyLiveFeedScreen` | WebRTC live camera feed (<300 ms latency) |
-| `FacultyAlertsScreen` | Early-leave alerts, student absence alerts |
-| `FacultyNotificationsScreen` | All notifications |
-| `FacultyScheduleScreen` | Teaching schedule |
-| `FacultyClassDetailScreen` | Per-class attendance summary and student list |
-| `FacultyStudentDetailScreen` | Individual student attendance profile |
-| `FacultyReportsScreen` | Exportable attendance reports |
-| `FacultyAnalyticsDashboardScreen` | Charts: attendance rate, engagement scores, trends |
-| `FacultyManualEntryScreen` | Manually mark a student present/absent |
-| `FacultyProfileScreen` | View profile |
-| `FacultyEditProfileScreen` | Update personal info |
+- **Video delivery** — mediamtx → WebRTC → `SurfaceViewRenderer` on the phone (no backend processing, always smooth).
+- **Face detection (positions)** — Google ML Kit runs on-device at ~15 fps against WebRTC frames via `MlKitFrameSink`. Zero network, instant bounding boxes.
+- **Face recognition (identities)** — Backend processes RTSP at 5 fps (SCRFD + ByteTrack + ArcFace + FAISS) and broadcasts `{track_id, bbox, name, server_time_ms, frame_sequence}` over WebSocket.
+- **Fusion** — `FaceIdentityMatcher` on the phone binds ML Kit detections to backend identities via IoU (greedy assignment with sticky release threshold and identity-hold TTL) so names don't flip when faces cluster.
+- **Fallback** — `HybridFallbackController` monitors ML Kit + WebSocket liveness and switches between `HYBRID` / `BACKEND_ONLY` / `DEGRADED` / `OFFLINE` modes automatically.
 
-**Auth + onboarding screens (10 screens):**
+**Networking:** Retrofit + OkHttp with `AuthInterceptor` for bearer tokens, `TokenManager` persists JWTs in DataStore. `AttendanceWebSocketClient` uses OkHttp's WebSocket with auto-reconnect.
 
-| Screen | Purpose |
-|--------|---------|
-| `SplashScreen` | App launch splash |
-| `WelcomeScreen` | Role selection (student / faculty) |
-| `OnboardingScreen` | Feature highlights for new users |
-| `StudentLoginScreen` | Student ID + password login |
-| `FacultyLoginScreen` | Email + password login |
-| `RegisterStep1Screen` | Enter Student ID for verification |
-| `RegisterStep2Screen` | Fill account details (name, email, password) |
-| `RegisterStep3Screen` | Capture face images (3–5 angles) |
-| `RegisterReviewScreen` | Review and submit registration |
-| `EmailVerificationScreen` | Handle email confirmation link |
-| `ForgotPasswordScreen` | Request password reset |
-| `ResetPasswordScreen` | Set new password via OTP token |
+**DI:** Hilt (`IAMSApplication` is `@HiltAndroidApp`, all screens are `@AndroidEntryPoint`). `NetworkModule` provides Retrofit, OkHttp, and the `ApiService`.
 
-**State management:** Zustand stores for auth, attendance data, notifications. AsyncStorage for token persistence. React Hook Form + Zod for all forms.
-
-**Real-time:** WebSocket connection per authenticated user (`/api/v1/ws/{user_id}`) with auto-reconnect. Events: `attendance_marked`, `early_leave_alert`, `session_started`, `session_ended`, `notification`.
+**Backend target:** Build-time `BACKEND_HOST` / `BACKEND_PORT` from `android/gradle.properties`, managed exclusively by [scripts/switch-env.sh](scripts/switch-env.sh) — never hand-edited.
 
 ---
 
@@ -773,14 +742,18 @@ pnpm dev
 # → http://localhost:5173
 ```
 
-### 5. Mobile app
+### 5. Android app
 
 ```bash
-cd mobile
-pnpm install
-pnpm android   # Android (requires Android Studio / emulator)
-pnpm ios       # iOS (macOS + Xcode only)
+# Point the APK at local Docker or at the VPS (never hand-edit gradle.properties).
+./scripts/switch-env.sh local       # LAN IP of this Mac, port 8000
+# or: ./scripts/switch-env.sh production   # VPS: 167.71.217.44, port 80
+
+cd android
+./gradlew clean installDebug        # Always use `clean` on every environment switch
 ```
+
+Requires Android Studio (SDK 35, min SDK 26). Open the `android/` folder in Android Studio for iterative development.
 
 ### 6. Edge device (Raspberry Pi)
 
@@ -865,7 +838,7 @@ bash deploy/setup-server.sh
 | Edge device | Raspberry Pi 4 (4 GB) | Runs detection only — no GPU needed |
 | Camera | Pi Camera Module 3 or USB webcam | RTSP IP camera also supported |
 | Network | Stable WiFi or Ethernet | RPi needs internet access to VPS |
-| Student devices | Any Android / iOS phone | Students use their own phones |
+| Student devices | Android phone (SDK 26+) | Students use their own phones. For LOCAL dev mode, device must share the Mac's WiFi subnet. |
 
 ### Development machine
 
@@ -900,7 +873,7 @@ Full documentation lives in `docs/main/`:
 | [Best Practices](docs/main/best-practices.md) | Coding guidelines |
 | [ML Pipeline](docs/main/ml-pipeline-spec.md) | InsightFace + FAISS technical spec |
 | [Master Blueprint](docs/main/master-blueprint.md) | Full system blueprint |
-| [Screen List](docs/screens/screen-list.md) | All 35 mobile screens with navigation flow |
+| [Screen List](docs/screens/screen-list.md) | Android app screen list and navigation flow |
 
 ---
 
