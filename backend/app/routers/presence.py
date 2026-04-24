@@ -36,6 +36,10 @@ class SessionStartRequest(BaseModel):
     schedule_id: str
 
 
+class SessionEndRequest(BaseModel):
+    schedule_id: str
+
+
 class SessionStartResponse(BaseModel):
     schedule_id: str
     started_at: datetime
@@ -129,6 +133,22 @@ async def start_session(
                         if not faiss_manager.user_map:
                             faiss_manager.rebuild_user_map_from_db()
 
+                        # If an admin was watching this schedule out-of-window,
+                        # a preview pipeline is currently running. Stop it
+                        # before starting the full one so they don't compete
+                        # for the same grabber.
+                        preview_pipelines = getattr(http_request.app.state, "preview_pipelines", None)
+                        if preview_pipelines is not None:
+                            existing_preview = preview_pipelines.pop(body.schedule_id, None)
+                            if existing_preview is not None:
+                                try:
+                                    await existing_preview.stop()
+                                    logger.info(
+                                        f"Replaced preview with full pipeline for {body.schedule_id}"
+                                    )
+                                except Exception as prev_err:
+                                    logger.error(f"Failed to stop preview pipeline: {prev_err}")
+
                         from app.database import SessionLocal
                         from app.services.realtime_pipeline import SessionPipeline
 
@@ -166,8 +186,8 @@ async def start_session(
     description="End an active attendance tracking session",
 )
 async def end_session(
+    body: SessionEndRequest,
     http_request: Request,
-    schedule_id: str = Query(..., description="Schedule UUID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -181,6 +201,8 @@ async def end_session(
     # Check permissions
     if current_user.role not in [UserRole.FACULTY, UserRole.ADMIN]:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only faculty and admins can end sessions")
+
+    schedule_id = body.schedule_id
 
     try:
         presence_service = PresenceService(db)

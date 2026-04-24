@@ -1,0 +1,119 @@
+# mediamtx ONPREM configuration for IAMS
+#
+# Target host: Mac on IAMS-Net running deploy/docker-compose.onprem.yml.
+#
+# Two stream endpoints from ONE camera pull:
+#   1. RPi → this mediamtx (port 8554). Serves the LAN admin portal via WHEP
+#      on port 8889, and is consumed by the api-gateway's frame-grabber.
+#   2. This mediamtx → VPS mediamtx via runOnReady ffmpeg (outbound RTSP push).
+#      The VPS serves that pushed stream as the public WebRTC feed for the
+#      mobile app.
+#
+# Difference vs mediamtx.dev.yml:
+# - No `source: rtsp://...@192.168.88.10/...` — cameras do not get pulled by
+#   this mediamtx directly. The RPi is the single camera reader.
+# - paths include a runOnReady hook that mirrors the ingested stream to the
+#   VPS on the same path name (e.g. `eb226` → `rtsp://167.71.217.44:8554/eb226`).
+# - webrtcAdditionalHosts is patched at startup by scripts/onprem-up.sh with
+#   the Mac's current LAN IP (same sed pattern as scripts/dev-up.sh).
+
+logLevel: info
+
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+        path:
+      - action: read
+        path:
+      - action: playback
+        path:
+  - user: any
+    pass:
+    ips: ['127.0.0.1', '::1', '172.16.0.0/12', '192.168.0.0/16', '10.0.0.0/8']
+    permissions:
+      - action: api
+      - action: metrics
+      - action: pprof
+
+api: yes
+apiAddress: :9997
+
+rtsp: yes
+rtspAddress: :8554
+
+# Longer than the mediamtx 10 s default — bursty cameras / WiFi publisher
+# reconnects benefit from the extra slack. Matches the VPS config.
+readTimeout: 30s
+writeTimeout: 30s
+
+webrtc: yes
+webrtcAddress: :8889
+
+# Only advertise the Mac's LAN IP as a WebRTC candidate. Docker-internal
+# addresses (172.x / 127.0.0.1) are unreachable from the admin browser + phone.
+#
+# THIS FILE IS A TEMPLATE. scripts/onprem-up.sh copies it to
+# `deploy/mediamtx.onprem.generated.yml` (gitignored) and rewrites
+# `webrtcAdditionalHosts` with the Mac's actual `ipconfig getifaddr en0` IP.
+# docker-compose.onprem.yml mounts the generated copy, not this template.
+# Do NOT commit real LAN IPs here — the placeholder below is intentional.
+webrtcIPsFromInterfaces: no
+webrtcAdditionalHosts:
+  - 127.0.0.1   # placeholder — substituted by scripts/onprem-up.sh
+
+webrtcLocalUDPAddress: :8887
+
+# LAN-only admin portal + phones on IAMS-Net — STUN alone resolves NAT within
+# the LAN. No TURN needed (that's the VPS relay's job for off-campus viewers).
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+
+hls: no
+srt: no
+rtmp: no
+
+writeQueueSize: 512
+
+# Paths: the host ffmpeg supervisor (scripts/iams-cam-relay.sh) pushes the
+# camera MAIN stream to `eb226`, `eb227`, … and the camera SUB stream to
+# `eb226-sub`, `eb227-sub`, ….
+#
+# Matching order:
+#   1. The regex `~^.+-sub$` catches the admin-only sub streams and keeps
+#      them LOCAL — no runOnReady, so they never hit the VPS. The admin
+#      portal's WhepPlayer consumes these directly.
+#   2. `all_others` catches everything else (the main streams) and mirrors
+#      them to the VPS for the Faculty APK.
+paths:
+  # Admin-only low-bitrate streams. No VPS push. No re-encode.
+  "~^.+-sub$":
+    overridePublisher: yes
+
+  all_others:
+    # Allow publisher reconnection without waiting for old session timeout
+    # — important when the RPi relay restarts (power cycle, network blip).
+    overridePublisher: yes
+
+    # On publisher-ready, spawn ffmpeg that pulls the local path and pushes
+    # to the same path name on the VPS. `-c copy` = no re-encode; zero CPU.
+    # $MTX_PATH is expanded by mediamtx to the current path name.
+    #
+    # runOnReadyRestart: yes auto-restarts the ffmpeg if it exits (common
+    # case: VPS mediamtx TCP reset, school network blip). No manual babysitting.
+    #
+    # Why push outbound instead of VPS pulling? MikroTik / school NAT blocks
+    # inbound to the LAN; outbound always works. See lessons 2026-04-21:
+    # "NAT-aware streaming — always push LAN → cloud, never pull".
+    #
+    # NOTE (2026-04-22): the bluenviron/mediamtx Alpine image has no `sh` —
+    # wrapping in `sh -c "..."` crashes every 5 s with "exec: sh: executable
+    # file not found in $PATH". mediamtx's runOnReady just exec's the
+    # command directly, so we drop the shell wrapper and put all args in
+    # a single line. Env-var expansion ($MTX_PATH) is handled by mediamtx
+    # itself before exec.
+    runOnReady: ffmpeg -hide_banner -loglevel warning -fflags nobuffer -flags low_delay -rtsp_transport tcp -i rtsp://localhost:8554/$MTX_PATH -c copy -an -f rtsp -rtsp_transport tcp -rw_timeout 15000000 rtsp://167.71.217.44:8554/$MTX_PATH
+    runOnReadyRestart: yes

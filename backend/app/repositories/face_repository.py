@@ -228,6 +228,31 @@ class FaceRepository:
         """Get all embeddings for a registration."""
         return self.db.query(FaceEmbedding).filter(FaceEmbedding.registration_id == uuid.UUID(registration_id)).all()
 
+    def set_image_storage_keys(self, registration_id: str, keys_by_faiss: dict[int, str]) -> int:
+        """Update `image_storage_key` on embeddings by FAISS id.
+
+        Used by the post-commit image-persistence step in
+        `FaceService.register_face`. Returns the number of rows updated.
+        Caller is responsible for committing.
+        """
+        if not keys_by_faiss:
+            return 0
+        embeddings = (
+            self.db.query(FaceEmbedding)
+            .filter(
+                FaceEmbedding.registration_id == uuid.UUID(registration_id),
+                FaceEmbedding.faiss_id.in_(keys_by_faiss.keys()),
+            )
+            .all()
+        )
+        updated = 0
+        for emb in embeddings:
+            key = keys_by_faiss.get(int(emb.faiss_id))
+            if key:
+                emb.image_storage_key = key
+                updated += 1
+        return updated
+
     def get_all_active_embeddings(self) -> list[FaceEmbedding]:
         """
         Get all FaceEmbedding rows belonging to active registrations.

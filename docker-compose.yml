@@ -54,7 +54,10 @@ services:
     image: bluenviron/mediamtx:1.11.3
     container_name: iams-mediamtx
     volumes:
-      - ./deploy/mediamtx.dev.yml:/mediamtx.yml:ro
+      # Mount the gitignored `.generated.yml` produced by scripts/dev-up.sh
+      # from the committed `mediamtx.dev.yml` template. This keeps the Mac's
+      # LAN IP out of version control (see .gitignore).
+      - ./deploy/mediamtx.dev.generated.yml:/mediamtx.yml:ro
     ports:
       - "8554:8554"      # RTSP
       - "8887:8887/udp"  # WebRTC media UDP

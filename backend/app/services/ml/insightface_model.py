@@ -6,6 +6,25 @@ InsightFace buffalo_l model pack. Single instance shared across registration
 (selfie uploads) and CCTV recognition — same SCRFD detector, same ArcFace
 embedder, so embeddings are numerically compatible between the two paths.
 
+Two API surfaces live here:
+
+- Registration path (selfie uploads): ``get_embedding`` /
+  ``get_face_with_quality`` / ``get_embeddings_batch``. These still go through
+  the full ``FaceAnalysis.get()`` because they process one image at a time
+  and the ~40 ms cost of the unused per-face models (landmark_2d_106,
+  landmark_3d_68, genderage) doesn't matter.
+
+- CCTV realtime path (``RealtimeTracker``): ``detect()`` and
+  ``embed_from_kps()``. These split the pipeline so that every-frame cost is
+  **only** SCRFD, and ArcFace runs strictly on new / drifted / re-verify
+  tracks. We also instruct ``FaceAnalysis`` to load only the two models we
+  actually use via ``allowed_modules=['detection', 'recognition']`` —
+  buffalo_l normally spins up 5 ONNX sessions (detection, landmark_2d_106,
+  landmark_3d_68, genderage, recognition) and runs the last four on every
+  face every frame, which dominates per-face cost in a full-classroom scene.
+  Skipping those three cuts ~25 ms × N_faces per frame, enough to be the
+  difference between a smooth and a choppy stream at 1–2 fps.
+
 References:
   - ArcFace: Deng et al., CVPR 2019
   - SCRFD:   Guo et al., ICCV 2021
@@ -96,7 +115,18 @@ class InsightFaceModel:
             logger.info(
                 f"Loading InsightFace '{self._model_name}' (providers={providers}, det_size={self._det_size})..."
             )
-            self.app = FaceAnalysis(name=self._model_name, providers=providers)
+            # ``allowed_modules`` pins the loaded ONNX sessions to just the two
+            # we use. Without this, buffalo_l eagerly loads landmark_2d_106,
+            # landmark_3d_68, and genderage, and ``FaceAnalysis.get()`` runs
+            # each of them on every detected face on every frame (see the
+            # upstream ``for taskname, model in self.models.items()`` loop).
+            # For the realtime CCTV path we never consume any of those
+            # outputs, so loading and running them is pure overhead.
+            self.app = FaceAnalysis(
+                name=self._model_name,
+                providers=providers,
+                allowed_modules=["detection", "recognition"],
+            )
             self.app.prepare(ctx_id=0, det_size=self._det_size, det_thresh=settings.INSIGHTFACE_DET_THRESH)
 
             # NOTE: ORT session thread counts are controlled via OMP_NUM_THREADS
@@ -318,6 +348,131 @@ class InsightFaceModel:
             "bbox": (int(x1), int(y1), int(max(1, x2 - x1)), int(max(1, y2 - y1))),
             "image_bgr": bgr,
         }
+
+    # ------------------------------------------------------------------
+    # CCTV realtime API — detect-only + embed-from-kps
+    # ------------------------------------------------------------------
+    #
+    # Why a separate API: ``FaceAnalysis.get()`` always runs
+    #   detection → (landmark_2d_106) → (landmark_3d_68) → (genderage) →
+    #   recognition
+    # on every face. For the realtime tracker we want SCRFD every frame
+    # (cheap-ish, needed for ByteTrack), but ArcFace **only** on tracks that
+    # are new, drifting, or due for re-verification. Pulling the two apart
+    # lets the tracker skip ArcFace for already-known tracks, which is the
+    # common case in a classroom of 5-20 mostly-stationary students.
+    #
+    # Correctness: the bboxes + 5-point keypoints this returns are in the
+    # coordinate system of the **input frame** passed to ``detect()``. The
+    # tracker downscales for detection and must scale the returned bboxes /
+    # keypoints back to the original full-resolution frame before calling
+    # ``embed_from_kps`` — ArcFace alignment is scale-sensitive and needs the
+    # crop from the original-res frame to preserve recognition accuracy.
+
+    def detect(
+        self,
+        frame: np.ndarray,
+        input_size: tuple[int, int] | None = None,
+    ) -> list[dict]:
+        """Run SCRFD detection on ``frame`` and return raw bboxes + keypoints.
+
+        Args:
+            frame: BGR numpy array. Can be the original-resolution CCTV
+                frame or a pre-downscaled copy — all returned coordinates
+                are in this frame's pixel space.
+            input_size: Optional SCRFD internal input size override. If
+                None, uses the size set at ``prepare()`` time
+                (``settings.INSIGHTFACE_DET_SIZE``).
+
+        Returns:
+            List of dicts, one per detected face:
+              - ``bbox``: np.ndarray [x1, y1, x2, y2] in pixels, float32.
+              - ``det_score``: SCRFD detection confidence (0..1).
+              - ``kps``: np.ndarray [5, 2] five-point landmarks in pixels
+                (right-eye, left-eye, nose, right-mouth, left-mouth), or
+                ``None`` if the model wasn't configured to return them
+                (buffalo_l does).
+        """
+        if self.app is None or self.app.det_model is None:
+            return []
+
+        try:
+            bboxes, kpss = self.app.det_model.detect(
+                frame,
+                input_size=input_size,
+                max_num=0,
+                metric="default",
+            )
+        except Exception as exc:
+            logger.error(f"SCRFD detect error: {exc}")
+            return []
+
+        if bboxes is None or bboxes.shape[0] == 0:
+            return []
+
+        out: list[dict] = []
+        for i in range(bboxes.shape[0]):
+            out.append(
+                {
+                    "bbox": bboxes[i, 0:4].astype(np.float32, copy=True),
+                    "det_score": float(bboxes[i, 4]),
+                    "kps": (
+                        kpss[i].astype(np.float32, copy=True) if kpss is not None else None
+                    ),
+                }
+            )
+        return out
+
+    def embed_from_kps(
+        self,
+        frame: np.ndarray,
+        kps: np.ndarray,
+    ) -> np.ndarray:
+        """Extract an ArcFace embedding for one face using 5-point landmarks.
+
+        This is the recognition-only counterpart to :meth:`detect`. Callers
+        that need the standard "detect + embed everyone" pipeline should
+        still use :meth:`get_faces` or :meth:`get_embedding`.
+
+        Args:
+            frame: BGR numpy array. Must be the **original-resolution**
+                frame the face actually appears in — alignment and the
+                subsequent 112×112 crop are scale-sensitive, and running
+                ArcFace on a bilinearly-resized tiny crop measurably
+                degrades recognition confidence.
+            kps: [5, 2] float landmark coordinates for this face in
+                ``frame``'s pixel space.
+
+        Returns:
+            512-dim L2-normalized ArcFace embedding, dtype float32. This
+            matches the numeric scale stored in FAISS at registration time
+            (registration uses ``face.normed_embedding`` from
+            ``FaceAnalysis.get()``, which is the same
+            embedding / ||embedding||).
+
+        Raises:
+            RuntimeError: Model not loaded or recognition sub-model missing.
+        """
+        if self.app is None:
+            raise RuntimeError("Model not loaded. Call load_model() first.")
+
+        rec_model = self.app.models.get("recognition")
+        if rec_model is None:
+            raise RuntimeError("Recognition model not loaded (allowed_modules?)")
+
+        # ``face_align`` is part of the insightface package. Import lazily so
+        # a missing dep doesn't break module import at app startup — the
+        # recognition path is optional during registration-only deployments.
+        from insightface.utils import face_align
+
+        aligned = face_align.norm_crop(
+            frame, landmark=kps, image_size=rec_model.input_size[0]
+        )
+        raw = rec_model.get_feat(aligned).flatten()
+        norm = float(np.linalg.norm(raw))
+        if norm > 1e-6:
+            raw = raw / norm
+        return raw.astype(np.float32, copy=False)
 
     # ------------------------------------------------------------------
     # Utility (same interface as old FaceNetModel)

@@ -82,5 +82,15 @@ temp/
 # mediamtx binary (downloaded locally, not committed)
 backend/bin/mediamtx
 backend/bin/mediamtx.exe
+
+# mediamtx runtime configs — generated from templates by scripts/onprem-up.sh
+# (and scripts/dev-up.sh in the future). Committing these would leak the
+# host's LAN IP via webrtcAdditionalHosts.
+deploy/mediamtx.*.generated.yml
+
+# Per-machine operator secrets sourced by scripts/onprem-up.sh and
+# scripts/deploy.sh — chiefly POSTGRES_PASSWORD. The `.example` is
+# committed as a template.
+scripts/.env.local
 .worktrees/
 .vercel

@@ -199,6 +199,98 @@ class Settings(BaseSettings):
     LOG_MAX_BYTES: int = 10485760  # 10MB
     LOG_BACKUP_COUNT: int = 5
 
+    # ───────────────────────────────────────────────────────────────────────
+    # Feature flags (2026-04-22 two-app split)
+    #
+    # The backend image boots into one of two profiles, controlled by these
+    # flags:
+    #
+    # - FULL (on-prem Mac): all flags True — SCRFD + ArcFace + FAISS, every
+    #   router, background jobs, frame grabbers. This is the default.
+    # - THIN (public VPS):  only AUTH / USERS / SCHEDULES / ROOMS / HEALTH
+    #   enabled. The VPS serves the faculty app (login + schedule list + video
+    #   relay) and never touches student PII, face embeddings, or attendance
+    #   data. Heavy ML imports are skipped, so the VPS container is cheap.
+    #
+    # See backend/.env.vps.example for the VPS profile and
+    # docs/plans/2026-04-22-two-app-split/DESIGN.md for the rationale.
+    # ───────────────────────────────────────────────────────────────────────
+
+    ENABLE_ML: bool = True  # SCRFD + ArcFace + FAISS + insightface model load
+    ENABLE_REDIS: bool = True  # Identity cache + WS pubsub (tied to ML)
+    ENABLE_FRAME_GRABBERS: bool = True  # Persistent RTSP readers (tied to ML)
+    ENABLE_BACKGROUND_JOBS: bool = True  # APScheduler, session lifecycle, digests
+
+    # Router-level flags. Always-on routers: auth, users, schedules, rooms, health.
+    ENABLE_FACE_ROUTES: bool = True  # /api/v1/face/*
+    ENABLE_ATTENDANCE_ROUTES: bool = True  # /api/v1/attendance/*
+    ENABLE_PRESENCE_ROUTES: bool = True  # /api/v1/presence/*
+    ENABLE_ANALYTICS_ROUTES: bool = True  # /api/v1/analytics/*
+    ENABLE_NOTIFICATION_ROUTES: bool = True  # /api/v1/notifications/*
+    ENABLE_AUDIT_ROUTES: bool = True  # /api/v1/audit/*
+    ENABLE_EDGE_ROUTES: bool = True  # /api/v1/edge/*
+    ENABLE_SETTINGS_ROUTES: bool = True  # /api/v1/settings/*
+    ENABLE_WS_ROUTES: bool = True  # /api/v1/ws/*
+    ENABLE_RECOGNITION_ROUTES: bool = True  # /api/v1/recognitions/*
+    ENABLE_ACTIVITY_ROUTES: bool = True  # /api/v1/activity/* — unified event timeline
+
+    # ───────────────────────────────────────────────────────────────────────
+    # Recognition Evidence (docs/plans/2026-04-22-recognition-evidence)
+    #
+    # Every FAISS decision on the realtime pipeline is captured as a row in
+    # ``recognition_events`` plus a pair of JPEG crops (live probe + matched
+    # registered angle) on disk. Disabled on the VPS thin profile.
+    # ───────────────────────────────────────────────────────────────────────
+    ENABLE_RECOGNITION_EVIDENCE: bool = True  # Master switch — capture writer lifecycle
+    RECOGNITION_EVIDENCE_CROP_ROOT: str = "/var/lib/iams/crops"  # Inside the container
+    RECOGNITION_EVIDENCE_CROP_QUALITY: int = 75  # JPEG quality; 75 is a good size/quality knee
+    RECOGNITION_EVIDENCE_QUEUE_SIZE: int = 1000  # Drop threshold — pipeline must never back-pressure
+    RECOGNITION_EVIDENCE_BATCH_ROWS: int = 50  # DB flush trigger — whichever comes first
+    RECOGNITION_EVIDENCE_BATCH_MS: int = 500  # DB flush interval
+
+    # Retention — daily APScheduler job prunes crops + rows past these limits.
+    # Dry-run is ON by default until the operator has confirmed at least one
+    # sweep logs the expected delete set, to keep a config mistake from wiping
+    # the thesis corpus.
+    ENABLE_RECOGNITION_EVIDENCE_RETENTION: bool = True
+    RECOGNITION_EVIDENCE_RETENTION_DRY_RUN: bool = True
+    RECOGNITION_CROP_RETENTION_DAYS: int = 30
+    RECOGNITION_EVENT_RETENTION_DAYS: int = 365
+    RECOGNITION_EVIDENCE_RETENTION_MAX_DELETES: int = 10000  # Hard safety cap per run
+
+    # ───────────────────────────────────────────────────────────────────────
+    # Recognition Evidence — Phase 5 (enterprise hardening)
+    #
+    # Backend selector: "filesystem" keeps crops in the host-mounted Docker
+    # volume (Phases 1–4). "minio" puts them in an S3-compatible object
+    # store on the same host, and crop fetches become 302 redirects to
+    # time-limited presigned URLs. The API never proxies bytes.
+    #
+    # Cutover procedure is in docs/plans/2026-04-22-recognition-evidence/
+    # RUNBOOK.md §Phase 5 — flip this env var, restart, run the migration
+    # script to backfill existing FS crops into MinIO.
+    # ───────────────────────────────────────────────────────────────────────
+    RECOGNITION_EVIDENCE_BACKEND: str = "filesystem"  # "filesystem" | "minio"
+
+    # MinIO (S3-compatible) client config. Only read when BACKEND=="minio".
+    MINIO_ENDPOINT: str = "minio:9000"  # Docker-network hostname
+    MINIO_ACCESS_KEY: str = "iams"
+    MINIO_SECRET_KEY: str = "iams-minio-dev-key"  # Override via env in prod
+    MINIO_SECURE: bool = False  # TLS to MinIO; onprem LAN = plain HTTP
+    MINIO_BUCKET: str = "iams-recognition-evidence"
+    MINIO_REGION: str = "us-east-1"  # S3 API requires a region string; unused locally
+
+    # Presigned-URL TTL for the 302 redirect path served from
+    # /api/v1/recognitions/{id}/live-crop and /registered-crop. Short TTL so
+    # a leaked URL can't be replayed for long; just long enough for a normal
+    # page render + image fetch.
+    RECOGNITION_EVIDENCE_SIGNED_URL_TTL: int = 60  # seconds
+
+    # Access auditing: every crop fetch inserts a recognition_access_audit
+    # row. Feeds the /audit/recognition-access admin page. Independent of
+    # the storage backend — works for filesystem and MinIO.
+    ENABLE_RECOGNITION_ACCESS_AUDIT: bool = True
+
     class Config:
         env_file = ".env"
         case_sensitive = True

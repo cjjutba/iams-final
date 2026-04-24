@@ -1,5 +1,3 @@
-import { useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { UserPlus, ScanFace, CalendarCheck, Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
@@ -22,17 +20,6 @@ const steps = [
 ]
 
 export default function LandingPage() {
-  const navigate = useNavigate()
-
-  // If Supabase redirected here with auth tokens in the hash fragment,
-  // forward to the email-confirmed page which handles them properly.
-  useEffect(() => {
-    const hash = window.location.hash
-    if (hash && (hash.includes('access_token=') || hash.includes('error='))) {
-      navigate(`/auth/email-confirmed${hash}`, { replace: true })
-    }
-  }, [navigate])
-
   return (
     <div className="h-screen overflow-hidden bg-background text-foreground">
       <div className="mx-auto flex h-full max-w-sm flex-col items-center justify-between px-6 py-10 sm:py-14">

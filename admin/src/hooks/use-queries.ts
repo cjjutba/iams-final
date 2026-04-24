@@ -7,9 +7,9 @@ import { attendanceService } from '@/services/attendance.service'
 import { notificationsService } from '@/services/notifications.service'
 import { settingsService } from '@/services/settings.service'
 import { faceService } from '@/services/face.service'
-import { auditService } from '@/services/audit.service'
-import { edgeService } from '@/services/edge.service'
-import type { AdminCreateUser, CreateStudentRecord, UpdateStudentRecord, UserRole, UserUpdate, ScheduleCreate, ScheduleUpdate, RoomCreate, RoomUpdate, BroadcastNotificationRequest, NotificationPreferenceUpdate } from '@/types'
+import { recognitionsService } from '@/services/recognitions.service'
+import { activityService } from '@/services/activity.service'
+import type { AdminCreateUser, CreateStudentRecord, UpdateStudentRecord, UserRole, UserUpdate, ScheduleCreate, ScheduleUpdate, RoomCreate, RoomUpdate, NotificationPreferenceUpdate, RecognitionListFilters, ActivityListFilters, AccessAuditFilters } from '@/types'
 
 // ── Query keys ──────────────────────────────────────────────
 
@@ -41,8 +41,6 @@ export const queryKeys = {
     dailyTrend: (days: number) => ['analytics', 'daily-trend', days] as const,
     weekdayBreakdown: ['analytics', 'weekday-breakdown'] as const,
     atRisk: ['analytics', 'at-risk'] as const,
-    anomalies: ['analytics', 'anomalies'] as const,
-    classOverview: (id: string) => ['analytics', 'class', id] as const,
   },
   attendance: {
     all: ['attendance'] as const,
@@ -58,20 +56,26 @@ export const queryKeys = {
     all: ['face'] as const,
     statistics: ['face', 'statistics'] as const,
   },
-  audit: {
-    all: ['audit'] as const,
-    logs: (params?: Record<string, unknown>) => ['audit', 'logs', params] as const,
-  },
-  edge: {
-    all: ['edge'] as const,
-    status: ['edge', 'status'] as const,
-    detail: (id: string) => ['edge', 'detail', id] as const,
-  },
   notifications: {
     all: ['notifications'] as const,
     list: ['notifications', 'list'] as const,
     unreadCount: ['notifications', 'unread-count'] as const,
     preferences: ['notifications', 'preferences'] as const,
+  },
+  recognitions: {
+    all: ['recognitions'] as const,
+    list: (filters: RecognitionListFilters) => ['recognitions', 'list', filters] as const,
+    detail: (id: string) => ['recognitions', 'detail', id] as const,
+    summary: (studentId: string, scheduleId?: string) =>
+      ['recognitions', 'summary', studentId, scheduleId ?? null] as const,
+    accessAudit: (filters: AccessAuditFilters) =>
+      ['recognitions', 'access-audit', filters] as const,
+  },
+  activity: {
+    all: ['activity'] as const,
+    list: (filters: ActivityListFilters) => ['activity', 'list', filters] as const,
+    detail: (id: string) => ['activity', 'detail', id] as const,
+    stats: (windowMinutes: number) => ['activity', 'stats', windowMinutes] as const,
   },
   settings: {
     all: ['settings'] as const,
@@ -353,21 +357,6 @@ export function useAtRiskStudents() {
   })
 }
 
-export function useAnomalies() {
-  return useQuery({
-    queryKey: queryKeys.analytics.anomalies,
-    queryFn: () => analyticsService.anomalies(),
-  })
-}
-
-export function useResolveAnomaly() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (id: string) => analyticsService.resolveAnomaly(id),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: queryKeys.analytics.anomalies }) },
-  })
-}
-
 // ── Attendance ──────────────────────────────────────────────
 
 export function useAttendanceList(params?: Record<string, unknown>) {
@@ -437,35 +426,6 @@ export function useDeregisterFace() {
   })
 }
 
-// ── Audit Logs ─────────────────────────────────────────────
-
-export function useAuditLogs(params?: Record<string, unknown>) {
-  return useQuery({
-    queryKey: queryKeys.audit.logs(params),
-    queryFn: () => auditService.getLogs(params as Record<string, string | number | boolean | undefined>),
-    placeholderData: keepPreviousData,
-  })
-}
-
-// ── Edge Devices ───────────────────────────────────────────
-
-export function useEdgeStatus() {
-  return useQuery({
-    queryKey: queryKeys.edge.status,
-    queryFn: () => edgeService.getStatus(),
-    refetchInterval: 30_000,
-    retry: false,
-  })
-}
-
-export function useEdgeDevice(id: string) {
-  return useQuery({
-    queryKey: queryKeys.edge.detail(id),
-    queryFn: () => edgeService.getDevice(id),
-    enabled: !!id,
-  })
-}
-
 // ── Notifications ───────────────────────────────────────────
 
 export function useNotifications() {
@@ -493,14 +453,6 @@ export function useMarkNotificationRead() {
   })
 }
 
-export function useBroadcastNotification() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (data: BroadcastNotificationRequest) => notificationsService.broadcast(data),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: queryKeys.notifications.all }) },
-  })
-}
-
 export function useNotificationPreferences() {
   return useQuery({
     queryKey: queryKeys.notifications.preferences,
@@ -515,6 +467,70 @@ export function useUpdateNotificationPreferences() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: queryKeys.notifications.preferences })
     },
+  })
+}
+
+// ── Recognition Evidence ───────────────────────────────────
+
+export function useRecognitions(filters: RecognitionListFilters = {}) {
+  return useQuery({
+    queryKey: queryKeys.recognitions.list(filters),
+    queryFn: () => recognitionsService.list(filters),
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useRecognitionEvent(eventId: string) {
+  return useQuery({
+    queryKey: queryKeys.recognitions.detail(eventId),
+    queryFn: () => recognitionsService.getById(eventId),
+    enabled: !!eventId,
+  })
+}
+
+export function useRecognitionSummary(studentId: string, scheduleId?: string) {
+  return useQuery({
+    queryKey: queryKeys.recognitions.summary(studentId, scheduleId),
+    queryFn: () =>
+      recognitionsService.summarize({
+        student_id: studentId,
+        schedule_id: scheduleId,
+      }),
+    enabled: !!studentId,
+  })
+}
+
+export function useRecognitionAccessAudit(filters: AccessAuditFilters = {}) {
+  return useQuery({
+    queryKey: queryKeys.recognitions.accessAudit(filters),
+    queryFn: () => recognitionsService.accessAudit(filters),
+    placeholderData: keepPreviousData,
+  })
+}
+
+// ── System Activity ─────────────────────────────────────────
+
+export function useActivityEvents(filters: ActivityListFilters = {}) {
+  return useQuery({
+    queryKey: queryKeys.activity.list(filters),
+    queryFn: () => activityService.list(filters),
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useActivityEvent(eventId: string) {
+  return useQuery({
+    queryKey: queryKeys.activity.detail(eventId),
+    queryFn: () => activityService.getById(eventId),
+    enabled: !!eventId,
+  })
+}
+
+export function useActivityStats(windowMinutes: number = 15) {
+  return useQuery({
+    queryKey: queryKeys.activity.stats(windowMinutes),
+    queryFn: () => activityService.stats(windowMinutes),
+    refetchInterval: 30_000, // refresh live counters every 30s
   })
 }
 

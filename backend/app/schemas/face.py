@@ -51,6 +51,63 @@ class FaceStatusResponse(BaseModel):
     embedding_id: int | None = None
 
 
+# ===== Admin Face Comparison (Live-Feed Detail Sheet) =====
+
+
+class FaceAngleMetadataResponse(BaseModel):
+    """Per-angle embedding metadata for the admin face-comparison sheet.
+
+    `image_url` is None in Phase 1 (images not persisted yet). Phase 2 populates
+    it with a URL pointing at the image-bytes endpoint for angles whose
+    `image_storage_key` is non-null.
+    """
+
+    id: str
+    angle_label: str | None
+    quality_score: float | None
+    created_at: datetime
+    image_url: str | None = None
+
+
+class FaceRegistrationDetailResponse(BaseModel):
+    """Admin-only registration detail for a single student.
+
+    `available=false` means either no active registration exists or (in Phase 2+)
+    the registration has no persisted images and the caller should render the
+    metadata-only fallback.
+    """
+
+    user_id: str
+    available: bool
+    registered_at: datetime | None = None
+    embedding_dim: int = 512
+    angles: list[FaceAngleMetadataResponse] = []
+
+
+class LiveCropResponse(BaseModel):
+    """One server-captured live crop entry from the Phase-3 Redis ring buffer."""
+
+    crop_b64: str
+    captured_at: datetime
+    confidence: float
+    track_id: int
+    bbox: list[float]
+
+
+class LiveCropsListResponse(BaseModel):
+    """Admin-only response for the Phase-3 live-crops endpoint.
+
+    `available=false` when Redis is disabled (VPS), no key exists, or the
+    list is empty — the admin UI then falls back to the Phase-1 client-side
+    canvas crop of the WHEP video element.
+    """
+
+    schedule_id: str
+    user_id: str
+    available: bool
+    crops: list[LiveCropResponse] = []
+
+
 # ===== Edge API Contract (Raspberry Pi → Backend) =====
 
 

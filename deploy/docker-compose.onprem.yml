@@ -1,0 +1,290 @@
+# IAMS On-Prem (Mac on IAMS-Net) — Docker Compose
+#
+# Target host: user's MacBook Pro M5 24 GB on IAMS-Net (school WiFi).
+# This is the production-grade stack that powers the admin portal and the Android
+# app for faculty/students on-site. Mobile live-feed video still comes from the
+# VPS public relay; this stack handles REST, WebSocket, and the admin portal's
+# live-feed page (raw WebRTC + canvas overlay).
+#
+# Volumes are intentionally separate from the `local` dev compose (different
+# postgres credentials would fight over the same volume) so both modes can
+# coexist on the same Mac.
+#
+# Usage:
+#   ./scripts/onprem-up.sh                                  # start (added in Phase 7)
+#   docker compose -f deploy/docker-compose.onprem.yml down # stop
+#   docker compose -f deploy/docker-compose.onprem.yml logs -f api-gateway
+
+services:
+  # ── Database ────────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: iams-postgres-onprem
+    environment:
+      TZ: Asia/Manila
+      POSTGRES_DB: iams
+      POSTGRES_USER: iams
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-iams_onprem_password}
+    volumes:
+      - postgres_data_onprem:/var/lib/postgresql/data
+      - ../backend/db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ../backend/db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    ports:
+      # Loopback only — the backend reaches postgres via the Docker network.
+      # Exposed on 127.0.0.1 for occasional psql debugging.
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iams -d iams"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ── Cache ───────────────────────────────────────────────────────────────
+
+  redis:
+    image: redis:7-alpine
+    container_name: iams-redis-onprem
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save ""
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ── Object Storage (S3-compatible — recognition-evidence crops) ─────────
+
+  # MinIO backs the Phase 5 storage mode. When
+  # RECOGNITION_EVIDENCE_BACKEND=minio, every live+registered crop JPEG
+  # lands here instead of the iams_crops_onprem volume, and crop fetches
+  # become 302 redirects to presigned URLs (API never proxies bytes).
+  #
+  # Credentials default to hard-coded dev values so first-boot works
+  # without .env.local edits; override MINIO_ACCESS_KEY + MINIO_SECRET_KEY
+  # in backend/.env.onprem + here for production.
+  minio:
+    image: minio/minio:RELEASE.2024-06-13T22-53-53Z
+    container_name: iams-minio-onprem
+    command: server /data --console-address ":9001"
+    environment:
+      - TZ=Asia/Manila
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-iams}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-iams-minio-dev-key}
+    volumes:
+      - iams_minio_onprem:/data
+    ports:
+      # Loopback-only — api-gateway reaches it via Docker network.
+      # 9001 exposed on 127.0.0.1 for the MinIO admin console.
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # One-shot sidecar that creates the recognition-evidence bucket + sets
+  # an object-expiration lifecycle rule matching
+  # RECOGNITION_CROP_RETENTION_DAYS. Idempotent — re-running is a no-op.
+  minio-init:
+    image: minio/mc:RELEASE.2024-06-12T14-34-03Z
+    container_name: iams-minio-init-onprem
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      sh -c '
+        set -eu
+        mc alias set local http://minio:9000 "$${MINIO_ACCESS_KEY:-iams}" "$${MINIO_SECRET_KEY:-iams-minio-dev-key}"
+        mc mb --ignore-existing local/iams-recognition-evidence
+        mc ilm rule add local/iams-recognition-evidence --expire-days 30 || true
+        echo "minio bucket ready"
+      '
+    environment:
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-iams}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-iams-minio-dev-key}
+    restart: "no"
+
+  # ── Media (RTSP ingest + WebRTC serving + VPS push via runOnReady) ──────
+
+  mediamtx:
+    # `-ffmpeg` variant bundles ffmpeg — required because mediamtx.onprem.yml's
+    # `runOnReady` exec's ffmpeg to push each incoming stream up to the VPS
+    # relay. The plain `1.11.3` image is minimal (alpine) and has neither
+    # `sh` nor `ffmpeg`, causing continuous "executable not found" restart
+    # loops (documented 2026-04-22).
+    image: bluenviron/mediamtx:1.11.3-ffmpeg
+    container_name: iams-mediamtx-onprem
+    volumes:
+      # Mount the gitignored `.generated.yml` produced by scripts/onprem-up.sh
+      # from the committed `mediamtx.onprem.yml` template. This keeps the
+      # Mac's LAN IP out of version control.
+      - ../deploy/mediamtx.onprem.generated.yml:/mediamtx.yml
+    ports:
+      - "8554:8554"      # RTSP — the RPi pushes here
+      - "8887:8887/udp"  # WebRTC media UDP
+      - "8889:8889"      # WHEP (admin portal + direct LAN viewers)
+      - "9997:9997"      # mediamtx HTTP API (used by api-gateway)
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ── Core Application (SCRFD + ByteTrack + ArcFace + FAISS) ──────────────
+
+  api-gateway:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: iams-api-gateway-onprem
+    env_file:
+      - ../backend/.env.onprem
+    environment:
+      - TZ=Asia/Manila
+      - SERVICE_ROLE=api-gateway
+      # Credentials must match postgres service above. Overriding here so a
+      # mismatched .env.onprem doesn't silently break auth.
+      - DATABASE_URL=postgresql://iams:${POSTGRES_PASSWORD:-iams_onprem_password}@postgres:5432/iams
+      - REDIS_URL=redis://redis:6379/0
+      # mediamtx runs as a sibling container; use Docker-internal hostname.
+      - MEDIAMTX_EXTERNAL=true
+      - MEDIAMTX_API_URL=http://mediamtx:9997
+      - MEDIAMTX_WEBRTC_URL=http://mediamtx:8889
+      - MEDIAMTX_RTSP_URL=rtsp://mediamtx:8554
+      - EDGE_API_KEY=iams-edge-key-2026-prod
+      # ADMIN_URL + CORS_ORIGINS are injected from the host's detected LAN IP
+      # by scripts/onprem-up.sh (exports HOST_IP before `docker compose up`).
+      # This replaces the previous sed-in-place rewrite of backend/.env.onprem
+      # so the user-edited secret file is no longer mutated at boot.
+      - ADMIN_URL=http://${HOST_IP:-localhost}
+      - CORS_ORIGINS=["http://${HOST_IP:-localhost}","http://localhost","http://iams-server.local"]
+    volumes:
+      # Production-style: NO source-code mount. Image is baked.
+      # Only persistent state volumes.
+      - faiss_data_onprem:/app/data/faiss
+      - face_uploads_onprem:/app/data/uploads/faces
+      - insightface_models_onprem:/home/appuser/.insightface/models
+      - app_logs_onprem:/app/logs
+      # Recognition-evidence crop store. Every FAISS decision writes a pair
+      # of JPEGs here. Retention job (APScheduler daily) prunes under
+      # RECOGNITION_CROP_RETENTION_DAYS.
+      - iams_crops_onprem:/var/lib/iams/crops
+      - ../docs/data:/docs/data:ro
+    ports:
+      # Loopback-only — nginx proxies to this port. Android + admin portal
+      # clients on IAMS-Net reach the backend through nginx on port 80.
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mediamtx:
+        condition: service_started
+      # MinIO is always started (cheap) but api-gateway only hits it when
+      # RECOGNITION_EVIDENCE_BACKEND=minio. service_started is enough —
+      # the storage abstraction handles connect failures gracefully.
+      minio:
+        condition: service_started
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # 24 GB Mac — give the big consumer plenty of room. Main inference
+          # + FAISS index + FastAPI workers. No GPU (Docker on Apple Silicon
+          # can't reach Metal/Neural Engine).
+          memory: 8G
+
+  # ── Admin Portal Build (sidecar — runs once on `up`, then exits) ────────
+
+  admin-build:
+    image: node:20-alpine
+    container_name: iams-admin-build-onprem
+    working_dir: /app
+    volumes:
+      - ../admin:/app
+      - admin_dist_onprem:/app/dist
+    # `npm run build -- --mode onprem` tells Vite to load admin/.env.onprem
+    # for the build. Output lands in the shared `admin_dist_onprem` volume
+    # which nginx mounts read-only as its docroot.
+    command: >
+      sh -c "npm ci --no-audit --no-fund &&
+             npm run build -- --mode onprem"
+    restart: "no"
+
+  # ── Reverse Proxy (serves admin static + proxies /api + /ws + /whep) ────
+
+  nginx:
+    image: nginx:alpine
+    container_name: iams-nginx-onprem
+    volumes:
+      - ../deploy/nginx.onprem.conf:/etc/nginx/conf.d/default.conf:ro
+      - admin_dist_onprem:/usr/share/nginx/html/admin:ro
+    ports:
+      - "80:80"
+    depends_on:
+      admin-build:
+        condition: service_completed_successfully
+      api-gateway:
+        condition: service_healthy
+      mediamtx:
+        condition: service_started
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # ── Monitoring ──────────────────────────────────────────────────────────
+
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: iams-dozzle-onprem
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      # Avoid clashing with dev mode's 9999 if both run back-to-back.
+      - "9998:8080"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+volumes:
+  postgres_data_onprem:
+  faiss_data_onprem:
+  face_uploads_onprem:
+  insightface_models_onprem:
+  admin_dist_onprem:
+  app_logs_onprem:
+  iams_crops_onprem:
+  iams_minio_onprem:

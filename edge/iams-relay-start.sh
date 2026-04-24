@@ -24,16 +24,32 @@
 set -uo pipefail
 
 SOURCE="${CAMERA_RTSP_URL}"
-TARGET="${VPS_RTSP_URL}/${ROOM_ID}"
 MODE="${RELAY_MODE:-copy}"
 
-# Parse host/port from VPS_RTSP_URL=rtsp://HOST:PORT
-VPS_HOSTPORT="${VPS_RTSP_URL#rtsp://}"
-VPS_HOSTPORT="${VPS_HOSTPORT%%/*}"
-VPS_HOST="${VPS_HOSTPORT%%:*}"
-VPS_PORT="${VPS_HOSTPORT##*:}"
-# Fallback if no port was specified
-if [ "${VPS_PORT}" = "${VPS_HOSTPORT}" ] || [ -z "${VPS_PORT}" ]; then
+# Relay target: prefer RELAY_RTSP_URL (new post-2026-04-21 split), fall back to
+# RELAY_HOST → VPS_RTSP_URL → VPS_HOST for backward compatibility with
+# already-deployed RPi .env files.
+if [ -n "${RELAY_RTSP_URL:-}" ]; then
+    TARGET_URL="${RELAY_RTSP_URL}"
+elif [ -n "${RELAY_HOST:-}" ]; then
+    TARGET_URL="rtsp://${RELAY_HOST}:8554"
+elif [ -n "${VPS_RTSP_URL:-}" ]; then
+    TARGET_URL="${VPS_RTSP_URL}"
+elif [ -n "${VPS_HOST:-}" ]; then
+    TARGET_URL="rtsp://${VPS_HOST}:8554"
+else
+    echo "ERROR: no RELAY_HOST / RELAY_RTSP_URL / VPS_HOST / VPS_RTSP_URL set." >&2
+    exit 1
+fi
+
+TARGET="${TARGET_URL}/${ROOM_ID}"
+
+# Parse host/port for the downstream watchdog `ss -tnpi` probe.
+RELAY_HOSTPORT="${TARGET_URL#rtsp://}"
+RELAY_HOSTPORT="${RELAY_HOSTPORT%%/*}"
+VPS_HOST="${RELAY_HOSTPORT%%:*}"
+VPS_PORT="${RELAY_HOSTPORT##*:}"
+if [ "${VPS_PORT}" = "${RELAY_HOSTPORT}" ] || [ -z "${VPS_PORT}" ]; then
     VPS_PORT="8554"
 fi
 

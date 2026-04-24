@@ -27,6 +27,7 @@ from app.services.ml.face_quality import QualityReport, assess_quality
 from app.services.ml.faiss_manager import faiss_manager
 from app.services.ml.insightface_model import insightface_model
 from app.utils.exceptions import FaceRecognitionError, ValidationError
+from app.utils.face_image_storage import FaceImageStorage
 
 
 class FaceService:
@@ -137,6 +138,7 @@ class FaceService:
         # Generate embeddings for each image
         embeddings = []
         face_crops = []  # Collected for anti-spoof check
+        raw_image_bytes: list[bytes] = []  # Kept for post-commit disk persistence
         quality_reports: list[QualityReport] = []
         for i, image_file in enumerate(images):
             _img_start = time.monotonic()
@@ -147,6 +149,12 @@ class FaceService:
                 # Validate file size
                 if len(image_bytes) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
                     raise ValidationError(f"Image {i + 1} exceeds size limit")
+
+                # Stash the raw bytes for post-commit disk persistence so the
+                # admin face-comparison sheet can show the original angle later.
+                # Storage happens AFTER db.commit() so a rollback doesn't leave
+                # orphan JPEGs on disk.
+                raw_image_bytes.append(image_bytes)
 
                 # Generate embedding (with quality metadata if available)
                 if settings.QUALITY_GATE_ENABLED and hasattr(self.facenet, "get_face_with_quality"):
@@ -268,6 +276,43 @@ class FaceService:
             # Persist FAISS index to disk only after DB commit succeeds
             self.faiss.save()
 
+            # Persist the raw registration JPEGs to the face-uploads volume so
+            # the admin live-feed face-comparison sheet can render them. Only
+            # the real phone-captured angles are stored — the `sim_*`
+            # CCTV-simulated embeddings are algorithmic derivatives with no
+            # separate image to save.
+            #
+            # Failure here is best-effort: a disk-write error leaves
+            # image_storage_key=NULL on the affected row(s), the registration
+            # still succeeds, and the admin UI falls back to metadata-only
+            # tiles (same path as pre-Phase-2 rows).
+            try:
+                storage = FaceImageStorage()
+                keys_by_faiss: dict[int, str] = {}
+                for idx, img_bytes in enumerate(raw_image_bytes):
+                    if idx >= len(normed):
+                        break
+                    angle = angle_labels[idx] if idx < len(angle_labels) else None
+                    if angle is None:
+                        continue
+                    key = storage.save_registration_image(user_id, angle, img_bytes)
+                    if key:
+                        keys_by_faiss[int(faiss_ids[idx])] = key
+                if keys_by_faiss:
+                    updated = self.face_repo.set_image_storage_keys(
+                        str(registration.id), keys_by_faiss
+                    )
+                    self.db.commit()
+                    logger.info(
+                        f"Persisted {updated} registration image(s) for user {user_id}"
+                    )
+            except Exception:
+                logger.warning(
+                    f"Failed to persist registration images for user {user_id}",
+                    exc_info=True,
+                )
+                # Don't re-raise: registration is already committed.
+
             logger.info(
                 f"Face registered for user {user_id}: "
                 f"{len(faiss_ids)} embeddings (FAISS IDs {faiss_ids[0]}-{faiss_ids[-1]})"
@@ -380,9 +425,17 @@ class FaceService:
 
     async def deregister_face(self, user_id: str):
         """
-        Deregister user's face
+        Deregister user's face (right-to-delete)
 
-        Marks face registration as inactive and rebuilds FAISS index.
+        Marks face registration as inactive, cleans up all biometric
+        evidence on disk, wipes recognition_events for this user, and
+        rebuilds the FAISS index.
+
+        "Right to be forgotten" — intentionally destructive on the
+        biometric layer. Attendance_records are preserved (they only
+        reference user_id, not face data) so the attendance audit trail
+        stays intact. See docs/plans/2026-04-22-recognition-evidence/
+        DESIGN.md §5.6.
 
         Args:
             user_id: User UUID
@@ -393,10 +446,105 @@ class FaceService:
         # Deactivate in database
         self.face_repo.deactivate(user_id)
 
+        # Best-effort disk cleanup so redeploys + re-registrations don't
+        # accumulate orphan JPEGs. Deactivate vs. hard-delete intentionally
+        # keeps the DB row (audit trail), but the images are no longer
+        # reachable from the admin UI.
+        try:
+            FaceImageStorage().delete_user_images(user_id)
+        except Exception:
+            logger.warning(
+                f"Failed to clean registration images for user {user_id}",
+                exc_info=True,
+            )
+
+        # Recognition-evidence cascade. Delete every captured crop pair for
+        # this user + delete the rows. This is the "right to delete" effect
+        # on the CCTV evidence trail. Isolated in a try so a filesystem
+        # hiccup doesn't abort the whole deregister flow.
+        try:
+            self._purge_recognition_evidence_for_user(user_id)
+        except Exception:
+            logger.warning(
+                f"Failed to purge recognition evidence for user {user_id}",
+                exc_info=True,
+            )
+
         logger.info(f"Face deregistered for user {user_id}")
 
         # Rebuild FAISS index
         await self.rebuild_faiss_index()
+
+    def _purge_recognition_evidence_for_user(self, user_id: str) -> None:
+        """Delete crop blobs + recognition_events rows for a given user.
+
+        Uses the evidence storage abstraction so it works identically for
+        filesystem (Phases 1-4) and MinIO (Phase 5) backends.
+
+        Silent no-op if the feature flag is off or the table is empty.
+        Missing blobs are ignored (retention may have pruned them already).
+        """
+        if not settings.ENABLE_RECOGNITION_EVIDENCE:
+            return
+        import uuid
+
+        from sqlalchemy import text
+
+        from app.services.evidence_storage import evidence_storage
+
+        try:
+            uid = uuid.UUID(user_id)
+        except ValueError:
+            logger.debug(
+                "purge_recognition_evidence called with non-UUID user_id=%s",
+                user_id,
+            )
+            return
+
+        # Collect refs first so we know what to delete from storage — the
+        # DB DELETE below wipes them and we lose the ability to walk them.
+        rows = (
+            self.db.execute(
+                text(
+                    "SELECT live_crop_ref, registered_crop_ref "
+                    "FROM recognition_events WHERE student_id = :uid"
+                ),
+                {"uid": str(uid)},
+            )
+            .fetchall()
+        )
+        blobs_deleted = 0
+        for live_ref, reg_ref in rows:
+            for ref in (live_ref, reg_ref):
+                if not ref:
+                    continue
+                try:
+                    evidence_storage.delete(ref)
+                    blobs_deleted += 1
+                except Exception:
+                    logger.debug(
+                        "Could not delete crop %s via storage backend",
+                        ref,
+                        exc_info=True,
+                    )
+
+        # Row delete. FK on recognition_events.student_id is ON DELETE SET
+        # NULL so we do an explicit DELETE here — the point is to actually
+        # remove the row, not null it out. recognition_access_audit rows
+        # CASCADE-delete with the event rows (event_id FK has ON DELETE
+        # CASCADE).
+        result = self.db.execute(
+            text("DELETE FROM recognition_events WHERE student_id = :uid"),
+            {"uid": str(uid)},
+        )
+        self.db.commit()
+        logger.info(
+            "Purged recognition evidence for user %s: rows=%d blobs=%d backend=%s",
+            user_id,
+            int(result.rowcount or 0),
+            blobs_deleted,
+            settings.RECOGNITION_EVIDENCE_BACKEND,
+        )
 
     async def reregister_face(self, user_id: str, images: list[UploadFile]) -> tuple[int, str]:
         """
@@ -420,6 +568,16 @@ class FaceService:
             self.db.delete(old_registration)
             self.db.commit()
             logger.info(f"Deleted old face registration for user {user_id}")
+
+            # Clean old JPEGs BEFORE the new register writes, or a crash
+            # during save would leave the new angle files mixed with old ones.
+            try:
+                FaceImageStorage().delete_user_images(user_id)
+            except Exception:
+                logger.warning(
+                    f"Failed to clean old registration images for user {user_id}",
+                    exc_info=True,
+                )
 
         # Rebuild FAISS BEFORE register_face so the index is clean and
         # index.ntotal-based FAISS IDs assigned during registration match

@@ -6,10 +6,8 @@ import {
   Calendar,
   ClipboardList,
   TrendingUp,
-  AlertTriangle,
   ArrowRight,
   UserX,
-  ShieldAlert,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { usePageTitle } from '@/hooks/use-page-title'
@@ -49,9 +47,9 @@ export default function AnalyticsPage() {
       </div>
 
       {/* System Metrics */}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
         {loading ? (
-          Array.from({ length: 6 }).map((_, i) => (
+          Array.from({ length: 5 }).map((_, i) => (
             <Card key={`skeleton-${String(i)}`}>
               <CardHeader className="flex flex-row items-center justify-between pb-2">
                 <Skeleton className="h-4 w-24" />
@@ -73,17 +71,12 @@ export default function AnalyticsPage() {
               value={`${metrics.average_attendance_rate.toFixed(1)}%`}
               icon={TrendingUp}
             />
-            <StatCard
-              title="Unresolved Anomalies"
-              value={metrics.unresolved_anomalies}
-              icon={AlertTriangle}
-            />
           </>
         ) : null}
       </div>
 
       {/* Quick Links */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4">
         <Link to="/analytics/at-risk">
           <Card className="hover:border-primary/50 transition-colors cursor-pointer">
             <CardHeader className="flex flex-row items-center gap-3">
@@ -92,23 +85,6 @@ export default function AnalyticsPage() {
                 <CardTitle className="text-lg">At-Risk Students</CardTitle>
                 <CardDescription>
                   Students with low attendance rates that need attention
-                </CardDescription>
-              </div>
-              <ArrowRight className="h-5 w-5 text-muted-foreground" />
-            </CardHeader>
-          </Card>
-        </Link>
-
-        <Link to="/analytics/anomalies">
-          <Card className="hover:border-primary/50 transition-colors cursor-pointer">
-            <CardHeader className="flex flex-row items-center gap-3">
-              <ShieldAlert className="h-8 w-8 text-orange-500" />
-              <div className="flex-1">
-                <CardTitle className="text-lg">Anomaly Detection</CardTitle>
-                <CardDescription>
-                  {metrics
-                    ? `${metrics.unresolved_anomalies} unresolved anomalies detected`
-                    : 'Detect unusual attendance patterns'}
                 </CardDescription>
               </div>
               <ArrowRight className="h-5 w-5 text-muted-foreground" />

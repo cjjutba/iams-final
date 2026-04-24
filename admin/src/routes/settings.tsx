@@ -16,11 +16,6 @@ import type { NotificationPreference } from '@/types'
 const DEFAULT_SETTINGS: Record<string, string> = {
   current_semester: '1st',
   academic_year: '2025-2026',
-  scan_interval: '60',
-  early_leave_threshold: '3',
-  cosine_similarity_threshold: '0.6',
-  grace_period: '5',
-  maintenance_mode: 'false',
 }
 
 export default function SettingsPage() {
@@ -34,7 +29,7 @@ export default function SettingsPage() {
       const loaded: Record<string, string> = { ...DEFAULT_SETTINGS }
       for (const [key, entry] of Object.entries(settingsData)) {
         const val = (entry as { value?: string })?.value
-        if (val !== undefined) {
+        if (val !== undefined && key in DEFAULT_SETTINGS) {
           loaded[key] = String(val)
         }
       }
@@ -60,12 +55,12 @@ export default function SettingsPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-2xl font-semibold">System Settings</h1>
+          <h1 className="text-2xl font-semibold">Settings</h1>
           <p className="text-muted-foreground mt-1">Loading settings...</p>
         </div>
         <div className="space-y-4">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={`settings-skeleton-${String(i)}`} className="h-48 w-full" />
+          {Array.from({ length: 2 }).map((_, i) => (
+            <Skeleton key={`settings-skeleton-${String(i)}`} className="h-40 w-full" />
           ))}
         </div>
       </div>
@@ -76,9 +71,9 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">System Settings</h1>
+          <h1 className="text-2xl font-semibold">Settings</h1>
           <p className="text-muted-foreground mt-1">
-            Configure system-wide settings
+            Academic calendar and notification preferences
           </p>
         </div>
         <Button onClick={() => void handleSave()} disabled={updateSettings.isPending}>
@@ -90,7 +85,7 @@ export default function SettingsPage() {
           ) : (
             <>
               <Save className="mr-2 h-4 w-4" />
-              Save Settings
+              Save
             </>
           )}
         </Button>
@@ -127,91 +122,6 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Recognition Thresholds</CardTitle>
-          <CardDescription>
-            Configure face recognition and presence tracking parameters
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="scan_interval">Scan Interval (seconds)</Label>
-              <Input
-                id="scan_interval"
-                type="number"
-                value={values.scan_interval}
-                onChange={e => handleChange('scan_interval', e.target.value)}
-                placeholder="60"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="early_leave_threshold">
-                Early Leave Threshold (missed scans)
-              </Label>
-              <Input
-                id="early_leave_threshold"
-                type="number"
-                value={values.early_leave_threshold}
-                onChange={e => handleChange('early_leave_threshold', e.target.value)}
-                placeholder="3"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="cosine_similarity_threshold">
-                Cosine Similarity Threshold
-              </Label>
-              <Input
-                id="cosine_similarity_threshold"
-                type="number"
-                step="0.01"
-                value={values.cosine_similarity_threshold}
-                onChange={e => handleChange('cosine_similarity_threshold', e.target.value)}
-                placeholder="0.6"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="grace_period">Grace Period (minutes)</Label>
-              <Input
-                id="grace_period"
-                type="number"
-                value={values.grace_period}
-                onChange={e => handleChange('grace_period', e.target.value)}
-                placeholder="5"
-              />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>System</CardTitle>
-          <CardDescription>
-            System-level configuration options
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Separator className="mb-4" />
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <Label htmlFor="maintenance_mode">Maintenance Mode</Label>
-              <p className="text-sm text-muted-foreground">
-                When enabled, the system will reject new attendance submissions
-              </p>
-            </div>
-            <Switch
-              id="maintenance_mode"
-              checked={values.maintenance_mode === 'true'}
-              onCheckedChange={checked =>
-                handleChange('maintenance_mode', String(checked))
-              }
-            />
-          </div>
-        </CardContent>
-      </Card>
-
       <NotificationPreferencesCard />
     </div>
   )
@@ -235,13 +145,9 @@ function NotificationPreferencesCard() {
   }
 
   const items: { key: keyof NotificationPreference; label: string; description: string }[] = [
-    { key: 'early_leave_alerts', label: 'Early Leave Alerts', description: 'Receive alerts when a student leaves class early' },
-    { key: 'anomaly_alerts', label: 'Anomaly Alerts', description: 'Receive alerts for anomalous attendance patterns' },
-    { key: 'attendance_confirmation', label: 'Attendance Confirmations', description: 'Receive confirmations when attendance is recorded' },
-    { key: 'low_attendance_warning', label: 'Low Attendance Warnings', description: 'Receive warnings when attendance drops below threshold' },
-    { key: 'daily_digest', label: 'Daily Digest', description: 'Receive a daily attendance summary at 8 PM' },
-    { key: 'weekly_digest', label: 'Weekly Digest', description: 'Receive a weekly attendance summary on Mondays' },
-    { key: 'email_enabled', label: 'Email Notifications', description: 'Also send notifications to your email address' },
+    { key: 'early_leave_alerts', label: 'Early Leave Alerts', description: 'Notify when a student leaves class early' },
+    { key: 'low_attendance_warning', label: 'Low Attendance Warnings', description: 'Warn when attendance drops below the threshold' },
+    { key: 'email_enabled', label: 'Email Notifications', description: 'Also deliver notifications to your email' },
   ]
 
   return (

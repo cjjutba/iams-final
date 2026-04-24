@@ -1,5 +1,5 @@
 import api from './api'
-import type { Notification, BroadcastNotificationRequest, NotificationPreference, NotificationPreferenceUpdate } from '@/types'
+import type { Notification, NotificationPreference, NotificationPreferenceUpdate } from '@/types'
 
 export const notificationsService = {
   list: () =>
@@ -10,8 +10,6 @@ export const notificationsService = {
     api.post('/notifications/read-all').then(r => r.data),
   unreadCount: () =>
     api.get<{ unread_count: number }>('/notifications/unread-count').then(r => r.data),
-  broadcast: (data: BroadcastNotificationRequest) =>
-    api.post('/notifications/broadcast', data).then(r => r.data),
   getPreferences: () =>
     api.get<NotificationPreference>('/notifications/preferences').then(r => r.data),
   updatePreferences: (data: NotificationPreferenceUpdate) =>

@@ -1,9 +1,15 @@
 # mediamtx LOCAL DEVELOPMENT configuration for IAMS
 #
 # Identical to mediamtx.yml (production) except:
-# - webrtcAdditionalHosts uses Mac's LAN IP (auto-patched by dev-up.sh)
+# - webrtcAdditionalHosts uses Mac's LAN IP (auto-patched)
 # - No TURN server (not needed on LAN)
 # - logLevel: info for easier debugging
+#
+# THIS FILE IS A TEMPLATE. scripts/dev-up.sh copies it to
+# `deploy/mediamtx.dev.generated.yml` (gitignored) and rewrites
+# `webrtcAdditionalHosts` with the Mac's `ipconfig getifaddr en0` IP.
+# docker-compose.yml mounts the generated copy, not this template.
+# Do NOT commit real LAN IPs here — the placeholder below is intentional.
 
 logLevel: info
 
@@ -41,7 +47,7 @@ webrtcAddress: :8889
 # (127.0.0.1, 172.x.x.x) as WebRTC candidates
 webrtcIPsFromInterfaces: no
 webrtcAdditionalHosts:
-  - 192.168.88.13
+  - 127.0.0.1   # placeholder — substituted by scripts/dev-up.sh
 
 webrtcLocalUDPAddress: :8887
 

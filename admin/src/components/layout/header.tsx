@@ -1,6 +1,5 @@
 import { Bell, Inbox } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth.store'
 import { useNotificationStore } from '@/stores/notification.store'
@@ -31,7 +30,6 @@ export function Header() {
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [notifOpen, setNotifOpen] = useState(false)
   const [loadingNotifs, setLoadingNotifs] = useState(false)
-  const navigate = useNavigate()
 
   const initials = user
     ? `${user.first_name.charAt(0)}${user.last_name.charAt(0)}`
@@ -123,20 +121,6 @@ export function Header() {
                 ))
               )}
             </div>
-            {notifications.length > 0 && (
-              <div className="border-t px-4 py-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setNotifOpen(false)
-                    navigate('/notifications')
-                  }}
-                  className="w-full text-center text-xs text-muted-foreground hover:text-foreground cursor-pointer"
-                >
-                  View all notifications
-                </button>
-              </div>
-            )}
           </PopoverContent>
         </Popover>
         <DropdownMenu>

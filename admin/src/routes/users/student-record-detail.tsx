@@ -19,6 +19,8 @@ import {
 } from 'lucide-react'
 
 import { DataTable } from '@/components/data-tables'
+import { FaceVerificationCard } from '@/components/students/FaceVerificationCard'
+import { AttendanceDetailSheet } from '@/components/attendance/AttendanceDetailSheet'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -103,6 +105,8 @@ export default function StudentRecordDetailPage() {
   )
 
   const [editOpen, setEditOpen] = useState(false)
+  const [selectedRecord, setSelectedRecord] = useState<AttendanceRecord | null>(null)
+  const [detailOpen, setDetailOpen] = useState(false)
   const updateMutation = useUpdateStudentRecord()
   const deactivateMutation = useDeactivateStudentRecord()
   const deregisterMutation = useDeregisterFace()
@@ -655,6 +659,10 @@ export default function StudentRecordDetailPage() {
         </DialogContent>
       </Dialog>
 
+      {student.is_registered && student.has_face_registered && student.user_id && (
+        <FaceVerificationCard userId={student.user_id} />
+      )}
+
       {student.is_registered && (
         <div>
           <h3 className="text-lg font-semibold mb-4">Attendance History</h3>
@@ -665,9 +673,22 @@ export default function StudentRecordDetailPage() {
             searchColumn="subject_code"
             searchPlaceholder="Search by subject..."
             borderless
+            onRowClick={(row) => {
+              setSelectedRecord(row)
+              setDetailOpen(true)
+            }}
           />
         </div>
       )}
+
+      <AttendanceDetailSheet
+        record={selectedRecord}
+        studentId={student.user_id ?? null}
+        studentName={fullName ?? undefined}
+        open={detailOpen}
+        onOpenChange={setDetailOpen}
+      />
+
 
       {/* Edit Dialog */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>

@@ -12,24 +12,30 @@ import time
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.config import logger, settings
 from app.database import get_db
 from app.models.user import User
 from app.repositories.schedule_repository import ScheduleRepository
+from app.repositories.face_repository import FaceRepository
 from app.schemas.face import (
     CameraDiagnosticFace,
     CameraDiagnosticResponse,
     EdgeProcessRequest,
     EdgeProcessResponse,
     EdgeProcessResponseData,
+    FaceAngleMetadataResponse,
     FaceGoneRequest,
     FaceRecognizeRequest,
     FaceRecognizeResponse,
     FaceRegisterResponse,
+    FaceRegistrationDetailResponse,
     FaceStatusResponse,
     ImageQualityResponse,
+    LiveCropResponse,
+    LiveCropsListResponse,
     MatchedUser,
     QualityScoreResponse,
 )
@@ -37,7 +43,9 @@ from app.services.face_service import FaceService
 from app.services.ml.face_quality import assess_quality, compute_blur_score, compute_brightness
 from app.services.ml.insightface_model import insightface_model
 from app.services.presence_service import PresenceService
-from app.utils.dependencies import get_current_student, get_current_user, get_optional_user
+from app.utils.audit import log_audit
+from app.utils.dependencies import get_current_admin, get_current_student, get_current_user, get_optional_user
+from app.utils.face_image_storage import FaceImageStorage
 
 router = APIRouter()
 
@@ -170,6 +178,210 @@ async def get_face_status(current_user: User = Depends(get_current_user), db: Se
     status_data = face_service.get_face_status(str(current_user.id))
 
     return FaceStatusResponse(**status_data)
+
+
+@router.get(
+    "/registrations/{user_id}",
+    response_model=FaceRegistrationDetailResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_registration_detail(
+    user_id: str,
+    _admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    **Admin-only: Registration Detail for Face-Comparison Sheet**
+
+    Returns per-angle embedding metadata for a student's active face
+    registration. Used by the admin live-feed page to populate the
+    side-by-side comparison sheet.
+
+    In Phase 1 every `image_url` is null (images not persisted yet).
+    Phase 2 populates it for angles whose `image_storage_key` is set.
+    """
+    face_repo = FaceRepository(db)
+    registration = face_repo.get_by_user(user_id)
+
+    if registration is None:
+        return FaceRegistrationDetailResponse(user_id=user_id, available=False)
+
+    embeddings = face_repo.get_embeddings_by_registration(str(registration.id))
+
+    # Only surface real phone-captured angles to the admin sheet. The `sim_*`
+    # CCTV-degraded derivatives are FAISS-only and have no image to render.
+    real_angles = {"center", "left", "right", "up", "down"}
+    storage = FaceImageStorage()
+    angles: list[FaceAngleMetadataResponse] = []
+    for emb in embeddings:
+        if emb.angle_label not in real_angles:
+            continue
+        image_url: str | None = None
+        if emb.image_storage_key and storage.exists(emb.image_storage_key):
+            image_url = (
+                f"/api/v1/face/registrations/{user_id}/images/{emb.angle_label}"
+            )
+        angles.append(
+            FaceAngleMetadataResponse(
+                id=str(emb.id),
+                angle_label=emb.angle_label,
+                quality_score=emb.quality_score,
+                created_at=emb.created_at,
+                image_url=image_url,
+            )
+        )
+
+    return FaceRegistrationDetailResponse(
+        user_id=user_id,
+        available=True,
+        registered_at=registration.registered_at,
+        embedding_dim=512,
+        angles=angles,
+    )
+
+
+@router.get(
+    "/registrations/{user_id}/images/{angle_label}",
+    status_code=status.HTTP_200_OK,
+    include_in_schema=True,
+)
+async def get_registration_image(
+    user_id: str,
+    angle_label: str,
+    current_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    **Admin-only: Registration Image Bytes**
+
+    Returns the stored JPEG for a specific registration angle. Used by the
+    admin live-feed face-comparison sheet to render `<img>` tags.
+
+    - 404 if there is no active registration or no embedding row for the
+      given angle.
+    - 410 Gone when the DB row points at a file that is no longer on disk
+      (distinct from 404 — useful signal for backfill / storage drift).
+    - Cache-Control is 5 min, `private` — files never change once written.
+    """
+    real_angles = {"center", "left", "right", "up", "down"}
+    if angle_label not in real_angles:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown angle")
+
+    face_repo = FaceRepository(db)
+    registration = face_repo.get_by_user(user_id)
+    if registration is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="no registration")
+
+    embeddings = face_repo.get_embeddings_by_registration(str(registration.id))
+    match = next(
+        (e for e in embeddings if e.angle_label == angle_label and e.image_storage_key),
+        None,
+    )
+    if match is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="angle not stored")
+
+    storage = FaceImageStorage()
+    try:
+        path = storage.resolve_path(match.image_storage_key)
+    except FileNotFoundError:
+        # DB row points at a missing file — distinct state from "never had one".
+        logger.warning(
+            f"Registration image missing on disk for user {user_id} angle {angle_label} "
+            f"(key={match.image_storage_key})"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE, detail="image_missing_on_disk"
+        )
+
+    # Audit the byte fetch (not the index call — would flood audit on a poll).
+    try:
+        log_audit(
+            db,
+            admin_id=current_user.id,
+            action="face.registered_images.view",
+            target_type="user",
+            target_id=user_id,
+            details=f"angle={angle_label}",
+        )
+    except Exception:
+        # Audit failures should not break the read.
+        logger.warning("log_audit failed for face.registered_images.view", exc_info=True)
+
+    return FileResponse(
+        path=str(path),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
+@router.get(
+    "/live-crops/{schedule_id}/{user_id}",
+    response_model=LiveCropsListResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_live_crops(
+    schedule_id: str,
+    user_id: str,
+    limit: int = 10,
+    _admin: User = Depends(get_current_admin),
+):
+    """
+    **Admin-only: Recent Server-Captured Live Crops**
+
+    Returns the most recent JPEGs (base64-encoded) that the realtime pipeline
+    captured on the ``warming_up → recognized`` transition for this
+    (schedule, user) pair. Backs the Phase-3 source-swap in the admin
+    live-feed face-comparison sheet (`LiveCropPanel` with
+    ``source.kind === 'server'``).
+
+    Returns ``available=false`` on the VPS (``ENABLE_REDIS=false``) or when
+    no crop key exists — the admin UI transparently falls back to the
+    Phase-1 client-side canvas grab.
+    """
+    import json
+
+    capped_limit = max(1, min(50, int(limit)))
+
+    if not settings.ENABLE_REDIS:
+        return LiveCropsListResponse(
+            schedule_id=schedule_id, user_id=user_id, available=False
+        )
+
+    try:
+        from app.redis_client import get_redis
+
+        r = await get_redis()
+        key = f"live_crops:{schedule_id}:{user_id}"
+        raw_entries = await r.lrange(key, 0, capped_limit - 1)
+    except Exception:
+        logger.warning("Failed to read live crops from Redis", exc_info=True)
+        return LiveCropsListResponse(
+            schedule_id=schedule_id, user_id=user_id, available=False
+        )
+
+    crops: list[LiveCropResponse] = []
+    for raw in raw_entries:
+        try:
+            data = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+            crops.append(
+                LiveCropResponse(
+                    crop_b64=data["crop_b64"],
+                    captured_at=data["captured_at"],
+                    confidence=float(data["confidence"]),
+                    track_id=int(data["track_id"]),
+                    bbox=[float(v) for v in data["bbox"]],
+                )
+            )
+        except Exception:
+            # Malformed entry — skip. Shouldn't happen because we control the writer.
+            logger.debug("Skipping malformed live-crop entry", exc_info=True)
+
+    return LiveCropsListResponse(
+        schedule_id=schedule_id,
+        user_id=user_id,
+        available=bool(crops),
+        crops=crops,
+    )
 
 
 @router.post("/validate-image", response_model=ImageQualityResponse, status_code=status.HTTP_200_OK)

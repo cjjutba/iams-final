@@ -156,6 +156,35 @@ def login(
     auth_service = AuthService(db)
     user, tokens = auth_service.login(body.identifier, body.password)
 
+    # Record the login in both audit_logs (legacy) and activity_events
+    # (System Activity page). The log_audit helper derives the event type
+    # from (action, target_type) — here "login" + role gives us
+    # ADMIN_LOGIN / FACULTY_LOGIN / STUDENT_LOGIN automatically.
+    try:
+        from app.utils.audit import log_audit
+
+        role = (
+            user.role.value if hasattr(user.role, "value") else str(user.role)
+        ).lower()
+        full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+        log_audit(
+            db,
+            admin_id=user.id,
+            action="login",
+            target_type=role,
+            target_id=str(user.id),
+            details=f"Identifier: {body.identifier}",
+            activity_summary=f"{full_name or user.email} logged in as {role.upper()}",
+            activity_payload={
+                "user_id": str(user.id),
+                "role": role,
+                "email": user.email,
+            },
+        )
+    except Exception:
+        # Audit is best-effort — never block login on it.
+        pass
+
     return TokenResponse(
         access_token=tokens["access_token"],
         refresh_token=tokens.get("refresh_token"),

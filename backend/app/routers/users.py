@@ -54,6 +54,25 @@ def create_student_record(
     """
     user_service = UserService(db)
     record = user_service.create_student_record(body)
+
+    try:
+        from app.utils.audit import log_audit
+
+        full_name = f"{body.first_name or ''} {body.last_name or ''}".strip()
+        log_audit(
+            db,
+            admin_id=current_user.id,
+            action="create",
+            target_type="user",
+            target_id=str(record.student_id),
+            details=f"Student record: {full_name} ({body.student_id})",
+            activity_summary=(
+                f"Student record created: {full_name} ({body.student_id})"
+            ),
+        )
+    except Exception:
+        pass
+
     return StudentRecordResponse.model_validate(record)
 
 
@@ -254,6 +273,22 @@ def update_user(
     update_dict = {k: v for k, v in update_data.model_dump().items() if v is not None}
 
     user = user_service.update_user(user_id, update_dict)
+
+    # Audit the change (best effort, never block on it).
+    try:
+        from app.utils.audit import log_audit
+
+        log_audit(
+            db,
+            admin_id=current_user.id,
+            action="update",
+            target_type="user",
+            target_id=user_id,
+            details=f"Updated fields: {', '.join(update_dict.keys())}",
+        )
+    except Exception:
+        pass
+
     return UserResponse.model_validate(user)
 
 
@@ -272,6 +307,20 @@ def deactivate_user(user_id: str, current_user: User = Depends(get_current_admin
     """
     user_service = UserService(db)
     user_service.deactivate_user(user_id)
+
+    try:
+        from app.utils.audit import log_audit
+
+        log_audit(
+            db,
+            admin_id=current_user.id,
+            action="deactivate",
+            target_type="user",
+            target_id=user_id,
+            details="Soft-delete (deactivated)",
+        )
+    except Exception:
+        pass
 
     return {"success": True, "message": "User deactivated successfully"}
 

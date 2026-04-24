@@ -8,6 +8,7 @@ Message types:
   - early_leave:         Early leave detection
   - early_leave_return:  Student return after early leave
   - scan_result:         Legacy scan result (backward compatibility)
+  - activity_event:      Discrete system-wide domain event (admin live tail)
 """
 
 import asyncio
@@ -15,6 +16,7 @@ import json
 import logging
 import os
 from collections import defaultdict
+from dataclasses import dataclass, field
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -25,12 +27,46 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@dataclass
+class ActivityClient:
+    """A subscribed /ws/events viewer with per-connection filter.
+
+    Filters are snapshotted at connect time and never mutated — to change
+    filters the client reconnects. This keeps the per-message filter check
+    a simple set-membership test with no locking.
+    """
+
+    ws: WebSocket
+    event_types: frozenset[str] = field(default_factory=frozenset)
+    categories: frozenset[str] = field(default_factory=frozenset)
+    severities: frozenset[str] = field(default_factory=frozenset)
+    schedule_id: str | None = None
+    student_id: str | None = None
+
+    def matches(self, msg: dict) -> bool:
+        """Return True iff this client should receive the given message."""
+        if self.event_types and msg.get("event_type") not in self.event_types:
+            return False
+        if self.categories and msg.get("category") not in self.categories:
+            return False
+        if self.severities and msg.get("severity") not in self.severities:
+            return False
+        if self.schedule_id and msg.get("subject_schedule_id") != self.schedule_id:
+            return False
+        if self.student_id and msg.get("subject_user_id") != self.student_id:
+            return False
+        return True
+
+
 class ConnectionManager:
     """WebSocket connection manager with optional Redis pub/sub backing."""
 
     def __init__(self):
         self._attendance_clients: dict[str, set[WebSocket]] = defaultdict(set)
         self._alert_clients: dict[str, set[WebSocket]] = defaultdict(set)
+        # Activity clients are a flat set keyed by filter spec — per-connection
+        # filters are server-side-applied on each incoming message.
+        self._activity_clients: set[ActivityClient] = set()
         self._redis_subscriber_task: asyncio.Task | None = None
 
     # ── Client management ────────────────────────────────────────
@@ -51,6 +87,23 @@ class ConnectionManager:
 
     def remove_alert_client(self, user_id: str, ws: WebSocket):
         self._alert_clients[user_id].discard(ws)
+
+    async def add_activity_client(self, client: ActivityClient):
+        """Accept a /ws/events viewer (admin live-tail stream)."""
+        await client.ws.accept()
+        self._activity_clients.add(client)
+        logger.debug(
+            "WS activity client added (filters: types=%s, cats=%s, sevs=%s, sched=%s, student=%s) — total %d",
+            client.event_types or "*",
+            client.categories or "*",
+            client.severities or "*",
+            client.schedule_id or "*",
+            client.student_id or "*",
+            len(self._activity_clients),
+        )
+
+    def remove_activity_client(self, client: ActivityClient):
+        self._activity_clients.discard(client)
 
     # ── Broadcasting ─────────────────────────────────────────────
 
@@ -117,6 +170,40 @@ class ConnectionManager:
             },
         )
 
+    async def broadcast_activity(self, data: dict) -> None:
+        """Send an activity event to all matching /ws/events viewers, then
+        publish to Redis for multi-worker fanout.
+
+        Per-client filters are applied in-handler against the event's own
+        metadata — no server-side fanout key is needed.
+        """
+        dead: list[ActivityClient] = []
+        for client in list(self._activity_clients):
+            if not client.matches(data):
+                continue
+            try:
+                await client.ws.send_json(data)
+            except Exception:
+                dead.append(client)
+        for client in dead:
+            self._activity_clients.discard(client)
+
+        # Publish to Redis for multi-worker fanout
+        await self._redis_publish_activity(data)
+
+    async def _redis_publish_activity(self, data: dict) -> None:
+        """Publish activity event to the shared Redis subchannel."""
+        channel = f"{settings.REDIS_WS_CHANNEL}:activity:global"
+        try:
+            from app.redis_client import get_redis
+
+            r = await get_redis()
+            enriched = {**data, "origin_pid": os.getpid(), "_activity": True}
+            payload = json.dumps(enriched, default=str)
+            await r.publish(channel, payload)
+        except Exception as e:
+            logger.warning("Redis activity publish failed: %s", e)
+
     # ── Redis pub/sub (multi-worker support) ─────────────────────
 
     async def _redis_publish(self, schedule_id: str, data: dict) -> None:
@@ -165,21 +252,36 @@ class ConnectionManager:
                         if data.get("origin_pid") == os.getpid():
                             continue
 
-                        # Determine if this is an alert or attendance channel
-                        # Alert channels: ws_broadcast:alert:{user_id}
-                        # Attendance channels: ws_broadcast:{schedule_id}
+                        # Determine channel type by suffix parts:
+                        #   Alert:      ws_broadcast:alert:{user_id}
+                        #   Activity:   ws_broadcast:activity:global
+                        #   Attendance: ws_broadcast:{schedule_id}
                         parts = channel.split(":")
                         if len(parts) >= 3 and parts[-2] == "alert":
                             # Alert message — forward to alert clients
                             user_id = parts[-1]
-                            dead = []
+                            dead_alerts = []
                             for ws in list(self._alert_clients.get(user_id, set())):
                                 try:
                                     await ws.send_json(data)
                                 except Exception:
-                                    dead.append(ws)
-                            for ws in dead:
+                                    dead_alerts.append(ws)
+                            for ws in dead_alerts:
                                 self._alert_clients[user_id].discard(ws)
+                        elif len(parts) >= 3 and parts[-2] == "activity":
+                            # Activity event — fan out to all matching
+                            # /ws/events viewers, applying per-connection
+                            # filters server-side.
+                            dead_activity: list[ActivityClient] = []
+                            for client in list(self._activity_clients):
+                                if not client.matches(data):
+                                    continue
+                                try:
+                                    await client.ws.send_json(data)
+                                except Exception:
+                                    dead_activity.append(client)
+                            for client in dead_activity:
+                                self._activity_clients.discard(client)
                         else:
                             # Attendance message — forward to attendance clients
                             schedule_id = parts[-1]
@@ -254,6 +356,16 @@ async def attendance_websocket(websocket: WebSocket, schedule_id: str):
     finally:
         ws_manager.remove_attendance_client(schedule_id, websocket)
 
+        # If this was the last viewer AND a preview pipeline is running for
+        # this schedule, tear it down so we don't leak ML CPU time watching
+        # a stream nobody's looking at. Full (attendance) pipelines are owned
+        # by the lifecycle scheduler and stay up until session end.
+        remaining = ws_manager._attendance_clients.get(schedule_id, set())
+        if not remaining:
+            stop_preview_fn = getattr(websocket.app.state, "stop_preview_pipeline", None)
+            if stop_preview_fn is not None:
+                asyncio.ensure_future(stop_preview_fn(schedule_id))
+
 
 @router.websocket("/alerts/{user_id}")
 async def alerts_websocket(websocket: WebSocket, user_id: str):
@@ -285,6 +397,95 @@ async def alerts_websocket(websocket: WebSocket, user_id: str):
         logger.warning("Unexpected error on alert WS for user %s", user_id, exc_info=True)
     finally:
         ws_manager.remove_alert_client(user_id, websocket)
+
+
+def _split_csv_param(value: str | None) -> frozenset[str]:
+    """Parse a CSV query param into a frozenset of trimmed non-empty values."""
+    if not value:
+        return frozenset()
+    return frozenset(p.strip() for p in value.split(",") if p.strip())
+
+
+@router.websocket("/events")
+async def events_websocket(websocket: WebSocket):
+    """Admin-only live tail of the system activity event stream.
+
+    Query params:
+        token:        JWT; must carry role=admin.
+        event_type:   CSV of event type names to include.
+        category:     CSV of categories to include.
+        severity:     CSV of severities to include.
+        schedule_id:  Restrict to a single schedule.
+        student_id:   Restrict to a single student (subject).
+
+    Filters are snapshotted at connect time and never mutated — to change
+    filters the client closes and reopens the socket.
+    """
+    token = websocket.query_params.get("token")
+    if token is None:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+    try:
+        payload = verify_token(token)
+    except Exception:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+
+    # Admin-only: the activity stream can carry any student's check-in
+    # moments, login events, etc. — not safe for faculty/student role.
+    # Our JWT payload only carries user_id/exp/iat — no role claim — so
+    # the role must be resolved via a DB lookup (same pattern as
+    # get_current_admin).
+    user_id_raw = payload.get("user_id")
+    if not user_id_raw:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+    try:
+        import uuid as _uuid
+
+        from app.database import SessionLocal
+        from app.models.user import User, UserRole
+
+        db = SessionLocal()
+        try:
+            user = (
+                db.query(User)
+                .filter(User.id == _uuid.UUID(str(user_id_raw)))
+                .first()
+            )
+        finally:
+            db.close()
+    except Exception:
+        logger.warning("Activity WS auth lookup failed", exc_info=True)
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+
+    if user is None or not user.is_active or user.role != UserRole.ADMIN:
+        await websocket.close(code=4003, reason="Forbidden")
+        return
+
+    client = ActivityClient(
+        ws=websocket,
+        event_types=_split_csv_param(websocket.query_params.get("event_type")),
+        categories=_split_csv_param(websocket.query_params.get("category")),
+        severities=_split_csv_param(websocket.query_params.get("severity")),
+        schedule_id=websocket.query_params.get("schedule_id"),
+        student_id=websocket.query_params.get("student_id"),
+    )
+
+    await ws_manager.add_activity_client(client)
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        logger.warning("Unexpected error on activity events WS", exc_info=True)
+    finally:
+        ws_manager.remove_activity_client(client)
 
 
 @router.websocket("/{user_id}")

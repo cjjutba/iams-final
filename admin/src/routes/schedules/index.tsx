@@ -12,6 +12,7 @@ import {
   Pencil,
   Trash2,
   Plus,
+  PlayCircle,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -62,7 +63,10 @@ import {
 import { useSchedules, useCreateSchedule, useUpdateSchedule, useDeleteSchedule, useUsers, useRooms } from '@/hooks/use-queries'
 import type { ScheduleResponse } from '@/types'
 
-const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+// Indexed Monday-first to match the backend's `day_of_week` convention
+// (0=Mon..6=Sun — see backend/scripts/seed_data.py). Do not reorder without
+// also fixing the todayIdx remap below and the Day column in the table.
+const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
 type StatusFilter = 'all' | 'active' | 'inactive'
 type DayFilter = 'all' | '0' | '1' | '2' | '3' | '4' | '5' | '6'
@@ -124,6 +128,10 @@ function ActionsCell({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        <DropdownMenuItem onClick={() => navigate(`/schedules/${schedule.id}/live`)}>
+          <PlayCircle className="mr-2 h-4 w-4" />
+          Watch Live
+        </DropdownMenuItem>
         <DropdownMenuItem onClick={() => navigate(`/schedules/${schedule.id}`)}>
           <Eye className="mr-2 h-4 w-4" />
           View Details
@@ -155,8 +163,18 @@ export default function SchedulesPage() {
   const [editingSchedule, setEditingSchedule] = useState<ScheduleResponse | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<ScheduleResponse | null>(null)
 
+  // JS Date.getDay() returns 0=Sunday..6=Saturday. Our DAY_NAMES constant
+  // lives at index 0=Monday..6=Sunday, so remap: Sun(0) -> 6, Mon..Sat -> n-1.
+  const todayIdx = useMemo(() => {
+    const jsDay = new Date().getDay()
+    return jsDay === 0 ? 6 : jsDay - 1
+  }, [])
+
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
-  const [dayFilter, setDayFilter] = useState<DayFilter>('all')
+  // Default to TODAY + active so the page opens on what matters most —
+  // "classes happening today, earliest to latest." User can flip to
+  // "All Days" or "All Status" if they want the full list.
+  const [dayFilter, setDayFilter] = useState<DayFilter>(String(todayIdx) as DayFilter)
   const [isPending, startTransition] = useTransition()
 
   const filtered = useMemo(() => {
@@ -166,10 +184,22 @@ export default function SchedulesPage() {
 
     if (dayFilter !== 'all') result = result.filter((s) => s.day_of_week === parseInt(dayFilter, 10))
 
+    // Sort morning -> evening: by (day_of_week, start_time). When viewing
+    // "All Days" this groups days together; when filtered to one day this
+    // is just chronological order.
+    result = [...result].sort((a, b) => {
+      if (a.day_of_week !== b.day_of_week) return a.day_of_week - b.day_of_week
+      return (a.start_time ?? '').localeCompare(b.start_time ?? '')
+    })
+
     return result
   }, [schedules, statusFilter, dayFilter])
 
-  const hasFilters = statusFilter !== 'all' || dayFilter !== 'all'
+  // Treat "default" (today-only + active status) as no explicit filter —
+  // the Clear button only appears once the user has diverged from it.
+  const hasFilters =
+    statusFilter !== 'all' ||
+    (dayFilter !== 'all' && dayFilter !== (String(todayIdx) as DayFilter))
 
   function handleFilterChange<T>(setter: (v: T) => void) {
     return (value: string) => {
@@ -178,9 +208,12 @@ export default function SchedulesPage() {
   }
 
   function clearFilters() {
+    // "Clear" goes back to the default view (today + active), not to
+    // a wide-open list — otherwise users would have to re-pick today
+    // every time they clear.
     startTransition(() => {
       setStatusFilter('all')
-      setDayFilter('all')
+      setDayFilter(String(todayIdx) as DayFilter)
     })
   }
 

@@ -19,6 +19,7 @@ import {
   Plus,
   Trash2,
   User,
+  Video,
 } from 'lucide-react'
 
 import { DataTable } from '@/components/data-tables'
@@ -78,7 +79,9 @@ import {
 } from '@/hooks/use-queries'
 import { usersService } from '@/services/users.service'
 
-const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+// Indexed Monday-first to match the backend's `day_of_week` convention
+// (0=Mon..6=Sun — see backend/scripts/seed_data.py).
+const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
 const scheduleFormSchema = z.object({
   subject_code: z.string().min(1, 'Subject code is required').max(20, 'Max 20 characters'),
@@ -348,10 +351,21 @@ export default function ScheduleDetailPage() {
                 )}
               </div>
             </div>
-            <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
-              <Pencil className="mr-2 h-4 w-4" />
-              Edit
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={() => navigate(`/schedules/${id}/live`)}
+                disabled={!schedule.room}
+                title={schedule.room ? 'Open live feed' : 'Room required'}
+              >
+                <Video className="mr-2 h-4 w-4" />
+                Watch Live
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+                <Pencil className="mr-2 h-4 w-4" />
+                Edit
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <Separator />

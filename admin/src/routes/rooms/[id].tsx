@@ -41,7 +41,9 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useRoom, useSchedules, useUpdateRoom } from '@/hooks/use-queries'
 import type { ScheduleResponse } from '@/types'
 
-const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+// Indexed Monday-first to match the backend's `day_of_week` convention
+// (0=Mon..6=Sun — see backend/scripts/seed_data.py).
+const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
 function formatTime(time: string): string {
   if (!time) return ''

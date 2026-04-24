@@ -7,8 +7,10 @@ Changes persist in-memory until the process restarts.
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.database import get_db
 from app.models.user import User
 from app.utils.dependencies import get_current_admin
 
@@ -54,6 +56,7 @@ def get_settings(current_user: User = Depends(get_current_admin)):
 def update_settings(
     updates: SettingsUpdate,
     current_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
 ):
     """
     Update system settings in-memory.
@@ -65,6 +68,24 @@ def update_settings(
         if attr in _EXPOSED_SETTINGS:
             setattr(settings, attr, value)
             changed[field_name] = value
+
+    if changed:
+        try:
+            from app.utils.audit import log_audit
+
+            details = ", ".join(f"{k}={v}" for k, v in changed.items())
+            log_audit(
+                db,
+                admin_id=current_user.id,
+                action="update",
+                target_type="settings",
+                target_id=None,
+                details=f"Changed: {details}",
+                activity_summary=f"Settings updated: {details}",
+                activity_payload={"changed": changed},
+            )
+        except Exception:
+            pass
 
     return {
         "success": True,

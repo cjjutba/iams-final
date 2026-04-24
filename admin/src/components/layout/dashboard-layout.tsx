@@ -1,11 +1,27 @@
 import { Suspense, useEffect } from 'react'
 import { Outlet } from 'react-router-dom'
+import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar'
 import { AppSidebar } from './app-sidebar'
 import { Header } from './header'
 import { useWebSocket } from '@/hooks/use-websocket'
 import { useNotificationStore } from '@/stores/notification.store'
+
+/**
+ * Visible fallback for the inner Suspense that wraps route-level lazy imports.
+ * The sidebar + header are already mounted by this point, so we only need to
+ * fill the content pane. An empty div (the previous fallback) made the app
+ * look dead after login while Vite compiled the Dashboard chunk in dev.
+ */
+function RouteFallback() {
+  return (
+    <div className="flex h-[calc(100vh-8rem)] items-center justify-center text-muted-foreground">
+      <Loader2 className="h-5 w-5 animate-spin" />
+      <span className="ml-2 text-sm">Loading…</span>
+    </div>
+  )
+}
 
 export function DashboardLayout() {
   const { fetchUnreadCount } = useNotificationStore()
@@ -59,16 +75,6 @@ export function DashboardLayout() {
         })
         break
 
-      case 'anomaly_alert':
-        useNotificationStore.getState().incrementUnreadCount()
-        toast.error('Anomaly Detected', {
-          description: message.anomaly_type
-            ? `${message.anomaly_type}: ${message.student_name} (${message.severity})`
-            : message.message,
-          duration: 10000,
-        })
-        break
-
       case 'low_attendance_warning':
         useNotificationStore.getState().incrementUnreadCount()
         toast.warning('Low Attendance Warning', {
@@ -96,7 +102,7 @@ export function DashboardLayout() {
         <Header />
         <main className="flex-1 p-6">
           <div className="mx-auto w-full max-w-[1440px]">
-            <Suspense fallback={<div className="h-full" />}>
+            <Suspense fallback={<RouteFallback />}>
               <Outlet />
             </Suspense>
           </div>

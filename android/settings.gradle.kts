@@ -33,4 +33,11 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "IAMS"
-include(":app")
+
+// Two Android APKs after the 2026-04-22 two-app split:
+//   :app-student — full-feature student app, points at the on-prem Mac backend
+//                  (IAMS-Net only). Ships CameraX + ML Kit for face registration.
+//   :app-faculty — minimal pure-viewer, points at the public VPS for auth +
+//                  schedules + live WebRTC stream. No CameraX, no ML Kit.
+include(":app-student")
+include(":app-faculty")
