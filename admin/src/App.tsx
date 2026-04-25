@@ -5,6 +5,12 @@ import { useAuthStore } from '@/stores/auth.store'
 import { ProtectedRoute } from '@/components/protected-route'
 import { DashboardLayout } from '@/components/layout/dashboard-layout'
 import { Toaster } from '@/components/ui/sonner'
+// Eager-import the two pages an admin hits immediately after a visit:
+// Login is the first paint for an unauthenticated user, and Dashboard is
+// where every successful sign-in lands. Keeping them out of lazy-chunks
+// eliminates the "Loading…" flash during Vite dev-mode compile.
+import LoginPage from '@/routes/login'
+import DashboardPage from '@/routes/dashboard'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -18,8 +24,6 @@ const queryClient = new QueryClient({
 })
 
 const LandingPage = lazy(() => import('@/routes/landing'))
-const LoginPage = lazy(() => import('@/routes/login'))
-const DashboardPage = lazy(() => import('@/routes/dashboard'))
 const StudentsPage = lazy(() => import('@/routes/users/students'))
 const StudentRecordDetailPage = lazy(() => import('@/routes/users/student-record-detail'))
 const FacultyPage = lazy(() => import('@/routes/users/faculty'))

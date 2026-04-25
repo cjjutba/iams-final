@@ -106,6 +106,11 @@ class EvidenceWriter:
         self._last_drop_log_at: float = 0.0
         self._dropped_total: int = 0
         self._written_total: int = 0
+        # Reference to the uvicorn event loop, captured when start() runs.
+        # The realtime pipeline executes tracker.process() in a thread-pool
+        # executor so it cannot reach the loop via get_event_loop(); it must
+        # post submit() coroutines via run_coroutine_threadsafe(...).
+        self._loop: asyncio.AbstractEventLoop | None = None
         # Cheap de-dup so we don't copy the same registered-angle JPEG over
         # and over for the same session. Bounded to stop unbounded growth
         # across a long-running process.
@@ -123,6 +128,9 @@ class EvidenceWriter:
             )
             return
 
+        # Capture the running loop so off-thread producers can reach us.
+        self._loop = asyncio.get_running_loop()
+
         self._tasks.append(asyncio.create_task(self._run_worker(), name="evidence-worker"))
         self._started = True
         logger.info(
@@ -130,6 +138,46 @@ class EvidenceWriter:
             settings.RECOGNITION_EVIDENCE_BACKEND,
             self._queue.maxsize,
         )
+
+    def submit_threadsafe(self, draft: RecognitionEventDraft) -> None:
+        """Producer API callable from any thread.
+
+        The realtime pipeline runs ``tracker.process()`` on a thread-pool
+        executor, so it can't use ``submit()`` (a coroutine). This wrapper
+        posts the coroutine to the uvicorn loop via
+        ``run_coroutine_threadsafe``, returning immediately. Drops silently
+        if the writer isn't started or the queue is near capacity — the
+        pipeline must never back-pressure on recognition-evidence I/O.
+        """
+        if not self._started or self._stopping or self._loop is None:
+            return
+        # Back-pressure relief: drop the event without scheduling the task
+        # at all when the queue is already near-full. Cheaper than bouncing
+        # through run_coroutine_threadsafe only to hit QueueFull inside
+        # submit(). Threshold matches the existing 10% head-room policy.
+        try:
+            high_water = max(1, int(self._queue.maxsize * 0.9))
+            if self._queue.qsize() >= high_water:
+                self._dropped_total += 1
+                now = time.monotonic()
+                if (now - self._last_drop_log_at) >= _DROP_LOG_WINDOW_S:
+                    logger.warning(
+                        "EvidenceWriter: back-pressure drop — qsize=%d (total_dropped=%d)",
+                        self._queue.qsize(),
+                        self._dropped_total,
+                    )
+                    self._last_drop_log_at = now
+                return
+        except Exception:
+            # Never let a queue-introspection oddity crash the hot path.
+            pass
+
+        try:
+            asyncio.run_coroutine_threadsafe(self.submit(draft), self._loop)
+        except RuntimeError:
+            # Loop closed between our check and the post — pipeline is
+            # shutting down. Silent drop is correct here.
+            pass
 
     async def stop(self) -> None:
         if not self._started:

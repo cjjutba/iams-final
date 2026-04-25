@@ -1,5 +1,10 @@
 import api from './api'
-import type { ScheduleResponse, ScheduleCreate, ScheduleUpdate } from '@/types'
+import type {
+  ScheduleResponse,
+  ScheduleCreate,
+  ScheduleUpdate,
+  StudentEnrollmentsPage,
+} from '@/types'
 
 export const schedulesService = {
   list: (params?: { day?: number }) =>
@@ -18,6 +23,17 @@ export const schedulesService = {
     api.post(`/schedules/${scheduleId}/enroll/${studentUserId}`).then(r => r.data),
   unenrollStudent: (scheduleId: string, studentUserId: string) =>
     api.delete(`/schedules/${scheduleId}/enroll/${studentUserId}`).then(r => r.data),
-  getStudentEnrollments: (studentUserId: string) =>
-    api.get(`/schedules/student/${studentUserId}/enrollments`).then(r => r.data),
+  getStudentEnrollments: (
+    studentUserId: string,
+    params?: { limit?: number; offset?: number },
+  ) =>
+    api
+      .get<StudentEnrollmentsPage>(`/schedules/student/${studentUserId}/enrollments`, {
+        params: { limit: params?.limit ?? 20, offset: params?.offset ?? 0 },
+      })
+      .then(r => r.data),
+  getStudentEnrollmentIds: (studentUserId: string) =>
+    api
+      .get<{ schedule_ids: string[] }>(`/schedules/student/${studentUserId}/enrollments/ids`)
+      .then(r => r.data.schedule_ids),
 }

@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useRecognitions } from '@/hooks/use-queries'
-import api from '@/services/api'
+import { useAuthedImage } from '@/hooks/use-authed-image'
 import type { RecognitionEvent } from '@/types'
 
 interface Props {
@@ -123,16 +123,17 @@ function DetectionRow({ event }: { event: RecognitionEvent }) {
 }
 
 function CropThumbnail({ url, alt }: { url: string; alt: string }) {
-  const [errored, setErrored] = useState(false)
-  const [loaded, setLoaded] = useState(false)
-  // The API client prepends baseURL; the service returns relative paths.
-  const absolute = url.startsWith('http')
-    ? url
-    : `${api.defaults.baseURL ?? ''}${url}`
+  // The crop endpoint is Bearer-auth protected; a plain <img> cannot send
+  // the Authorization header. useAuthedImage fetches through Axios and
+  // hands us a same-origin blob URL to display.
+  const { src, loading, error } = useAuthedImage(url)
 
-  if (errored) {
+  if (error) {
     return (
-      <div className="flex h-16 w-16 items-center justify-center rounded border bg-muted text-muted-foreground">
+      <div
+        className="flex h-16 w-16 items-center justify-center rounded border bg-muted text-muted-foreground"
+        title={`Failed to load crop: ${error.message}`}
+      >
         <ImageOff className="h-4 w-4" aria-hidden />
       </div>
     )
@@ -140,19 +141,18 @@ function CropThumbnail({ url, alt }: { url: string; alt: string }) {
 
   return (
     <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded border bg-muted/50">
-      {!loaded && (
+      {(loading || !src) && (
         <div className="absolute inset-0 flex items-center justify-center text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
         </div>
       )}
-      <img
-        src={absolute}
-        alt={alt}
-        loading="lazy"
-        className="h-full w-full object-cover"
-        onLoad={() => setLoaded(true)}
-        onError={() => setErrored(true)}
-      />
+      {src && (
+        <img
+          src={src}
+          alt={alt}
+          className="h-full w-full object-cover"
+        />
+      )}
     </div>
   )
 }

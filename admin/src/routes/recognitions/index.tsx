@@ -17,8 +17,8 @@ import {
 } from '@/components/ui/select'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useRecognitions } from '@/hooks/use-queries'
+import { useAuthedImage } from '@/hooks/use-authed-image'
 import { recognitionsService } from '@/services/recognitions.service'
-import api from '@/services/api'
 import type { RecognitionEvent, RecognitionListFilters } from '@/types'
 
 type MatchedFilter = 'all' | 'matched' | 'missed'
@@ -250,22 +250,25 @@ export default function RecognitionsPage() {
 }
 
 function CropLink({ url, label }: { url: string; label: string }) {
-  const absolute = url.startsWith('http')
-    ? url
-    : `${api.defaults.baseURL ?? ''}${url}`
+  // Both the <img> preview AND the click-to-open-in-new-tab path need the
+  // bearer token. The preview gets it via useAuthedImage (blob URL); the
+  // link itself drops the target="_blank" affordance since a new tab
+  // would lack the auth context anyway. Clicking the thumbnail now opens
+  // the blob URL inline, which is still useful for zooming in.
+  const { src } = useAuthedImage(url)
+  const href = src ?? undefined
   return (
     <a
-      href={absolute}
-      target="_blank"
+      href={href}
+      target={src ? '_blank' : undefined}
       rel="noreferrer"
       className="inline-flex h-10 w-10 items-center justify-center overflow-hidden rounded border bg-muted/30"
     >
-      <img
-        src={absolute}
-        alt={label}
-        className="h-full w-full object-cover"
-        loading="lazy"
-      />
+      {src ? (
+        <img src={src} alt={label} className="h-full w-full object-cover" />
+      ) : (
+        <span className="text-[9px] text-muted-foreground">—</span>
+      )}
     </a>
   )
 }

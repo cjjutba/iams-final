@@ -27,13 +27,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@dataclass
+@dataclass(eq=False)
 class ActivityClient:
     """A subscribed /ws/events viewer with per-connection filter.
 
     Filters are snapshotted at connect time and never mutated — to change
     filters the client reconnects. This keeps the per-message filter check
     a simple set-membership test with no locking.
+
+    ``eq=False`` falls back to identity equality + identity hash so an
+    instance can be stored in a ``set`` — which is how the manager
+    tracks live connections.
     """
 
     ws: WebSocket

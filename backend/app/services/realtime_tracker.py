@@ -161,6 +161,16 @@ class RealtimeTracker:
         # process() call. Stored on the event so an admin can reconstruct
         # frame ordering regardless of clock skew.
         self._frame_counter: int = 0
+        # Per-user caches so the evidence intercept (called on every FAISS
+        # decision) does ZERO extra DB / disk I/O after the first match.
+        #   * bytes: the registered-angle JPEG loaded once per user.
+        #   * ref  : the storage key assigned once by the writer, returned
+        #            on the evidence draft of subsequent events.
+        # Missing-user is cached explicitly (None value) so we don't retry
+        # the DB lookup each frame for a user whose image_storage_key is
+        # null (pre-Phase-2 registrations).
+        self._evidence_reg_bytes: dict[str, bytes | None] = {}
+        self._evidence_reg_ref: dict[str, str] = {}
 
         # ByteTrack with tuned parameters for face tracking
         self._tracker = sv.ByteTrack(
@@ -1058,42 +1068,46 @@ class RealtimeTracker:
     ) -> None:
         """Build a RecognitionEventDraft and hand it to the evidence writer.
 
-        Import is local to keep evidence_writer module loading lazy — unit
-        tests that instantiate RealtimeTracker directly (without the full
-        FastAPI app) don't pay the import cost.
+        Called from inside the per-track loop of ``_recognize_batch`` which
+        runs on the pipeline's thread-pool executor. The hot path here
+        **must stay sub-millisecond**; all non-trivial work (encoding,
+        disk, DB) is deferred to the writer's async worker.
 
-        Matched events also eagerly fetch a registered-angle JPEG for the
-        matched user on the first match; subsequent events for the same
-        ``(user_id, angle)`` pair reuse the writer's cache.
+        Per-user caches (``_evidence_reg_bytes``, ``_evidence_reg_ref``)
+        ensure ``_load_registered_crop_bytes`` runs at most once per user
+        per process — not every frame.
         """
-        import asyncio as _asyncio
-
         from app.services.evidence_writer import (
             RecognitionEventDraft,
             evidence_writer,
         )
 
         matched = bool(user_id) and not is_ambiguous
-        embedding_norm = float(np.linalg.norm(search_embedding))
-
-        # Angle label for caching the registered-side crop. Best-effort —
-        # the FAISS result doesn't carry angle metadata, so we leave it
-        # blank and let the writer use "match" as the cache key per user.
-        angle_label = "match"
 
         registered_crop_ref: str | None = None
         registered_crop_bytes: bytes | None = None
         if matched and user_id:
-            registered_crop_ref = evidence_writer.get_registered_crop_ref(
-                user_id, angle_label
-            )
-            if not registered_crop_ref:
+            cached_ref = self._evidence_reg_ref.get(user_id)
+            if cached_ref:
+                registered_crop_ref = cached_ref
+            elif user_id not in self._evidence_reg_bytes:
+                # First match for this user this process: one-shot DB+disk
+                # read. Future events for the same user hit the cache.
                 try:
-                    registered_crop_bytes = self._load_registered_crop_bytes(user_id)
+                    self._evidence_reg_bytes[user_id] = (
+                        self._load_registered_crop_bytes(user_id)
+                    )
                 except Exception:
                     logger.debug(
-                        "Could not load registered crop for user %s", user_id, exc_info=True
+                        "Could not load registered crop for user %s",
+                        user_id,
+                        exc_info=True,
                     )
+                    self._evidence_reg_bytes[user_id] = None
+                registered_crop_bytes = self._evidence_reg_bytes[user_id]
+            else:
+                # Cached miss — user has no registered-image on disk.
+                registered_crop_bytes = None
 
         draft = RecognitionEventDraft(
             schedule_id=str(self._schedule_id),
@@ -1106,7 +1120,7 @@ class RealtimeTracker:
             matched=matched,
             is_ambiguous=bool(is_ambiguous),
             det_score=float(det_score),
-            embedding_norm=embedding_norm,
+            embedding_norm=float(np.linalg.norm(search_embedding)),
             bbox={
                 "x1": int(bbox_px[0]),
                 "y1": int(bbox_px[1]),
@@ -1119,35 +1133,33 @@ class RealtimeTracker:
             registered_crop_ref=registered_crop_ref,
         )
 
-        try:
-            loop = _asyncio.get_event_loop()
-            if loop.is_running():
-                _asyncio.create_task(evidence_writer.submit(draft))
-            else:
-                # Tracker is running in a thread without an event loop; try
-                # the writer's loop via run_coroutine_threadsafe if that's
-                # reachable. If not, drop silently.
-                logger.debug("No running event loop — skipping evidence submit")
-        except RuntimeError:
-            logger.debug("get_event_loop() failed — skipping evidence submit")
+        # Thread-safe post to the writer's loop. Returns immediately —
+        # crop encoding + DB insert + WS broadcast happen on the writer's
+        # async worker. If we're the one who supplied the bytes, record
+        # the ref locally when the writer assigns it on the next event
+        # cycle; we detect that via the draft.event_id reappearing in
+        # writer state (too elaborate for this patch — instead, the
+        # writer.remember_registered_crop is called reactively when
+        # the first event flushes, and future drafts pull from that
+        # cache via get_registered_crop_ref).
+        evidence_writer.submit_threadsafe(draft)
 
-        # Record the registered-crop ref for future submits even if we're
-        # deferring the async write. If the writer materialised the ref it
-        # will cache on its own; this covers the case where the ref already
-        # existed and was reused.
-        if matched and user_id and registered_crop_ref:
-            evidence_writer.remember_registered_crop(
-                user_id, angle_label, registered_crop_ref
-            )
+        # Opportunistic: once the writer has materialised the ref, hoist
+        # it into our local cache so subsequent events skip the bytes
+        # payload on the wire.
+        if matched and user_id and not registered_crop_ref:
+            cached = evidence_writer.get_registered_crop_ref(user_id, "match")
+            if cached:
+                self._evidence_reg_ref[user_id] = cached
 
     def _load_registered_crop_bytes(self, user_id: str) -> bytes | None:
-        """Read a single registered-angle JPEG for the user from the existing
-        face-uploads volume, so the evidence writer can materialise it once
-        under the crop root.
+        """Read a single registered-angle JPEG for the user from the
+        face-uploads volume. Called at most once per user per process
+        (guarded by ``_evidence_reg_bytes`` cache in the caller).
 
-        Returns None if the user has no persisted image_storage_key yet (pre-
-        Phase-2 registrations). The writer tolerates this — the event row
-        still gets inserted, just with registered_crop_ref NULL.
+        Returns None for pre-Phase-2 registrations that have no persisted
+        ``image_storage_key``. The writer tolerates None and inserts the
+        row with ``registered_crop_ref`` NULL.
         """
         from app.database import SessionLocal
         from app.models.face_embedding import FaceEmbedding

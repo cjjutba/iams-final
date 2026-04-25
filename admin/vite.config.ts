@@ -11,6 +11,32 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  // Pre-bundle deps that otherwise show up as "Outdated Optimize Dep 504"s
+  // after a package.json change. Without this, every time a new dep lands,
+  // the running dev server keeps serving old optimizer fingerprints and
+  // the browser hits 504s until the cache is wiped + server restarted.
+  // Listing the heavy/commonly-added-late deps here forces deterministic
+  // pre-bundling on server start.
+  optimizeDeps: {
+    include: [
+      'react',
+      'react-dom',
+      'react-router-dom',
+      'react-hook-form',
+      '@hookform/resolvers/zod',
+      'zod',
+      'react-day-picker',
+      'react-grab',
+      'date-fns',
+      'lucide-react',
+      'axios',
+      '@tanstack/react-query',
+      '@tanstack/react-table',
+      'zustand',
+      'recharts',
+      'sonner',
+    ],
+  },
   server: {
     port: 5173,
     proxy: {

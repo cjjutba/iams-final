@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, useInfiniteQuery, keepPreviousData } from '@tanstack/react-query'
 import { usersService } from '@/services/users.service'
 import { schedulesService } from '@/services/schedules.service'
 import { roomsService } from '@/services/rooms.service'
@@ -9,7 +9,7 @@ import { settingsService } from '@/services/settings.service'
 import { faceService } from '@/services/face.service'
 import { recognitionsService } from '@/services/recognitions.service'
 import { activityService } from '@/services/activity.service'
-import type { AdminCreateUser, CreateStudentRecord, UpdateStudentRecord, UserRole, UserUpdate, ScheduleCreate, ScheduleUpdate, RoomCreate, RoomUpdate, NotificationPreferenceUpdate, RecognitionListFilters, ActivityListFilters, AccessAuditFilters } from '@/types'
+import type { AdminCreateUser, CreateStudentRecord, UpdateStudentRecord, UserRole, UserUpdate, ScheduleCreate, ScheduleUpdate, RoomCreate, RoomUpdate, NotificationPreferenceUpdate, RecognitionListFilters, ActivityListFilters, AccessAuditFilters, StudentEnrollmentsPage } from '@/types'
 
 // ── Query keys ──────────────────────────────────────────────
 
@@ -257,6 +257,7 @@ export function useEnrollStudent() {
       void qc.invalidateQueries({ queryKey: queryKeys.schedules.students(variables.scheduleId) })
       void qc.invalidateQueries({ queryKey: queryKeys.schedules.all })
       void qc.invalidateQueries({ queryKey: ['enrollments', 'student', variables.studentUserId] })
+      void qc.invalidateQueries({ queryKey: ['enrollments', 'student', variables.studentUserId, 'ids'] })
     },
   })
 }
@@ -270,15 +271,33 @@ export function useUnenrollStudent() {
       void qc.invalidateQueries({ queryKey: queryKeys.schedules.students(variables.scheduleId) })
       void qc.invalidateQueries({ queryKey: queryKeys.schedules.all })
       void qc.invalidateQueries({ queryKey: ['enrollments', 'student', variables.studentUserId] })
+      void qc.invalidateQueries({ queryKey: ['enrollments', 'student', variables.studentUserId, 'ids'] })
     },
   })
 }
 
+const ENROLLMENTS_PAGE_SIZE = 20
+
 export function useStudentEnrollments(studentUserId: string) {
-  return useQuery({
+  return useInfiniteQuery<StudentEnrollmentsPage>({
     queryKey: ['enrollments', 'student', studentUserId],
-    queryFn: () => schedulesService.getStudentEnrollments(studentUserId),
+    queryFn: ({ pageParam = 0 }) =>
+      schedulesService.getStudentEnrollments(studentUserId, {
+        limit: ENROLLMENTS_PAGE_SIZE,
+        offset: pageParam as number,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) =>
+      lastPage.has_more ? lastPage.offset + lastPage.items.length : undefined,
     enabled: !!studentUserId,
+  })
+}
+
+export function useStudentEnrollmentIds(studentUserId: string, enabled = true) {
+  return useQuery<string[]>({
+    queryKey: ['enrollments', 'student', studentUserId, 'ids'],
+    queryFn: () => schedulesService.getStudentEnrollmentIds(studentUserId),
+    enabled: !!studentUserId && enabled,
   })
 }
 

@@ -68,6 +68,7 @@ import {
   useUserAttendance,
   useDeregisterFace,
   useStudentEnrollments,
+  useStudentEnrollmentIds,
   useEnrollStudent,
   useUnenrollStudent,
   useSchedules,
@@ -113,7 +114,15 @@ export default function StudentRecordDetailPage() {
   const actionLoading = deactivateMutation.isPending || deregisterMutation.isPending
 
   // Enrollment management
-  const { data: enrollments = [], isLoading: enrollmentsLoading } = useStudentEnrollments(student?.user_id ?? '')
+  const {
+    data: enrollmentsData,
+    isLoading: enrollmentsLoading,
+    fetchNextPage: fetchNextEnrollments,
+    hasNextPage: hasMoreEnrollments,
+    isFetchingNextPage: isFetchingMoreEnrollments,
+  } = useStudentEnrollments(student?.user_id ?? '')
+  const enrollments = enrollmentsData?.pages.flatMap((p) => p.items) ?? []
+  const enrollmentsTotal = enrollmentsData?.pages[0]?.total ?? 0
   const { data: allSchedules = [] } = useSchedules()
   const enrollMutation = useEnrollStudent()
   const unenrollMutation = useUnenrollStudent()
@@ -122,8 +131,17 @@ export default function StudentRecordDetailPage() {
   const [bulkEnrolling, setBulkEnrolling] = useState(false)
   const [unenrollConfirm, setUnenrollConfirm] = useState<{ scheduleId: string; name: string } | null>(null)
 
-  const enrolledScheduleIds = new Set((enrollments as Array<{ schedule_id: string }>).map((e) => e.schedule_id))
-  const availableSchedules = allSchedules.filter((s) => s.is_active && !enrolledScheduleIds.has(s.id))
+  // Lightweight enrolled-ID list for filtering the enroll dialog's available
+  // schedules — only fetched when the dialog is opened so we don't pull the
+  // full ID list on every student-detail page view.
+  const { data: enrolledIds = [] } = useStudentEnrollmentIds(
+    student?.user_id ?? '',
+    enrollDialogOpen,
+  )
+  const enrolledScheduleIds = new Set(enrolledIds)
+  const availableSchedules = allSchedules.filter(
+    (s) => s.is_active && !enrolledScheduleIds.has(s.id),
+  )
 
   useEffect(() => {
     if (!enrollDialogOpen) setSelectedScheduleIds(new Set())
@@ -501,13 +519,17 @@ export default function StudentRecordDetailPage() {
         </CardContent>
       </Card>
 
+      {student.is_registered && student.has_face_registered && student.user_id && (
+        <FaceVerificationCard userId={student.user_id} />
+      )}
+
       {student.user_id && (
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle className="flex items-center gap-2 text-lg">
                 <BookOpen className="h-5 w-5" />
-                Enrolled Schedules ({(enrollments as unknown[]).length})
+                Enrolled Schedules ({enrollmentsTotal})
               </CardTitle>
               <Button size="sm" onClick={() => setEnrollDialogOpen(true)}>
                 <Plus className="mr-2 h-4 w-4" />
@@ -518,11 +540,11 @@ export default function StudentRecordDetailPage() {
           <CardContent>
             {enrollmentsLoading ? (
               <Skeleton className="h-24 w-full" />
-            ) : (enrollments as unknown[]).length === 0 ? (
+            ) : enrollmentsTotal === 0 ? (
               <p className="text-sm text-muted-foreground">No enrollments yet.</p>
             ) : (
               <div className="space-y-2">
-                {(enrollments as Array<{ enrollment_id: string; schedule_id: string; schedule: { id: string; subject_code: string; subject_name: string; day_of_week: number; start_time: string; end_time: string; faculty_name?: string | null } | null }>).map((e) => (
+                {enrollments.map((e) => (
                   <div key={e.enrollment_id} className="flex items-center justify-between rounded-md border px-4 py-3">
                     <div className="cursor-pointer" onClick={() => e.schedule && navigate(`/schedules/${e.schedule.id}`)}>
                       <p className="text-sm font-medium">{e.schedule?.subject_code} - {e.schedule?.subject_name}</p>
@@ -544,6 +566,28 @@ export default function StudentRecordDetailPage() {
                     </Button>
                   </div>
                 ))}
+                {hasMoreEnrollments && (
+                  <div className="flex flex-col items-center gap-1 pt-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => fetchNextEnrollments()}
+                      disabled={isFetchingMoreEnrollments}
+                    >
+                      {isFetchingMoreEnrollments ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Loading...
+                        </>
+                      ) : (
+                        'Load more'
+                      )}
+                    </Button>
+                    <p className="text-xs text-muted-foreground">
+                      Showing {enrollments.length} of {enrollmentsTotal}
+                    </p>
+                  </div>
+                )}
               </div>
             )}
           </CardContent>
@@ -607,7 +651,7 @@ export default function StudentRecordDetailPage() {
           <div className="max-h-[300px] overflow-y-auto space-y-1">
             {availableSchedules.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
-                {(enrollments as unknown[]).length > 0 ? 'Enrolled in all available schedules.' : 'No active schedules available.'}
+                {enrollmentsTotal > 0 ? 'Enrolled in all available schedules.' : 'No active schedules available.'}
               </p>
             ) : (
               availableSchedules.map((s) => {
@@ -658,10 +702,6 @@ export default function StudentRecordDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {student.is_registered && student.has_face_registered && student.user_id && (
-        <FaceVerificationCard userId={student.user_id} />
-      )}
 
       {student.is_registered && (
         <div>

@@ -23,6 +23,23 @@ export interface ScheduleResponse {
   is_active: boolean
   faculty: UserResponse | null
   room: RoomInfo | null
+  faculty_name?: string | null
+  room_name?: string | null
+}
+
+export interface StudentEnrollment {
+  enrollment_id: string
+  schedule_id: string
+  enrolled_at: string | null
+  schedule: ScheduleResponse | null
+}
+
+export interface StudentEnrollmentsPage {
+  items: StudentEnrollment[]
+  total: number
+  limit: number
+  offset: number
+  has_more: boolean
 }
 
 export interface ScheduleCreate {

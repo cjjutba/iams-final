@@ -1,13 +1,13 @@
 import { useMemo } from 'react'
 import { format } from 'date-fns'
-import { AlertCircle, CheckCircle2, Clock } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Clock, ImageOff, Loader2 } from 'lucide-react'
 
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Link } from 'react-router-dom'
 import { useRecognitionSummary, useRecognitions } from '@/hooks/use-queries'
-import api from '@/services/api'
+import { useAuthedImage } from '@/hooks/use-authed-image'
 import type { RecognitionEvent } from '@/types'
 
 interface Props {
@@ -203,6 +203,8 @@ function CropPane({
   label: string
   emptyLabel: string
 }) {
+  const { src, loading, error } = useAuthedImage(url)
+
   if (!url) {
     return (
       <div className="flex h-40 flex-col items-center justify-center gap-1 rounded border border-dashed text-center text-xs text-muted-foreground">
@@ -210,18 +212,30 @@ function CropPane({
       </div>
     )
   }
-  const absolute = url.startsWith('http')
-    ? url
-    : `${api.defaults.baseURL ?? ''}${url}`
+
   return (
     <figure className="flex flex-col gap-1">
       <div className="relative h-40 overflow-hidden rounded border bg-muted/30">
-        <img
-          src={absolute}
-          alt={label}
-          loading="lazy"
-          className="h-full w-full object-contain"
-        />
+        {error && (
+          <div
+            className="flex h-full w-full items-center justify-center text-muted-foreground"
+            title={error.message}
+          >
+            <ImageOff className="h-6 w-6" aria-hidden />
+          </div>
+        )}
+        {!error && (loading || !src) && (
+          <div className="absolute inset-0 flex items-center justify-center text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
+          </div>
+        )}
+        {!error && src && (
+          <img
+            src={src}
+            alt={label}
+            className="h-full w-full object-contain"
+          />
+        )}
       </div>
       <figcaption className="text-[11px] text-muted-foreground text-center">
         {label}

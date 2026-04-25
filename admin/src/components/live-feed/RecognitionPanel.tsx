@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import api from '@/services/api'
+import { useAuthedImage } from '@/hooks/use-authed-image'
 import type { RecognitionEventMessage } from '@/hooks/use-attendance-ws'
 
 type Filter = 'all' | 'matched' | 'missed' | 'ambiguous'
@@ -190,19 +190,14 @@ function RecognitionRow({ event }: { event: RecognitionEventMessage }) {
 }
 
 function CropThumbnail({ url }: { url: string }) {
-  const [errored, setErrored] = useState(false)
-  const absolute = url.startsWith('http')
-    ? url
-    : `${api.defaults.baseURL ?? ''}${url}`
-  if (errored) {
+  const { src, error } = useAuthedImage(url)
+  if (error || !src) {
     return <div className="h-12 w-12 shrink-0 rounded border bg-muted/30" />
   }
   return (
     <img
-      src={absolute}
+      src={src}
       alt="live crop"
-      loading="lazy"
-      onError={() => setErrored(true)}
       className="h-12 w-12 shrink-0 rounded border object-cover"
     />
   )

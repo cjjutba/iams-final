@@ -355,23 +355,35 @@ def unenroll_student(
 @router.get("/student/{student_user_id}/enrollments", status_code=status.HTTP_200_OK)
 def get_student_enrollments(
     student_user_id: str,
+    limit: int = Query(20, ge=1, le=100, description="Max results per page"),
+    offset: int = Query(0, ge=0, description="Number of results to skip"),
     current_user: User = Depends(require_role(UserRole.ADMIN, UserRole.FACULTY)),
     db: Session = Depends(get_db),
 ):
     """
     **Get Student Enrollments** (Admin/Faculty)
 
-    Get all schedules a student is enrolled in.
+    Get schedules a student is enrolled in, paginated.
+
+    - **limit**: max results per page (default 20, max 100)
+    - **offset**: number of results to skip (default 0)
+
+    Returns `{ items, total, limit, offset, has_more }`.
     """
+    base_query = db.query(Enrollment).filter(Enrollment.student_id == student_user_id)
+    total = base_query.count()
+
     enrollments = (
-        db.query(Enrollment)
+        base_query
         .options(joinedload(Enrollment.schedule).joinedload(Schedule.faculty))
         .options(joinedload(Enrollment.schedule).joinedload(Schedule.room))
-        .filter(Enrollment.student_id == student_user_id)
+        .order_by(Enrollment.enrolled_at.desc(), Enrollment.id.desc())
+        .offset(offset)
+        .limit(limit)
         .all()
     )
 
-    return [
+    items = [
         {
             "enrollment_id": str(e.id),
             "schedule_id": str(e.schedule_id),
@@ -380,3 +392,32 @@ def get_student_enrollments(
         }
         for e in enrollments
     ]
+
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(items) < total,
+    }
+
+
+@router.get("/student/{student_user_id}/enrollments/ids", status_code=status.HTTP_200_OK)
+def get_student_enrollment_ids(
+    student_user_id: str,
+    current_user: User = Depends(require_role(UserRole.ADMIN, UserRole.FACULTY)),
+    db: Session = Depends(get_db),
+):
+    """
+    **Get Student Enrollment Schedule IDs** (Admin/Faculty)
+
+    Returns a flat list of schedule_ids the student is enrolled in.
+    Used by the admin portal's Enroll-in-Schedule dialog to hide already-
+    enrolled schedules without loading the paginated enrollment payload.
+    """
+    rows = (
+        db.query(Enrollment.schedule_id)
+        .filter(Enrollment.student_id == student_user_id)
+        .all()
+    )
+    return {"schedule_ids": [str(r[0]) for r in rows]}
