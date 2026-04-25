@@ -4,6 +4,8 @@ Users Router
 API endpoints for user management operations.
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
@@ -22,6 +24,7 @@ from app.services.user_service import UserService
 from app.utils.dependencies import get_current_admin, get_current_user
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -37,6 +40,35 @@ def admin_create_user(
     """
     user_service = UserService(db)
     user = user_service.admin_create_user(body)
+
+    try:
+        from app.utils.audit import log_audit
+
+        full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+        role_value = (
+            user.role.value if hasattr(user.role, "value") else str(user.role)
+        )
+        log_audit(
+            db,
+            admin_id=current_user.id,
+            action="create",
+            target_type="user",
+            target_id=str(user.id),
+            details=f"User created: {full_name} ({user.email}) role={role_value}",
+            activity_summary=(
+                f"{role_value.capitalize()} created: "
+                f"{full_name or user.email}"
+            ),
+            activity_payload={
+                "user_id": str(user.id),
+                "email": user.email,
+                "role": role_value,
+            },
+            activity_severity="success",
+        )
+    except Exception:
+        logger.warning("log_audit failed for user.create", exc_info=True)
+
     return UserResponse.model_validate(user)
 
 

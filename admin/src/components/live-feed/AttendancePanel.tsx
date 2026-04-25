@@ -43,14 +43,14 @@ const STATUSES: StatusConfig[] = [
     countKey: 'late_count',
     label: 'Late',
     icon: Clock,
-    badgeClass: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
+    badgeClass: 'bg-slate-500/10 text-slate-600 border-slate-500/20',
   },
   {
     key: 'early_leave',
     countKey: 'early_leave_count',
     label: 'Early Leave',
     icon: DoorOpen,
-    badgeClass: 'bg-red-500/10 text-red-600 border-red-500/20',
+    badgeClass: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
   },
   {
     key: 'early_leave_returned',
@@ -64,7 +64,7 @@ const STATUSES: StatusConfig[] = [
     countKey: 'absent_count',
     label: 'Absent',
     icon: UserX,
-    badgeClass: 'bg-slate-500/10 text-slate-600 border-slate-500/20',
+    badgeClass: 'bg-red-500/10 text-red-600 border-red-500/20',
   },
 ]
 

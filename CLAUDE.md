@@ -87,11 +87,12 @@ Keep these invariants in mind before editing anything:
 | **Mac on IAMS-Net** | `iams-postgres-onprem` | Full DB — users, faces, schedules, attendance, presence logs |
 |  | `iams-redis-onprem` | Identity cache + WS pub/sub |
 |  | `iams-mediamtx-onprem` | RTSP ingest from ffmpeg supervisor; WHEP out to admin; RTSP out to api-gateway frame_grabber; `runOnReady` push to VPS |
-|  | `iams-api-gateway-onprem` | FastAPI: auth, face recognition, attendance, WebSocket broadcast, APScheduler (session lifecycle + digests). All `ENABLE_*` flags true. |
+|  | `iams-api-gateway-onprem` | FastAPI: auth, face recognition, attendance, WebSocket broadcast, APScheduler (session lifecycle + digests). All `ENABLE_*` flags true. **Realtime ML proxies to the native ML sidecar** when `ML_SIDECAR_URL` is set (default in `.env.onprem`). |
 |  | `iams-nginx-onprem` | Serves the admin SPA + proxies `/api/*`, `/api/v1/ws/*`, `/whep/*` |
 |  | `iams-admin-build-onprem` | One-shot sidecar: `npm run build -- --mode onprem`; exits 0 when done |
 |  | `iams-dozzle-onprem` | Log viewer @ `http://localhost:9998/` |
 |  | Host ffmpeg supervisor | `scripts/iams-cam-relay.sh` — pulls Reolink main-stream RTSP, pushes to local mediamtx |
+|  | **Host ML sidecar** | `scripts/iams-ml-sidecar.sh` — native macOS Python process (port 8001). Loads InsightFace with `CoreMLExecutionProvider` so SCRFD + ArcFace run on the Apple Neural Engine + Metal GPU. The api-gateway in Docker proxies its realtime calls here over `host.docker.internal:8001`. |
 | **VPS 167.71.217.44** | `iams-api-gateway` | Same backend image as the Mac, but with `ENABLE_ML=false`, `ENABLE_FACE_ROUTES=false`, etc. Only auth / users / schedules / rooms / health routers remain. |
 |  | `iams-postgres` | Minimal DB: faculty users + schedules + rooms + admin. Seeded by `backend/scripts/seed_vps_minimal.py`. |
 |  | `iams-mediamtx` | Receives runOnReady push from the Mac; serves public WHEP to the Faculty APK. |
@@ -113,9 +114,15 @@ After a Mac reboot / Docker Desktop restart / stale-state recovery:
 ```bash
 cd ~/Projects/iams
 ./scripts/dev-down.sh           # safety — stops the dev stack if it's up
-./scripts/onprem-up.sh          # brings up postgres+redis+mediamtx+api-gateway+nginx+admin-build+dozzle
+./scripts/onprem-up.sh          # brings up ML sidecar + postgres+redis+mediamtx+api-gateway+nginx+admin-build+dozzle
 ./scripts/start-cam-relay.sh    # starts Reolink → mediamtx ffmpeg supervisor (idempotent)
 ```
+
+`onprem-up.sh` now starts the **ML sidecar** as its first step (before
+Docker) so the api-gateway's lifespan probe (`GET /health` on
+`host.docker.internal:8554`) finds it on the first try. To skip the
+sidecar and run inference in-container on CPU only, set
+`IAMS_SKIP_ML_SIDECAR=1` in the environment or `scripts/.env.local`.
 
 `./scripts/onprem-up.sh` auto-sources `scripts/.env.local` (gitignored) to
 pick up `POSTGRES_PASSWORD` — see the "Secrets + first-time setup" section
@@ -176,7 +183,12 @@ cp admin/.env.production.example admin/.env.production
 the value baked into the `postgres_data_onprem` Docker volume on the FIRST
 `onprem-up.sh` boot. If you ever rotate it without also rotating inside
 postgres, the api-gateway will fail with "password authentication failed".
-Easy recovery: `./scripts/onprem-down.sh --purge` + re-seed.
+Easy recovery: `./scripts/onprem-down.sh --purge` + re-seed — but **see
+the seed-data warning in the next section first**: a fresh seed wipes
+every registered face. If you have working face registrations on this
+Mac you do NOT want to lose, fix the password mismatch in-place
+(`docker exec iams-postgres-onprem psql ... ALTER USER ...`) instead of
+purging the volume.
 
 ---
 
@@ -243,7 +255,21 @@ On the on-prem Mac (`backend/.env.onprem`):
 INSIGHTFACE_MODEL=buffalo_l
 INSIGHTFACE_DET_SIZE=960
 INSIGHTFACE_DET_THRESH=0.3
+RECOGNITION_THRESHOLD=0.45        # Was 0.38 until the 2026-04-25 swap
+RECOGNITION_MARGIN=0.10           # Was 0.06 until the 2026-04-25 swap
+ADAPTIVE_ENROLL_ENABLED=false     # Default off — see lessons.md
+ADAPTIVE_ENROLL_MIN_CONFIDENCE=0.70
+ADAPTIVE_ENROLL_STABLE_FRAMES=30
 ```
+
+Operator workflows for the recognition layer:
+
+| Tool | Use case |
+|---|---|
+| `python -m scripts.rebuild_faiss [--dry-run]` | Wipe in-memory adaptive vectors + rebuild FAISS strictly from canonical DB embeddings. Run after threshold changes or any suspected index poisoning. |
+| `python -m scripts.calibrate_threshold --rooms EB226,EB227 [--csv /tmp/calib.csv]` | Sample N frames from each camera, dump per-user top-1 sim distribution, recommend threshold + margin. |
+| `python -m scripts.cctv_enroll --user-id <uuid> --room EB226 --captures 5` | Add 5 CCTV-domain embeddings to a student who has phone-side registered. Closes the cross-domain gap. Operator must keep ONE student in frame. |
+| `POST /api/v1/face/cctv-enroll/{user_id}` | Same as above via REST (admin-only). Reuses the always-on FrameGrabber if available. |
 
 History of pain:
 
@@ -264,6 +290,12 @@ History of pain:
   The sub profile is admin-display-only; it is NOT forwarded to the VPS
   (the faculty APK consumes main via the runOnReady relay). See the
   `~^.+-sub$` path rule in [deploy/mediamtx.onprem.yml](deploy/mediamtx.onprem.yml).
+  **Don't switch the admin display to main without first decoupling readers.**
+  An attempt on 2026-04-25 to default the admin to main produced black
+  screens because the api-gateway's always-on FrameGrabber and the
+  browser's WHEP reader both contend for the same publisher's frames.
+  The fix would be a separate ffmpeg fanout path (e.g. `eb226-display`
+  alongside `eb226`) so the two readers don't compete.
 
 At `buffalo_l` on CPU (M5), the real-time pipeline tops out around
 0.5-1 fps. The admin portal's `DetectionOverlay` smooths this with a
@@ -300,16 +332,55 @@ rows), `schedules`, and `rooms` rows as the Mac. It does NOT hold
 students, enrollments, face embeddings, attendance records, presence logs,
 or early-leave events.
 
-If you add a new real schedule to `SCHEDULE_DEFS` in
-`backend/scripts/seed_data.py`, both stacks pick it up on their next seed:
+### ⚠️ DO NOT re-run `seed_data` on the on-prem Mac
+
+`backend/scripts/seed_data.py` calls `_wipe_all()` first, which truncates
+**every** table including `face_embeddings`, `face_registrations`, and
+`enrollments`, and also deletes the FAISS index file
+([seed_data.py:355-380](backend/scripts/seed_data.py#L355-L380)). The Mac
+currently holds **real registered student faces** that took multi-angle
+captures from the student APK to produce. Running the seed against this
+DB destroys all of them — students would have to re-register from
+scratch, and any historical attendance/presence records lose their FK
+anchor.
+
+The on-prem stack is a **steady-state** environment now. Treat re-seed
+as the same blast radius as `DROP DATABASE`. If you genuinely need to
+add a new schedule or room, write a one-off ad-hoc SQL/script that
+`INSERT`s the row instead of running the full seed.
+
+Safe operations on the on-prem DB:
+
+- Adding a new schedule: insert via the admin portal "Create Schedule"
+  button, or run a targeted `INSERT INTO schedules ...` via psql.
+- Adding a new room: same — admin portal, or `INSERT INTO rooms ...`.
+- Adding faculty: admin portal Faculty page.
+- Resetting an individual student's face: admin portal Student detail
+  page → "Reset Face Registration" (preserves the user row + history).
+
+If, despite all of the above, the Mac DB gets corrupted and a full
+re-seed is unavoidable, the recovery path is:
+
+1. `pg_dump` first so face data can be selectively restored if needed.
+2. `docker exec iams-api-gateway-onprem python -m scripts.seed_data`.
+3. Re-register every student's face manually via the student APK.
+
+The VPS is different — it holds no face data, so re-seeding the VPS
+postgres is a no-op for student PII:
 
 ```bash
-# Re-seed on-prem
-docker exec iams-api-gateway-onprem python -m scripts.seed_data
-
-# Re-seed VPS
+# Re-seed VPS (faculty + schedules + rooms only — never student faces)
 bash deploy/deploy.sh vps     # `deploy.sh` auto-re-runs seed_vps_minimal
 ```
+
+The VPS seed (`seed_vps_minimal.py`) does NOT touch face_embeddings or
+face_registrations because those tables don't exist on the VPS profile.
+
+**If you add a new schedule to `SCHEDULE_DEFS` in `seed_data.py`**, do
+NOT then re-seed on-prem. Either copy that schedule into the admin
+portal manually on the Mac, or run a one-line `INSERT` via psql. The
+constants file is now a reference for VPS seeds + fresh-clone first
+boots, not a sync target.
 
 ---
 
@@ -319,11 +390,11 @@ bash deploy/deploy.sh vps     # `deploy.sh` auto-re-runs seed_vps_minimal
 
 1. Pulls schedules whose `(day_of_week, start_time..end_time)` window
    contains `datetime.now()` and isn't already active → **auto-starts** a
-   SessionPipeline for each (creates a FrameGrabber if the room doesn't
-   have one already).
+   SessionPipeline for each (just attaches ML to the room's existing
+   FrameGrabber — see "Always-on FrameGrabbers" below).
 2. Pulls active sessions whose `end_time` is in the past → **auto-ends**
-   them (tears down the pipeline; keeps the FrameGrabber if another
-   back-to-back session in the same room starts within 15 s).
+   them (tears down the SessionPipeline; FrameGrabbers stay alive for the
+   process lifetime).
 
 The rolling 30-min test schedules (`EB226-HHMM` / `EB227-HHMM`) use this
 to exercise the full PRESENT / LATE / ABSENT / EARLY_LEAVE state machine
@@ -333,6 +404,96 @@ This means "click Start Session" in the admin portal is usually
 **unnecessary**: once the schedule window opens, the session appears by
 itself. The button exists for (a) manual sessions outside the normal
 window, (b) restart recovery, (c) explicit demo control.
+
+### ML Sidecar — native CoreML/ANE inference
+
+The api-gateway runs in a Linux Docker container; ONNX Runtime there
+only ships with `CPUExecutionProvider`, so the M5's Apple Neural Engine
+and Metal GPU can't be reached from inside Docker. The `ml-sidecar` is a
+small native macOS Python process (no Docker) that loads the same
+`buffalo_l_static` model pack with `CoreMLExecutionProvider` available,
+exposes `/detect` and `/embed` HTTP endpoints, and serves them on
+`127.0.0.1:8001`.
+
+Architecture:
+
+```
+  Docker container (Linux)              Mac host (native macOS)
+┌────────────────────────────┐         ┌───────────────────────────┐
+│ iams-api-gateway-onprem    │         │ ml-sidecar                │
+│  ├─ FrameGrabber (RTSP)    │         │  ├─ FastAPI (uvicorn)     │
+│  ├─ ByteTrack              │  HTTP   │  ├─ InsightFace via ORT   │
+│  ├─ FAISS index            │ ──────▶ │  │   with CoreML EP       │
+│  ├─ DB + WS + APScheduler  │  loop-  │  └─ Endpoints:            │
+│  ├─ RealtimeTracker        │  back   │      /detect (SCRFD)      │
+│  └─ Calls sidecar via      │         │      /embed  (ArcFace)    │
+│     RemoteInsightFaceModel │         │      /health              │
+└────────────────────────────┘         └───────────────────────────┘
+   :8000 (api)  →  host.docker.internal:8001
+```
+
+Files:
+
+| File | Role |
+|---|---|
+| [backend/ml-sidecar/main.py](backend/ml-sidecar/main.py) | The FastAPI app. Loads InsightFace, exposes `/detect`, `/embed`, `/health`. ~250 lines. |
+| [backend/app/services/ml/remote_insightface_model.py](backend/app/services/ml/remote_insightface_model.py) | Gateway-side proxy. Same `detect()` / `embed_from_kps()` API as in-process model; calls sidecar via httpx. |
+| [backend/app/services/ml/inference.py](backend/app/services/ml/inference.py) | Selector. `set_realtime_model()` / `get_realtime_model()`. Bound once at gateway startup. |
+| [scripts/iams-ml-sidecar.sh](scripts/iams-ml-sidecar.sh) | Supervisor loop. Restarts uvicorn on crash (3s backoff). Trap-cleans on SIGTERM. |
+| [scripts/start-ml-sidecar.sh](scripts/start-ml-sidecar.sh) | nohup+disown launcher with health-wait. Idempotent. |
+| [scripts/stop-ml-sidecar.sh](scripts/stop-ml-sidecar.sh) | SIGTERM → SIGKILL + pattern-scan cleanup. |
+
+The gateway's lifespan calls `RemoteInsightFaceModel.healthcheck()` once
+at boot. If the sidecar reports `model_loaded=true`, the realtime path
+proxies to it. Else the gateway logs a warning and binds the in-process
+`InsightFaceModel` (CPU-only, today's behaviour pre-sidecar). This means
+a missing sidecar **degrades to "no overlays during sessions" rather than
+refusing to start.**
+
+Verify the sidecar is delegating to CoreML/ANE:
+
+```bash
+curl -s http://127.0.0.1:8001/health | python3 -m json.tool
+```
+
+Look for `"providers": ["CoreMLExecutionProvider", ...]` per task. If the
+list shows only `CPUExecutionProvider`, the static-shape model export
+hasn't been run on the host — see
+[backend/scripts/export_static_models.py](backend/scripts/export_static_models.py)
+and run `python -m scripts.export_static_models` from the host venv.
+
+Logs: `~/Library/Logs/iams-ml-sidecar.log` (same convention as cam-relay).
+
+### Always-on FrameGrabbers, session-gated ML
+
+Strict session-gated policy: ML detection + recognition only run while a
+real session is active. When no schedule is in its window, the live page
+shows raw WHEP video with no overlays — no preview pipeline is spawned,
+no recognition events fire, the FAISS path is idle.
+
+To make the transition into a session feel instant despite that gating,
+the backend pre-warms the slow parts at boot:
+
+1. **InsightFace JIT** — one synthetic SCRFD pass right after model load
+   (`insightface_model.warmup()` in [backend/app/services/ml/insightface_model.py](backend/app/services/ml/insightface_model.py))
+   so the first real inference doesn't pay the ~3-5 s ONNX Runtime warmup
+   tax.
+2. **FrameGrabbers** — at startup, [backend/app/main.py](backend/app/main.py)
+   opens an ffmpeg-backed `FrameGrabber` for every `Room` whose
+   `camera_endpoint` is non-null. These RTSP readers stay alive for the
+   lifetime of the process. Idle CPU is roughly 10-15 % on the M5 for
+   two H.264 main streams decoding to drop frames; in exchange, the
+   first frame delivered to a session pipeline lands in <1 s instead of
+   waiting for the I-frame handshake.
+
+When a session opens, the lifecycle scheduler attaches a SessionPipeline
+to the existing grabber and ML starts producing bounding boxes
+immediately. When the session ends, only the pipeline is torn down — the
+grabber keeps running, ready for the next session in that room.
+
+Caveat: changing a room's `camera_endpoint` in the DB requires a backend
+restart to take effect. The boot-time preload reads each room's URL once
+and never re-checks. Acceptable since camera URLs don't change at runtime.
 
 ---
 

@@ -29,6 +29,13 @@ export interface ActivityEvent {
 
   subject_user_id: string | null
   subject_user_name: string | null
+  /**
+   * Human-facing student record number (e.g. "JR-2024-001234") for the
+   * subject user, when they are a student. Distinct from
+   * ``subject_user_id`` (UUID). Used by the sidebar drilldown so the URL
+   * matches the route param the student-record-detail page accepts.
+   */
+  subject_user_student_id: string | null
 
   subject_schedule_id: string | null
   subject_schedule_subject: string | null

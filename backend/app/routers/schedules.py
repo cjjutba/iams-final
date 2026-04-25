@@ -4,6 +4,8 @@ Schedules Router
 API endpoints for class schedule management.
 """
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session, joinedload
 
@@ -20,9 +22,75 @@ from app.schemas.schedule import (
     ScheduleUpdate,
     ScheduleWithStudents,
 )
+from app.services import session_manager
 from app.utils.dependencies import get_current_user, require_role
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Runtime status derivation
+#
+# `Schedule.is_active` is the enable/archive flag — it does NOT change with
+# the clock. The admin "Schedule Management" page used to show "Active" for
+# every enabled row, which read as "session is running" to operators. To
+# fix that, we compute a presentation-only `runtime_status` per row using
+# session_manager (which schedule IDs have a running pipeline?) plus the
+# current wall clock (is this schedule's window in the past, present, or
+# future?).
+#
+# Status taxonomy (frontend renders one badge per value):
+#   "live"      — register_session() has been called for this schedule.id
+#   "upcoming"  — today is the schedule's day, current time is before window
+#   "ended"     — today, current time is past the window's end
+#   "scheduled" — any other day (the common case for most rows)
+#   "disabled"  — schedule.is_active is False (operator-archived)
+#
+# The "in window today but not live" gap (15 s lifecycle tick hasn't fired
+# yet) collapses into "live" optimistically — see lessons file 2026-04-25.
+# ---------------------------------------------------------------------------
+
+
+def _compute_runtime_status(
+    schedule: Schedule,
+    active_session_ids: set[str],
+    now: datetime,
+) -> str:
+    if not schedule.is_active:
+        return "disabled"
+    if str(schedule.id) in active_session_ids:
+        return "live"
+    if schedule.day_of_week != now.weekday():
+        return "scheduled"
+    now_t = now.time()
+    if now_t < schedule.start_time:
+        return "upcoming"
+    if now_t > schedule.end_time:
+        return "ended"
+    # Today, in window, not registered — the lifecycle scheduler ticks every
+    # 15 s and will register it shortly. Optimistic "live" avoids confusing
+    # operators with a flickering "ended/upcoming" label during the gap.
+    return "live"
+
+
+def _serialize_schedule(
+    schedule: Schedule,
+    active_session_ids: set[str] | None = None,
+    now: datetime | None = None,
+) -> ScheduleResponse:
+    """Build a ScheduleResponse with runtime_status populated.
+
+    For batch endpoints (list_schedules, get_my_schedules) pass a single
+    pre-snapshotted `active_session_ids` and `now` so we don't re-fetch them
+    per row. Single-row callers may omit both — the helper snapshots once.
+    """
+    if active_session_ids is None:
+        active_session_ids = session_manager.list_active_session_ids()
+    if now is None:
+        now = datetime.now()
+    response = ScheduleResponse.model_validate(schedule)
+    response.runtime_status = _compute_runtime_status(schedule, active_session_ids, now)
+    return response
 
 
 @router.get("/", response_model=list[ScheduleResponse], status_code=status.HTTP_200_OK)
@@ -49,7 +117,12 @@ def list_schedules(
     else:
         schedules = schedule_repo.get_all()
 
-    return [ScheduleResponse.model_validate(s) for s in schedules]
+    # Snapshot once and reuse across rows so all rows are derived against
+    # the same instant — a row processed half a second after another that
+    # crossed end_time would otherwise flip from "live" → "ended" mid-list.
+    active = session_manager.list_active_session_ids()
+    now = datetime.now()
+    return [_serialize_schedule(s, active, now) for s in schedules]
 
 
 @router.get("/me", response_model=list[ScheduleResponse], status_code=status.HTTP_200_OK)
@@ -101,7 +174,9 @@ def get_my_schedules(current_user: User = Depends(get_current_user), db: Session
         schedules = base_query.filter(Schedule.is_active).all()
         logger.info(f"GET /schedules/me — admin={current_user.email}, found {len(schedules)} schedule(s)")
 
-    return [ScheduleResponse.model_validate(s) for s in schedules]
+    active = session_manager.list_active_session_ids()
+    now = datetime.now()
+    return [_serialize_schedule(s, active, now) for s in schedules]
 
 
 @router.get("/{schedule_id}", response_model=ScheduleResponse, status_code=status.HTTP_200_OK)
@@ -121,7 +196,7 @@ def get_schedule(schedule_id: str, current_user: User = Depends(get_current_user
     if not schedule:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
 
-    return ScheduleResponse.model_validate(schedule)
+    return _serialize_schedule(schedule)
 
 
 @router.get("/{schedule_id}/students", response_model=ScheduleWithStudents, status_code=status.HTTP_200_OK)
@@ -150,7 +225,7 @@ def get_enrolled_students(
     students = schedule_repo.get_enrolled_students(schedule_id)
 
     # Convert to response format
-    response = ScheduleResponse.model_validate(schedule)
+    response = _serialize_schedule(schedule)
     student_info = [
         {
             "id": str(s.id),
@@ -185,7 +260,36 @@ def create_schedule(
 
     logger.info(f"Schedule created: {schedule.subject_code} by admin {current_user.email}")
 
-    return ScheduleResponse.model_validate(schedule)
+    # Audit + System Activity feed. Wrapped in a try so a logging failure
+    # never undoes the schedule create.
+    try:
+        from app.utils.audit import log_audit
+
+        log_audit(
+            db,
+            admin_id=current_user.id,
+            action="create",
+            target_type="schedule",
+            target_id=str(schedule.id),
+            details=f"Schedule created: {schedule.subject_code} ({schedule.subject_name})",
+            activity_summary=(
+                f"Schedule created: {schedule.subject_code} — {schedule.subject_name}"
+            ),
+            activity_payload={
+                "subject_code": schedule.subject_code,
+                "subject_name": schedule.subject_name,
+                "day_of_week": schedule.day_of_week,
+                "start_time": str(schedule.start_time) if schedule.start_time else None,
+                "end_time": str(schedule.end_time) if schedule.end_time else None,
+                "room_id": str(schedule.room_id) if schedule.room_id else None,
+                "faculty_id": str(schedule.faculty_id) if schedule.faculty_id else None,
+            },
+            activity_severity="success",
+        )
+    except Exception:
+        logger.warning("log_audit failed for schedule.create", exc_info=True)
+
+    return _serialize_schedule(schedule)
 
 
 @router.patch("/{schedule_id}", response_model=ScheduleResponse, status_code=status.HTTP_200_OK)
@@ -214,7 +318,32 @@ def update_schedule(
 
     logger.info(f"Schedule updated: {schedule_id} by admin {current_user.email}")
 
-    return ScheduleResponse.model_validate(schedule)
+    try:
+        from app.utils.audit import log_audit
+
+        # Stringify payload values so JSONB serialization never trips on
+        # time / UUID objects from the update_dict pass-through.
+        safe_changes = {k: str(v) if v is not None else None for k, v in update_dict.items()}
+
+        log_audit(
+            db,
+            admin_id=current_user.id,
+            action="update",
+            target_type="schedule",
+            target_id=str(schedule.id),
+            details=f"Schedule updated: {schedule.subject_code}",
+            activity_summary=(
+                f"Schedule updated: {schedule.subject_code} — {schedule.subject_name}"
+            ),
+            activity_payload={
+                "subject_code": schedule.subject_code,
+                "changes": safe_changes,
+            },
+        )
+    except Exception:
+        logger.warning("log_audit failed for schedule.update", exc_info=True)
+
+    return _serialize_schedule(schedule)
 
 
 @router.delete("/{schedule_id}", status_code=status.HTTP_200_OK)
@@ -231,9 +360,41 @@ def delete_schedule(
     Requires admin authentication.
     """
     schedule_repo = ScheduleRepository(db)
+    # Capture identifying fields *before* the delete so the audit summary
+    # has a human-readable name even on hard-delete (soft-delete keeps the
+    # row but a future migration may flip this).
+    target = schedule_repo.get_by_id(schedule_id)
+    target_subject_code = target.subject_code if target else None
+    target_subject_name = target.subject_name if target else None
+
     schedule_repo.delete(schedule_id)
 
     logger.info(f"Schedule deleted: {schedule_id} by admin {current_user.email}")
+
+    try:
+        from app.utils.audit import log_audit
+
+        log_audit(
+            db,
+            admin_id=current_user.id,
+            action="delete",
+            target_type="schedule",
+            target_id=str(schedule_id),
+            details=(
+                f"Schedule deleted: {target_subject_code or schedule_id}"
+            ),
+            activity_summary=(
+                f"Schedule deleted: {target_subject_code or schedule_id}"
+                + (f" — {target_subject_name}" if target_subject_name else "")
+            ),
+            activity_payload={
+                "subject_code": target_subject_code,
+                "subject_name": target_subject_name,
+            },
+            activity_severity="warn",
+        )
+    except Exception:
+        logger.warning("log_audit failed for schedule.delete", exc_info=True)
 
     return {"success": True, "message": "Schedule deleted successfully"}
 
@@ -281,7 +442,33 @@ def update_schedule_config(
         f"by {current_user.email}"
     )
 
-    return ScheduleResponse.model_validate(updated)
+    try:
+        from app.utils.audit import log_audit
+
+        log_audit(
+            db,
+            admin_id=current_user.id,
+            action="update",
+            target_type="schedule",
+            target_id=str(schedule_id),
+            details=(
+                f"Config updated: early_leave_timeout="
+                f"{config_data.early_leave_timeout_minutes}min"
+            ),
+            activity_summary=(
+                f"Schedule config updated: {schedule.subject_code} — "
+                f"early-leave timeout {config_data.early_leave_timeout_minutes}min"
+            ),
+            activity_payload={
+                "subject_code": schedule.subject_code,
+                "early_leave_timeout_minutes": config_data.early_leave_timeout_minutes,
+                "actor_role": current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role),
+            },
+        )
+    except Exception:
+        logger.warning("log_audit failed for schedule.config_update", exc_info=True)
+
+    return _serialize_schedule(updated)
 
 
 # ===================================================================
@@ -322,6 +509,33 @@ def enroll_student(
     db.commit()
 
     logger.info(f"Manual enrollment: {student.email} -> {schedule.subject_code} by {current_user.email}")
+
+    try:
+        from app.utils.audit import log_audit
+
+        log_audit(
+            db,
+            admin_id=current_user.id,
+            action="create",
+            target_type="enrollment",
+            target_id=str(enrollment.id),
+            details=(
+                f"Enrolled {student.email} -> {schedule.subject_code}"
+            ),
+            activity_summary=(
+                f"Enrolled {student.first_name} {student.last_name} "
+                f"in {schedule.subject_code}"
+            ),
+            activity_payload={
+                "student_user_id": str(student_user_id),
+                "schedule_id": str(schedule_id),
+                "subject_code": schedule.subject_code,
+                "student_email": student.email,
+            },
+        )
+    except Exception:
+        logger.warning("log_audit failed for enrollment.create", exc_info=True)
+
     return {"success": True, "message": f"{student.first_name} {student.last_name} enrolled successfully"}
 
 
@@ -345,10 +559,47 @@ def unenroll_student(
     if not enrollment:
         raise HTTPException(status_code=404, detail="Enrollment not found")
 
+    enrollment_id = str(enrollment.id)
+    # Resolve names *before* delete so the audit row carries human context
+    # even though the FK rows are gone.
+    student = db.query(User).filter(User.id == student_user_id).first()
+    schedule = db.query(Schedule).filter(Schedule.id == schedule_id).first()
+
     db.delete(enrollment)
     db.commit()
 
     logger.info(f"Manual unenrollment: user {student_user_id} from schedule {schedule_id} by {current_user.email}")
+
+    try:
+        from app.utils.audit import log_audit
+
+        student_label = (
+            f"{student.first_name} {student.last_name}".strip()
+            if student
+            else str(student_user_id)
+        )
+        subject_code = schedule.subject_code if schedule else str(schedule_id)
+        log_audit(
+            db,
+            admin_id=current_user.id,
+            action="delete",
+            target_type="enrollment",
+            target_id=enrollment_id,
+            details=(
+                f"Unenrolled user {student_user_id} from schedule {schedule_id}"
+            ),
+            activity_summary=f"Unenrolled {student_label} from {subject_code}",
+            activity_payload={
+                "student_user_id": str(student_user_id),
+                "schedule_id": str(schedule_id),
+                "subject_code": subject_code,
+                "student_email": student.email if student else None,
+            },
+            activity_severity="warn",
+        )
+    except Exception:
+        logger.warning("log_audit failed for enrollment.delete", exc_info=True)
+
     return {"success": True, "message": "Student unenrolled successfully"}
 
 
@@ -383,12 +634,14 @@ def get_student_enrollments(
         .all()
     )
 
+    active = session_manager.list_active_session_ids()
+    now = datetime.now()
     items = [
         {
             "enrollment_id": str(e.id),
             "schedule_id": str(e.schedule_id),
             "enrolled_at": e.enrolled_at.isoformat() if e.enrolled_at else None,
-            "schedule": ScheduleResponse.model_validate(e.schedule).model_dump() if e.schedule else None,
+            "schedule": _serialize_schedule(e.schedule, active, now).model_dump() if e.schedule else None,
         }
         for e in enrollments
     ]

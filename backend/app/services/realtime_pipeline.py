@@ -12,7 +12,7 @@ import base64
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, time as dtime
 
 from app.config import settings
 from app.services import session_manager
@@ -50,20 +50,11 @@ class SessionPipeline:
         grabber: FrameGrabber,
         db_factory,
         room_id: str | None = None,
-        preview_mode: bool = False,
     ) -> None:
         self.schedule_id = schedule_id
         self.room_id = room_id
         self._grabber = grabber
         self._db_factory = db_factory
-        # Preview mode runs face detection + tracking + WS broadcast but skips
-        # all presence/attendance state. Used when an admin opens the live
-        # page for a schedule that is NOT in its currently-active window, so
-        # they still see bounding boxes on the feed without triggering any
-        # attendance side-effects (no check-ins, no early-leave events, no DB
-        # writes). When the window opens or the admin clicks "Start Session"
-        # the preview instance is stopped and a full one takes over.
-        self._preview_mode = preview_mode
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._tracker: RealtimeTracker | None = None
@@ -77,6 +68,19 @@ class SessionPipeline:
         self._faculty_id: str | None = None
         self._subject_code: str | None = None
         self._subject_name: str | None = None
+
+        # Snapshot of the schedule window — used by the in-pipeline
+        # self-stop guard (see _should_self_stop). When the lifecycle
+        # scheduler is healthy these are advisory; the guard exists as a
+        # safety net for the failure mode we hit on 2026-04-25, where a
+        # DetachedInstanceError aborted every lifecycle tick and let
+        # auto-managed sessions emit recognition events for hours past
+        # their window.
+        self._window_day: int | None = None
+        self._window_end: dtime | None = None
+        self._auto_managed: bool = False
+        self._self_stop_check_interval = 5.0  # seconds
+        self._last_self_stop_check: float = 0.0
 
         # Phase-3: dedup key for "captured a live crop for this (user, track)
         # on the warming_up → recognized transition." A fresh ByteTrack ID for
@@ -94,125 +98,97 @@ class SessionPipeline:
         """Initialize services and start the processing loop."""
         from app.models.face_registration import FaceRegistration
         from app.models.room import Room
-        from app.models.schedule import Schedule
         from app.models.user import User
         from app.services.ml.faiss_manager import faiss_manager
-        from app.services.ml.insightface_model import insightface_model
+        from app.services.ml.inference import get_realtime_model
+
+        # Either the in-process InsightFaceModel (Docker CPU) or the
+        # RemoteInsightFaceModel proxy → native macOS sidecar. The
+        # selector is bound once during gateway lifespan based on
+        # ML_SIDECAR_URL + a /health probe. See app/services/ml/inference.py.
+        insightface_model = get_realtime_model()
 
         db = self._db_factory()
         try:
-            if self._preview_mode:
-                # Preview mode: no TrackPresenceService. Still cache schedule
-                # metadata (for logging context) and build a full name_map from
-                # every active face registration so recognized faces render
-                # with real names even if they're not enrolled in this class.
-                schedule = db.query(Schedule).filter(Schedule.id == self.schedule_id).first()
-                if schedule:
-                    self._faculty_id = str(schedule.faculty_id)
-                    self._subject_code = schedule.subject_code
-                    self._subject_name = schedule.subject_name
+            # Initialize presence service (short-lived session for setup)
+            self._presence = TrackPresenceService(db, self.schedule_id)
+            self._presence.start_session()
 
-                full_name_map: dict[str, str] = {}
-                face_regs = (
-                    db.query(FaceRegistration.user_id, User.first_name, User.last_name)
-                    .join(User, FaceRegistration.user_id == User.id)
-                    .filter(FaceRegistration.is_active)
-                    .all()
-                )
-                for user_id, first_name, _last_name in face_regs:
-                    full_name_map[str(user_id)] = first_name
+            # Cache schedule metadata for notification context
+            schedule = self._presence._schedule
+            if schedule:
+                self._faculty_id = str(schedule.faculty_id)
+                self._subject_code = schedule.subject_code
+                self._subject_name = schedule.subject_name
 
-                preview_camera = None
-                if self.room_id:
-                    preview_room = db.query(Room).filter(Room.id == self.room_id).first()
-                    if preview_room:
-                        preview_camera = preview_room.stream_key or preview_room.name
-
-                self._tracker = RealtimeTracker(
-                    insightface_model=insightface_model,
-                    faiss_manager=faiss_manager,
-                    enrolled_user_ids=set(),  # no "enrolled" concept in preview
-                    name_map=full_name_map,
-                    schedule_id=self.schedule_id,
-                    camera_id=preview_camera,
+                # Snapshot the window for the self-stop guard. We mirror
+                # the same auto_managed rule SessionState uses: only
+                # self-stop sessions that started inside their natural
+                # (day, start..end) window — manual / out-of-window
+                # sessions are operator-driven and must persist until
+                # an explicit end.
+                self._window_day = schedule.day_of_week
+                self._window_end = schedule.end_time
+                now = datetime.now()
+                self._auto_managed = (
+                    schedule.day_of_week == now.weekday()
+                    and schedule.start_time <= now.time() <= schedule.end_time
                 )
 
-                self._last_flush = time.monotonic()
-                self._last_summary = time.monotonic()
-            else:
-                # Full mode: initialize presence service (short-lived session for setup)
-                self._presence = TrackPresenceService(db, self.schedule_id)
-                self._presence.start_session()
+            # Build a complete name_map: enrolled students + all face-registered users.
+            # Enrolled names come from presence service; augment with any registered
+            # user whose face is in FAISS so recognition always shows a name.
+            full_name_map = dict(self._presence.name_map)
+            face_regs = (
+                db.query(FaceRegistration.user_id, User.first_name, User.last_name)
+                .join(User, FaceRegistration.user_id == User.id)
+                .filter(FaceRegistration.is_active)
+                .all()
+            )
+            for user_id, first_name, _last_name in face_regs:
+                uid = str(user_id)
+                if uid not in full_name_map:
+                    full_name_map[uid] = first_name
 
-                # Cache schedule metadata for notification context
-                schedule = self._presence._schedule
-                if schedule:
-                    self._faculty_id = str(schedule.faculty_id)
-                    self._subject_code = schedule.subject_code
-                    self._subject_name = schedule.subject_name
+            camera_handle = None
+            if self.room_id:
+                room = db.query(Room).filter(Room.id == self.room_id).first()
+                if room:
+                    camera_handle = room.stream_key or room.name
 
-                # Initialize tracker with enrolled user info
-                # Build a complete name_map: enrolled students + all face-registered users.
-                # Enrolled names come from presence service; augment with any registered
-                # user whose face is in FAISS so recognition always shows a name.
-                full_name_map = dict(self._presence.name_map)
-                face_regs = (
-                    db.query(FaceRegistration.user_id, User.first_name, User.last_name)
-                    .join(User, FaceRegistration.user_id == User.id)
-                    .filter(FaceRegistration.is_active)
-                    .all()
-                )
-                for user_id, first_name, _last_name in face_regs:
-                    uid = str(user_id)
-                    if uid not in full_name_map:
-                        full_name_map[uid] = first_name
+            self._tracker = RealtimeTracker(
+                insightface_model=insightface_model,
+                faiss_manager=faiss_manager,
+                enrolled_user_ids=self._presence.enrolled_ids,
+                name_map=full_name_map,
+                schedule_id=self.schedule_id,
+                camera_id=camera_handle,
+            )
 
-                full_camera = None
-                if self.room_id:
-                    full_room = db.query(Room).filter(Room.id == self.room_id).first()
-                    if full_room:
-                        full_camera = full_room.stream_key or full_room.name
-
-                self._tracker = RealtimeTracker(
-                    insightface_model=insightface_model,
-                    faiss_manager=faiss_manager,
-                    enrolled_user_ids=self._presence.enrolled_ids,
-                    name_map=full_name_map,
-                    schedule_id=self.schedule_id,
-                    camera_id=full_camera,
-                )
-
-                self._last_flush = time.monotonic()
-                self._last_summary = time.monotonic()
+            self._last_flush = time.monotonic()
+            self._last_summary = time.monotonic()
 
         finally:
             # Close the setup session immediately — loop creates short-lived sessions
             db.close()
 
         # Start the async loop (no long-lived DB session)
-        task_name = (
-            f"preview-{self.schedule_id[:8]}" if self._preview_mode else f"pipeline-{self.schedule_id[:8]}"
+        self._task = asyncio.create_task(
+            self._run_loop(), name=f"pipeline-{self.schedule_id[:8]}"
         )
-        self._task = asyncio.create_task(self._run_loop(), name=task_name)
 
-        # In full mode, register in the global session manager so API endpoints
-        # see session_active=True. Preview pipelines do NOT register — their
-        # presence must not affect the `/presence/sessions/active` surface.
-        if not self._preview_mode:
-            session_manager.register_session(
-                self.schedule_id,
-                {
-                    "subject_code": self._subject_code,
-                    "subject_name": self._subject_name,
-                    "student_count": len(self._presence.enrolled_ids) if self._presence else 0,
-                },
-            )
-
-        logger.info(
-            "SessionPipeline started for schedule %s (preview=%s)",
+        # Register in the global session manager so API endpoints see
+        # session_active=True for this schedule.
+        session_manager.register_session(
             self.schedule_id,
-            self._preview_mode,
+            {
+                "subject_code": self._subject_code,
+                "subject_name": self._subject_name,
+                "student_count": len(self._presence.enrolled_ids) if self._presence else 0,
+            },
         )
+
+        logger.info("SessionPipeline started for schedule %s", self.schedule_id)
 
     async def stop(self) -> dict:
         """Stop the pipeline and return session summary."""
@@ -236,17 +212,9 @@ class SessionPipeline:
         if self._tracker is not None:
             self._tracker.reset()
 
-        # Only unregister from the global session manager if we registered.
-        # Preview pipelines never register, so skip to avoid removing a real
-        # session that may have started in parallel.
-        if not self._preview_mode:
-            session_manager.unregister_session(self.schedule_id)
+        session_manager.unregister_session(self.schedule_id)
 
-        logger.info(
-            "SessionPipeline stopped for schedule %s (preview=%s)",
-            self.schedule_id,
-            self._preview_mode,
-        )
+        logger.info("SessionPipeline stopped for schedule %s", self.schedule_id)
         return summary
 
     @property
@@ -263,6 +231,32 @@ class SessionPipeline:
                 self.schedule_id[:8],
             )
 
+    def _should_self_stop(self) -> bool:
+        """Belt-and-braces guard: should this pipeline halt because its
+        schedule window has passed?
+
+        Returns True only for auto-managed sessions whose window has
+        clearly closed (today's weekday matches the schedule's, current
+        time-of-day is past end_time). Manual / out-of-window sessions
+        bypass this check — they require an explicit end.
+
+        The lifecycle scheduler in main.py is the primary tear-down
+        mechanism. This method is a defense for the case where the
+        lifecycle thread crashes (as happened on 2026-04-25 with
+        DetachedInstanceError). When that happens, we'd rather a
+        zombie pipeline halt its ML emissions and stop polluting the
+        System Activity feed than keep emitting RECOGNITION_MATCH
+        events for hours.
+        """
+        if not self._auto_managed:
+            return False
+        if self._window_day is None or self._window_end is None:
+            return False
+        now = datetime.now()
+        if now.weekday() != self._window_day:
+            return False
+        return now.time() > self._window_end
+
     async def _run_loop(self) -> None:
         """Main processing loop — runs at PROCESSING_FPS.
 
@@ -278,16 +272,19 @@ class SessionPipeline:
                 loop_start = time.monotonic()
 
                 try:
-                    # ``grab_with_pts`` returns ``(frame, rtp_pts_90k)`` so
-                    # the broadcaster can ship the upstream RTP timestamp
-                    # to the admin overlay for video-aligned rendering
-                    # (live-feed plan 2026-04-25 Step 3).
+                    # ``grab_with_pts`` returns ``(frame, rtp_pts_90k,
+                    # captured_at_ms)``. ``rtp_pts_90k`` lets the admin
+                    # overlay align bbox draws to the WHEP video frame
+                    # (live-feed plan 2026-04-25 Step 3); ``captured_at_ms``
+                    # is the backend wall-clock stamp at FFmpeg-drain time
+                    # used by the end-to-end latency probe.
                     grabbed = self._grabber.grab_with_pts()
                     if grabbed is None:
                         frame = None
                         rtp_pts_90k: int | None = None
+                        captured_at_ms: int | None = None
                     else:
-                        frame, rtp_pts_90k = grabbed
+                        frame, rtp_pts_90k, captured_at_ms = grabbed
                     if frame is None:
                         _consecutive_none += 1
                         # Pause presence tracking after ~2s of missing frames so
@@ -315,52 +312,53 @@ class SessionPipeline:
                         # onto ``TrackFrame`` so the broadcaster can ship
                         # it to the admin overlay (live-feed plan Step 3).
                         track_frame = await loop.run_in_executor(
-                            None, self._tracker.process, frame, rtp_pts_90k
+                            None,
+                            self._tracker.process,
+                            frame,
+                            rtp_pts_90k,
+                            captured_at_ms,
                         )
 
                         self._frame_count += 1
 
                         # Broadcast frame update FIRST — minimizes latency to phone.
-                        # This is the ONLY side-effect the preview pipeline produces.
                         await self._broadcast_frame_update(track_frame)
 
                         # Phase-3: on the warming_up → recognized transition for
                         # each (user, track) pair, capture a server-side crop
                         # to Redis so the admin face-comparison sheet can show
-                        # the exact frame the ML saw. No-op in preview mode or
-                        # when ENABLE_REDIS is false.
-                        if not self._preview_mode:
-                            self._capture_newly_recognized_crops(frame, track_frame)
-                            # Emit RECOGNITION_MISS once per track that commits
-                            # to recognition_state="unknown". This is the tri-
-                            # state gating described in config.py — once a track
-                            # has had UNKNOWN_CONFIRM_ATTEMPTS low-score reads
-                            # the RealtimeTracker flips it to "unknown".
-                            for t in track_frame.tracks:
-                                if (
-                                    t.recognition_state == "unknown"
-                                    and t.track_id not in self._unknown_emitted
-                                ):
-                                    self._unknown_emitted.add(t.track_id)
-                                    self._emit_recognition_miss(t)
+                        # the exact frame the ML saw. No-op when ENABLE_REDIS
+                        # is false.
+                        self._capture_newly_recognized_crops(frame, track_frame)
+                        # Emit RECOGNITION_MISS once per track that commits
+                        # to recognition_state="unknown". This is the tri-
+                        # state gating described in config.py — once a track
+                        # has had UNKNOWN_CONFIRM_ATTEMPTS low-score reads
+                        # the RealtimeTracker flips it to "unknown".
+                        for t in track_frame.tracks:
+                            if (
+                                t.recognition_state == "unknown"
+                                and t.track_id not in self._unknown_emitted
+                            ):
+                                self._unknown_emitted.add(t.track_id)
+                                self._emit_recognition_miss(t)
 
-                        if not self._preview_mode:
-                            # Update presence state — use short-lived DB session for
-                            # any event-driven writes (check-in, early leave)
-                            db = self._db_factory()
-                            try:
-                                self._presence.rebind_db(db)
-                                events = self._presence.process_track_frame(track_frame, time.monotonic())
-                            finally:
-                                db.close()
+                        # Update presence state — use short-lived DB session for
+                        # any event-driven writes (check-in, early leave)
+                        db = self._db_factory()
+                        try:
+                            self._presence.rebind_db(db)
+                            events = self._presence.process_track_frame(track_frame, time.monotonic())
+                        finally:
+                            db.close()
 
-                            # Handle events (check-in notifications, early leave alerts)
-                            if events:
-                                # Broadcast updated summary immediately on any status change
-                                await self._broadcast_attendance_summary()
-                                self._last_summary = time.monotonic()
-                            for event in events:
-                                await self._handle_event(event)
+                        # Handle events (check-in notifications, early leave alerts)
+                        if events:
+                            # Broadcast updated summary immediately on any status change
+                            await self._broadcast_attendance_summary()
+                            self._last_summary = time.monotonic()
+                        for event in events:
+                            await self._handle_event(event)
 
                         # Log performance periodically
                         if self._frame_count % 100 == 0:
@@ -380,7 +378,7 @@ class SessionPipeline:
 
                 # Periodic flush (every PRESENCE_FLUSH_INTERVAL) — short-lived DB session
                 now = time.monotonic()
-                if not self._preview_mode and (now - self._last_flush) >= settings.PRESENCE_FLUSH_INTERVAL:
+                if (now - self._last_flush) >= settings.PRESENCE_FLUSH_INTERVAL:
                     try:
                         db = self._db_factory()
                         try:
@@ -393,15 +391,31 @@ class SessionPipeline:
                     self._last_flush = now
 
                 # Periodic attendance summary (every 2s for real-time UI responsiveness).
-                # Preview mode skips the attendance summary broadcast (there's
-                # nothing to summarise) but still emits stream_status so the UI
-                # can surface camera-offline state.
                 if (now - self._last_summary) >= 2.0:
-                    if not self._preview_mode:
-                        await self._broadcast_attendance_summary()
+                    await self._broadcast_attendance_summary()
                     # Broadcast stream health so the app can show "camera offline"
                     await self._broadcast_stream_status(_consecutive_none > 0)
                     self._last_summary = now
+
+                # Self-stop guard — checked at most once every
+                # _self_stop_check_interval seconds to keep the per-frame
+                # path cheap. See _should_self_stop docstring for why
+                # this exists alongside the lifecycle scheduler.
+                if (now - self._last_self_stop_check) >= self._self_stop_check_interval:
+                    self._last_self_stop_check = now
+                    if self._should_self_stop():
+                        logger.warning(
+                            "Pipeline %s: schedule window has passed (end=%s, "
+                            "day=%s) — self-stopping ML emissions. The "
+                            "lifecycle scheduler should normally tear this "
+                            "down; if you see this log it crashed. Run will "
+                            "exit cleanly after this iteration.",
+                            self.schedule_id[:8],
+                            self._window_end,
+                            self._window_day,
+                        )
+                        self._stop_event.set()
+                        break
 
                 # Sleep to hit target FPS
                 elapsed = time.monotonic() - loop_start
@@ -481,6 +495,15 @@ class SessionPipeline:
             # video frame. See live-feed plan 2026-04-25 Step 3.
             if track_frame.rtp_pts_90k is not None:
                 payload["rtp_pts_90k"] = int(track_frame.rtp_pts_90k)
+            # Backend wall-clock at frame-grab time. Clients subtract this
+            # from their local clock at message-receive time to plot the
+            # end-to-end "detection → display" delay required by thesis
+            # Objective 2 (≤5 s SLA). ``server_time_ms`` above is the
+            # broadcast moment, so (server_time_ms - detected_at_ms) is
+            # backend processing time and (client_now - detected_at_ms)
+            # adds wire + render time on top.
+            if track_frame.captured_at_ms is not None:
+                payload["detected_at_ms"] = int(track_frame.captured_at_ms)
 
             await ws_manager.broadcast_attendance(self.schedule_id, payload)
         except Exception:
@@ -494,9 +517,8 @@ class SessionPipeline:
         so neither SCRFD+ArcFace nor the frame broadcaster wait on JPEG
         encode / Redis round-trips.
 
-        Guarded upstream by ``not self._preview_mode`` (see call site). Each
-        ``_save_live_crop`` also guards on ``settings.ENABLE_REDIS`` as a
-        belt-and-braces no-op for VPS misconfigs.
+        ``_save_live_crop`` guards on ``settings.ENABLE_REDIS`` as a no-op
+        for VPS misconfigs where Redis is disabled.
         """
         if not settings.ENABLE_REDIS or frame is None:
             return
@@ -599,10 +621,9 @@ class SessionPipeline:
         swallows all failures so the ML loop never stalls on activity log
         writes.
         """
-        if self._preview_mode:
-            return
         try:
             from app.services.activity_service import (
+                EventSeverity,
                 EventType,
                 emit_recognition_transition,
             )
@@ -614,13 +635,28 @@ class SessionPipeline:
                 # and not plumbed through. Room UUID is still useful for
                 # filtering in the admin activity feed.
                 camera_handle = self.room_id
+                # Prefer the human name resolved by the tracker over a
+                # raw UUID. ``track.name`` comes from the realtime
+                # tracker's ``name_map`` (built from enrolled students +
+                # face-registered users at session start). Fall back to
+                # the UUID only if the name didn't resolve — keeps the
+                # event self-contained even when name_map is stale for
+                # a user who registered mid-session.
+                display_name = (track.name or "").strip() or str(track.user_id)
+                # SUCCESS severity: a recognized identity is a positive
+                # outcome and should render green on the System Activity
+                # stream — the visual counterpart to MARKED_PRESENT and
+                # CAMERA_ONLINE which are already SUCCESS. Without this
+                # override, the helper defaults to INFO and matches blend
+                # in with the much more frequent RECOGNITION_MISS rows.
                 emit_recognition_transition(
                     db,
                     event_type=EventType.RECOGNITION_MATCH,
+                    severity=EventSeverity.SUCCESS,
                     summary=(
-                        f"Recognition match: user={track.user_id} "
-                        f"track={track.track_id} "
-                        f"confidence={float(track.confidence):.2f}"
+                        f"Recognition match: {display_name} "
+                        f"(track={track.track_id}, "
+                        f"confidence={float(track.confidence):.2f})"
                     ),
                     schedule_id=self.schedule_id,
                     camera_id=camera_handle,
@@ -629,6 +665,12 @@ class SessionPipeline:
                         "track_id": int(track.track_id),
                         "confidence": float(track.confidence),
                         "subject_code": self._subject_code,
+                        # Persist both forms in the payload for full
+                        # auditability — the summary shows the name; the
+                        # downstream recognition-events page can still
+                        # join on user_id.
+                        "user_id": str(track.user_id) if track.user_id else None,
+                        "user_name": display_name if track.name else None,
                     },
                     autocommit=True,
                 )
@@ -644,8 +686,6 @@ class SessionPipeline:
         — a face detected but not matched to any registered identity.
         Cardinality gated by ``self._unknown_emitted``.
         """
-        if self._preview_mode:
-            return
         try:
             from app.services.activity_service import (
                 EventSeverity,
@@ -817,6 +857,14 @@ class SessionPipeline:
             "subject_code": self._subject_code,
             "subject_name": self._subject_name,
             "timestamp": datetime.now().isoformat(),
+            # Broadcast-side wall clock (epoch ms). Consumed by the Android
+            # student-app latency probe to compute event-receive delay
+            # (client_now_ms - server_time_ms). Distinct from the per-frame
+            # ``detected_at_ms`` carried on the admin frame_update channel:
+            # this stamps the moment we decided to send the event, not the
+            # moment the underlying frame was grabbed. Both feed thesis
+            # Objective 2 — together they bracket the full pipeline.
+            "server_time_ms": int(time.time() * 1000),
         }
 
         try:

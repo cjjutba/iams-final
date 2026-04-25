@@ -505,14 +505,31 @@ class FAISSManager:
             ValueError: If embeddings_data is empty or invalid
         """
         with self._lock:
+            # rebuild() always discards volatile adaptive IDs — they
+            # referenced positions in the OLD index. Failing to clear here
+            # leaves a stale list that later add_adaptive()/save() calls
+            # treat as live, leading to confusing "ghost" log lines and a
+            # latent bug if any code path ever consults _adaptive_ids
+            # directly to decide whether to re-add a vector.
+            adaptive_dropped = len(self._adaptive_ids)
+            self._adaptive_ids.clear()
+
             if not embeddings_data:
-                logger.warning("No embeddings provided for rebuild, creating empty index")
+                logger.warning(
+                    "No embeddings provided for rebuild, creating empty index "
+                    "(dropped %d adaptive vector(s))",
+                    adaptive_dropped,
+                )
                 self.index = self._create_index()
                 self.user_map = {}
                 self.save()
                 return {}
 
-            logger.info(f"Rebuilding FAISS index with {len(embeddings_data)} embeddings...")
+            logger.info(
+                "Rebuilding FAISS index with %d embeddings (dropped %d adaptive)...",
+                len(embeddings_data),
+                adaptive_dropped,
+            )
 
             # Create new index
             self.index = self._create_index()

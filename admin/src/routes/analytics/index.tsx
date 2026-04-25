@@ -112,10 +112,10 @@ export default function AnalyticsPage() {
             data={trendData}
             xKey="date"
             lines={[
-              { key: 'present', label: 'Present', color: 'var(--color-chart-1)' },
-              { key: 'late', label: 'Late', color: 'var(--color-chart-3)' },
-              { key: 'early_leave', label: 'Early Leave', color: 'var(--color-chart-4)' },
-              { key: 'absent', label: 'Absent', color: 'var(--color-chart-5)' },
+              { key: 'present', label: 'Present', color: 'var(--color-status-present)' },
+              { key: 'late', label: 'Late', color: 'var(--color-status-late)' },
+              { key: 'early_leave', label: 'Early Leave', color: 'var(--color-status-early-leave)' },
+              { key: 'absent', label: 'Absent', color: 'var(--color-status-absent)' },
             ]}
             height={320}
           />

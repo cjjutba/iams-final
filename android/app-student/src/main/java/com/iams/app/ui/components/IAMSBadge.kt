@@ -22,12 +22,12 @@ import com.iams.app.ui.theme.EarlyLeaveFg
 import com.iams.app.ui.theme.ExcusedBg
 import com.iams.app.ui.theme.ExcusedBorder
 import com.iams.app.ui.theme.ExcusedFg
-import com.iams.app.ui.theme.LateBg
-import com.iams.app.ui.theme.LateBorder
-import com.iams.app.ui.theme.LateFg
 import com.iams.app.ui.theme.PresentBg
 import com.iams.app.ui.theme.PresentBorder
 import com.iams.app.ui.theme.PresentFg
+import com.iams.app.ui.theme.StatusLateBg
+import com.iams.app.ui.theme.StatusLateBorder
+import com.iams.app.ui.theme.StatusLateFg
 
 enum class AttendanceStatus { PRESENT, LATE, ABSENT, EARLY_LEAVE, EXCUSED }
 
@@ -39,7 +39,7 @@ data class StatusColors(
 
 fun attendanceStatusColors(status: AttendanceStatus): StatusColors = when (status) {
     AttendanceStatus.PRESENT -> StatusColors(PresentBg, PresentFg, PresentBorder)
-    AttendanceStatus.LATE -> StatusColors(LateBg, LateFg, LateBorder)
+    AttendanceStatus.LATE -> StatusColors(StatusLateBg, StatusLateFg, StatusLateBorder)
     AttendanceStatus.ABSENT -> StatusColors(AbsentBg, AbsentFg, AbsentBorder)
     AttendanceStatus.EARLY_LEAVE -> StatusColors(EarlyLeaveBg, EarlyLeaveFg, EarlyLeaveBorder)
     AttendanceStatus.EXCUSED -> StatusColors(ExcusedBg, ExcusedFg, ExcusedBorder)

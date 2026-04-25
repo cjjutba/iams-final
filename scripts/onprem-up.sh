@@ -78,6 +78,31 @@ echo "  IAMS On-Prem Stack (Mac on IAMS-Net)"
 echo "  Host IP: ${HOST_IP}"
 echo "========================================"
 
+# ─ Start the ML sidecar (native macOS, CoreML/ANE) ───────────────────────
+# Bring it up BEFORE the Docker stack so the api-gateway's lifespan health
+# probe (curl http://host.docker.internal:8001/health) finds it on the
+# first try. If the sidecar is already running, start-ml-sidecar.sh is
+# idempotent — it stops the previous one and relaunches.
+#
+# Skip-the-sidecar override: set IAMS_SKIP_ML_SIDECAR=1 in the environment
+# (or scripts/.env.local) to fall back to in-process CPU inference. Useful
+# for debugging the gateway in isolation. The gateway's lifespan still
+# routes correctly because ML_SIDECAR_URL controls the proxy decision; if
+# the sidecar is down, the gateway falls back to in-process anyway, just
+# with a warning.
+
+if [ "${IAMS_SKIP_ML_SIDECAR:-0}" = "1" ]; then
+  echo ""
+  echo "ML sidecar startup skipped (IAMS_SKIP_ML_SIDECAR=1)."
+else
+  echo ""
+  echo "Starting ML sidecar (native macOS InsightFace + CoreML)..."
+  if ! "${REPO_ROOT}/scripts/start-ml-sidecar.sh"; then
+    echo "WARNING: ML sidecar failed to start — gateway will fall back to in-process CPU inference."
+    echo "         To investigate: tail -f ~/Library/Logs/iams-ml-sidecar.log"
+  fi
+fi
+
 # ─ Generate mediamtx config from template with current LAN IP ───────────
 # The committed `deploy/mediamtx.onprem.yml` is a TEMPLATE with a placeholder
 # in `webrtcAdditionalHosts`. We copy it to a gitignored `.generated.yml`

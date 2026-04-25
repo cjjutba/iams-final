@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { formatDistanceToNow } from 'date-fns'
+import { formatTimestamp, formatFullDatetime } from '@/lib/format-time'
 import { AlertTriangle, Clock, ImageOff, Loader2, Radio } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
@@ -123,8 +123,6 @@ function ConnectionDot({ isConnected }: { isConnected: boolean }) {
 }
 
 function DetectionRow({ event }: { event: RecognitionEvent }) {
-  const timestamp = new Date(event.created_at)
-  const relative = formatDistanceToNow(timestamp, { addSuffix: true })
   const score = Math.max(0, Math.min(1, event.similarity))
   const threshold = Math.max(0, Math.min(1, event.threshold_used))
   const matched = event.matched
@@ -142,7 +140,12 @@ function DetectionRow({ event }: { event: RecognitionEvent }) {
         </div>
         <ScoreBar score={score} threshold={threshold} matched={matched} />
         <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-          <span title={timestamp.toLocaleString()}>{relative}</span>
+          <span
+            title={formatFullDatetime(event.created_at)}
+            className="font-mono tabular-nums"
+          >
+            {formatTimestamp(event.created_at)}
+          </span>
           <span className="font-mono">
             sim {(score * 100).toFixed(1)}% / thr {(threshold * 100).toFixed(0)}%
           </span>

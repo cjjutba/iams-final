@@ -207,6 +207,32 @@ class InsightFaceModel:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def warmup(self) -> None:
+        """Run one synthetic SCRFD pass so the first real inference is hot.
+
+        ONNX Runtime defers per-graph optimisation work to the first call —
+        on M5 CPU at ``det_size=960`` that costs ~3-5 s the first time SCRFD
+        runs. Without this, the first session pipeline that opens after boot
+        sees a noticeable lag before any bounding box reaches the WS clients.
+        Calling ``detect()`` on a noise frame here pre-pays that cost during
+        startup, when nobody is watching.
+
+        ArcFace JITs separately on its first ``embed_from_kps`` — that one
+        is much cheaper (~100-200 ms) and only happens once per process,
+        so we don't bother pre-warming it.
+        """
+        if self.app is None:
+            return
+        try:
+            warm_frame = np.random.randint(
+                0, 256,
+                (settings.FRAME_GRABBER_HEIGHT, settings.FRAME_GRABBER_WIDTH, 3),
+                dtype=np.uint8,
+            )
+            self.detect(warm_frame)
+        except Exception:
+            logger.debug("InsightFace warmup pass failed", exc_info=True)
+
     def _to_bgr(self, image: Image.Image | np.ndarray | bytes) -> np.ndarray:
         """
         Convert PIL Image / bytes / numpy array to BGR ndarray.

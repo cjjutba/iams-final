@@ -61,8 +61,47 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { useSchedules, useCreateSchedule, useUpdateSchedule, useDeleteSchedule, useUsers, useRooms } from '@/hooks/use-queries'
-import type { ScheduleResponse } from '@/types'
+import type { ScheduleResponse, ScheduleRuntimeStatus } from '@/types'
 import { tokenMatches, joinHaystack, formatTime12h, DAY_NAMES_MON_FIRST } from '@/lib/search'
+
+// Runtime status badge palette. The label is what gets rendered in the
+// Status column AND fed into the search haystack (so typing "live" or
+// "ended" filters correctly). Distinct visual weight per state:
+//   live      — solid green, demands attention (this is the "running now")
+//   upcoming  — secondary, signals "today, hasn't started yet"
+//   ended     — outline + muted, today's class is over
+//   scheduled — outline (most rows; deliberately understated)
+//   disabled  — destructive, archived schedules
+const RUNTIME_STATUS_META: Record<
+  ScheduleRuntimeStatus,
+  { label: string; className: string }
+> = {
+  live: {
+    label: 'Live',
+    // Solid emerald — overrides the default Badge variant background so
+    // a running session is unmistakable in a dark-theme list of dozens.
+    className:
+      'border-transparent bg-emerald-600 text-white hover:bg-emerald-600',
+  },
+  upcoming: {
+    label: 'Upcoming',
+    className:
+      'border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80',
+  },
+  ended: {
+    label: 'Ended',
+    className: 'border-border text-muted-foreground',
+  },
+  scheduled: {
+    label: 'Scheduled',
+    className: 'border-border text-muted-foreground',
+  },
+  disabled: {
+    label: 'Disabled',
+    className:
+      'border-transparent bg-destructive text-white hover:bg-destructive/90',
+  },
+}
 
 // Indexed Monday-first to match the backend's `day_of_week` convention
 // (0=Mon..6=Sun — see backend/scripts/seed_data.py). Do not reorder without
@@ -71,6 +110,75 @@ const DAY_NAMES = DAY_NAMES_MON_FIRST
 
 type StatusFilter = 'all' | 'active' | 'inactive'
 type DayFilter = 'all' | '0' | '1' | '2' | '3' | '4' | '5' | '6'
+
+// ---------------------------------------------------------------------------
+// Filter persistence (per-tab session)
+//
+// "Back to Schedules" on the detail page is a hard navigate('/schedules'),
+// not navigate(-1), so router-history alone won't keep the user's day
+// selection. We mirror filters into sessionStorage on every change and
+// hydrate them on mount — fresh tab still defaults to today + active.
+// ---------------------------------------------------------------------------
+
+const STORAGE_PREFIX = 'iams.schedules.filter.'
+
+function isStatusFilter(v: string): v is StatusFilter {
+  return v === 'all' || v === 'active' || v === 'inactive'
+}
+
+function isDayFilter(v: string): v is DayFilter {
+  return (
+    v === 'all' ||
+    v === '0' ||
+    v === '1' ||
+    v === '2' ||
+    v === '3' ||
+    v === '4' ||
+    v === '5' ||
+    v === '6'
+  )
+}
+
+function readStoredFilter<T extends string>(
+  key: string,
+  guard: (v: string) => v is T,
+  fallback: T,
+): T {
+  if (typeof window === 'undefined') return fallback
+  try {
+    const raw = window.sessionStorage.getItem(STORAGE_PREFIX + key)
+    if (raw && guard(raw)) return raw
+  } catch {
+    // SessionStorage can throw in private mode / iframe sandboxes —
+    // fall through to the default.
+  }
+  return fallback
+}
+
+function readStoredString(key: string, fallback: string): string {
+  if (typeof window === 'undefined') return fallback
+  try {
+    const raw = window.sessionStorage.getItem(STORAGE_PREFIX + key)
+    if (raw !== null) return raw
+  } catch {
+    // ignore
+  }
+  return fallback
+}
+
+function writeStoredFilter(key: string, value: string): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem(STORAGE_PREFIX + key, value)
+  } catch {
+    // Quota exceeded / disabled storage — silently degrade. The page
+    // still works; the filter just won't survive navigation.
+  }
+}
+
+function writeStoredString(key: string, value: string): void {
+  writeStoredFilter(key, value)
+}
 
 interface ScheduleFormValues {
   subject_code: string
@@ -122,7 +230,11 @@ function buildScheduleHaystack(s: ScheduleResponse): string {
     formatTime12h(s.start_time),
     formatTime12h(s.end_time),
     `${formatTime12h(s.start_time)} - ${formatTime12h(s.end_time)}`,
+    // is_active still in the haystack so the legacy "Active"/"Inactive"
+    // search vocabulary keeps working. The runtime_status label is added
+    // alongside so operators can also search "live", "upcoming", etc.
     s.is_active ? 'Active' : 'Inactive',
+    RUNTIME_STATUS_META[s.runtime_status]?.label,
     s.semester,
     s.academic_year,
     s.target_course,
@@ -192,13 +304,40 @@ export default function SchedulesPage() {
     return jsDay === 0 ? 6 : jsDay - 1
   }, [])
 
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  // Persist filter selections per browser tab so navigating into a
+  // schedule's detail page and clicking "Back to Schedules" (which is a
+  // hard navigate('/schedules'), NOT navigate(-1)) doesn't snap the day
+  // back to today. Stored in sessionStorage so a fresh tab still opens
+  // on today, which is what the page is best at showing.
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(
+    () => readStoredFilter('status', isStatusFilter, 'all'),
+  )
   // Default to TODAY + active so the page opens on what matters most —
   // "classes happening today, earliest to latest." User can flip to
   // "All Days" or "All Status" if they want the full list.
-  const [dayFilter, setDayFilter] = useState<DayFilter>(String(todayIdx) as DayFilter)
-  const [searchQuery, setSearchQuery] = useState('')
+  const [dayFilter, setDayFilter] = useState<DayFilter>(
+    () => readStoredFilter('day', isDayFilter, String(todayIdx) as DayFilter),
+  )
+  const [searchQuery, setSearchQuery] = useState<string>(
+    () => readStoredString('q', ''),
+  )
   const [isPending, startTransition] = useTransition()
+
+  // Persist on change. Wrapping the original setter keeps the type
+  // signature identical so the existing handleFilterChange / clearFilters
+  // helpers work without modification.
+  const persistedSetStatusFilter = (v: StatusFilter) => {
+    writeStoredFilter('status', v)
+    setStatusFilter(v)
+  }
+  const persistedSetDayFilter = (v: DayFilter) => {
+    writeStoredFilter('day', v)
+    setDayFilter(v)
+  }
+  const persistedSetSearchQuery = (v: string) => {
+    writeStoredString('q', v)
+    setSearchQuery(v)
+  }
 
   const filtered = useMemo(() => {
     let result = schedules
@@ -225,13 +364,33 @@ export default function SchedulesPage() {
     return result
   }, [schedules, statusFilter, dayFilter, searchQuery])
 
-  // Treat "default" (today-only + active status) as no explicit filter —
-  // the Clear button only appears once the user has diverged from it OR
-  // a search query has been entered.
+  // "Anything other than fully unfiltered counts as filtered." Today-first
+  // is still the fresh-mount default (useState initialiser above), but it's
+  // a *filter* in the user's mental model — the page literally hides ~88
+  // rows when it's set. So the Clear button shows by default and drops the
+  // user into the wide-open list; today is one click away in the day picker.
   const hasFilters =
     statusFilter !== 'all' ||
-    (dayFilter !== 'all' && dayFilter !== (String(todayIdx) as DayFilter)) ||
+    dayFilter !== 'all' ||
     searchQuery.trim().length > 0
+
+  // Human-readable description of the active filters, rendered under the
+  // count heading so a user landing on the page immediately knows what's
+  // narrowing the visible rows. Empty string when fully unfiltered.
+  const filterDescription = useMemo(() => {
+    const parts: string[] = []
+    if (dayFilter !== 'all') {
+      parts.push(DAY_NAMES[parseInt(dayFilter, 10)])
+    }
+    if (statusFilter !== 'all') {
+      parts.push(statusFilter === 'active' ? 'Enabled only' : 'Disabled only')
+    }
+    const q = searchQuery.trim()
+    if (q) {
+      parts.push(`matching "${q}"`)
+    }
+    return parts.join(' · ')
+  }, [dayFilter, statusFilter, searchQuery])
 
   function handleFilterChange<T>(setter: (v: T) => void) {
     return (value: string) => {
@@ -240,13 +399,16 @@ export default function SchedulesPage() {
   }
 
   function clearFilters() {
-    // "Clear" goes back to the default view (today + active + no search),
-    // not to a wide-open list — otherwise users would have to re-pick
-    // today every time they clear.
+    // "Clear" means clear — wide-open list (all days + all status + no
+    // search). Today is reachable from the day picker if the user wants
+    // it back. Previous behaviour ("clear" → today) confused operators
+    // who expected the label to do what it says. Persisted setters keep
+    // sessionStorage in lockstep so this also resets what we hydrate
+    // next mount.
     startTransition(() => {
-      setStatusFilter('all')
-      setDayFilter(String(todayIdx) as DayFilter)
-      setSearchQuery('')
+      persistedSetStatusFilter('all')
+      persistedSetDayFilter('all')
+      persistedSetSearchQuery('')
     })
   }
 
@@ -390,14 +552,45 @@ export default function SchedulesPage() {
       ),
     },
     {
-      accessorKey: 'is_active',
+      accessorKey: 'runtime_status',
       header: 'Status',
-      cell: ({ row }) =>
-        row.original.is_active ? (
-          <Badge variant="default">Active</Badge>
-        ) : (
-          <Badge variant="destructive">Inactive</Badge>
-        ),
+      // Sort by runtime priority instead of alphabetical so clicking the
+      // header surfaces "what's running now" first. Order: live → upcoming
+      // → ended → scheduled → disabled. Reverse sort flips it.
+      sortingFn: (a, b) => {
+        const order: Record<ScheduleRuntimeStatus, number> = {
+          live: 0,
+          upcoming: 1,
+          ended: 2,
+          scheduled: 3,
+          disabled: 4,
+        }
+        return order[a.original.runtime_status] - order[b.original.runtime_status]
+      },
+      cell: ({ row }) => {
+        const meta = RUNTIME_STATUS_META[row.original.runtime_status]
+        if (!meta) {
+          // Backend omitted runtime_status (shouldn't happen post-migration)
+          // — fall back to the legacy is_active rendering so the column
+          // doesn't disappear during a backend rollout window.
+          return row.original.is_active ? (
+            <Badge variant="outline">Active</Badge>
+          ) : (
+            <Badge variant="destructive">Inactive</Badge>
+          )
+        }
+        return (
+          <Badge variant="outline" className={meta.className}>
+            {row.original.runtime_status === 'live' && (
+              <span
+                className="mr-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-white"
+                aria-hidden
+              />
+            )}
+            {meta.label}
+          </Badge>
+        )
+      },
     },
     {
       id: 'actions',
@@ -423,8 +616,13 @@ export default function SchedulesPage() {
               ? 'Loading...'
               : hasFilters
                 ? `${filtered.length} of ${schedules.length} schedules`
-                : `${schedules.length} schedule${schedules.length !== 1 ? 's' : ''} total`}
+                : `${schedules.length} schedule${schedules.length !== 1 ? 's' : ''}`}
           </p>
+          {!isLoading && filterDescription && (
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Showing {filterDescription}
+            </p>
+          )}
         </div>
         <Button onClick={openCreateDialog}>
           <Plus className="mr-2 h-4 w-4" />
@@ -441,12 +639,12 @@ export default function SchedulesPage() {
         // input's controlled state; the noop globalFilterFn ensures
         // TanStack does not re-filter the rows we already pre-filtered.
         globalFilter={searchQuery}
-        onGlobalFilterChange={(v) => startTransition(() => setSearchQuery(v))}
+        onGlobalFilterChange={(v) => startTransition(() => persistedSetSearchQuery(v))}
         globalFilterFn={() => true}
         searchPlaceholder="Search by subject, faculty, room, day, time, status..."
         toolbar={
           <>
-            <Select value={dayFilter} onValueChange={handleFilterChange(setDayFilter)}>
+            <Select value={dayFilter} onValueChange={handleFilterChange(persistedSetDayFilter)}>
               <SelectTrigger className="w-[140px] h-9">
                 <SelectValue placeholder="Day" />
               </SelectTrigger>
@@ -458,14 +656,19 @@ export default function SchedulesPage() {
               </SelectContent>
             </Select>
 
-            <Select value={statusFilter} onValueChange={handleFilterChange(setStatusFilter)}>
+            <Select value={statusFilter} onValueChange={handleFilterChange(persistedSetStatusFilter)}>
               <SelectTrigger className="w-[130px] h-9">
                 <SelectValue placeholder="Status" />
               </SelectTrigger>
               <SelectContent>
+                {/* Filter values map to `is_active` (enable/archive flag),
+                    NOT the runtime_status badge in the table. The labels
+                    were renamed from "Active/Inactive" to "Enabled/Disabled"
+                    so they don't read as "currently running" — that
+                    information lives in the Status column badge now. */}
                 <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="active">Active</SelectItem>
-                <SelectItem value="inactive">Inactive</SelectItem>
+                <SelectItem value="active">Enabled</SelectItem>
+                <SelectItem value="inactive">Disabled</SelectItem>
               </SelectContent>
             </Select>
 

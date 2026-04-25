@@ -71,12 +71,16 @@ class EventType:
     RECOGNITION_MATCH = "RECOGNITION_MATCH"
     RECOGNITION_MISS = "RECOGNITION_MISS"
 
-    # System (3)
+    # System (4) — pipeline + camera health
     PIPELINE_STARTED = "PIPELINE_STARTED"
     PIPELINE_STOPPED = "PIPELINE_STOPPED"
     CAMERA_OFFLINE = "CAMERA_OFFLINE"
+    CAMERA_ONLINE = "CAMERA_ONLINE"
 
-    # Audit (8) — emitted by log_audit() indirection only
+    # Audit (13) — emitted by log_audit() indirection only.
+    # Schedule + enrollment CRUD added 2026-04-25 to close the
+    # "no admin action gets logged" gap surfaced by the System
+    # Activity overhaul.
     ADMIN_LOGIN = "ADMIN_LOGIN"
     FACULTY_LOGIN = "FACULTY_LOGIN"
     STUDENT_LOGIN = "STUDENT_LOGIN"
@@ -85,6 +89,11 @@ class EventType:
     USER_DELETED = "USER_DELETED"
     FACE_REGISTRATION_APPROVED = "FACE_REGISTRATION_APPROVED"
     SETTINGS_CHANGED = "SETTINGS_CHANGED"
+    SCHEDULE_CREATED = "SCHEDULE_CREATED"
+    SCHEDULE_UPDATED = "SCHEDULE_UPDATED"
+    SCHEDULE_DELETED = "SCHEDULE_DELETED"
+    ENROLLMENT_ADDED = "ENROLLMENT_ADDED"
+    ENROLLMENT_REMOVED = "ENROLLMENT_REMOVED"
 
 
 class EventCategory:
@@ -198,10 +207,63 @@ def emit_event(
 
 
 def _serialise_for_broadcast(event: ActivityEvent) -> dict[str, Any]:
-    """Build the JSON-safe dict that ws_manager.broadcast_activity() sends."""
+    """Build the JSON-safe dict that ws_manager.broadcast_activity() sends.
+
+    Includes ``actor_name`` / ``subject_user_name`` / ``subject_schedule_subject``
+    so the admin's live stream renders human labels in real time. Without
+    these, freshly-arriving events display raw UUIDs in the summary
+    (the formatter does UUID-to-name substitution on the client). The
+    REST list endpoint enriches the same fields server-side; we mirror
+    its shape here so REST and WS payloads stay interchangeable.
+    """
 
     def _id(x):
         return str(x) if x is not None else None
+
+    # Resolve relationship names lazily. The relationships are configured
+    # on the model with default lazy='select', so accessing them issues
+    # one SELECT each — fine for the emit-time path which is already
+    # writing a row in the same transaction. Wrap in try/except because:
+    #  - the session might be closed by the time the broadcast task fires
+    #    (we serialise *before* scheduling the task, so usually OK)
+    #  - test fixtures sometimes pass detached events
+    # If anything goes wrong, the broadcast still ships with a null name
+    # and the client gracefully falls back to the raw UUID display.
+    actor_name: str | None = None
+    subject_user_name: str | None = None
+    subject_user_student_id: str | None = None
+    subject_schedule_subject: str | None = None
+    try:
+        if event.actor is not None:
+            first = getattr(event.actor, "first_name", "") or ""
+            last = getattr(event.actor, "last_name", "") or ""
+            actor_name = f"{first} {last}".strip() or None
+    except Exception:
+        logger.debug("activity broadcast: failed to resolve actor name", exc_info=True)
+    try:
+        if event.subject_user is not None:
+            first = getattr(event.subject_user, "first_name", "") or ""
+            last = getattr(event.subject_user, "last_name", "") or ""
+            subject_user_name = f"{first} {last}".strip() or None
+            # User.student_id is the human-facing record number — the
+            # admin's "View student" drilldown URL needs THIS value, not
+            # the user UUID. Mirror what the REST list endpoint emits.
+            subject_user_student_id = (
+                getattr(event.subject_user, "student_id", None) or None
+            )
+    except Exception:
+        logger.debug(
+            "activity broadcast: failed to resolve subject_user name",
+            exc_info=True,
+        )
+    try:
+        if event.schedule is not None:
+            subject_schedule_subject = getattr(event.schedule, "subject_code", None)
+    except Exception:
+        logger.debug(
+            "activity broadcast: failed to resolve schedule subject_code",
+            exc_info=True,
+        )
 
     return {
         "type": "activity_event",
@@ -211,8 +273,12 @@ def _serialise_for_broadcast(event: ActivityEvent) -> dict[str, Any]:
         "severity": event.severity,
         "actor_type": event.actor_type,
         "actor_id": _id(event.actor_id),
+        "actor_name": actor_name,
         "subject_user_id": _id(event.subject_user_id),
+        "subject_user_name": subject_user_name,
+        "subject_user_student_id": subject_user_student_id,
         "subject_schedule_id": _id(event.subject_schedule_id),
+        "subject_schedule_subject": subject_schedule_subject,
         "subject_room_id": _id(event.subject_room_id),
         "camera_id": event.camera_id,
         "ref_attendance_id": _id(event.ref_attendance_id),

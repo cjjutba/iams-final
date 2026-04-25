@@ -87,7 +87,14 @@ hls: no
 srt: no
 rtmp: no
 
-writeQueueSize: 512
+# mediamtx's per-reader packet queue depth. Default 512 was tuned for cross-
+# internet WebRTC where bursts and reconnects need a deep buffer; on IAMS-Net
+# we want the lowest end-to-end latency we can afford. 128 packets is roughly
+# 50-100 ms of buffered video at H.264 30 fps, enough to ride out a brief
+# jitter spike but not enough to add visible delay to the admin live feed.
+# If we ever see frame drops in the WHEP egress logs at this size, bump it
+# back up (256 is a reasonable middle ground).
+writeQueueSize: 128
 
 # Paths: the host ffmpeg supervisor (scripts/iams-cam-relay.sh) pushes the
 # camera MAIN stream to `eb226`, `eb227`, … and the camera SUB stream to

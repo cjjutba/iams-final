@@ -41,6 +41,25 @@ class Settings(BaseSettings):
     ONNX_INTRA_OP_THREADS: int = 4  # threads within a single op (1 worker × 4 = 4 vCPUs)
     ONNX_INTER_OP_THREADS: int = 2  # threads between ops (allows pipelining det + rec)
 
+    # ML Sidecar (native macOS InsightFace process for CoreML/ANE acceleration)
+    # When set, the realtime SCRFD + ArcFace path is proxied to a native
+    # macOS process via HTTP loopback (host.docker.internal). The sidecar
+    # is the only way to reach CoreMLExecutionProvider — Linux Docker
+    # builds of ONNX Runtime can't see the Apple Neural Engine. Empty
+    # string = run inference in-process (today's behaviour, CPU-only
+    # inside the container). The gateway falls back to in-process if the
+    # sidecar fails its boot-time health probe, so a missing sidecar
+    # degrades to "no overlays" rather than a hard error.
+    ML_SIDECAR_URL: str = ""
+    # How long the gateway waits for the sidecar to respond per call.
+    # Detection at det_size=960 on the ANE typically returns in 30-80ms;
+    # 5s is a generous ceiling that still surfaces a wedged sidecar fast
+    # enough that the pipeline's "no frames" detection trips.
+    ML_SIDECAR_TIMEOUT_SECONDS: float = 5.0
+    # JPEG quality for sidecar requests. 85 is the sweet spot — visually
+    # indistinguishable from 95 for face crops, ~30% smaller payload.
+    ML_SIDECAR_JPEG_QUALITY: int = 85
+
     # Face Recognition
     INSIGHTFACE_MODEL: str = "buffalo_l"
     INSIGHTFACE_DET_SIZE: int = 640  # 640 for best accuracy with main stream (480 for sub-stream)
@@ -83,8 +102,19 @@ class Settings(BaseSettings):
     # Adaptive Per-Session Enrollment
     # When a student is recognized with high confidence from CCTV, store that
     # real CCTV embedding in FAISS (RAM only, volatile) to boost future matches.
-    ADAPTIVE_ENROLL_ENABLED: bool = True
-    ADAPTIVE_ENROLL_MIN_CONFIDENCE: float = 0.55  # Balance: strict enough to avoid poisoning, loose enough to close domain gap
+    #
+    # DEFAULT-OFF as of 2026-04-25: a wrong first-match could lock in via
+    # identity-swap suppression and then poison FAISS — the misidentified
+    # user's real face crop would get appended to the wrong identity's vector
+    # cluster, making the swap permanent for that session. Re-enable only
+    # after raising RECOGNITION_THRESHOLD to >= 0.45 AND running a CCTV-side
+    # re-enrollment pass (scripts/cctv_enroll.py) so canonical CCTV embeddings
+    # exist for each enrolled student. The gate values below are intentionally
+    # strict: 0.70 confidence + 30 frames stable + 30 s cooldown = at most
+    # one adaptive embedding per user per minute, only on near-certain matches.
+    ADAPTIVE_ENROLL_ENABLED: bool = False
+    ADAPTIVE_ENROLL_MIN_CONFIDENCE: float = 0.70  # Was 0.55 — too permissive, poisoned FAISS during the 2026-04-25 swap incident
+    ADAPTIVE_ENROLL_STABLE_FRAMES: int = 30  # Was hardcoded 10; raised to require ~1.5 s of consistent recognition before adaptive add
     ADAPTIVE_ENROLL_MAX_PER_USER: int = 3  # Max session embeddings per user (conservative to avoid corruption)
     ADAPTIVE_ENROLL_COOLDOWN: float = 30.0  # Seconds between adaptive enrollments per user (was too aggressive)
 
@@ -268,6 +298,21 @@ class Settings(BaseSettings):
     RECOGNITION_EVIDENCE_QUEUE_SIZE: int = 1000  # Drop threshold — pipeline must never back-pressure
     RECOGNITION_EVIDENCE_BATCH_ROWS: int = 50  # DB flush trigger — whichever comes first
     RECOGNITION_EVIDENCE_BATCH_MS: int = 500  # DB flush interval
+
+    # Per-(student, decision-state, camera) suppression window for evidence
+    # capture. Without this the 5-second re-verify cadence × per-track churn
+    # × 2 concurrent cameras flooded the Student Record Detail "Recent
+    # detections" panel with 50+ near-identical crops per minute (a static
+    # subject in front of a static camera produces visually-identical JPEGs
+    # every reverify). Added 2026-04-25.
+    #
+    # Within this window, repeat events with the *same* outcome — same
+    # matched user_id, same matched/ambiguous flags — are dropped at the
+    # tracker's submit site so they never reach the writer queue, the DB,
+    # disk, or the WebSocket. State changes (new identity swap, miss → match,
+    # match → ambiguous, etc.) bypass the throttle so we never lose a
+    # genuine signal. Set to 0 to disable.
+    RECOGNITION_EVIDENCE_THROTTLE_S: float = 10.0
 
     # Margin around the SCRFD bbox before cropping for the audit trail.
     # 0.35 means the crop expands 35 % outward on each side, giving a head

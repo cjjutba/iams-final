@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -36,10 +37,24 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Keep in sync with FACE_ANGLES in face_service.py — path traversal guard.
+# Phone-captured registration angles. These are the canonical set written
+# during the student-facing registration flow.
 _ALLOWED_ANGLE_LABELS: frozenset[str] = frozenset(
     {"center", "left", "right", "up", "down"}
 )
+
+# CCTV-captured registration crops written by the operator-driven
+# scripts/cctv_enroll.py + POST /api/v1/face/cctv-enroll endpoint. These
+# augment the phone-captured angles with embeddings drawn from the actual
+# CCTV image domain so recognition can close the phone→CCTV cross-domain
+# gap. Pattern is `cctv_<positive_int>` — index is per-user and assigned
+# by the service when persisting to face_embeddings.
+_CCTV_LABEL_RE = re.compile(r"^cctv_\d+$")
+
+
+def _is_allowed_angle_label(angle_label: str) -> bool:
+    """True if angle_label is either a phone-captured angle or a CCTV index."""
+    return angle_label in _ALLOWED_ANGLE_LABELS or bool(_CCTV_LABEL_RE.match(angle_label))
 
 _REGISTRATIONS_SUBDIR = "registrations"
 _MAX_EDGE_PX = 640
@@ -69,7 +84,7 @@ class FaceImageStorage:
         or None on any failure (callers keep the DB row with NULL key rather
         than roll back the whole registration).
         """
-        if angle_label not in _ALLOWED_ANGLE_LABELS:
+        if not _is_allowed_angle_label(angle_label):
             logger.warning(
                 "Refusing to save registration image: unknown angle_label=%r",
                 angle_label,

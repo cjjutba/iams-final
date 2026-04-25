@@ -51,6 +51,42 @@ class FaceStatusResponse(BaseModel):
     embedding_id: int | None = None
 
 
+class CctvEnrollRequest(BaseModel):
+    """Operator-driven CCTV-side enrolment request.
+
+    Augments an existing phone-registered student with N embeddings drawn
+    from the live CCTV stream so recognition can close the cross-domain
+    gap. See FaceService.cctv_enroll for the algorithm.
+    """
+
+    room_code_or_id: str
+    num_captures: int = 5
+    capture_interval_s: float = 1.0
+    min_face_size_px: int = 60
+    min_det_score: float = 0.65
+
+
+class CctvEnrollCapture(BaseModel):
+    faiss_id: int
+    label: str
+    det_score: float
+    bbox: list[int]
+
+
+class CctvEnrollResponse(BaseModel):
+    success: bool
+    user_id: str
+    added: int
+    faiss_ids: list[int]
+    labels: list[str]
+    attempts: int
+    skipped_reasons: dict[str, int]
+    self_similarity_to_phone_mean: float
+    self_similarity_to_phone_min: float
+    self_similarity_to_phone_max: float
+    per_capture: list[CctvEnrollCapture]
+
+
 # ===== Admin Face Comparison (Live-Feed Detail Sheet) =====
 
 

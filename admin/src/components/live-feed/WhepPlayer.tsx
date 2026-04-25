@@ -185,6 +185,41 @@ export const WhepPlayer = forwardRef<WhepPlayerHandle, WhepPlayerProps>(function
         if (videoRef.current && event.streams[0]) {
           videoRef.current.srcObject = event.streams[0]
         }
+
+        // Latency-critical: cap the WebRTC jitter buffer.
+        //
+        // Chromium's default playout delay targets ~200 ms to absorb network
+        // jitter — appropriate for cross-internet conferencing, way more than
+        // we need on IAMS-Net. Setting playoutDelayHint=0 asks the receiver to
+        // minimise buffering (Chrome won't actually go to 0; it lands around
+        // 30-50 ms in practice). On a LAN that's the difference between video
+        // that "feels live" and video that always looks ~200 ms behind.
+        //
+        // contentHint='motion' tells the decoder to prefer smoothness over
+        // still-image quality — sensible for a CCTV feed where motion is the
+        // whole point.
+        //
+        // Both APIs are Chromium-only. Safari ignores them silently. Brave is
+        // Chromium-based so they apply here. Wrap in try/catch for safety:
+        // older Chromium versions reject playoutDelayHint=0 with a TypeError
+        // (Chrome <94, very rare in 2026 but cheap insurance).
+        try {
+          for (const receiver of pc.getReceivers()) {
+            if (receiver.track?.kind === 'video') {
+              const r = receiver as RTCRtpReceiver & { playoutDelayHint?: number }
+              if ('playoutDelayHint' in receiver) {
+                r.playoutDelayHint = 0
+              }
+              try {
+                receiver.track.contentHint = 'motion'
+              } catch {
+                /* Safari etc. */
+              }
+            }
+          }
+        } catch (err) {
+          console.debug('[WhepPlayer] playoutDelayHint not supported', err)
+        }
       }
 
       pc.onconnectionstatechange = () => {

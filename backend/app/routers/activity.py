@@ -59,10 +59,18 @@ def _event_to_response(row) -> ActivityEventResponse:
         actor_name = f"{first} {last}".strip() or None
 
     subject_user_name = None
+    subject_user_student_id = None
     if row.subject_user is not None:
         first = getattr(row.subject_user, "first_name", None) or ""
         last = getattr(row.subject_user, "last_name", None) or ""
         subject_user_name = f"{first} {last}".strip() or None
+        # ``User.student_id`` is the human student-record number
+        # (e.g. "JR-2024-001234"), the route-param the student detail
+        # page expects. Carrying it on the response means the sidebar
+        # drilldown doesn't need a second round-trip.
+        subject_user_student_id = (
+            getattr(row.subject_user, "student_id", None) or None
+        )
 
     subject_schedule_subject = None
     if row.schedule is not None:
@@ -81,6 +89,7 @@ def _event_to_response(row) -> ActivityEventResponse:
         actor_name=actor_name,
         subject_user_id=_id(row.subject_user_id),
         subject_user_name=subject_user_name,
+        subject_user_student_id=subject_user_student_id,
         subject_schedule_id=_id(row.subject_schedule_id),
         subject_schedule_subject=subject_schedule_subject,
         subject_room_id=_id(row.subject_room_id),

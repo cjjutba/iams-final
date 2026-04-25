@@ -1,8 +1,9 @@
 import { useMemo, useState, useTransition } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
-import { format } from 'date-fns'
 import { Download, ScanSearch } from 'lucide-react'
+
+import { formatTimestamp, formatFullDatetime } from '@/lib/format-time'
 
 import { DataTable } from '@/components/data-tables'
 import { Badge } from '@/components/ui/badge'
@@ -107,8 +108,11 @@ export default function RecognitionsPage() {
         accessorKey: 'created_at',
         header: 'When',
         cell: ({ row }) => (
-          <span className="text-sm">
-            {format(new Date(row.original.created_at), 'MMM d, h:mm:ss a')}
+          <span
+            className="font-mono text-xs tabular-nums"
+            title={formatFullDatetime(row.original.created_at)}
+          >
+            {formatTimestamp(row.original.created_at)}
           </span>
         ),
       },

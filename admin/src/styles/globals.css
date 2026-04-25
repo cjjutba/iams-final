@@ -27,6 +27,14 @@
   --color-chart-3: oklch(0.398 0.07 227.392);
   --color-chart-4: oklch(0.828 0.189 84.429);
   --color-chart-5: oklch(0.769 0.188 70.08);
+
+  /* Attendance status palette — unified across admin, student, faculty.
+     Present: green, Late: slate-gray, Early Leave: amber, Absent: red. */
+  --color-status-present: oklch(0.6964 0.1612 162.48);   /* emerald-500 */
+  --color-status-late: oklch(0.554 0.046 257.417);       /* slate-500 */
+  --color-status-early-leave: oklch(0.769 0.188 70.08);  /* amber-500 */
+  --color-status-absent: oklch(0.628 0.258 29.234);      /* red-500 */
+  --color-status-excused: oklch(0.6 0.18 252);           /* blue-500 */
   --color-sidebar: oklch(0.965 0 0);
   --color-sidebar-foreground: oklch(0.32 0 0);
   --color-sidebar-primary: oklch(0.205 0 0);

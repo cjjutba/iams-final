@@ -46,11 +46,11 @@ function buildAttendanceHaystack(r: AttendanceRecord): string {
 }
 
 const statusColors: Record<AttendanceStatus, string> = {
-  present: 'bg-green-100 text-green-800 hover:bg-green-100',
-  late: 'bg-yellow-100 text-yellow-800 hover:bg-yellow-100',
+  present: 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100',
+  late: 'bg-slate-200 text-slate-700 hover:bg-slate-200',
   absent: 'bg-red-100 text-red-800 hover:bg-red-100',
   excused: 'bg-blue-100 text-blue-800 hover:bg-blue-100',
-  early_leave: 'bg-orange-100 text-orange-800 hover:bg-orange-100',
+  early_leave: 'bg-amber-100 text-amber-800 hover:bg-amber-100',
 }
 
 const columns: ColumnDef<AttendanceRecord>[] = [
@@ -82,6 +82,11 @@ const columns: ColumnDef<AttendanceRecord>[] = [
     accessorKey: 'check_in_time',
     header: 'Check-in',
     cell: ({ row }) => safeFormat(row.original.check_in_time, 'h:mm a'),
+  },
+  {
+    accessorKey: 'check_out_time',
+    header: 'Check-out',
+    cell: ({ row }) => safeFormat(row.original.check_out_time, 'h:mm a'),
   },
   {
     accessorKey: 'presence_score',

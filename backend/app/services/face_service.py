@@ -546,6 +546,329 @@ class FaceService:
             settings.RECOGNITION_EVIDENCE_BACKEND,
         )
 
+    # ------------------------------------------------------------------
+    # CCTV-side enrollment
+    # ------------------------------------------------------------------
+    #
+    # Phone-only registration produces embeddings in a domain (close-up
+    # selfie camera, even lighting, sharp focus) that is structurally
+    # different from what the CCTV pipeline sees at recognition time
+    # (40-60 px wide face, motion blur, mixed lighting, H.264 artefacts).
+    # The fixed-quality CCTV simulation in
+    # ``_generate_cctv_simulated_embeddings`` helps but is not a substitute
+    # for embeddings drawn from the *actual* camera. After the 2026-04-25
+    # identity-swap incident (see lessons.md), every freshly-registered
+    # student should also be enrolled with 3-5 real CCTV captures via the
+    # operator workflow:
+    #
+    #   docker exec iams-api-gateway-onprem python -m scripts.cctv_enroll \
+    #       --user-id <uuid> --room <code> --captures 5
+    #
+    # or via the REST endpoint POST /api/v1/face/cctv-enroll/{user_id}.
+
+    async def cctv_enroll(
+        self,
+        user_id: str,
+        room_code_or_id: str,
+        *,
+        num_captures: int = 5,
+        capture_interval: float = 1.0,
+        min_face_size_px: int = 60,
+        min_det_score: float = 0.65,
+        max_attempts: int | None = None,
+        provided_grabber=None,  # backend.services.frame_grabber.FrameGrabber | None
+    ) -> dict:
+        """Capture N high-quality CCTV face crops + add as canonical embeddings.
+
+        These embeddings AUGMENT the user's existing phone-captured ones —
+        they are written to ``face_embeddings`` with ``angle_label="cctv_<idx>"``
+        and the crop bytes go to ``FaceImageStorage`` so the admin sheet can
+        verify them visually.
+
+        Preconditions:
+          * The user must already have an active FaceRegistration. CCTV-only
+            registration is intentionally not supported here — there is no
+            user-facing capture flow for it, only operator-driven re-enrolment
+            on top of an existing registration.
+          * Exactly one face must be visible in each accepted frame. If the
+            scene is empty or has multiple faces, that frame is skipped and
+            the loop tries the next one until ``max_attempts`` is reached
+            (default: ``num_captures * 6``).
+
+        Args:
+            user_id: Target student UUID.
+            room_code_or_id: Room.code (e.g. "EB226") OR Room.id (UUID). The
+                service resolves both so callers don't have to do a lookup.
+            num_captures: Number of CCTV embeddings to add (default 5).
+            capture_interval: Seconds between successful captures. Set to
+                a small value (1.0 s default) so the operator can shift the
+                student's pose between captures and produce diverse vectors.
+            min_face_size_px: Minimum face short-edge in pixels.
+            min_det_score: Minimum SCRFD detection confidence.
+            max_attempts: Hard cap on grab attempts. None → ``num_captures * 6``.
+            provided_grabber: Optional pre-warmed FrameGrabber. Pass the
+                always-on grabber from ``app.state.frame_grabbers[room_id]``
+                from the request handler to avoid spinning up a duplicate
+                ffmpeg subprocess. CLI callers leave this None.
+
+        Returns:
+            Dict with keys:
+              * ``added``: count of new embeddings persisted
+              * ``faiss_ids``: list of new FAISS IDs
+              * ``per_capture``: list of per-capture metadata
+              * ``self_similarity_to_phone_mean``: best-effort cosine sim of
+                the new CCTV embeddings to the user's averaged phone vector.
+                Useful sanity check — if it's < 0.30, the operator likely
+                enrolled the wrong person or the camera framing was bad.
+
+        Raises:
+            ValidationError: User has no existing registration, room not
+                found, or no usable captures collected.
+        """
+        # Lazy import — keeps face_service.py importable in test contexts
+        # where the FrameGrabber's ffmpeg dependency isn't available.
+        import uuid as _uuid
+
+        from app.models.room import Room
+        from app.services.frame_grabber import FrameGrabber
+
+        # 1. Validate preconditions
+        if num_captures < 1:
+            raise ValidationError("num_captures must be >= 1")
+        if num_captures > 10:
+            # Keep the per-user vector cluster bounded — too many CCTV
+            # embeddings widens the matching cone and re-introduces
+            # cross-identity confusion.
+            raise ValidationError("num_captures must be <= 10")
+
+        registration = self.face_repo.get_by_user(user_id)
+        if registration is None:
+            raise ValidationError(
+                f"User {user_id} has no active face registration. "
+                "Run phone registration first; CCTV enrolment only augments."
+            )
+
+        # Resolve room by code OR id
+        room: Room | None = None
+        try:
+            room = self.db.query(Room).filter(Room.id == _uuid.UUID(room_code_or_id)).first()
+        except (ValueError, AttributeError):
+            pass
+        if room is None:
+            room = self.db.query(Room).filter(Room.code == room_code_or_id).first()
+        if room is None:
+            raise ValidationError(f"Room not found: {room_code_or_id}")
+        if not room.camera_endpoint:
+            raise ValidationError(f"Room {room.code} has no camera_endpoint configured")
+
+        # 2. Resolve grabber — reuse provided one or spin a fresh one
+        grabber = provided_grabber
+        owns_grabber = False
+        if grabber is None:
+            logger.info(
+                "cctv_enroll: spinning up dedicated FrameGrabber for room %s (%s)",
+                room.code,
+                room.camera_endpoint,
+            )
+            grabber = FrameGrabber(
+                rtsp_url=room.camera_endpoint,
+                fps=settings.FRAME_GRABBER_FPS,
+                width=settings.FRAME_GRABBER_WIDTH,
+                height=settings.FRAME_GRABBER_HEIGHT,
+            )
+            owns_grabber = True
+            time.sleep(2.0)  # let ffmpeg deliver the first frames
+
+        # 3. Capture loop
+        cap_attempt_cap = max_attempts or (num_captures * 6)
+        captures: list[dict] = []  # {emb, crop_bytes, det_score, bbox}
+        attempts = 0
+        skipped_reasons: dict[str, int] = {}
+
+        try:
+            while len(captures) < num_captures and attempts < cap_attempt_cap:
+                attempts += 1
+                frame = grabber.grab()
+                if frame is None:
+                    skipped_reasons["no_frame"] = skipped_reasons.get("no_frame", 0) + 1
+                    time.sleep(0.5)
+                    continue
+
+                dets = self.facenet.detect(frame)
+                # Filter to "usable" detections
+                usable = []
+                for det in dets:
+                    if det.get("kps") is None:
+                        continue
+                    bx1, by1, bx2, by2 = det["bbox"]
+                    bw = float(bx2 - bx1)
+                    bh = float(by2 - by1)
+                    if min(bw, bh) < min_face_size_px:
+                        continue
+                    if float(det["det_score"]) < min_det_score:
+                        continue
+                    usable.append(det)
+
+                if len(usable) == 0:
+                    skipped_reasons["no_face"] = skipped_reasons.get("no_face", 0) + 1
+                    time.sleep(capture_interval / 2)
+                    continue
+                if len(usable) > 1:
+                    # Operator must run enrolment with only ONE student in
+                    # frame — otherwise we don't know which face goes to
+                    # this user_id.
+                    skipped_reasons["multi_face"] = skipped_reasons.get("multi_face", 0) + 1
+                    time.sleep(capture_interval / 2)
+                    continue
+
+                det = usable[0]
+                # 4. Embed via SCRFD-aligned crop (matches recognition path)
+                try:
+                    embedding = self.facenet.embed_from_kps(frame, det["kps"])
+                except Exception as exc:
+                    logger.warning("cctv_enroll: embed_from_kps failed: %s", exc)
+                    skipped_reasons["embed_fail"] = skipped_reasons.get("embed_fail", 0) + 1
+                    time.sleep(capture_interval / 2)
+                    continue
+
+                # 5. Crop the face for storage (with margin for context)
+                bx1, by1, bx2, by2 = (int(v) for v in det["bbox"])
+                fh, fw = frame.shape[:2]
+                margin = int(min(bx2 - bx1, by2 - by1) * 0.25)
+                cx1 = max(0, bx1 - margin)
+                cy1 = max(0, by1 - margin)
+                cx2 = min(fw, bx2 + margin)
+                cy2 = min(fh, by2 + margin)
+                crop_bgr = frame[cy1:cy2, cx1:cx2]
+
+                ok, jpg = cv2.imencode(".jpg", crop_bgr, [cv2.IMWRITE_JPEG_QUALITY, 92])
+                crop_bytes = jpg.tobytes() if ok else b""
+
+                captures.append({
+                    "embedding": embedding.astype(np.float32),
+                    "crop_bytes": crop_bytes,
+                    "det_score": float(det["det_score"]),
+                    "bbox": [int(bx1), int(by1), int(bx2 - bx1), int(by2 - by1)],
+                })
+                logger.info(
+                    "cctv_enroll: capture %d/%d (det=%.2f, size=%dx%d)",
+                    len(captures), num_captures,
+                    float(det["det_score"]), int(bx2 - bx1), int(by2 - by1),
+                )
+                time.sleep(capture_interval)
+        finally:
+            if owns_grabber:
+                with contextlib.suppress(Exception):
+                    grabber.stop()
+
+        if not captures:
+            raise ValidationError(
+                f"No usable CCTV captures collected after {attempts} attempts. "
+                f"Skipped: {skipped_reasons}. "
+                "Make sure exactly one student is in frame and the camera framing is reasonable."
+            )
+
+        # 6. Sanity check: how do these new embeddings score against the
+        #    user's existing phone embeddings? If sims are uniformly low,
+        #    the operator probably enrolled the wrong person.
+        existing_phone_emb = np.frombuffer(
+            registration.embedding_vector, dtype=np.float32
+        )
+        new_embs = np.stack([c["embedding"] for c in captures])
+        sims_to_phone = (new_embs @ existing_phone_emb).tolist()
+        mean_sim = float(np.mean(sims_to_phone))
+        if mean_sim < 0.20:
+            # Refuse to commit obviously-wrong enrolments. 0.20 is
+            # well below RECOGNITION_THRESHOLD even at 0.45 — anything
+            # in this range means there is no plausible identity match.
+            raise ValidationError(
+                f"CCTV captures do not resemble user {user_id}'s registered face "
+                f"(mean cosine sim to phone embedding = {mean_sim:.3f}). "
+                "Stopping to avoid poisoning the index. Verify the right student is in frame."
+            )
+
+        # 7. Pick next cctv_<idx> labels
+        existing_embs = self.face_repo.get_embeddings_by_registration(str(registration.id))
+        existing_cctv_indices = []
+        for emb in existing_embs:
+            if emb.angle_label and emb.angle_label.startswith("cctv_"):
+                try:
+                    existing_cctv_indices.append(int(emb.angle_label.split("_", 1)[1]))
+                except ValueError:
+                    pass
+        next_idx = max(existing_cctv_indices, default=-1) + 1
+        labels = [f"cctv_{next_idx + i}" for i in range(len(captures))]
+
+        # 8. Add to FAISS in batch
+        try:
+            faiss_ids = self.faiss.add_batch(
+                new_embs, [user_id] * len(new_embs)
+            )
+        except Exception as exc:
+            logger.error("cctv_enroll: FAISS add_batch failed: %s", exc)
+            raise FaceRecognitionError("Failed to index CCTV embeddings") from exc
+
+        # 9. Persist to DB + storage in one transaction
+        try:
+            entries = []
+            for fid, cap, label in zip(faiss_ids, captures, labels):
+                entries.append({
+                    "faiss_id": fid,
+                    "embedding_vector": cap["embedding"].astype(np.float32).tobytes(),
+                    "angle_label": label,
+                    "quality_score": cap["det_score"],
+                })
+            self.face_repo.create_embeddings_batch(str(registration.id), entries)
+            self.db.commit()
+            self.faiss.save()
+
+            # Best-effort image persistence (matches register_face pattern)
+            storage = FaceImageStorage()
+            keys_by_faiss: dict[int, str] = {}
+            for fid, cap, label in zip(faiss_ids, captures, labels):
+                if not cap["crop_bytes"]:
+                    continue
+                key = storage.save_registration_image(user_id, label, cap["crop_bytes"])
+                if key:
+                    keys_by_faiss[int(fid)] = key
+            if keys_by_faiss:
+                self.face_repo.set_image_storage_keys(
+                    str(registration.id), keys_by_faiss
+                )
+                self.db.commit()
+
+            logger.info(
+                "cctv_enroll: committed %d CCTV embeddings for user %s "
+                "(FAISS IDs %s, mean sim to phone=%.3f)",
+                len(captures), user_id, faiss_ids, mean_sim,
+            )
+        except Exception as exc:
+            self.db.rollback()
+            for fid in faiss_ids:
+                with contextlib.suppress(Exception):
+                    self.faiss.remove(fid)
+            try:
+                await self.rebuild_faiss_index()
+            except Exception:
+                logger.error("cctv_enroll: rebuild after rollback failed", exc_info=True)
+            logger.error("cctv_enroll: persistence failed for user %s: %s", user_id, exc)
+            raise FaceRecognitionError("Failed to persist CCTV embeddings") from exc
+
+        return {
+            "added": len(captures),
+            "faiss_ids": faiss_ids,
+            "labels": labels,
+            "attempts": attempts,
+            "skipped_reasons": skipped_reasons,
+            "self_similarity_to_phone_mean": mean_sim,
+            "self_similarity_to_phone_min": float(min(sims_to_phone)),
+            "self_similarity_to_phone_max": float(max(sims_to_phone)),
+            "per_capture": [
+                {"faiss_id": fid, "label": lbl, "det_score": cap["det_score"], "bbox": cap["bbox"]}
+                for fid, lbl, cap in zip(faiss_ids, labels, captures)
+            ],
+        }
+
     async def reregister_face(self, user_id: str, images: list[UploadFile]) -> tuple[int, str]:
         """
         Re-register user's face (update)

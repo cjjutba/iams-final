@@ -118,6 +118,7 @@ data class AttendanceRecordResponse(
     val status: String,
     val date: String,
     @SerializedName("check_in_time") val checkInTime: String?,
+    @SerializedName("check_out_time") val checkOutTime: String? = null,
     @SerializedName("presence_score") val presenceScore: Float?,
     @SerializedName("total_scans") val totalScans: Int? = null,
     @SerializedName("scans_present") val scansPresent: Int? = null,
@@ -165,6 +166,7 @@ data class StudentAttendanceStatus(
     @SerializedName("student_name") val studentName: String,
     val status: String,
     @SerializedName("check_in_time") val checkInTime: String? = null,
+    @SerializedName("check_out_time") val checkOutTime: String? = null,
     @SerializedName("presence_score") val presenceScore: Float? = null,
 )
 data class AlertResponse(
@@ -373,6 +375,7 @@ data class LiveStudentStatus(
     @SerializedName("student_number") val studentNumber: String? = null,
     val status: String,
     @SerializedName("check_in_time") val checkInTime: String? = null,
+    @SerializedName("check_out_time") val checkOutTime: String? = null,
     @SerializedName("currently_detected") val currentlyDetected: Boolean = false,
     @SerializedName("presence_score") val presenceScore: Float? = null,
 )

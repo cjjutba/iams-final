@@ -87,6 +87,14 @@ class ScheduleResponse(ScheduleBase):
     is_active: bool
     faculty: UserResponse | None = None
     room: RoomInfo | None = None
+    # Derived presentation status — distinct from `is_active` (which is the
+    # enable/archive flag). Computed in the router from session_manager + the
+    # current clock, defaulting to "scheduled" when ScheduleResponse is built
+    # from an ORM row alone (e.g. in non-list contexts where the runtime
+    # context isn't available). Possible values: "live", "upcoming",
+    # "ended", "scheduled", "disabled". The admin Schedules list reads this
+    # to render an honest status badge instead of always showing "Active".
+    runtime_status: str = "scheduled"
 
     @computed_field
     @property

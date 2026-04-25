@@ -93,12 +93,12 @@ function buildAttendanceHaystackForRecord(r: AttendanceRecord): string {
 }
 import { Loader2, Plus, Trash2, BookOpen } from 'lucide-react'
 
-const statusBadgeVariant: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
-  present: 'default',
-  late: 'secondary',
-  absent: 'destructive',
-  excused: 'outline',
-  early_leave: 'destructive',
+const statusBadgeClass: Record<string, string> = {
+  present: 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100',
+  late: 'bg-slate-200 text-slate-700 hover:bg-slate-200',
+  absent: 'bg-red-100 text-red-800 hover:bg-red-100',
+  excused: 'bg-blue-100 text-blue-800 hover:bg-blue-100',
+  early_leave: 'bg-amber-100 text-amber-800 hover:bg-amber-100',
 }
 
 export default function StudentRecordDetailPage() {
@@ -338,7 +338,7 @@ export default function StudentRecordDetailPage() {
       accessorKey: 'status',
       header: 'Status',
       cell: ({ row }) => (
-        <Badge variant={statusBadgeVariant[row.original.status] ?? 'outline'}>
+        <Badge className={statusBadgeClass[row.original.status] ?? ''}>
           {formatStatus(row.original.status)}
         </Badge>
       ),
@@ -349,6 +349,15 @@ export default function StudentRecordDetailPage() {
       cell: ({ row }) => (
         <span className="text-sm">
           {safeFormat(row.original.check_in_time, 'h:mm a')}
+        </span>
+      ),
+    },
+    {
+      accessorKey: 'check_out_time',
+      header: 'Check-out Time',
+      cell: ({ row }) => (
+        <span className="text-sm">
+          {safeFormat(row.original.check_out_time, 'h:mm a')}
         </span>
       ),
     },

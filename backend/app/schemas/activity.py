@@ -27,6 +27,11 @@ class ActivityEventResponse(BaseModel):
 
     subject_user_id: Optional[str] = None
     subject_user_name: Optional[str] = None
+    # Distinct from ``subject_user_id`` (the user UUID) — this is the
+    # human-facing student record number (e.g. "JR-2024-001234"). Used by
+    # the admin sidebar's "View student" drilldown so the URL points at
+    # the route param the student-record-detail page actually accepts.
+    subject_user_student_id: Optional[str] = None
 
     subject_schedule_id: Optional[str] = None
     subject_schedule_subject: Optional[str] = None

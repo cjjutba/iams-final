@@ -72,6 +72,26 @@ class SessionState:
         self.student_states: dict[str, dict] = {}  # student_id -> state
         self.is_active = True
 
+        # Snapshot of schedule primitives. The Schedule ORM instance above
+        # is bound to whatever DB session loaded it (typically a request-
+        # scoped session that closes immediately after start_session
+        # returns). Once detached, any attribute access lazy-loads against
+        # a closed session and raises DetachedInstanceError — which then
+        # silently kills the lifecycle scheduler. Every consumer that
+        # needs schedule fields after construction must read these
+        # snapshotted primitives instead of dereferencing self.schedule.
+        self.day_of_week: int = schedule.day_of_week
+        self.window_start: time = schedule.start_time
+        self.window_end: time = schedule.end_time
+        self.subject_code: str = schedule.subject_code
+        self.subject_name: str = schedule.subject_name
+        self.room_id: str | None = (
+            str(schedule.room_id) if schedule.room_id else None
+        )
+        self.faculty_id: str | None = (
+            str(schedule.faculty_id) if schedule.faculty_id else None
+        )
+
         # auto_manage: whether the session_lifecycle_check background job
         # is allowed to auto-end this session once today's schedule window
         # closes. True when the session is created *inside* the schedule's
@@ -85,8 +105,8 @@ class SessionState:
         # section on session lifecycle for the intended semantics.
         now = self.start_time
         self.auto_manage = (
-            schedule.day_of_week == now.weekday()
-            and schedule.start_time <= now.time() <= schedule.end_time
+            self.day_of_week == now.weekday()
+            and self.window_start <= now.time() <= self.window_end
         )
 
     def add_student(self, student_id: str, attendance_id: str):
@@ -449,12 +469,15 @@ class PresenceService:
                 if not attendance:
                     continue
 
-                # Set check-out time
-                if attendance.status != AttendanceStatus.ABSENT:
+                # Set check-out time. Only when not already set, so an
+                # EARLY_LEAVE student keeps the last_seen timestamp that
+                # flag_early_leave wrote — otherwise we'd clobber it with
+                # session-end and the admin UI would show the wrong value.
+                if attendance.status != AttendanceStatus.ABSENT and attendance.check_out_time is None:
                     self.attendance_repo.update(attendance_id, {"check_out_time": datetime.now()})
-                else:
+                elif attendance.status == AttendanceStatus.ABSENT:
                     absent_student_events.append(
-                        (_student_id, attendance_id, session.schedule.subject_code)
+                        (_student_id, attendance_id, session.subject_code)
                     )
 
             # Build session summary
@@ -465,8 +488,10 @@ class PresenceService:
                 "early_leave_count": sum(1 for s in session.student_states.values() if s.get("early_leave_flagged")),
             }
 
-            schedule = session.schedule
-            room_id = self._get_room_id(schedule)
+            # Use the snapshotted primitives — session.schedule may be
+            # detached from its original DB session by the time end_session
+            # runs (it commonly is when called from the lifecycle thread).
+            room_id = session.room_id or ""
 
             # Remove from active sessions
             del self.active_sessions[schedule_id]
@@ -489,8 +514,8 @@ class PresenceService:
             {
                 "event": "session_end",
                 "schedule_id": schedule_id,
-                "subject_code": schedule.subject_code,
-                "subject_name": schedule.subject_name,
+                "subject_code": session.subject_code,
+                "subject_name": session.subject_name,
                 "end_time": datetime.now().isoformat(),
                 "summary": summary,
             },
@@ -537,16 +562,16 @@ class PresenceService:
                 self.db,
                 event_type=event_type,
                 summary=(
-                    f"Session ended: {schedule.subject_code} "
+                    f"Session ended: {session.subject_code} "
                     f"(present={summary['present_count']}, "
                     f"early_leave={summary['early_leave_count']}, "
                     f"scans={summary['total_scans']})"
                 ),
                 schedule_id=schedule_id,
-                room_id=str(schedule.room_id) if schedule.room_id else None,
+                room_id=session.room_id,
                 payload={
-                    "subject_code": schedule.subject_code,
-                    "subject_name": schedule.subject_name,
+                    "subject_code": session.subject_code,
+                    "subject_name": session.subject_name,
                     "auto_managed": auto_managed,
                     "summary": summary,
                     "end_time": datetime.now().isoformat(),
@@ -590,7 +615,7 @@ class PresenceService:
                 # Look up scan_result for this session's room
                 scan_result = None
                 if scan_results is not None:
-                    room_id = self._get_room_id(session.schedule)
+                    room_id = session.room_id or ""
                     scan_result = scan_results.get(room_id)
                 await self.process_session_scan(schedule_id, scan_result=scan_result)
             except Exception as e:
@@ -616,7 +641,7 @@ class PresenceService:
             session = self.active_sessions[schedule_id]
             session.scan_count += 1
             scan_count = session.scan_count
-            room_id = self._get_room_id(session.schedule)
+            room_id = session.room_id or ""
             student_snapshot = {
                 sid: {
                     "attendance_id": s["attendance_id"],
@@ -655,7 +680,7 @@ class PresenceService:
                     # First detection -> check in as PRESENT or LATE
                     current_time = datetime.now().time()
                     grace_time = (
-                        datetime.combine(date.today(), session.schedule.start_time)
+                        datetime.combine(date.today(), session.window_start)
                         + timedelta(minutes=settings.GRACE_PERIOD_MINUTES)
                     ).time()
 
@@ -724,9 +749,7 @@ class PresenceService:
                         )
 
                         is_late = new_status == AttendanceStatus.LATE
-                        subject_code = (
-                            session.schedule.subject_code if session.schedule else ""
-                        )
+                        subject_code = session.subject_code or ""
                         emit_attendance_event(
                             self.db,
                             event_type=(
@@ -757,14 +780,14 @@ class PresenceService:
                         )
 
                     # Notify student of check-in
-                    subject_code = session.schedule.subject_code if session.schedule else ""
+                    subject_code = session.subject_code or ""
                     await self._notify_check_in(
                         student_id,
                         student_info["name"],
                         new_status.value,
                         check_in_time,
                         subject_code,
-                        getattr(session.schedule, "subject_name", ""),
+                        session.subject_name or "",
                     )
 
                     logger.info(f"Student {student_id} checked in via scan cycle: {new_status.value}")
@@ -887,10 +910,10 @@ class PresenceService:
         """
         logger.warning(f"Early leave detected: student {student_id}, {consecutive_misses} consecutive misses")
 
-        # Update attendance status
-        self.attendance_repo.update(attendance_id, {"status": AttendanceStatus.EARLY_LEAVE})
-
-        # Get attendance record for last seen time
+        # Get attendance record + scan history first so we can stamp the
+        # actual check-out time (last detected scan) onto the record. Without
+        # this, end_session() later overwrites it with session-end and the
+        # admin UI would show the wrong "left at" time for early-leavers.
         attendance = self.attendance_repo.get_by_id(attendance_id)
         recent_logs = self.attendance_repo.get_recent_logs(attendance_id, limit=consecutive_misses + 1)
 
@@ -900,6 +923,12 @@ class PresenceService:
             if log.detected:
                 last_seen = log.scan_time
                 break
+
+        # Update attendance status (and check-out if we know when they left)
+        update_payload: dict = {"status": AttendanceStatus.EARLY_LEAVE}
+        if last_seen is not None:
+            update_payload["check_out_time"] = last_seen
+        self.attendance_repo.update(attendance_id, update_payload)
 
         # Compute context severity based on schedule
         severity = "medium"
@@ -1052,7 +1081,12 @@ class PresenceService:
                 )
             else:
                 restored_status = AttendanceStatus.PRESENT
-            self.attendance_repo.update(attendance_id, {"status": restored_status})
+            # Also clear the stale check_out_time written by flag_early_leave;
+            # end_session will re-stamp it once the session actually closes.
+            self.attendance_repo.update(
+                attendance_id,
+                {"status": restored_status, "check_out_time": None},
+            )
 
         self.db.commit()
 

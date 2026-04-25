@@ -1,7 +1,6 @@
 import { useMemo, useState, useTransition } from 'react'
 import { Link } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
-import { format } from 'date-fns'
 import { Eye, Shield } from 'lucide-react'
 
 import { DataTable } from '@/components/data-tables'
@@ -12,6 +11,7 @@ import { usePageTitle } from '@/hooks/use-page-title'
 import { useRecognitionAccessAudit } from '@/hooks/use-queries'
 import type { AccessAuditEntry, AccessAuditFilters } from '@/types'
 import { tokenMatches, joinHaystack, isoDateHaystackParts } from '@/lib/search'
+import { formatTimestamp, formatFullDatetime } from '@/lib/format-time'
 
 function buildAccessAuditHaystack(e: AccessAuditEntry): string {
   return joinHaystack([
@@ -77,8 +77,11 @@ export default function RecognitionAccessAuditPage() {
         accessorKey: 'viewed_at',
         header: 'Viewed',
         cell: ({ row }) => (
-          <span className="text-sm">
-            {format(new Date(row.original.viewed_at), 'MMM d, h:mm:ss a')}
+          <span
+            className="font-mono text-xs tabular-nums"
+            title={formatFullDatetime(row.original.viewed_at)}
+          >
+            {formatTimestamp(row.original.viewed_at)}
           </span>
         ),
       },

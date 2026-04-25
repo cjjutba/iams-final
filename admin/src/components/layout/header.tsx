@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Breadcrumbs } from './breadcrumbs'
+import { formatTimestamp, formatFullDatetime } from '@/lib/format-time'
 import type { Notification } from '@/types'
 
 export function Header() {
@@ -114,8 +115,11 @@ export function Header() {
                   >
                     <p className="text-sm font-medium">{notif.title}</p>
                     <p className="text-xs text-muted-foreground line-clamp-2">{notif.message}</p>
-                    <p className="mt-1 text-[11px] text-muted-foreground/70">
-                      {new Date(notif.created_at).toLocaleDateString()}
+                    <p
+                      className="mt-1 font-mono text-[11px] tabular-nums text-muted-foreground/70"
+                      title={formatFullDatetime(notif.created_at)}
+                    >
+                      {formatTimestamp(notif.created_at)}
                     </p>
                   </div>
                 ))

@@ -142,6 +142,7 @@ class StudentAttendanceStatus(BaseModel):
     student_name: str
     status: AttendanceStatus
     check_in_time: datetime | None
+    check_out_time: datetime | None = None
     presence_score: float
     total_scans: int
     scans_present: int

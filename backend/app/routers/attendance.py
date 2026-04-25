@@ -538,6 +538,7 @@ async def get_live_attendance(
                 student_name=f"{record.student.first_name} {record.student.last_name}",
                 status=record.status,
                 check_in_time=record.check_in_time,
+                check_out_time=record.check_out_time,
                 presence_score=record.presence_score,
                 total_scans=record.total_scans,
                 scans_present=record.scans_present,

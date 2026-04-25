@@ -7,8 +7,8 @@ Wipes ALL data and reseeds the database from scratch with:
   - 2 faculty user accounts (faculty.eb226@gmail.com, faculty.eb227@gmail.com)
   - 1 admin account (admin@admin.com / 123)
   - 2 rooms (EB226, EB227)
-  - All class schedules (15 real courses + 672 rolling 30-min test sessions
-    on EB226 and EB227 — 48 slots/day × 7 days × 2 rooms)
+  - All class schedules (15 real weekday courses + 70 IAMS test blocks
+    on EB226 and EB227 — 5 back-to-back 5h blocks/day × 7 days × 2 rooms)
   - System settings
   - Faculty notifications
 
@@ -55,17 +55,49 @@ MARKDOWN_PATH = (
 SEMESTER = "2nd"
 ACADEMIC_YEAR = "2025-2026"
 
-# Rolling 30-min test sessions on EB226 + EB227 — lets us exercise the full
-# PRESENT/LATE/ABSENT/EARLY_LEAVE state machine all day long on BOTH rooms.
-# (Previously only EB227 had rolling sessions; EB226 was a single 24/7 row,
-# which produced nonsensical presence scores — see "TEST 226 semantics" note
-# in docs. Both rooms now share identical rollover behaviour.)
-ROLLING_SESSION_MINUTES = 30
-ROLLING_EARLY_LEAVE_TIMEOUT_MIN = 2  # 2 min continuous absence → EARLY_LEAVE
+# IAMS test blocks — 5 back-to-back ~5h windows per day, on both EB226 and
+# EB227, covering all 24h with a 5-minute reset at midnight.
+#
+# Replaces the previous 672-row rolling-30-min generator (which polluted the
+# schedule list to ~700 rows and was unreadable). 5 blocks × 7 days × 2 rooms
+# = 70 rows, comfortably navigable.
+#
+# Block layout (same for every weekday):
+#   0000 → 00:00 – 05:00   (5h, "late night")
+#   0500 → 05:00 – 10:00   (5h, "morning")
+#   1000 → 10:00 – 15:00   (5h, "midday")
+#   1500 → 15:00 – 20:00   (5h, "afternoon")
+#   2000 → 20:00 – 23:55   (3h 55m, "evening" — short to satisfy auto-end's
+#                            day-of-week guard. If end_time were 23:59:59 the
+#                            session would never auto-end across midnight.)
+#
+# Within-day blocks are ZERO-gap back-to-back: at the lifecycle's tick after
+# (say) 05:00, auto-start spins up Block 0500's pipeline first and auto-end
+# tears down Block 0000 immediately after. By the time the new pipeline
+# reads its first frame Block 0000 is already gone — no overlapping frame
+# processing, no duplicate attendance. Same dynamic real classes already
+# exhibit (CpE 115 9:00-10:30 → CpE 324 10:30-12:00 in EB226).
+#
+# Only deliberate gap is 23:55 → 00:00 (5 min/day). Acceptable price for
+# clean lifecycle behaviour, and a useful test of the strict-session-gated
+# raw-video state on the live page.
+TEST_BLOCK_EARLY_LEAVE_TIMEOUT_MIN = 2  # 2 min continuous absence → EARLY_LEAVE
 
-# Rooms that get 336 back-to-back rolling test sessions generated at seed time.
-# (room_name, faculty_email) — order controls seed output order.
-ROLLING_ROOMS = [
+# (start_hour_label, start_time, end_time)
+TEST_BLOCK_WINDOWS: list[tuple[str, time, time]] = [
+    ("0000", time(0, 0),   time(5, 0)),
+    ("0500", time(5, 0),   time(10, 0)),
+    ("1000", time(10, 0),  time(15, 0)),
+    ("1500", time(15, 0),  time(20, 0)),
+    ("2000", time(20, 0),  time(23, 55)),
+]
+
+# Day index (0=Mon..6=Sun) → short name used in test-block subject codes.
+TEST_BLOCK_DAY_NAMES = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+
+# Rooms that get the 5-block-per-day test schedule, plus their dedicated
+# faculty (so the test blocks don't clutter real faculty timetables).
+TEST_BLOCK_ROOMS = [
     ("EB226", "faculty.eb226@gmail.com"),
     ("EB227", "faculty.eb227@gmail.com"),
 ]
@@ -106,10 +138,11 @@ ROOM_DEFS = [
 # day_of_week: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
 
 SCHEDULE_DEFS = [
-    # NOTE: Rolling 30-min sessions for EB226 AND EB227 are generated in
-    # _seed_schedules() below (48 back-to-back slots × 7 days × 2 rooms = 672
-    # rows). This replaces the old "TEST 226" 24/7 row, which made the grace
-    # window and 3-miss early-leave threshold produce meaningless numbers.
+    # NOTE: 70 IAMS test blocks (5 ~5h windows/day × 7 days × 2 rooms) are
+    # generated in _seed_schedules() via _seed_test_blocks(). They cover all
+    # 24h on EB226 + EB227 with one 5-minute daily reset at midnight. See the
+    # TEST_BLOCK_WINDOWS constant for the exact layout. Real weekday classes
+    # below run alongside (different cohorts → no enrollment overlap).
 
     # ── Elumba ────────────────────────────────────────────────────────
     ("CpE 121",  "WEB Technologies (LEC)",              2, "BSCPE", [1, 3], time(7, 0),   time(8, 30),  "EB227", "ryan.elumba@jrmsu.edu.ph"),
@@ -137,8 +170,9 @@ SCHEDULE_DEFS = [
 SYSTEM_SETTINGS = [
     ("scan_interval_seconds", "15"),
     ("early_leave_threshold", "3"),
-    # 5-min grace pairs cleanly with 30-min rolling test sessions:
-    # first 5 min of session = PRESENT window, next 25 min = LATE window.
+    # 5-min grace pairs cleanly with the 5h IAMS test blocks: first 5 min
+    # of session = PRESENT window, the remaining ~4h 55m = LATE window.
+    # Real classes (1.5-3h) follow the same proportions.
     ("grace_period_minutes", "5"),
     ("recognition_threshold", "0.45"),
     ("session_buffer_minutes", "5"),
@@ -518,58 +552,53 @@ def _seed_schedules(db, faculty_map: dict[str, User], room_map: dict[str, Room])
                   f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')} "
                   f"in {room_name} [{fac_short}]")
 
-    # ── Rolling 30-min sessions for EB226 + EB227 (Mon–Sun, 48/day) ────
-    for room_name, faculty_email in ROLLING_ROOMS:
-        rolling_total = _seed_rolling_sessions(
+    # ── IAMS test blocks for EB226 + EB227 (5 blocks × 7 days × 2 rooms) ─
+    for room_name, faculty_email in TEST_BLOCK_ROOMS:
+        test_total = _seed_test_blocks(
             db, faculty_map, room_map, room_name, faculty_email
         )
-        total += rolling_total
-        print(f"  Generated {rolling_total} rolling 30-min {room_name} sessions "
-              f"({rolling_total // 7}/day × 7 days, 2-min early-leave timeout)")
+        total += test_total
+        print(f"  Generated {test_total} IAMS test blocks for {room_name} "
+              f"({test_total // 7} blocks/day × 7 days, 2-min early-leave timeout)")
 
     db.flush()
     return total
 
 
-def _seed_rolling_sessions(
+def _seed_test_blocks(
     db,
     faculty_map: dict[str, User],
     room_map: dict[str, Room],
     room_name: str,
     faculty_email: str,
 ) -> int:
-    """Generate back-to-back 30-min test sessions covering 24h × 7 days for one room.
+    """Generate 5 back-to-back ~5h test blocks covering 24h × 7 days for one room.
 
-    Lets us exercise PRESENT/LATE/ABSENT/EARLY_LEAVE transitions any time of day.
-    With grace_period_minutes=5 and session=30min:
+    Replaces the old rolling-30-min sessions. With grace_period_minutes=5 and
+    a 5h block:
       - first 5 min of session = PRESENT window
-      - 5–30 min               = LATE window
+      - 5 min – 5h             = LATE window
       - 2 min continuous absence after check-in → EARLY_LEAVE
 
-    Subject codes are prefixed with the room name (e.g. "EB226-0900") so both
-    rooms can coexist without conflicting schedule identifiers.
+    Subject code format: ``{room_name}-{day_short}-{start_hhmm}``, e.g.
+    ``EB226-MON-0000``. Sorts cleanly by room → day → block start hour in
+    the schedule UI.
+
+    See ``TEST_BLOCK_WINDOWS`` for the per-day layout. Blocks are within-day
+    back-to-back (zero gap); the only daily gap is 23:55 → 00:00 to satisfy
+    auto-end's day-of-week guard.
     """
     faculty = faculty_map[faculty_email]
     room = room_map[room_name]
 
-    slots_per_day = (24 * 60) // ROLLING_SESSION_MINUTES  # 48
     count = 0
     for day_idx in range(7):
-        for slot in range(slots_per_day):
-            start_minutes = slot * ROLLING_SESSION_MINUTES
-            end_minutes = start_minutes + ROLLING_SESSION_MINUTES
-
-            start_t = time(start_minutes // 60, start_minutes % 60)
-            # Last slot ends at 23:59 instead of 24:00 (Time can't represent 24:00).
-            if end_minutes >= 24 * 60:
-                end_t = time(23, 59)
-            else:
-                end_t = time(end_minutes // 60, end_minutes % 60)
-
+        day_short = TEST_BLOCK_DAY_NAMES[day_idx]
+        for hour_label, start_t, end_t in TEST_BLOCK_WINDOWS:
             db.add(Schedule(
-                subject_code=f"{room_name}-{start_t.strftime('%H%M')}",
+                subject_code=f"{room_name}-{day_short}-{hour_label}",
                 subject_name=(
-                    f"IAMS Test {room_name} Rolling "
+                    f"IAMS Test {room_name} {day_short} "
                     f"({start_t.strftime('%H:%M')}-{end_t.strftime('%H:%M')})"
                 ),
                 faculty_id=faculty.id,
@@ -581,7 +610,7 @@ def _seed_rolling_sessions(
                 academic_year=ACADEMIC_YEAR,
                 target_course="BSCPE",
                 target_year_level=4,
-                early_leave_timeout_minutes=ROLLING_EARLY_LEAVE_TIMEOUT_MIN,
+                early_leave_timeout_minutes=TEST_BLOCK_EARLY_LEAVE_TIMEOUT_MIN,
                 is_active=True,
             ))
             count += 1

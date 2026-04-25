@@ -136,6 +136,13 @@ class TrackFrame:
     embed_ms: float = 0.0
     faiss_ms: float = 0.0
     rtp_pts_90k: int | None = None
+    # Backend wall-clock (epoch ms) when the FrameGrabber drained this
+    # frame off FFmpeg stdout. Travels through the WS payload as
+    # ``detected_at_ms`` so clients can compute end-to-end display latency
+    # against ``Date.now()`` / ``System.currentTimeMillis()``. ``None``
+    # when the frame came from a test fixture or a legacy caller that
+    # didn't pass it through ``process()``.
+    captured_at_ms: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +198,16 @@ class RealtimeTracker:
         self._evidence_reg_bytes: dict[str, bytes | None] = {}
         self._evidence_reg_ref: dict[str, str] = {}
 
+        # Per-(student_id-or-track, matched, ambiguous) last-submit timestamps.
+        # Drives the RECOGNITION_EVIDENCE_THROTTLE_S window: repeat events
+        # with the same outcome inside the window are dropped before they
+        # reach the evidence writer queue, so the audit log + recognition
+        # panel UI no longer fill up with 50+ near-identical crops per minute
+        # of a static subject. The dict is per-tracker (and trackers are
+        # per-camera-per-schedule) so each (student, camera) pair keeps its
+        # own clock.
+        self._evidence_last_submit: dict[tuple[str, bool, bool], float] = {}
+
         # ByteTrack with tuned parameters for face tracking
         self._tracker = sv.ByteTrack(
             track_activation_threshold=0.25,
@@ -227,7 +244,12 @@ class RealtimeTracker:
     # Public API
     # ------------------------------------------------------------------
 
-    def process(self, frame: np.ndarray, rtp_pts_90k: int | None = None) -> TrackFrame:
+    def process(
+        self,
+        frame: np.ndarray,
+        rtp_pts_90k: int | None = None,
+        captured_at_ms: int | None = None,
+    ) -> TrackFrame:
         """Process one BGR frame: detect → track → recognize (new only).
 
         ``rtp_pts_90k`` is the upstream RTSP/RTP PTS captured by the
@@ -293,6 +315,7 @@ class RealtimeTracker:
                 timestamp=now,
                 det_ms=t_det_ms,
                 rtp_pts_90k=rtp_pts_90k,
+                captured_at_ms=captured_at_ms,
             )
 
         # Split the detection records into parallel arrays. ``kpss`` carries
@@ -349,6 +372,7 @@ class RealtimeTracker:
                 timestamp=now,
                 det_ms=t_det_ms,
                 rtp_pts_90k=rtp_pts_90k,
+                captured_at_ms=captured_at_ms,
             )
         bboxes, confidences, kpss = zip(*filtered)
         bboxes = list(bboxes)
@@ -798,6 +822,7 @@ class RealtimeTracker:
             embed_ms=t_embed_total_ms,
             faiss_ms=t_faiss_ms,
             rtp_pts_90k=rtp_pts_90k,
+            captured_at_ms=captured_at_ms,
         )
 
     def get_recognized_user_ids(self) -> set[str]:
@@ -810,6 +835,10 @@ class RealtimeTracker:
         self._identity_cache.clear()
         self._prev_bboxes.clear()
         self._identity_graveyard.clear()
+        # Also clear the evidence throttle ledger so the first event of a
+        # new session always fires (even if the same student was throttled
+        # 1 s before the previous session ended).
+        self._evidence_last_submit.clear()
 
     # ------------------------------------------------------------------
     # Internals
@@ -1064,11 +1093,21 @@ class RealtimeTracker:
                             confidence,
                         )
                     # Adaptive enrollment — only after stable re-verification (prev_user_id == user_id).
-                    # This prevents poisoning FAISS from a single wrong first-recognition.
-                    # Requires: (1) already recognized as same user before (not first-time),
-                    #           (2) confidence >= ADAPTIVE_ENROLL_MIN_CONFIDENCE (0.55),
-                    #           (3) track has been alive for 10+ frames (~0.5s at 20fps).
-                    is_stable_reverify = (prev_user_id == user_id and identity.frames_seen >= 10)
+                    # Prevents poisoning FAISS from a single wrong first-recognition.
+                    # Requires:
+                    #   (1) recognized as same user on the previous decision (not first-time),
+                    #   (2) confidence >= ADAPTIVE_ENROLL_MIN_CONFIDENCE (default 0.70),
+                    #   (3) track alive for >= ADAPTIVE_ENROLL_STABLE_FRAMES frames
+                    #       (default 30 ≈ 1.5 s at 20 fps).
+                    # The stable-frames gate was hardcoded to 10 until the 2026-04-25
+                    # identity-swap incident — at 10 frames @ 5 fps backend (CPU-only),
+                    # a wrong lock-in could poison FAISS in ~2 s. Now env-tunable so
+                    # different deployments can dial this against their actual
+                    # PROCESSING_FPS without a rebuild.
+                    is_stable_reverify = (
+                        prev_user_id == user_id
+                        and identity.frames_seen >= settings.ADAPTIVE_ENROLL_STABLE_FRAMES
+                    )
                     if (settings.ADAPTIVE_ENROLL_ENABLED
                         and is_stable_reverify
                         and confidence >= settings.ADAPTIVE_ENROLL_MIN_CONFIDENCE):
@@ -1119,6 +1158,7 @@ class RealtimeTracker:
                         student_name=resolved_name,
                         confidence=float(confidence),
                         is_ambiguous=bool(is_ambiguous),
+                        now=now,
                     )
                 except Exception:
                     # Evidence capture must never destabilise the pipeline.
@@ -1141,6 +1181,7 @@ class RealtimeTracker:
         student_name: str | None,
         confidence: float,
         is_ambiguous: bool,
+        now: float,
     ) -> None:
         """Build a RecognitionEventDraft and hand it to the evidence writer.
 
@@ -1152,6 +1193,11 @@ class RealtimeTracker:
         Per-user caches (``_evidence_reg_bytes``, ``_evidence_reg_ref``)
         ensure ``_load_registered_crop_bytes`` runs at most once per user
         per process — not every frame.
+
+        ``now`` is the monotonic timestamp from ``process()``; it drives the
+        per-(student, decision-state) throttle so a static subject doesn't
+        produce 50+ near-identical events per minute (the "stale faces"
+        complaint on the Student Record Detail page, 2026-04-25).
         """
         from app.services.evidence_writer import (
             RecognitionEventDraft,
@@ -1159,6 +1205,38 @@ class RealtimeTracker:
         )
 
         matched = bool(user_id) and not is_ambiguous
+
+        # Throttle: drop repeat events with the same outcome inside the
+        # configured window. Keyed on (identity, matched, ambiguous) so a
+        # genuine state change (miss → match, match → ambiguous, identity
+        # swap to a different user) always bypasses the gate. For misses
+        # we key on the track id since there's no student_id to anchor to;
+        # this still dedupes per-track rapid-fire UNKNOWN reads.
+        throttle_window = float(settings.RECOGNITION_EVIDENCE_THROTTLE_S)
+        if throttle_window > 0.0:
+            key_anchor = (
+                str(user_id) if user_id else f"track:{int(identity.track_id)}"
+            )
+            key = (key_anchor, bool(matched), bool(is_ambiguous))
+            last = self._evidence_last_submit.get(key)
+            if last is not None and (now - last) < throttle_window:
+                # Within window — silently drop. No DB row, no JPEG, no WS
+                # broadcast. Attendance/presence state are unaffected since
+                # they live on a separate code path (TrackPresenceService).
+                return
+            self._evidence_last_submit[key] = now
+
+            # Bound the dict so a long-running session with many distinct
+            # transient track ids can't grow it without limit. 1024 anchors
+            # at ~80 bytes each is ~80 KB worst case, plenty of head-room
+            # for any realistic classroom.
+            if len(self._evidence_last_submit) > 1024:
+                # Cheap eviction: drop entries older than 5× the throttle
+                # window. They can never fire the gate again anyway.
+                cutoff = now - (throttle_window * 5.0)
+                stale = [k for k, t in self._evidence_last_submit.items() if t < cutoff]
+                for k in stale:
+                    del self._evidence_last_submit[k]
 
         registered_crop_ref: str | None = None
         registered_crop_bytes: bytes | None = None

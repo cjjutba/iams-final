@@ -131,6 +131,59 @@ async def lifespan(app: FastAPI):
             # Background listener for FAISS reload notifications (multi-worker sync)
             app.state.faiss_subscriber_task = asyncio.create_task(faiss_manager.subscribe_index_changes())
 
+            # JIT the SCRFD ONNX graph now so the first real session pipeline
+            # doesn't pay the ~3-5s warmup tax on its first frame. (No-op if
+            # the realtime path will route through the sidecar — but cheap
+            # insurance against ML_SIDECAR_URL being unset later or the
+            # registration path needing the in-process model.)
+            await asyncio.to_thread(insightface_model.warmup)
+            logger.info("InsightFace warmup complete")
+
+            # Bind the realtime ML backend. ML_SIDECAR_URL set + reachable →
+            # route SCRFD + ArcFace through the native macOS sidecar
+            # (CoreML/ANE). Else use the in-process model. SessionPipeline
+            # picks up whatever we bind here via app.services.ml.inference.
+            from app.services.ml.inference import set_realtime_model
+
+            sidecar_bound = False
+            if settings.ML_SIDECAR_URL:
+                try:
+                    from app.services.ml.remote_insightface_model import (
+                        RemoteInsightFaceModel,
+                    )
+
+                    remote = RemoteInsightFaceModel(settings.ML_SIDECAR_URL)
+                    health = await asyncio.to_thread(remote.healthcheck)
+                    if health and health.get("model_loaded"):
+                        set_realtime_model(remote)
+                        provider_summary = ", ".join(
+                            f"{p['task']}={p['providers'][0] if p['providers'] else 'n/a'}"
+                            for p in health.get("providers", [])
+                        ) or "no providers reported"
+                        logger.info(
+                            "Realtime ML routed via sidecar at %s (%s)",
+                            settings.ML_SIDECAR_URL,
+                            provider_summary,
+                        )
+                        sidecar_bound = True
+                    else:
+                        logger.warning(
+                            "ML sidecar at %s did not pass health probe — "
+                            "falling back to in-process inference",
+                            settings.ML_SIDECAR_URL,
+                        )
+                        try:
+                            remote.close()
+                        except Exception:
+                            pass
+                except Exception:
+                    logger.exception(
+                        "Failed to initialise sidecar proxy — falling back to in-process"
+                    )
+
+            if not sidecar_bound:
+                set_realtime_model(insightface_model)
+
             logger.info("Face recognition system initialized")
         except Exception as e:
             logger.error(f"Failed to initialize face recognition: {e}")
@@ -158,6 +211,47 @@ async def lifespan(app: FastAPI):
     # is false they stay empty.
     app.state.frame_grabbers = {}  # room_id -> FrameGrabber
     app.state.session_pipelines = {}  # schedule_id -> SessionPipeline
+
+    # Pre-open RTSP readers for every room with a configured camera so the
+    # transition from "no session" → "session running" is instant. ML still
+    # only runs when a SessionPipeline is attached (gated by the lifecycle
+    # scheduler), but the grabber + decoder is already warm so the first
+    # real frame lands in <1s instead of waiting for the FFmpeg I-frame
+    # handshake. Skipped on the VPS thin profile where ENABLE_FRAME_GRABBERS
+    # is false (no cameras reachable from the VPS network).
+    if settings.ENABLE_ML and settings.ENABLE_FRAME_GRABBERS:
+        try:
+            from app.database import SessionLocal as _SessionLocal
+            from app.models.room import Room as _Room
+            from app.services.frame_grabber import FrameGrabber as _FrameGrabber
+
+            _db = _SessionLocal()
+            try:
+                _rooms = (
+                    _db.query(_Room)
+                    .filter(_Room.camera_endpoint.isnot(None))
+                    .filter(_Room.camera_endpoint != "")
+                    .all()
+                )
+                for _room in _rooms:
+                    _room_id = str(_room.id)
+                    if _room_id in app.state.frame_grabbers:
+                        continue
+                    try:
+                        app.state.frame_grabbers[_room_id] = _FrameGrabber(_room.camera_endpoint)
+                        logger.info(
+                            "FrameGrabber preloaded for room %s (%s)",
+                            _room.name,
+                            _room_id,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to preload FrameGrabber for room %s", _room_id
+                        )
+            finally:
+                _db.close()
+        except Exception:
+            logger.exception("FrameGrabber preload phase failed")
 
     # ── WebSocket Redis subscriber ─────────────────────────────
     if settings.ENABLE_WS_ROUTES and settings.ENABLE_REDIS:
@@ -291,7 +385,16 @@ async def lifespan(app: FastAPI):
                             if sid in pipeline_ids:
                                 pass  # Let pipeline manage its own state
                             continue
-                        schedule = session_state.schedule
+
+                        # Read from the SessionState's snapshotted primitives.
+                        # session_state.schedule is the original ORM instance —
+                        # its owning DB session has long since closed, so any
+                        # attribute lazy-load (day_of_week, start_time,
+                        # end_time, room_id, …) raises DetachedInstanceError
+                        # and aborts this whole gather, which is how zombie
+                        # sessions outlive their window. The snapshot fields
+                        # below are plain Python primitives captured at
+                        # SessionState.__init__ — safe to read forever.
 
                         # Only auto-end sessions that are "window-managed":
                         # started inside their natural (day, start..end) window.
@@ -309,23 +412,26 @@ async def lifespan(app: FastAPI):
                         # is 10:00 would be auto-ended at 10:01 *any* day of
                         # the week, because the previous check was purely on
                         # time-of-day.
-                        if schedule.day_of_week != current_day:
+                        if session_state.day_of_week != current_day:
                             continue
-                        if current_time <= schedule.end_time:
+                        if current_time <= session_state.window_end:
                             continue
 
-                        # Fetch faculty_id and enrolled student_ids for notifications
-                        faculty_id = str(schedule.faculty_id)
+                        # Fetch enrolled student_ids for notifications.
+                        # faculty_id comes from the snapshot; using `sid` for
+                        # the enrollment query avoids touching the detached
+                        # ORM instance entirely.
+                        faculty_id = session_state.faculty_id
                         student_ids = [
                             str(e.student_id)
-                            for e in db.query(Enrollment.student_id).filter(Enrollment.schedule_id == schedule.id).all()
+                            for e in db.query(Enrollment.student_id).filter(Enrollment.schedule_id == sid).all()
                         ]
 
                         to_end.append(
                             {
                                 "sid": sid,
-                                "room_id": str(schedule.room_id),
-                                "subject_code": schedule.subject_code,
+                                "room_id": session_state.room_id,
+                                "subject_code": session_state.subject_code,
                                 "faculty_id": faculty_id,
                                 "student_ids": student_ids,
                             }
@@ -361,13 +467,15 @@ async def lifespan(app: FastAPI):
                     finally:
                         db.close()
 
-                    # Create FrameGrabber if we have a camera
+                    # FrameGrabbers are preloaded at boot for every room with a
+                    # camera, but this fallback handles rooms added at runtime
+                    # or a failed preload pass. Either way, ML detection only
+                    # runs once a SessionPipeline is attached below.
                     if camera_url and room_id not in app.state.frame_grabbers:
                         grabber = FrameGrabber(camera_url)
                         app.state.frame_grabbers[room_id] = grabber
                         logger.info(f"[lifecycle] Created FrameGrabber for room {room_id}")
 
-                    # Start real-time pipeline
                     grabber = app.state.frame_grabbers.get(room_id)
                     if grabber:
                         # Self-heal FAISS before starting pipeline
@@ -379,22 +487,6 @@ async def lifespan(app: FastAPI):
                         if not faiss_manager.user_map:
                             faiss_manager.rebuild_user_map_from_db()
 
-                        # If a preview pipeline is running for this schedule
-                        # (admin was watching it out-of-window), stop it before
-                        # starting the full one so they don't fight over the
-                        # same stream.
-                        existing_preview = app.state.preview_pipelines.pop(sid, None)
-                        if existing_preview is not None:
-                            try:
-                                await existing_preview.stop()
-                                logger.info(
-                                    "[lifecycle] Replaced preview with full pipeline for %s", sid
-                                )
-                            except Exception:
-                                logger.exception(
-                                    "[lifecycle] Failed to stop preview pipeline for %s", sid
-                                )
-
                         pipeline = SessionPipeline(
                             schedule_id=sid,
                             grabber=grabber,
@@ -404,8 +496,81 @@ async def lifespan(app: FastAPI):
                         await pipeline.start()
                         app.state.session_pipelines[sid] = pipeline
                         logger.info(f"[lifecycle] Started pipeline for {subject_code} ({sid})")
+
+                        # System Activity event so the admin can see the
+                        # ML pipeline coming online in the timeline.
+                        # Fire-and-forget — never breaks the lifecycle loop.
+                        try:
+                            from app.services.activity_service import (
+                                EventSeverity,
+                                EventType,
+                                emit_system_event,
+                            )
+
+                            db = SessionLocal()
+                            try:
+                                emit_system_event(
+                                    db,
+                                    event_type=EventType.PIPELINE_STARTED,
+                                    summary=(
+                                        f"Pipeline started for {subject_code}"
+                                    ),
+                                    severity=EventSeverity.SUCCESS,
+                                    schedule_id=str(sid),
+                                    room_id=str(room_id),
+                                    payload={
+                                        "subject_code": subject_code,
+                                        "schedule_id": str(sid),
+                                        "room_id": str(room_id),
+                                    },
+                                    autocommit=True,
+                                )
+                            finally:
+                                db.close()
+                        except Exception:
+                            logger.warning(
+                                "[lifecycle] PIPELINE_STARTED emit failed",
+                                exc_info=True,
+                            )
                     else:
                         logger.warning(f"[lifecycle] No camera for {subject_code}, session started without pipeline")
+                        # Treat "session started but pipeline missing" as a
+                        # WARN system event — the operator should know the
+                        # camera was unavailable when the schedule fired.
+                        try:
+                            from app.services.activity_service import (
+                                EventSeverity,
+                                EventType,
+                                emit_system_event,
+                            )
+
+                            db = SessionLocal()
+                            try:
+                                emit_system_event(
+                                    db,
+                                    event_type=EventType.CAMERA_OFFLINE,
+                                    summary=(
+                                        f"No camera available for {subject_code} — "
+                                        f"session started without ML pipeline"
+                                    ),
+                                    severity=EventSeverity.WARN,
+                                    schedule_id=str(sid),
+                                    room_id=str(room_id),
+                                    payload={
+                                        "subject_code": subject_code,
+                                        "schedule_id": str(sid),
+                                        "room_id": str(room_id),
+                                        "reason": "no_camera_endpoint_or_grabber",
+                                    },
+                                    autocommit=True,
+                                )
+                            finally:
+                                db.close()
+                        except Exception:
+                            logger.warning(
+                                "[lifecycle] CAMERA_OFFLINE emit failed",
+                                exc_info=True,
+                            )
 
                     # Send session-start notifications (fire-and-forget)
                     try:
@@ -468,6 +633,41 @@ async def lifespan(app: FastAPI):
                         await pipeline.stop()
                         logger.info(f"[lifecycle] Stopped pipeline for {subject_code}")
 
+                        # System Activity event mirroring PIPELINE_STARTED so
+                        # the admin sees the full lifecycle on the timeline.
+                        try:
+                            from app.services.activity_service import (
+                                EventSeverity,
+                                EventType,
+                                emit_system_event,
+                            )
+
+                            db = SessionLocal()
+                            try:
+                                emit_system_event(
+                                    db,
+                                    event_type=EventType.PIPELINE_STOPPED,
+                                    summary=(
+                                        f"Pipeline stopped for {subject_code}"
+                                    ),
+                                    severity=EventSeverity.INFO,
+                                    schedule_id=str(sid),
+                                    room_id=str(room_id) if room_id else None,
+                                    payload={
+                                        "subject_code": subject_code,
+                                        "schedule_id": str(sid),
+                                        "room_id": str(room_id) if room_id else None,
+                                    },
+                                    autocommit=True,
+                                )
+                            finally:
+                                db.close()
+                        except Exception:
+                            logger.warning(
+                                "[lifecycle] PIPELINE_STOPPED emit failed",
+                                exc_info=True,
+                            )
+
                     # End legacy session
                     db = SessionLocal()
                     try:
@@ -477,26 +677,11 @@ async def lifespan(app: FastAPI):
                         db.close()
                     logger.info(f"[lifecycle] Ended session for {subject_code} ({sid})")
 
-                    # Stop FrameGrabber — but only if no other active pipeline
-                    # is still using the same room's grabber. This is the
-                    # "seamless handoff" guard: back-to-back rolling sessions
-                    # in the same classroom previously killed the grabber out
-                    # from under the next pipeline, starving it of frames and
-                    # leaving the UI stuck on "Detecting…".
-                    frame_grabbers = app.state.frame_grabbers
-                    still_used = any(
-                        getattr(p, "room_id", None) == room_id
-                        for p in app.state.session_pipelines.values()
-                    )
-                    if still_used:
-                        logger.info(
-                            f"[lifecycle] Keeping FrameGrabber for room {room_id} alive — "
-                            f"next session already streaming"
-                        )
-                    elif room_id in frame_grabbers:
-                        frame_grabbers[room_id].stop()
-                        del frame_grabbers[room_id]
-                        logger.info(f"[lifecycle] Stopped FrameGrabber for room {room_id}")
+                    # FrameGrabbers stay alive for the lifetime of the process —
+                    # the grabber + RTSP reader were preloaded at boot so the
+                    # next session in this room transitions cleanly without a
+                    # cold-start gap. Only the SessionPipeline (the ML attach)
+                    # gets torn down here.
 
                     # Send session-end notifications (fire-and-forget)
                     try:
@@ -659,36 +844,26 @@ async def lifespan(app: FastAPI):
     # On-demand pipeline startup (called from WebSocket handler)
     # ===================================================================
 
-    # Preview pipelines: lightweight, schedule-scoped SessionPipelines running
-    # in preview_mode (no attendance side-effects). Keyed by schedule_id. These
-    # exist ONLY while a WebSocket viewer is watching a schedule outside its
-    # current time window, so they're torn down on the last viewer's disconnect
-    # (see websocket.py's attendance_websocket.finally block).
-    app.state.preview_pipelines = {}  # schedule_id -> SessionPipeline (preview_mode=True)
-
     async def ensure_pipeline_running(schedule_id: str) -> bool:
-        """Start pipeline for a schedule if it should be active but isn't running.
+        """Start the full session pipeline if the schedule's window is open.
 
-        Called on WebSocket connect so faculty see bounding boxes immediately
-        instead of waiting up to 30s for the next scheduler tick.
+        Strict session-gated policy: ML detection + recognition only run while
+        a real session is active. Out-of-window WebSocket viewers see raw WHEP
+        video with no overlays — no preview pipeline is spawned.
 
-        Behaviour:
-          1. If a full session pipeline is already running → return True.
-          2. If the schedule is in its active window → start a full pipeline
-             (creates attendance records, fires events).
-          3. Otherwise → start a PREVIEW pipeline (detection + tracking + WS
-             broadcast only, no DB writes) so the admin still sees bounding
-             boxes on the live feed.
-
-        Returns True if any pipeline (full or preview) is running for the
-        schedule after this call.
+        Called on WebSocket connect to short-circuit the up-to-15s wait for the
+        next ``session_lifecycle_check`` tick. Returns True iff a full pipeline
+        is running for the schedule when this call returns.
         """
         # No-op when ML + frame grabbers are disabled (VPS thin profile).
-        # WebSocket routes themselves are also disabled in that profile, so
-        # this function shouldn't even be called — the guard is a belt-and-
-        # braces against wiring mistakes.
         if not (settings.ENABLE_ML and settings.ENABLE_FRAME_GRABBERS):
             return False
+
+        # Already running?
+        if schedule_id in app.state.session_pipelines:
+            pipeline = app.state.session_pipelines[schedule_id]
+            if pipeline.is_running:
+                return True
 
         from datetime import datetime
 
@@ -697,20 +872,6 @@ async def lifespan(app: FastAPI):
         from app.services.frame_grabber import FrameGrabber
         from app.services.realtime_pipeline import SessionPipeline
 
-        # Already running a full pipeline?
-        if schedule_id in app.state.session_pipelines:
-            pipeline = app.state.session_pipelines[schedule_id]
-            if pipeline.is_running:
-                return True
-
-        # Already running a preview pipeline?
-        if schedule_id in app.state.preview_pipelines:
-            pipeline = app.state.preview_pipelines[schedule_id]
-            if pipeline.is_running:
-                return True
-
-        # Gather schedule + room info. Determine whether the schedule is in
-        # its active window right now — this decides full vs preview mode.
         def _gather_info():
             db = SessionLocal()
             try:
@@ -731,14 +892,14 @@ async def lifespan(app: FastAPI):
                     and schedule.start_time <= current_time <= schedule.end_time
                 )
                 already_ended = PresenceService.was_session_ended_today(schedule_id)
-                should_start_full = in_window and not already_ended
+                should_start = in_window and not already_ended
 
                 return {
                     "sid": schedule_id,
                     "room_id": room_id,
                     "camera_url": camera_url,
                     "subject_code": schedule.subject_code,
-                    "should_start_full": should_start_full,
+                    "should_start": should_start,
                 }
             finally:
                 db.close()
@@ -749,14 +910,13 @@ async def lifespan(app: FastAPI):
             logger.exception("[on-demand] Failed to gather info for schedule %s", schedule_id)
             return False
 
-        if info is None:
+        if info is None or not info["should_start"]:
             return False
 
         sid = info["sid"]
         room_id = info["room_id"]
         camera_url = info["camera_url"]
         subject_code = info["subject_code"]
-        should_start_full = info["should_start_full"]
 
         if not camera_url:
             logger.warning("[on-demand] No camera for %s (%s)", subject_code, sid)
@@ -772,108 +932,37 @@ async def lifespan(app: FastAPI):
             if not faiss_manager.user_map:
                 faiss_manager.rebuild_user_map_from_db()
 
-            # Share FrameGrabbers across full + preview pipelines for the
-            # same room — opening one RTSP reader is enough for the whole
-            # stack (admin preview + attendance session both feed off it).
+            # FrameGrabbers are preloaded at boot; this fallback handles a
+            # room added at runtime or a failed preload.
             if room_id not in app.state.frame_grabbers:
                 app.state.frame_grabbers[room_id] = FrameGrabber(camera_url)
                 logger.info("[on-demand] Created FrameGrabber for room %s", room_id)
             grabber = app.state.frame_grabbers[room_id]
 
-            if should_start_full:
-                # Start legacy session record first (so presence service has
-                # something to bind to when the pipeline calls start_session).
-                db = SessionLocal()
-                try:
-                    presence_svc = PresenceService(db)
-                    await presence_svc.start_session(sid)
-                finally:
-                    db.close()
+            db = SessionLocal()
+            try:
+                presence_svc = PresenceService(db)
+                await presence_svc.start_session(sid)
+            finally:
+                db.close()
 
-                # Swap any running preview for a full pipeline.
-                existing_preview = app.state.preview_pipelines.pop(sid, None)
-                if existing_preview is not None:
-                    try:
-                        await existing_preview.stop()
-                        logger.info("[on-demand] Replaced preview with full pipeline for %s", sid)
-                    except Exception:
-                        logger.exception(
-                            "[on-demand] Failed to stop preview pipeline for %s", sid
-                        )
-
-                pipeline = SessionPipeline(
-                    schedule_id=sid,
-                    grabber=grabber,
-                    db_factory=SessionLocal,
-                    room_id=room_id,
-                    preview_mode=False,
-                )
-                await pipeline.start()
-                app.state.session_pipelines[sid] = pipeline
-                logger.info("[on-demand] Started FULL pipeline for %s (%s)", subject_code, sid)
-                return True
-
-            # Out-of-window admin viewer → preview pipeline only. Skips the
-            # presence service, no attendance records, no session_start
-            # notifications. Bounding boxes appear on the WS feed immediately.
-            preview = SessionPipeline(
+            pipeline = SessionPipeline(
                 schedule_id=sid,
                 grabber=grabber,
                 db_factory=SessionLocal,
                 room_id=room_id,
-                preview_mode=True,
             )
-            await preview.start()
-            app.state.preview_pipelines[sid] = preview
-            logger.info("[on-demand] Started PREVIEW pipeline for %s (%s)", subject_code, sid)
+            await pipeline.start()
+            app.state.session_pipelines[sid] = pipeline
+            logger.info("[on-demand] Started pipeline for %s (%s)", subject_code, sid)
             return True
 
         except Exception:
             logger.exception("[on-demand] Failed to start pipeline for %s", schedule_id)
             return False
 
-    async def stop_preview_pipeline(schedule_id: str) -> bool:
-        """Tear down a preview pipeline when the last WS viewer leaves.
-
-        Called from websocket.py when `remove_attendance_client` drops the
-        last client for a schedule. Leaves full pipelines untouched — those
-        are owned by the lifecycle scheduler. Also tears down the room's
-        FrameGrabber if nothing else is using it (no full or preview pipeline
-        referencing the same room).
-        """
-        preview = app.state.preview_pipelines.pop(schedule_id, None)
-        if preview is None:
-            return False
-
-        room_id = preview.room_id
-
-        try:
-            await preview.stop()
-        except Exception:
-            logger.exception("[on-demand] Failed to stop preview pipeline for %s", schedule_id)
-
-        # Reap the FrameGrabber if no other pipeline (full or preview) in the
-        # same room still needs it. Prevents keeping RTSP reader slots open
-        # for a camera nobody's watching.
-        if room_id and room_id in app.state.frame_grabbers:
-            still_used = any(
-                getattr(p, "room_id", None) == room_id
-                for p in list(app.state.session_pipelines.values())
-                + list(app.state.preview_pipelines.values())
-            )
-            if not still_used:
-                try:
-                    app.state.frame_grabbers[room_id].stop()
-                finally:
-                    app.state.frame_grabbers.pop(room_id, None)
-                logger.info("[on-demand] Reaped idle FrameGrabber for room %s", room_id)
-
-        logger.info("[on-demand] Stopped PREVIEW pipeline for schedule %s", schedule_id)
-        return True
-
     # Expose to other modules via app.state
     app.state.ensure_pipeline_running = ensure_pipeline_running
-    app.state.stop_preview_pipeline = stop_preview_pipeline
 
     # ===================================================================
     # YIELD — application serves requests
@@ -901,7 +990,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to stop scheduler: {e}")
 
-    # Stop all SessionPipelines (full + preview)
+    # Stop all SessionPipelines
     if hasattr(app.state, "session_pipelines"):
         for sid, pipeline in list(app.state.session_pipelines.items()):
             try:
@@ -910,15 +999,6 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.error(f"Failed to stop pipeline for schedule {sid}: {e}")
         app.state.session_pipelines.clear()
-
-    if hasattr(app.state, "preview_pipelines"):
-        for sid, pipeline in list(app.state.preview_pipelines.items()):
-            try:
-                await pipeline.stop()
-                logger.info(f"Preview pipeline stopped for schedule {sid}")
-            except Exception as e:
-                logger.error(f"Failed to stop preview pipeline for schedule {sid}: {e}")
-        app.state.preview_pipelines.clear()
 
     # Stop all FrameGrabbers
     if hasattr(app.state, "frame_grabbers"):

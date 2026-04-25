@@ -108,17 +108,37 @@ export default function ScheduleLivePage() {
     return deriveStreamKey(room.camera_endpoint, room.name)
   }, [schedule, room])
 
-  // The admin display pulls the camera SUB stream (e.g. `eb226-sub`), not the
-  // MAIN stream that the ML pipeline decodes. Two reasons:
-  //   1. The browser viewport is ~1280-wide — 2560×1440 is wasted bytes and
-  //      decode cycles.
-  //   2. Sharing the main stream between mediamtx → browser WHEP and
-  //      mediamtx → api-gateway frame_grabber caused the WebRTC jitter
-  //      buffer to drift over long sessions, making the feed feel laggy.
+  // The admin display pulls the camera SUB stream (e.g. `eb226-sub`), not
+  // the MAIN stream that the ML pipeline decodes. Reasons:
+  //   1. The browser viewport is ~1280-wide — 2304×1296 is wasted bytes
+  //      and decode cycles even on Apple-Silicon hardware decoders.
+  //   2. CRITICAL: the api-gateway's FrameGrabber is always-on for every
+  //      camera-equipped room (per the 2026-04-25 always-on-grabbers
+  //      change in app/main.py). It holds a permanent RTSP reader on the
+  //      main path from boot. If the browser also reads main via WHEP,
+  //      mediamtx must fan the same publisher out to two readers
+  //      simultaneously — empirically this causes WebRTC jitter-buffer
+  //      drift and intermittent black screens during ICE renegotiation
+  //      when the two readers' keyframe waits collide.
+  //   3. Sub gives the browser its own independent path (the cam-relay
+  //      supervisor publishes both profiles), so admin display and ML
+  //      pipeline don't compete.
   // Sub paths are provisioned by scripts/iams-cam-relay.sh + the
   // `~^.+-sub$` path in deploy/mediamtx.onprem.yml.
+  //
+  // We tried main-as-default on 2026-04-25 to get sharper images for the
+  // thesis demo — it produced the dual-reader contention described above.
+  // Don't re-enable without first solving the contention (separate
+  // ffmpeg fanout to a `-display` path, or HLS for admin instead of WHEP).
   const displayStreamKey = useMemo(() => {
     return streamKey ? `${streamKey}-sub` : null
+  }, [streamKey])
+
+  // Main stream becomes the auto-fallback if sub isn't publishing
+  // (e.g. cam-relay supervisor restarted the sub ffmpeg). Better to
+  // show heavyweight video than a black box.
+  const fallbackStreamKey = useMemo(() => {
+    return streamKey ?? null
   }, [streamKey])
 
   usePageTitle(
@@ -133,7 +153,16 @@ export default function ScheduleLivePage() {
     return () => setBreadcrumbLabel(null)
   }, [setBreadcrumbLabel, schedule?.subject_code])
 
-  const { isConnected, latestFrame, latestSummary, latestSessionEvent, recognitionEvents } = useAttendanceWs(scheduleId)
+  const {
+    isConnected,
+    latestFrame,
+    latestSummary,
+    latestSessionEvent,
+    recognitionEvents,
+    latencyStats,
+    downloadLatencyCsv,
+    clearLatencySamples,
+  } = useAttendanceWs(scheduleId)
 
   const playerRef = useRef<WhepPlayerHandle>(null)
   const [videoSize, setVideoSize] = useState<{ width: number; height: number } | null>(null)
@@ -380,7 +409,7 @@ export default function ScheduleLivePage() {
               <WhepPlayer
                 ref={playerRef}
                 streamKey={displayStreamKey ?? streamKey}
-                fallbackStreamKey={streamKey ?? undefined}
+                fallbackStreamKey={fallbackStreamKey ?? undefined}
                 className="h-full w-full"
                 onVideoSize={(w, h) => setVideoSize({ width: w, height: h })}
                 onActivePathChange={handleActivePathChange}
@@ -432,6 +461,46 @@ export default function ScheduleLivePage() {
                         {(latestFrame.other_ms ?? 0).toFixed(0)} ms
                       </span>
                     )}
+                    {/*
+                      End-to-end latency probe (thesis Objective 2). Each
+                      frame_update with detected_at_ms produces a sample
+                      (Date.now() - detected_at_ms) — the wall-clock
+                      delay from FrameGrabber drain to this hook
+                      receiving the WS message. p50/p95 are recomputed
+                      every 500 ms in the hook to keep this strip cheap.
+                      Download dumps the rolling buffer (≤5000 samples)
+                      to CSV for the thesis appendix.
+                    */}
+                    {latencyStats && (
+                      <span
+                        className="font-mono opacity-80"
+                        title="End-to-end: backend frame-grab → admin WS message receive (Date.now() − detected_at_ms)"
+                      >
+                        E2E p50:{latencyStats.p50Ms.toFixed(0)} p95:
+                        {latencyStats.p95Ms.toFixed(0)} (n=
+                        {latencyStats.count})
+                      </span>
+                    )}
+                    <span className="ml-auto flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={downloadLatencyCsv}
+                        disabled={!latencyStats || latencyStats.count === 0}
+                        className="rounded border px-2 py-0.5 font-mono text-[11px] hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                        title="Download every collected latency sample as CSV"
+                      >
+                        Download latency CSV
+                      </button>
+                      <button
+                        type="button"
+                        onClick={clearLatencySamples}
+                        disabled={!latencyStats || latencyStats.count === 0}
+                        className="rounded border px-2 py-0.5 font-mono text-[11px] hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                        title="Reset the rolling latency buffer for a fresh measurement run"
+                      >
+                        Reset
+                      </button>
+                    </span>
                   </>
                 )}
                 {activeStream?.isFallback && (
@@ -462,11 +531,9 @@ export default function ScheduleLivePage() {
       <TrackDetailSheet
         latestFrame={latestFrame}
         latestSummary={latestSummary}
-        videoElement={playerRef.current?.videoElement ?? null}
-        videoSize={videoSize}
         isConnected={isConnected}
-        activeStreamIsFallback={activeStream?.isFallback ?? false}
         scheduleId={scheduleId ?? ''}
+        recognitionEvents={recognitionEvents}
       />
 
       {sessionActive === false && (

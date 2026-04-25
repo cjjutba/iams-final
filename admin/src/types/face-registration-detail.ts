@@ -6,6 +6,8 @@
  * in Phase 2 for angles whose `image_storage_key` is set.
  */
 
+import type { RecognitionEventMessage } from '@/hooks/use-attendance-ws'
+
 export interface FaceAngleMetadata {
   id: string
   angle_label: string | null
@@ -45,7 +47,17 @@ export type LiveCropSource =
       isStale: boolean
       isSubStream: boolean
     }
-  | { kind: 'server'; scheduleId: string; userId: string | null }
+  | {
+      kind: 'server'
+      scheduleId: string
+      userId: string | null
+      // WS recognition-event stream (newest-first). The server hook
+      // surfaces the most recent event matching (schedule, user) and uses
+      // its `crop_urls.live` URL — every FAISS decision the ML pipeline
+      // emits is a fresh crop, so the panel ticks forward in real time
+      // instead of getting stuck on the first captured frame.
+      recognitionEvents: RecognitionEventMessage[]
+    }
 
 /** Uniform shape returned by the facade `useLiveCrop(source)` hook. */
 export interface LiveCropResult {

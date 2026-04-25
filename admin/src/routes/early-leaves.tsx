@@ -98,7 +98,7 @@ const columns: ColumnDef<EarlyLeaveAlert>[] = [
     header: 'Returned',
     cell: ({ row }) =>
       row.original.returned ? (
-        <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
+        <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
           {row.original.returned_at ? safeFormat(row.original.returned_at, 'h:mm a') : 'Yes'}
         </Badge>
       ) : (

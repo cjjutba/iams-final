@@ -73,6 +73,7 @@ import com.iams.app.ui.theme.IAMSThemeTokens
 import com.iams.app.ui.theme.LateFg
 import com.iams.app.ui.theme.PresentBorder
 import com.iams.app.ui.theme.PresentFg
+import com.iams.app.ui.theme.StatusLateFg
 import com.iams.app.ui.theme.Primary
 import com.iams.app.ui.theme.Secondary
 import com.iams.app.ui.theme.TextPrimary
@@ -756,7 +757,7 @@ private fun TodayScheduleCard(
                         )
                         val (label, color) = when (todayStatus.lowercase()) {
                             "present" -> "Present" to PresentFg
-                            "late" -> "Late" to LateFg
+                            "late" -> "Late" to StatusLateFg
                             "absent" -> "Absent" to AbsentFg
                             else -> todayStatus to TextSecondary
                         }

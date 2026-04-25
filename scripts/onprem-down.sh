@@ -19,6 +19,11 @@ else
   docker compose -f "${COMPOSE_FILE}" down
 fi
 
+# Stop the host-side ML sidecar too. Idempotent — no-op if it wasn't running.
+echo ""
+echo "Stopping ML sidecar..."
+"${REPO_ROOT}/scripts/stop-ml-sidecar.sh" || true
+
 echo ""
 echo "IAMS on-prem stack stopped."
 echo "To start again: ./scripts/onprem-up.sh"

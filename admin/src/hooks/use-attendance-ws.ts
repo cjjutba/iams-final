@@ -53,6 +53,15 @@ export interface FrameUpdateMessage {
    * because pre-Step-3 backends do not emit it.
    */
   rtp_pts_90k?: number
+  /**
+   * Backend wall-clock (epoch ms) recorded the instant the FrameGrabber
+   * read this frame off FFmpeg stdout. Used by the end-to-end latency
+   * probe to compute (Date.now() - detected_at_ms) as a proxy for the
+   * "detection time → mobile/admin display time" delay required by
+   * thesis Objective 2 (≤5 s SLA). Optional — older backends that
+   * pre-date the probe simply omit it and the probe stays empty.
+   */
+  detected_at_ms?: number
 }
 
 export interface AttendanceStatusEntry {
@@ -193,6 +202,63 @@ function mergeRecognitionEvents(
   return merged
 }
 
+/**
+ * Rolling end-to-end latency telemetry for thesis Objective 2.
+ *
+ * Each frame_update that carries ``detected_at_ms`` produces one
+ * ``LatencySample`` (a wall-clock pair: when the backend grabbed the
+ * frame, and when the client received the WS message). The hook keeps
+ * up to ``LATENCY_BUFFER_MAX`` samples in a ref-backed ring buffer
+ * (samples are NOT React state — pushing a sample never re-renders),
+ * and recomputes aggregate stats on a 500 ms interval so the live HUD
+ * stays cheap.
+ */
+export interface LatencySample {
+  /** Backend wall-clock at frame grab (epoch ms). */
+  detectedAtMs: number
+  /** Client wall-clock at WS message arrival (epoch ms, ``Date.now()``). */
+  receivedAtMs: number
+  /** Convenience: ``receivedAtMs - detectedAtMs``. May be negative under clock skew. */
+  latencyMs: number
+  /** Backend frame_sequence for cross-referencing, when broadcast. */
+  frameSequence?: number
+}
+
+export interface LatencyStats {
+  /** Total samples collected this session (post-clear). */
+  count: number
+  /** ``min`` / ``p50`` / ``p95`` / ``p99`` / ``max`` over the rolling buffer. */
+  minMs: number
+  p50Ms: number
+  p95Ms: number
+  p99Ms: number
+  maxMs: number
+  /** Most recent single sample, useful for the HUD live readout. */
+  lastMs: number
+}
+
+const LATENCY_BUFFER_MAX = 5000
+const LATENCY_STATS_INTERVAL_MS = 500
+
+function computeLatencyStats(buffer: LatencySample[]): LatencyStats | null {
+  if (buffer.length === 0) return null
+  const sorted = buffer.map((s) => s.latencyMs).sort((a, b) => a - b)
+  const pct = (p: number) => {
+    if (sorted.length === 0) return 0
+    const idx = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))
+    return sorted[idx]
+  }
+  return {
+    count: buffer.length,
+    minMs: sorted[0],
+    p50Ms: pct(50),
+    p95Ms: pct(95),
+    p99Ms: pct(99),
+    maxMs: sorted[sorted.length - 1],
+    lastMs: buffer[buffer.length - 1].latencyMs,
+  }
+}
+
 interface UseAttendanceWsReturn {
   isConnected: boolean
   latestFrame: FrameUpdateMessage | null
@@ -200,6 +266,12 @@ interface UseAttendanceWsReturn {
   latestSessionEvent: SessionEventMessage | null
   /** Newest-first bounded log of recognition events seen this session. */
   recognitionEvents: RecognitionEventMessage[]
+  /** Rolling end-to-end latency stats over the last ``LATENCY_BUFFER_MAX`` frame_updates. */
+  latencyStats: LatencyStats | null
+  /** Trigger a CSV download of every collected sample for the thesis appendix. */
+  downloadLatencyCsv: () => void
+  /** Clear the in-memory latency buffer (e.g. between measurement runs). */
+  clearLatencySamples: () => void
 }
 
 /**
@@ -224,7 +296,13 @@ export function useAttendanceWs(scheduleId: string | null | undefined): UseAtten
   const [latestSummary, setLatestSummary] = useState<AttendanceSummaryMessage | null>(null)
   const [latestSessionEvent, setLatestSessionEvent] = useState<SessionEventMessage | null>(null)
   const [recognitionEvents, setRecognitionEvents] = useState<RecognitionEventMessage[]>([])
+  const [latencyStats, setLatencyStats] = useState<LatencyStats | null>(null)
 
+  // Latency samples live in a ref, not state — pushing a sample on every
+  // frame_update would trigger a re-render at backend FPS, which torches
+  // the live overlay. The 500 ms timer below recomputes stats from the
+  // ref and pushes ONE state update.
+  const latencyBufferRef = useRef<LatencySample[]>([])
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const attemptsRef = useRef(0)
@@ -302,7 +380,28 @@ export function useAttendanceWs(scheduleId: string | null | undefined): UseAtten
         try {
           const data = JSON.parse(event.data) as AttendanceWsMessage
           if (data.type === 'frame_update') {
-            setLatestFrame(data as FrameUpdateMessage)
+            const frame = data as FrameUpdateMessage
+            setLatestFrame(frame)
+            // End-to-end latency probe (thesis Objective 2). Stamp
+            // ``Date.now()`` immediately on receive — before any React
+            // bookkeeping — so the sample reflects wire + parse time and
+            // nothing else. Buffer is a ref to avoid re-rendering at
+            // backend FPS; aggregate stats are recomputed by the 500 ms
+            // interval below.
+            if (frame.detected_at_ms != null) {
+              const now = Date.now()
+              const sample: LatencySample = {
+                detectedAtMs: frame.detected_at_ms,
+                receivedAtMs: now,
+                latencyMs: now - frame.detected_at_ms,
+                frameSequence: frame.frame_sequence,
+              }
+              const buf = latencyBufferRef.current
+              buf.push(sample)
+              if (buf.length > LATENCY_BUFFER_MAX) {
+                buf.splice(0, buf.length - LATENCY_BUFFER_MAX)
+              }
+            }
           } else if (data.type === 'attendance_summary') {
             setLatestSummary(data as AttendanceSummaryMessage)
           } else if (data.event === 'session_start' || data.event === 'session_end') {
@@ -365,11 +464,84 @@ export function useAttendanceWs(scheduleId: string | null | undefined): UseAtten
     }
   }, [scheduleId])
 
+  // Reset the rolling latency buffer per schedule so navigating between
+  // two live pages doesn't blend their samples. The buffer is a ref so
+  // we have to clear it imperatively; the stats state is cleared too so
+  // the HUD doesn't briefly show stale numbers. Same intentional setState-
+  // in-effect pattern the schedule-scoped resets above use — only fires
+  // on actual scheduleId change, so the cascading-render concern does
+  // not apply.
+  useEffect(() => {
+    latencyBufferRef.current = []
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setLatencyStats(null)
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [scheduleId])
+
+  // Recompute aggregate latency stats on a fixed cadence. Cheaper than
+  // rebuilding on every frame_update, and the HUD doesn't need
+  // sub-500ms freshness to show a defensible p50 / p95.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const buf = latencyBufferRef.current
+      const next = computeLatencyStats(buf)
+      setLatencyStats(next)
+    }, LATENCY_STATS_INTERVAL_MS)
+    return () => window.clearInterval(id)
+  }, [])
+
+  // Generate a thesis-ready CSV of every sample in the rolling buffer.
+  // Header columns are explicit so the file is self-describing without
+  // having to ship a schema doc alongside it. ``frame_sequence`` is
+  // optional in the source so we emit blank when absent.
+  const downloadLatencyCsv = () => {
+    const buf = latencyBufferRef.current
+    if (buf.length === 0) {
+      console.warn('[attendance-ws] no latency samples to download')
+      return
+    }
+    const lines: string[] = [
+      'index,detected_at_ms,received_at_ms,latency_ms,frame_sequence',
+    ]
+    buf.forEach((s, i) => {
+      lines.push(
+        [
+          i,
+          s.detectedAtMs,
+          s.receivedAtMs,
+          s.latencyMs,
+          s.frameSequence ?? '',
+        ].join(','),
+      )
+    })
+    const blob = new Blob([lines.join('\n') + '\n'], {
+      type: 'text/csv;charset=utf-8',
+    })
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const filename = `iams-latency-${scheduleId ?? 'unknown'}-${stamp}.csv`
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  const clearLatencySamples = () => {
+    latencyBufferRef.current = []
+    setLatencyStats(null)
+  }
+
   return {
     isConnected,
     latestFrame,
     latestSummary,
     latestSessionEvent,
     recognitionEvents,
+    latencyStats,
+    downloadLatencyCsv,
+    clearLatencySamples,
   }
 }

@@ -72,6 +72,16 @@ def get_active_session_count() -> int:
     return len(_active_sessions)
 
 
+def list_active_session_ids() -> set[str]:
+    """Return a snapshot of the schedule IDs with running pipelines.
+
+    Used by the schedules list endpoint to derive each row's runtime_status
+    in a single pass. Returns a new set so callers can iterate without
+    worrying about concurrent register/unregister calls.
+    """
+    return set(_active_sessions.keys())
+
+
 def update_session_scan_count(schedule_id: str):
     """
     Increment scan count for a session

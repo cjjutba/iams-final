@@ -22,12 +22,12 @@ interface Props {
   onOpenChange: (open: boolean) => void
 }
 
-const statusVariant: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
-  present: 'default',
-  late: 'secondary',
-  absent: 'destructive',
-  excused: 'outline',
-  early_leave: 'destructive',
+const statusBadgeClass: Record<string, string> = {
+  present: 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100',
+  late: 'bg-slate-200 text-slate-700 hover:bg-slate-200',
+  absent: 'bg-red-100 text-red-800 hover:bg-red-100',
+  excused: 'bg-blue-100 text-blue-800 hover:bg-blue-100',
+  early_leave: 'bg-amber-100 text-amber-800 hover:bg-amber-100',
 }
 
 /**
@@ -56,7 +56,7 @@ export function AttendanceDetailSheet({
           <SheetTitle className="flex items-center gap-2">
             {record ? (record.subject_code ?? 'Attendance') : 'Attendance'}
             {record && (
-              <Badge variant={statusVariant[record.status] ?? 'outline'}>
+              <Badge className={statusBadgeClass[record.status] ?? ''}>
                 {formatStatus(record.status)}
               </Badge>
             )}
@@ -103,8 +103,11 @@ function MetadataGrid({ record }: { record: AttendanceRecord }) {
   const dateLabel = record.check_in_time
     ? format(new Date(record.check_in_time), 'EEEE, MMM d yyyy')
     : '—'
-  const timeLabel = record.check_in_time
+  const checkInLabel = record.check_in_time
     ? format(new Date(record.check_in_time), 'h:mm a')
+    : '—'
+  const checkOutLabel = record.check_out_time
+    ? format(new Date(record.check_out_time), 'h:mm a')
     : '—'
   const score =
     typeof (record as { presence_score?: number }).presence_score === 'number'
@@ -114,12 +117,13 @@ function MetadataGrid({ record }: { record: AttendanceRecord }) {
   return (
     <div className="grid grid-cols-2 gap-4">
       <InfoItem icon={Calendar} label="Date" value={dateLabel} />
-      <InfoItem icon={Clock} label="Check-in" value={timeLabel} />
       <InfoItem
         icon={MapPin}
         label="Subject"
         value={record.subject_code ?? '—'}
       />
+      <InfoItem icon={Clock} label="Check-in" value={checkInLabel} />
+      <InfoItem icon={Clock} label="Check-out" value={checkOutLabel} />
       <InfoItem icon={Clock} label="Presence score" value={score} />
     </div>
   )

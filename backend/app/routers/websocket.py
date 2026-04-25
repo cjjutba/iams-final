@@ -423,16 +423,6 @@ async def attendance_websocket(websocket: WebSocket, schedule_id: str):
     finally:
         ws_manager.remove_attendance_client(schedule_id, websocket)
 
-        # If this was the last viewer AND a preview pipeline is running for
-        # this schedule, tear it down so we don't leak ML CPU time watching
-        # a stream nobody's looking at. Full (attendance) pipelines are owned
-        # by the lifecycle scheduler and stay up until session end.
-        remaining = ws_manager._attendance_clients.get(schedule_id, set())
-        if not remaining:
-            stop_preview_fn = getattr(websocket.app.state, "stop_preview_pipeline", None)
-            if stop_preview_fn is not None:
-                asyncio.ensure_future(stop_preview_fn(schedule_id))
-
 
 @router.websocket("/alerts/{user_id}")
 async def alerts_websocket(websocket: WebSocket, user_id: str):

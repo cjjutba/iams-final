@@ -7,6 +7,18 @@ export interface RoomInfo {
   capacity: number | null
 }
 
+// Backend-derived presentation status — distinct from `is_active` (which
+// is the enable/archive flag). Computed per-row in the schedules router
+// from session_manager + the current clock so the schedules list can
+// show "Live now / Upcoming / Ended / Scheduled / Disabled" instead of
+// always reading "Active".
+export type ScheduleRuntimeStatus =
+  | 'live'
+  | 'upcoming'
+  | 'ended'
+  | 'scheduled'
+  | 'disabled'
+
 export interface ScheduleResponse {
   id: string
   subject_code: string
@@ -21,6 +33,7 @@ export interface ScheduleResponse {
   faculty_id: string
   room_id: string
   is_active: boolean
+  runtime_status: ScheduleRuntimeStatus
   faculty: UserResponse | null
   room: RoomInfo | null
   faculty_name?: string | null

@@ -118,11 +118,21 @@ class NotificationWebSocketClient(
 
             override fun onMessage(ws: WebSocket, text: String) {
                 if (text == "pong") return
+                // Stamp the receive time *before* JSON parsing so the
+                // latency sample reflects only wire delay, not parser
+                // jitter. Backend stamps ``server_time_ms`` on
+                // attendance_event payloads (epoch ms at broadcast); the
+                // delta is the wire+render side of the
+                // detection-to-display SLA in thesis Objective 2.
+                val receivedAtMs = System.currentTimeMillis()
                 try {
                     val json = JsonParser.parseString(text).asJsonObject
                     when (val type = json.get("type")?.asString) {
                         "notification" -> dispatchNotification(text)
-                        "attendance_event" -> dispatchAttendanceEvent(json)
+                        "attendance_event" -> {
+                            recordE2ELatency(json, receivedAtMs)
+                            dispatchAttendanceEvent(json)
+                        }
                         null -> Log.w(TAG, "Message without type field ignored")
                         else -> Log.d(TAG, "Ignoring unknown envelope type=$type")
                     }
@@ -145,6 +155,37 @@ class NotificationWebSocketClient(
                 scheduleReconnect()
             }
         })
+    }
+
+    /**
+     * Log end-to-end latency for the student-facing attendance_event
+     * channel (thesis Objective 2). The backend stamps
+     * ``server_time_ms`` (epoch ms) at the broadcast moment, and we
+     * stamp ``receivedAtMs`` the instant onMessage fires. The delta
+     * captures wire + parse + dispatch overhead — i.e. everything that
+     * happens between the server committing the event and the client
+     * being ready to render it. The full pipeline (frame grab → event)
+     * is measured separately on the admin per-frame channel.
+     *
+     * Output goes to logcat with a stable ``[E2E]`` tag so a thesis
+     * data-collection script can grep ``adb logcat`` and dump samples
+     * to CSV without needing on-device persistence.
+     */
+    private fun recordE2ELatency(json: JsonObject, receivedAtMs: Long) {
+        val serverMsElement = json.get("server_time_ms") ?: return
+        if (serverMsElement.isJsonNull) return
+        val serverMs = serverMsElement.asLong
+        val deltaMs = receivedAtMs - serverMs
+        val event = json.get("event")?.takeUnless { it.isJsonNull }?.asString ?: "unknown"
+        val schedule = json.get("schedule_id")?.takeUnless { it.isJsonNull }?.asString?.take(8) ?: "-"
+        // Tag-prefixed so `adb logcat -s NotificationWS:* | grep '\[E2E\]'`
+        // produces a clean sample stream. The CSV columns mirror the
+        // admin probe so both sides plot on the same axes.
+        Log.i(
+            TAG,
+            "[E2E] event=$event schedule=$schedule server_time_ms=$serverMs " +
+                "received_at_ms=$receivedAtMs latency_ms=$deltaMs",
+        )
     }
 
     private fun dispatchNotification(raw: String) {

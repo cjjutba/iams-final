@@ -1,6 +1,11 @@
 import { useClientSideCrop } from './use-client-side-crop'
 import { useServerSideCrop } from './use-server-side-crop'
+import type { RecognitionEventMessage } from './use-attendance-ws'
 import type { LiveCropResult, LiveCropSource } from '@/types'
+
+// Stable empty array reference for the `kind: 'client'` branch — keeps
+// `useServerSideCrop`'s memo deps stable so React doesn't loop.
+const EMPTY_EVENTS: RecognitionEventMessage[] = []
 
 /**
  * Facade hook that dispatches to the right crop source.
@@ -26,6 +31,7 @@ export function useLiveCrop(source: LiveCropSource): LiveCropResult {
   const serverResult = useServerSideCrop({
     scheduleId: !isClient ? source.scheduleId : '',
     userId: !isClient ? source.userId : null,
+    recognitionEvents: !isClient ? source.recognitionEvents : EMPTY_EVENTS,
   })
 
   return isClient ? clientResult : serverResult

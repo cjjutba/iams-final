@@ -372,6 +372,17 @@ private fun HistoryRecordCard(
                     color = TextSecondary
                 )
             }
+
+            // Check-out time — populated when the session has ended (or for
+            // early-leavers, the moment they were last detected).
+            if (!record.checkOutTime.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(spacing.xs))
+                Text(
+                    text = "Check-out: ${formatCheckInForDisplay(record.checkOutTime)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextSecondary
+                )
+            }
         }
     }
 }
@@ -465,6 +476,13 @@ private fun HistoryRecordDetailSheet(
                 DetailRow(
                     label = "Check-in",
                     value = formatCheckInForDisplay(record.checkInTime),
+                )
+            }
+
+            if (!record.checkOutTime.isNullOrBlank()) {
+                DetailRow(
+                    label = "Check-out",
+                    value = formatCheckInForDisplay(record.checkOutTime),
                 )
             }
 

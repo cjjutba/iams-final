@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Link } from 'react-router-dom'
 import { useRecognitionSummary, useRecognitions } from '@/hooks/use-queries'
 import { useAuthedImage } from '@/hooks/use-authed-image'
+import { formatTimestamp, formatFullDatetime } from '@/lib/format-time'
 import type { RecognitionEvent } from '@/types'
 
 interface Props {
@@ -187,7 +188,14 @@ function PeakEvidence({ event }: { event: RecognitionEvent }) {
         />
       </div>
       <div className="mt-3 text-xs text-muted-foreground">
-        {event.camera_id} · {format(new Date(event.created_at), 'MMM d, h:mm:ss a')} · model {event.model_name}
+        {event.camera_id} ·{' '}
+        <span
+          className="font-mono tabular-nums"
+          title={formatFullDatetime(event.created_at)}
+        >
+          {formatTimestamp(event.created_at)}
+        </span>{' '}
+        · model {event.model_name}
       </div>
       <ScoreBar score={similarity} threshold={threshold} matched={event.matched} />
     </div>

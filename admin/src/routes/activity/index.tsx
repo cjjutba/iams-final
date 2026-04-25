@@ -1,15 +1,39 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { format } from 'date-fns'
+
+import { formatTimestamp, formatFullDatetime } from '@/lib/format-time'
 import {
   Activity,
+  AlertCircle,
+  AlertTriangle,
+  BookmarkMinus,
+  BookmarkPlus,
+  CalendarCog,
+  CalendarPlus,
+  CalendarX,
+  Camera,
+  CameraOff,
+  CheckCircle2,
   Download,
   FileJson,
+  LogIn,
+  LogOut,
   Pause,
   Play,
+  PlayCircle,
+  ScanFace,
+  Settings as SettingsIcon,
+  ShieldCheck,
+  StopCircle,
+  UserCheck,
+  UserCog,
+  UserMinus,
+  UserPlus,
   Wifi,
   WifiOff,
   X,
+  XCircle,
+  type LucideIcon,
 } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
@@ -21,6 +45,8 @@ import { Separator } from '@/components/ui/separator'
 import { useActivityEvents, useActivityStats } from '@/hooks/use-queries'
 import { useActivityWs } from '@/hooks/use-activity-ws'
 import { usePageTitle } from '@/hooks/use-page-title'
+import { cn } from '@/lib/utils'
+import { formatEventSummary } from '@/lib/activity-format'
 import { activityService } from '@/services/activity.service'
 import type {
   ActivityCategory,
@@ -48,20 +74,105 @@ const CATEGORIES: ActivityCategory[] = [
 ]
 const SEVERITIES: ActivitySeverity[] = ['info', 'success', 'warn', 'error']
 
+// Severity-first color vocabulary.
+// ─────────────────────────────────
+// Severity drives BOTH the icon stroke and the event-type chip so the
+// page reads as a health scan: emerald = good, neutral = background
+// traffic, amber = look here, red = act now. Category lives only in the
+// leading dot inside the chip — a quiet secondary signal for grouping
+// without competing with severity for the eye.
+//
+// Why this trumps category-driven coloring: on a busy stream the most
+// frequent rows are RECOGNITION_MISS (info) interleaved with
+// RECOGNITION_MATCH (success). Coloring by category made both teal and
+// indistinguishable on a fast scroll. Coloring by severity makes the
+// match rows pop emerald against the neutral miss rows so "students
+// being recognized" is visible from across the room.
 const severityRailClass: Record<ActivitySeverity, string> = {
-  info: 'bg-muted-foreground/30',
+  info: 'bg-muted-foreground/25',
   success: 'bg-emerald-500',
   warn: 'bg-amber-500',
   error: 'bg-red-500',
 }
 
-const categoryBadgeClass: Record<ActivityCategory, string> = {
-  attendance: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200',
-  session: 'bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-200',
-  recognition:
-    'bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-200',
-  system: 'bg-slate-100 text-slate-800 dark:bg-slate-900 dark:text-slate-200',
-  audit: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-200',
+// Faint full-row wash on warn/error only. Info/success stay clean so the
+// stream doesn't feel like a Christmas tree; the wash is reserved for
+// "you should look at this" rows.
+const severityTintClass: Record<ActivitySeverity, string> = {
+  info: '',
+  success: '',
+  warn: 'bg-amber-50/50 dark:bg-amber-950/20',
+  error: 'bg-red-50/60 dark:bg-red-950/25',
+}
+
+// Icon stroke color — mirrors the chip so the row reads as one gestalt.
+const severityIconClass: Record<ActivitySeverity, string> = {
+  info: 'text-muted-foreground',
+  success: 'text-emerald-600 dark:text-emerald-400',
+  warn: 'text-amber-600 dark:text-amber-400',
+  error: 'text-red-600 dark:text-red-400',
+}
+
+// Event-type chip background + text. The chip is the most visible token
+// on a row, so this is where the severity signal pays off most.
+const severityChipClass: Record<ActivitySeverity, string> = {
+  info: 'bg-muted/60 text-foreground/75 border-border',
+  success:
+    'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-200 dark:border-emerald-900',
+  warn: 'bg-amber-50 text-amber-900 border-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-900',
+  error:
+    'bg-red-50 text-red-900 border-red-200 dark:bg-red-950/40 dark:text-red-200 dark:border-red-900',
+}
+
+// Category dot — kept as a quiet secondary grouping signal inside the
+// chip. The dot remains visible against any severity-tinted chip
+// background because it's a saturated solid against a light tint.
+const categoryDotClass: Record<ActivityCategory, string> = {
+  attendance: 'bg-blue-500',
+  session: 'bg-purple-500',
+  recognition: 'bg-teal-500',
+  system: 'bg-slate-500',
+  audit: 'bg-indigo-500',
+}
+
+// Per-event-type icon. The category accent colors the stroke; the icon
+// shape itself is the at-a-glance identity (UserCheck != ScanFace even
+// though both are "recognition"). Anything not listed falls back to
+// Activity so a new EventType added on the backend keeps rendering.
+const eventTypeIcon: Record<string, LucideIcon> = {
+  // attendance
+  MARKED_PRESENT: CheckCircle2,
+  MARKED_LATE: AlertCircle,
+  MARKED_ABSENT: XCircle,
+  EARLY_LEAVE_FLAGGED: LogOut,
+  EARLY_LEAVE_RETURNED: LogIn,
+  // session + pipeline lifecycle (same shapes; different category)
+  SESSION_STARTED_AUTO: PlayCircle,
+  SESSION_STARTED_MANUAL: PlayCircle,
+  SESSION_ENDED_AUTO: StopCircle,
+  SESSION_ENDED_MANUAL: StopCircle,
+  PIPELINE_STARTED: PlayCircle,
+  PIPELINE_STOPPED: StopCircle,
+  // recognition
+  RECOGNITION_MATCH: UserCheck,
+  RECOGNITION_MISS: ScanFace,
+  // system / camera health
+  CAMERA_OFFLINE: CameraOff,
+  CAMERA_ONLINE: Camera,
+  // audit
+  ADMIN_LOGIN: ShieldCheck,
+  FACULTY_LOGIN: LogIn,
+  STUDENT_LOGIN: LogIn,
+  USER_CREATED: UserPlus,
+  USER_UPDATED: UserCog,
+  USER_DELETED: UserMinus,
+  FACE_REGISTRATION_APPROVED: ShieldCheck,
+  SETTINGS_CHANGED: SettingsIcon,
+  SCHEDULE_CREATED: CalendarPlus,
+  SCHEDULE_UPDATED: CalendarCog,
+  SCHEDULE_DELETED: CalendarX,
+  ENROLLMENT_ADDED: BookmarkPlus,
+  ENROLLMENT_REMOVED: BookmarkMinus,
 }
 
 function isoMinutesAgo(minutes: number): string {
@@ -221,6 +332,20 @@ export default function ActivityPage() {
 
   const visibleEvents = liveEvents.slice(0, MAX_VISIBLE)
   const hiddenInBuffer = liveEvents.length - visibleEvents.length
+
+  // Tally of warn/error in the visible window so the header can surface
+  // them as a one-glance health indicator. This is local to what the
+  // operator can actually see scrolling — not the global stats card,
+  // which already covers the 15-min window.
+  const visibleSeverityCounts = useMemo(() => {
+    let warn = 0
+    let error = 0
+    for (const ev of visibleEvents) {
+      if (ev.severity === 'warn') warn += 1
+      else if (ev.severity === 'error') error += 1
+    }
+    return { warn, error }
+  }, [visibleEvents])
 
   return (
     <div className="space-y-6">
@@ -409,27 +534,52 @@ export default function ActivityPage() {
       </Card>
 
       {/* Live stream */}
-      <Card>
+      <Card className="overflow-hidden">
         <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
             <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
               Event stream
             </CardTitle>
-            <div className="text-xs text-muted-foreground">
-              {liveEvents.length > 0
-                ? `${visibleEvents.length} shown${
-                    hiddenInBuffer > 0 ? ` · ${hiddenInBuffer} older buffered` : ''
-                  }`
-                : isInitialLoading
-                  ? 'Loading…'
-                  : 'No events match the current filters yet.'}
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              {liveEvents.length > 0 ? (
+                <>
+                  {visibleSeverityCounts.error > 0 && (
+                    <span className="inline-flex items-center gap-1 font-medium text-red-700 dark:text-red-300">
+                      <XCircle className="h-3.5 w-3.5" />
+                      {visibleSeverityCounts.error}
+                    </span>
+                  )}
+                  {visibleSeverityCounts.warn > 0 && (
+                    <span className="inline-flex items-center gap-1 font-medium text-amber-700 dark:text-amber-300">
+                      <AlertTriangle className="h-3.5 w-3.5" />
+                      {visibleSeverityCounts.warn}
+                    </span>
+                  )}
+                  <span>
+                    {visibleEvents.length} shown
+                    {hiddenInBuffer > 0 && ` · ${hiddenInBuffer} older buffered`}
+                  </span>
+                </>
+              ) : isInitialLoading ? (
+                'Loading…'
+              ) : (
+                'No events match the current filters yet.'
+              )}
             </div>
           </div>
         </CardHeader>
         <Separator />
         <CardContent className="p-0">
-          <ScrollArea className="h-[calc(100vh-480px)] min-h-[300px]">
-            <div className="divide-y">
+          {/* Height is intentionally generous: when the user has scrolled
+              past the filter card, the EVENT STREAM card sits near the
+              viewport top and we want it to claim almost everything down
+              to the bottom of the screen. The 100vh − 220px reserves
+              just enough for the page header + EVENT STREAM card header
+              + a little breathing room. ``min-h`` keeps the stream
+              usable on shorter laptop displays where viewport math
+              would otherwise produce a tiny box. */}
+          <ScrollArea className="h-[calc(100vh-220px)] min-h-[560px]">
+            <div className="divide-y divide-border/60">
               {visibleEvents.map((ev) => (
                 <EventRow
                   key={ev.event_id}
@@ -438,7 +588,7 @@ export default function ActivityPage() {
                 />
               ))}
               {visibleEvents.length === 0 && !isInitialLoading && (
-                <div className="p-8 text-center text-sm text-muted-foreground">
+                <div className="p-10 text-center text-sm text-muted-foreground">
                   Waiting for events…
                 </div>
               )}
@@ -519,6 +669,23 @@ function Metric({
   )
 }
 
+/**
+ * One row of the live event stream.
+ *
+ * Anatomy (left → right):
+ *   1. Severity rail (4px, full row height) — the at-a-glance "any red?".
+ *   2. Per-event-type icon, colored by category — instant identity
+ *      without reading the chip text.
+ *   3. Metadata chips (timestamp, category-dotted event_type, schedule
+ *      code, subject name).
+ *   4. Summary line (one truncated line, slightly stronger weight than
+ *      the metadata so the eye lands on "what happened" first).
+ *
+ * Background:
+ *   - info / success: transparent at rest, muted hover.
+ *   - warn / error: faint amber/red wash at rest so triage rows stand
+ *     out from the firehose, slightly darker hover.
+ */
 function EventRow({
   event,
   onClick,
@@ -526,36 +693,96 @@ function EventRow({
   event: ActivityEvent
   onClick: () => void
 }) {
+  const Icon = eventTypeIcon[event.event_type] ?? Activity
+  const tint = severityTintClass[event.severity]
+  const iconAccent = severityIconClass[event.severity]
+  const chipClass = severityChipClass[event.severity]
+  const isAlert = event.severity === 'warn' || event.severity === 'error'
+
   return (
     <button
       onClick={onClick}
-      className="w-full text-left flex items-stretch gap-0 hover:bg-muted/50 transition-colors focus:outline-none focus:bg-muted/50"
+      className={cn(
+        'group w-full text-left flex items-stretch gap-0 transition-colors',
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
+        tint,
+        isAlert
+          ? 'hover:bg-muted/40 focus-visible:bg-muted/40'
+          : 'hover:bg-muted/40 focus-visible:bg-muted/40',
+      )}
     >
       {/* Severity rail */}
-      <div className={`w-[3px] ${severityRailClass[event.severity]}`} />
-      <div className="flex-1 px-4 py-2.5 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="font-mono text-[11px] text-muted-foreground shrink-0">
-            {format(new Date(event.created_at), 'HH:mm:ss')}
-          </span>
-          <Badge
-            variant="outline"
-            className={`${categoryBadgeClass[event.category]} text-[10px] uppercase`}
+      <div
+        className={cn(
+          'w-1 shrink-0 transition-colors',
+          severityRailClass[event.severity],
+          // Visual feedback on hover — subtle width-feel by going opaque.
+          'group-hover:opacity-100',
+          event.severity === 'info' && 'group-hover:bg-foreground/30',
+        )}
+        aria-hidden
+      />
+
+      {/* Icon column. Fixed width so chips below align across rows. */}
+      <div className="shrink-0 w-10 flex items-start justify-center pt-3">
+        <Icon
+          className={cn('h-[18px] w-[18px]', iconAccent)}
+          strokeWidth={2.25}
+          aria-hidden
+        />
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 min-w-0 pr-4 py-2.5">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {/* Unified timestamp via @/lib/format-time. Same MMM d HH:mm:ss
+              format used by DetectionHistoryList, RecognitionPanel,
+              MatchEvidence, and the recognition/audit tables — operators
+              can correlate events across views by glancing at the time. */}
+          <span
+            className="font-mono text-[11px] tabular-nums text-muted-foreground shrink-0"
+            title={formatFullDatetime(event.created_at)}
           >
+            {formatTimestamp(event.created_at)}
+          </span>
+
+          {/* Event type chip — severity-tinted background carries the
+              "is this good/neutral/bad?" signal at a glance. The leading
+              category dot is the secondary "what bucket" hint; small on
+              purpose so it doesn't compete with severity. */}
+          <span
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded border px-1.5 py-[1px]',
+              'font-mono text-[10px] font-semibold uppercase tracking-wider',
+              chipClass,
+            )}
+          >
+            <span
+              className={cn(
+                'h-1.5 w-1.5 rounded-full shrink-0',
+                categoryDotClass[event.category],
+              )}
+              aria-hidden
+            />
             {event.event_type}
-          </Badge>
+          </span>
+
           {event.subject_schedule_subject && (
-            <Badge variant="secondary" className="text-[10px]">
+            <span className="inline-flex items-center rounded border border-dashed border-border px-1.5 py-[1px] font-mono text-[10px] text-muted-foreground">
               {event.subject_schedule_subject}
-            </Badge>
+            </span>
           )}
+
           {event.subject_user_name && (
-            <span className="text-xs text-muted-foreground truncate">
+            <span className="text-xs font-medium text-foreground/80 truncate">
               {event.subject_user_name}
             </span>
           )}
         </div>
-        <p className="text-sm mt-1 truncate">{event.summary}</p>
+
+        <p className="text-sm mt-1 leading-snug text-foreground/90 truncate">
+          {formatEventSummary(event)}
+        </p>
       </div>
     </button>
   )

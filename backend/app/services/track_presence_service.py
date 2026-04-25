@@ -44,6 +44,7 @@ class StudentPresenceState:
     status: AttendanceStatus = AttendanceStatus.ABSENT
     check_in_time: datetime | None = None
     last_seen_time: float | None = None  # monotonic timestamp
+    last_seen_at: datetime | None = None  # wall-clock of last detection (for check_out_time on early-leave)
     total_present_seconds: float = 0.0
     last_presence_start: float | None = None  # monotonic ts when current presence began
     absent_since: float | None = None  # monotonic ts when absence began
@@ -416,6 +417,7 @@ class TrackPresenceService:
                         state.status = new_status
                         state.check_in_time = now_dt
                         state.last_seen_time = now_mono
+                        state.last_seen_at = now_dt
                         state.last_presence_start = now_mono
                         state.absent_since = None
 
@@ -458,11 +460,14 @@ class TrackPresenceService:
                         state.last_presence_start = now_mono
 
                         # Restore attendance record to original status (PRESENT/LATE)
+                        # and clear the stale check_out_time written when we
+                        # flagged early-leave; end_session will re-stamp it.
                         restored_status = state.status
                         self.attendance_repo.update(
                             state.attendance_id,
                             {
                                 "status": restored_status,
+                                "check_out_time": None,
                             },
                         )
 
@@ -508,6 +513,7 @@ class TrackPresenceService:
                             state.last_presence_start = now_mono
 
                     state.last_seen_time = now_mono
+                    state.last_seen_at = datetime.now()
 
                 else:
                     # Student NOT detected
@@ -537,10 +543,14 @@ class TrackPresenceService:
                                     "absent_seconds": absent_seconds,
                                 }
                             )
-                            self.attendance_repo.update(
-                                state.attendance_id,
-                                {"status": AttendanceStatus.EARLY_LEAVE},
-                            )
+                            # Stamp check_out_time with the actual last
+                            # detection so end_session() (which only fills
+                            # null check-outs) doesn't clobber it with the
+                            # session-end timestamp.
+                            update_payload: dict = {"status": AttendanceStatus.EARLY_LEAVE}
+                            if state.last_seen_at is not None:
+                                update_payload["check_out_time"] = state.last_seen_at
+                            self.attendance_repo.update(state.attendance_id, update_payload)
 
                             # Persist EarlyLeaveEvent to DB
                             consecutive_misses = int(absent_seconds / settings.SCAN_INTERVAL_SECONDS)
@@ -554,7 +564,7 @@ class TrackPresenceService:
                             early_leave_event = EarlyLeaveEvent(
                                 attendance_id=_attendance_uuid,
                                 detected_at=datetime.now(),
-                                last_seen_at=(state.check_in_time if state.check_in_time else datetime.now()),
+                                last_seen_at=(state.last_seen_at or state.check_in_time or datetime.now()),
                                 consecutive_misses=max(1, consecutive_misses),
                                 context_severity="auto_detected",
                             )
@@ -648,17 +658,21 @@ class TrackPresenceService:
         # Final flush
         self.flush_presence_logs()
 
-        # Set check-out times
+        # Set check-out times. Skip the check_out_time write when it's
+        # already populated (early-leavers carry their last_seen_at from
+        # flag_early_leave); only PRESENT/LATE students who stayed through
+        # the session get the session-end timestamp here.
         now_dt = datetime.now()
         for state in self._students.values():
-            if state.status != AttendanceStatus.ABSENT:
-                self.attendance_repo.update(
-                    state.attendance_id,
-                    {
-                        "check_out_time": now_dt,
-                        "total_present_seconds": round(state.total_present_seconds, 2),
-                    },
-                )
+            if state.status == AttendanceStatus.ABSENT:
+                continue
+            current = self.attendance_repo.get_by_id(state.attendance_id)
+            update_payload: dict = {
+                "total_present_seconds": round(state.total_present_seconds, 2),
+            }
+            if current is None or current.check_out_time is None:
+                update_payload["check_out_time"] = now_dt
+            self.attendance_repo.update(state.attendance_id, update_payload)
 
         summary = {
             "total_students": len(self._students),

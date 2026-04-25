@@ -39,11 +39,19 @@ _DEFAULT_ACTIVITY_MAP: dict[tuple[str, str], str] = {
     ("update", "user"): "USER_UPDATED",
     ("delete", "user"): "USER_DELETED",
     ("deactivate", "user"): "USER_UPDATED",
+    ("reactivate", "user"): "USER_UPDATED",
     # Face / registration
     ("approve", "face_registration"): "FACE_REGISTRATION_APPROVED",
     # Settings
     ("update", "settings"): "SETTINGS_CHANGED",
     ("update", "system_setting"): "SETTINGS_CHANGED",
+    # Schedule CRUD (added 2026-04-25 — System Activity overhaul)
+    ("create", "schedule"): "SCHEDULE_CREATED",
+    ("update", "schedule"): "SCHEDULE_UPDATED",
+    ("delete", "schedule"): "SCHEDULE_DELETED",
+    # Enrollments (manual via admin)
+    ("create", "enrollment"): "ENROLLMENT_ADDED",
+    ("delete", "enrollment"): "ENROLLMENT_REMOVED",
 }
 
 

@@ -165,6 +165,29 @@ export default function StudentsPage() {
       result = result.filter((s) => tokenMatches(buildStudentHaystack(s), searchQuery))
     }
 
+    // Default sort: surface students who have actually completed app
+    // onboarding so the registry doesn't open on a wall of "PENDING-XXXX"
+    // admin-added rows. Tiers, top → bottom:
+    //   3. App-registered AND face enrolled (fully onboarded — the rows
+    //      that actually participate in attendance)
+    //   2. App-registered, no face yet (joined the app, registration step
+    //      pending)
+    //   1. Not app-registered, somehow has a face row (data anomaly,
+    //      sorted above no-app entries so it surfaces)
+    //   0. Admin-added only, no app account
+    // Within each tier, newest-first by created_at so recent additions
+    // remain visible at the top of their group. Clicking a column header
+    // overrides this — TanStack's sorting state takes precedence once set.
+    const tier = (s: StudentRecordWithStatus) =>
+      (s.is_registered ? 2 : 0) + (s.has_face_registered ? 1 : 0)
+    result = [...result].sort((a, b) => {
+      const ds = tier(b) - tier(a)
+      if (ds !== 0) return ds
+      const at = a.created_at ?? ''
+      const bt = b.created_at ?? ''
+      return bt.localeCompare(at)
+    })
+
     return result
   }, [students, appFilter, faceFilter, statusFilter, searchQuery])
 

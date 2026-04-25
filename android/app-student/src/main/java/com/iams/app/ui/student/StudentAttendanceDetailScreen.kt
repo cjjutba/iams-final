@@ -294,6 +294,39 @@ fun StudentAttendanceDetailScreen(
                         }
                     }
 
+                    // Check-out time card
+                    if (attendance.checkOutTime != null) {
+                        IAMSCard(modifier = Modifier.weight(1f)) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(
+                                    Icons.Outlined.AccessTime,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = TextTertiary
+                                )
+
+                                Spacer(modifier = Modifier.height(spacing.sm))
+
+                                Text(
+                                    text = "Check-out Time",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextTertiary
+                                )
+
+                                Spacer(modifier = Modifier.height(spacing.xs))
+
+                                Text(
+                                    text = formatDisplayTime(attendance.checkOutTime),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+
                     // Presence score card
                     if (attendance.presenceScore != null) {
                         IAMSCard(modifier = Modifier.weight(1f)) {

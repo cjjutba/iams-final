@@ -4,6 +4,47 @@ Append-only log of planning/implementation lessons worth keeping for future sess
 
 ---
 
+## 2026-04-25: Don't put admin WHEP on the same path as the FrameGrabber
+
+Tried switching the admin live page from sub → main for sharper demo footage. Result: black screen with WebRTC negotiation hanging, plus the lag we'd just fixed came right back. Symptom is intermittent — sometimes the connection completed and worked for a few seconds before stalling.
+
+Root cause is multi-reader contention on the same mediamtx path. The api-gateway's `FrameGrabber` is permanent (always-on for every camera-equipped room since the 2026-04-25 always-on-grabbers change). It holds a long-lived RTSP reader on `eb226`. When the browser opens a WHEP session on the same `eb226` path, mediamtx must fan the publisher's frames to two consumers; their keyframe-wait windows can collide and the WebRTC negotiation stalls before the first frame is presented. The original code's comment about "WebRTC jitter buffer drift over long sessions" was understating it — under the always-on-grabber regime the contention shows up immediately, not just over hours.
+
+The architectural fix isn't trivial: you'd need a third mediamtx path (`eb226-display`) fed by an ffmpeg `-c copy` fanout from the cam-relay supervisor, so admin display and ML pipeline read from physically separate paths even though the source is one camera. Until that exists, **the admin display MUST use the sub path**. Don't try to "make main work" with WHEP tuning — the contention is at the publisher fanout layer, not the receiver buffer.
+
+Reverted by restoring `displayStreamKey = ${streamKey}-sub` in [admin/src/routes/schedules/[id]/live.tsx](admin/src/routes/schedules/%5Bid%5D/live.tsx). Kept the `playoutDelayHint=0` + `writeQueueSize=128` lat-cut from the same session — those fixed real lag with sub and remain valid.
+
+---
+
+## 2026-04-25: ML sidecar — native CoreML escape hatch from Docker
+
+Built a native macOS Python sidecar (`backend/ml-sidecar/`) that the api-gateway proxies its realtime SCRFD + ArcFace calls to via `host.docker.internal:8001`. The win is single-line: ONNX Runtime built for Linux ships without `CoreMLExecutionProvider`, so InsightFace inside the Docker container is permanently pinned to CPU even on an M5. Moving inference to a native process gets `["CoreMLExecutionProvider", "CPUExecutionProvider"]` and the Apple Neural Engine starts doing real work.
+
+Key non-obvious details I'd forget without writing them down:
+
+- **Static-shape ONNX is mandatory for CoreML to delegate.** `buffalo_l` ships with dynamic input shapes; ORT's CoreML EP silently falls back to CPU on dynamic graphs. The codebase already had `backend/scripts/export_static_models.py` for this — run it on the host to produce `~/.insightface/models/buffalo_l_static/`. The static pack name is wired through `INSIGHTFACE_STATIC_PACK_NAME` env. Without this step the sidecar boots, the providers list shows CoreML, but actual delegation is silently zero.
+- **The gateway's `app.config.Settings` requires `DATABASE_URL`.** The sidecar reuses `InsightFaceModel` from `app.services.ml`, which transitively imports `app.config`. Setting `os.environ.setdefault("DATABASE_URL", "sqlite:///...")` *before* the import is enough to satisfy pydantic-settings without dragging in a real DB. Same trick disables Redis/background-jobs flags so the sidecar doesn't try to start a Redis subscriber.
+- **`from X import Y` holds a stale reference.** Tried to monkey-patch `app.services.ml.insightface_model.insightface_model` at runtime; `realtime_pipeline.py` had already `from ... import insightface_model` so its local name still pointed at the old object. Solution: `app.services.ml.inference.get_realtime_model()` selector, called inside `SessionPipeline.start()` instead of importing the module symbol at file load.
+- **Failover policy: degrade, don't refuse.** If `ML_SIDECAR_URL` is set but `/health` fails at gateway boot, the lifespan binds the in-process model anyway and logs a warning. A wedged sidecar shouldn't take the API down — same pattern as cam-relay being optional for non-camera operations.
+- **macOS 26 TCC + launchd is a known trap.** Same reason `iams-cam-relay.sh` uses nohup+disown instead of a LaunchAgent: ffmpeg/uvicorn spawned by launchctl get sandboxed in ways that block local-network reads. The sidecar follows the same pattern.
+- **Reusing `InsightFaceModel` in the sidecar saved ~200 lines of code.** Tempting to write a "minimal" sidecar from scratch with raw onnxruntime calls. Don't. The model class already handles thread-count tuning, static-pack resolution, provider introspection, and warmup. The sidecar wrapping is ~250 lines because the heavy lifting is already in `app.services.ml.insightface_model`.
+- **JPEG transport is the right pragmatic choice.** Considered raw mmap, multipart, gRPC. JPEG-encode (~5-10ms) + base64 + JSON is ~10ms total per request, dwarfed by the speedup. Optimize later if profiling actually flags this. Don't pre-optimize.
+- **Two endpoints (`/detect` and `/embed`), not one combined.** The realtime tracker's tri-state recognition relies on calling SCRFD every frame but ArcFace only on tracks needing identity work. A combined endpoint forced ArcFace on every detected face every frame, defeating the optimization. Two endpoints preserve the existing ML-budget design.
+
+---
+
+## 2026-04-25: Strict session-gated ML + boot-time warmup
+
+The user observed multi-minute cold starts on the admin live page when no session was running, then asked us to remove preview pipelines entirely. Killing preview without addressing cold-start would have just shifted the lag from "viewer connect" to "session start" — equally bad for the demo. The fix is the policy + the warmup together, not either alone.
+
+- **Cold-start has multiple sources, not one.** RTSP I-frame wait (~5-15 s), FFmpeg first-frame buffering, ONNX Runtime SCRFD JIT (~3-5 s on M5 at det_size=960), and FAISS hydration each contribute. Skipping any one of them leaves a visible lag. The warmup pass at boot is one synthetic `detect()` call on a noise frame — that's enough to JIT SCRFD because ORT optimises per-graph on first call.
+- **Always-on FrameGrabbers cost ~10-15 % idle CPU on the M5 for two H.264 main streams** (decode-and-discard). That's the price of "session start feels instant." Cheaper than running ML 24/7, and dramatically nicer than a 30-90 s cold-start gap right at the moment a real class begins.
+- **Strict session gating ≠ "ML always off".** ML still runs full-tilt during real sessions. The gating just means there's no hidden preview pipeline burning cycles when nobody's actually attending class. The live page still works out-of-window — it just shows raw WHEP video without overlays, which is exactly what the user asked for.
+- **`preview_mode` was load-bearing in three files.** main.py created/destroyed preview pipelines, presence.py's manual Start Session swapped a preview for a full pipeline, websocket.py's disconnect handler reaped previews. Removing it cleanly required tracking down all three. The compile-test catches the syntax errors but not the missing call sites — `grep` for the symbol across the whole repo before declaring it dead.
+- **Don't let `if not self._preview_mode:` rot into the codebase.** SessionPipeline accumulated 6 of those guards before we removed preview_mode. Each one was correct in isolation, but together they made the file harder to scan. When a feature flag is killed, kill the guards in the same change — leaving them as "dead but working" makes future readers ask "is preview ever set true?" and waste time chasing a ghost.
+
+---
+
 ## 2026-04-17: Hybrid detection rollout — master lessons
 
 Ten parallel Claude Code sessions delivered the ML Kit + backend matcher architecture. What the experiment taught us:

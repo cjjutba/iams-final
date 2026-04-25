@@ -43,10 +43,17 @@ val AbsentBg = Color(0xFFFEE2E2)
 val AbsentFg = Color(0xFF991B1B)
 val AbsentBorder = Color(0xFFFCA5A5)
 
-// ── Status: Early Leave ─────────────────────────────────────────────────
-val EarlyLeaveBg = Color(0xFFFED7AA)
-val EarlyLeaveFg = Color(0xFF9A3412)
-val EarlyLeaveBorder = Color(0xFFFDBA74)
+// ── Status: Early Leave (amber/yellow — matches admin portal) ───────────
+val EarlyLeaveBg = Color(0xFFFEF3C7)
+val EarlyLeaveFg = Color(0xFF92400E)
+val EarlyLeaveBorder = Color(0xFFFCD34D)
+
+// ── Attendance Status: Late (slate/gray — overrides amber LateBg/Fg used
+//    elsewhere as a generic warning hue). Kept distinct so toasts and the
+//    password-strength meter continue to read as warning yellow.
+val StatusLateBg = Color(0xFFF1F5F9)
+val StatusLateFg = Color(0xFF334155)
+val StatusLateBorder = Color(0xFFCBD5E1)
 
 // ── Status: Excused ─────────────────────────────────────────────────────
 val ExcusedBg = Color(0xFFDBEAFE)

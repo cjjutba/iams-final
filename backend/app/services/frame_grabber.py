@@ -98,6 +98,12 @@ class FrameGrabber:
         self._lock = threading.Lock()
         self._latest_frame: np.ndarray | None = None
         self._frame_time: float = 0.0
+        # Wall-clock (epoch ms) for the most recent frame, captured at the
+        # exact moment the FFmpeg drain thread read it off stdout. Used by
+        # the latency probe to compute "detection time → client display
+        # time" against client wall clocks. ``_frame_time`` above is
+        # ``time.monotonic()`` and not comparable across processes.
+        self._latest_capture_ms: int | None = None
         # PTS of the most recent frame returned to the consumer. Captured
         # under the same lock as ``_latest_frame`` so ``grab_with_pts()``
         # is atomic. ``None`` means "no PTS observed yet" (filter not on,
@@ -134,19 +140,24 @@ class FrameGrabber:
 
         Backwards-compatible accessor — used by face.py, calibrate scripts,
         and the test suite. The realtime pipeline uses ``grab_with_pts()``
-        to also receive the upstream RTP PTS.
+        to also receive the upstream RTP PTS and capture timestamp.
         """
         result = self.grab_with_pts()
         return None if result is None else result[0]
 
-    def grab_with_pts(self) -> tuple[np.ndarray, int | None] | None:
-        """Return ``(frame, rtp_pts_90k)`` for the latest frame, or None.
+    def grab_with_pts(self) -> tuple[np.ndarray, int | None, int | None] | None:
+        """Return ``(frame, rtp_pts_90k, captured_at_ms)`` or None.
 
         ``rtp_pts_90k`` is the source-stream PTS (in the input timebase,
         which for H.264 RTSP is the canonical 90 kHz RTP clock). It is
         ``None`` when ``capture_rtp_pts=False`` or when showinfo has not
         yet emitted a PTS for this frame (rare, but possible during
         warmup or a stderr-thread restart).
+
+        ``captured_at_ms`` is the backend wall-clock epoch-ms recorded the
+        instant the FFmpeg drain thread received this frame's bytes.
+        Consumed by the end-to-end latency probe (admin portal + Android
+        clients log ``client_now_ms - captured_at_ms`` per message).
 
         Stale-frame handling matches ``grab()``: a frame older than
         ``stale_timeout`` triggers a reconnect and returns None.
@@ -164,14 +175,74 @@ class FrameGrabber:
                 )
                 self._latest_frame = None
                 self._latest_pts = None
+                self._latest_capture_ms = None
                 self._reconnect()
                 return None
 
-            return self._latest_frame, self._latest_pts
+            return self._latest_frame, self._latest_pts, self._latest_capture_ms
 
     def is_alive(self) -> bool:
         """Return True if the drain thread is running."""
         return self._thread.is_alive() and not self._stop_event.is_set()
+
+    # ------------------------------------------------------------------
+    # System Activity emit (camera health)
+    # ------------------------------------------------------------------
+
+    def _short_url(self) -> str:
+        """Return the trailing path component of the RTSP URL for log
+        readability (e.g. ``rtsp://host:8554/eb226`` -> ``eb226``)."""
+        try:
+            tail = self._url.rstrip("/").rsplit("/", 1)[-1]
+            return tail or self._url
+        except Exception:
+            return self._url
+
+    def _emit_camera_health(
+        self,
+        *,
+        event_type: str,
+        severity: str,
+        summary: str,
+    ) -> None:
+        """Best-effort System Activity emit for camera offline/online edges.
+
+        Runs from the FFmpeg drain thread (not an asyncio loop), so we
+        rely on ``emit_system_event`` with ``autocommit=True`` and a
+        fresh ``SessionLocal`` — and we wrap the whole thing in a broad
+        try/except because nothing the FrameGrabber does should ever
+        crash on a logging path. The activity_service's WS broadcast
+        will also no-op gracefully when no event loop is running here.
+        """
+        try:
+            # Local imports — avoid pulling FastAPI/SQLAlchemy at
+            # FrameGrabber import time (the unit tests build grabbers
+            # without a configured DB).
+            from app.database import SessionLocal
+            from app.services.activity_service import emit_system_event
+
+            db = SessionLocal()
+            try:
+                emit_system_event(
+                    db,
+                    event_type=event_type,
+                    summary=summary,
+                    severity=severity,
+                    camera_id=self._short_url(),
+                    payload={
+                        "rtsp_url": self._url,
+                        "consecutive_failures": self._consecutive_failures,
+                    },
+                    autocommit=True,
+                )
+            finally:
+                db.close()
+        except Exception:
+            logger.debug(
+                "FrameGrabber: failed to emit %s system event",
+                event_type,
+                exc_info=True,
+            )
 
     def stop(self) -> None:
         """Signal the drain thread to exit and release FFmpeg."""
@@ -328,6 +399,15 @@ class FrameGrabber:
                             self._url,
                         )
                         self._publisher_offline_logged = True
+                        # Surface camera health on the System Activity feed.
+                        # Best-effort — never raise from a daemon thread.
+                        self._emit_camera_health(
+                            event_type="CAMERA_OFFLINE",
+                            severity="warn",
+                            summary=(
+                                f"Camera publisher offline: {self._short_url()}"
+                            ),
+                        )
                     continue
                 logger.warning("FFmpeg [%s]: %s", self._url, msg)
         except Exception:
@@ -403,11 +483,21 @@ class FrameGrabber:
 
             # Successful read — reset failure state and announce recovery
             # if we were previously in an offline state.
-            if self._consecutive_failures > 0 or self._publisher_offline_logged:
+            recovered = self._consecutive_failures > 0 or self._publisher_offline_logged
+            if recovered:
                 logger.info(
                     "Publisher online for %s (recovered after %d failed attempts)",
                     self._url,
                     self._consecutive_failures,
+                )
+                # Mirror the recovery on the System Activity feed so the
+                # admin sees both edges of the outage on the timeline.
+                self._emit_camera_health(
+                    event_type="CAMERA_ONLINE",
+                    severity="success",
+                    summary=(
+                        f"Camera publisher online: {self._short_url()}"
+                    ),
                 )
             self._consecutive_failures = 0
             self._publisher_offline_logged = False
@@ -430,3 +520,7 @@ class FrameGrabber:
                 self._latest_frame = frame
                 self._latest_pts = pts
                 self._frame_time = time.monotonic()
+                # Wall-clock stamp paired atomically with the frame so the
+                # end-to-end latency probe can compute display delay
+                # against any client's clock without RTP-timestamp magic.
+                self._latest_capture_ms = int(time.time() * 1000)

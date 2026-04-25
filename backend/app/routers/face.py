@@ -11,7 +11,7 @@ import io
 import time
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -23,6 +23,8 @@ from app.repositories.face_repository import FaceRepository
 from app.schemas.face import (
     CameraDiagnosticFace,
     CameraDiagnosticResponse,
+    CctvEnrollRequest,
+    CctvEnrollResponse,
     EdgeProcessRequest,
     EdgeProcessResponse,
     EdgeProcessResponseData,
@@ -208,13 +210,16 @@ async def get_registration_detail(
 
     embeddings = face_repo.get_embeddings_by_registration(str(registration.id))
 
-    # Only surface real phone-captured angles to the admin sheet. The `sim_*`
-    # CCTV-degraded derivatives are FAISS-only and have no image to render.
-    real_angles = {"center", "left", "right", "up", "down"}
+    # Surface real phone-captured angles AND CCTV-captured enrolment crops
+    # to the admin sheet. The `sim_*` CCTV-degraded derivatives written by
+    # the registration-time augmentation step are FAISS-only and have no
+    # image to render — those stay filtered out.
+    from app.utils.face_image_storage import _is_allowed_angle_label
+
     storage = FaceImageStorage()
     angles: list[FaceAngleMetadataResponse] = []
     for emb in embeddings:
-        if emb.angle_label not in real_angles:
+        if not emb.angle_label or not _is_allowed_angle_label(emb.angle_label):
             continue
         image_url: str | None = None
         if emb.image_storage_key and storage.exists(emb.image_storage_key):
@@ -263,8 +268,9 @@ async def get_registration_image(
       (distinct from 404 — useful signal for backfill / storage drift).
     - Cache-Control is 5 min, `private` — files never change once written.
     """
-    real_angles = {"center", "left", "right", "up", "down"}
-    if angle_label not in real_angles:
+    from app.utils.face_image_storage import _is_allowed_angle_label
+
+    if not _is_allowed_angle_label(angle_label):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown angle")
 
     face_repo = FaceRepository(db)
@@ -806,6 +812,106 @@ async def deregister_face(user_id: str, current_user: User = Depends(get_current
     await face_service.deregister_face(user_id)
 
     return {"success": True, "message": "Face deregistered successfully"}
+
+
+@router.post(
+    "/cctv-enroll/{user_id}",
+    response_model=CctvEnrollResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def cctv_enroll_user(
+    user_id: str,
+    body: CctvEnrollRequest,
+    request: Request,
+    _admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """**Admin-only: CCTV-side enrolment for an existing student**
+
+    Captures `num_captures` (default 5) high-quality face crops from the
+    chosen room's live CCTV stream and adds them as canonical embeddings
+    on top of the student's existing phone-captured registration. Closes
+    the phone→CCTV cross-domain gap that otherwise causes mass false
+    matches near the recognition threshold.
+
+    Operator workflow:
+      1. Stand the target student alone in front of the chosen camera so
+         exactly one face is visible.
+      2. POST this endpoint. The backend grabs frames at 1 s intervals,
+         skipping frames that have 0 or >1 faces or that are too small /
+         blurry.
+      3. Inspect the response — `self_similarity_to_phone_mean` should be
+         > 0.30 (0.50+ is good). If it isn't, the wrong student was in
+         frame.
+
+    Reuses the always-on FrameGrabber for the room when one exists; falls
+    back to spinning up a dedicated grabber if not (e.g. when the room's
+    grabber wasn't preloaded at boot).
+    """
+    face_service = FaceService(db)
+
+    # Reuse the always-on FrameGrabber for this room if one exists in app
+    # state (preloaded at boot — see backend/app/main.py). Falling back to
+    # a dedicated grabber works but spawns a second ffmpeg subprocess and
+    # competes with the always-on grabber for the publisher's frames.
+    provided_grabber = None
+    try:
+        room_id_str: str | None = None
+        # body.room_code_or_id may be either a Room.code or Room.id
+        from app.models.room import Room
+        try:
+            import uuid as _u
+            r = db.query(Room).filter(Room.id == _u.UUID(body.room_code_or_id)).first()
+        except (ValueError, AttributeError):
+            r = None
+        if r is None:
+            r = db.query(Room).filter(Room.code == body.room_code_or_id).first()
+        if r is not None:
+            room_id_str = str(r.id)
+
+        grabbers = getattr(request.app.state, "frame_grabbers", None) or {}
+        if room_id_str and room_id_str in grabbers:
+            provided_grabber = grabbers[room_id_str]
+            logger.info(
+                "cctv_enroll: reusing always-on FrameGrabber for room %s", room_id_str
+            )
+    except Exception:
+        # Defensive — if anything goes wrong with the reuse path, fall
+        # through to spinning a dedicated grabber inside the service.
+        logger.debug("cctv_enroll: grabber reuse lookup failed", exc_info=True)
+        provided_grabber = None
+
+    try:
+        result = await face_service.cctv_enroll(
+            user_id=user_id,
+            room_code_or_id=body.room_code_or_id,
+            num_captures=body.num_captures,
+            capture_interval=body.capture_interval_s,
+            min_face_size_px=body.min_face_size_px,
+            min_det_score=body.min_det_score,
+            provided_grabber=provided_grabber,
+        )
+    except Exception as exc:
+        logger.error("cctv_enroll failed for user %s: %s", user_id, exc)
+        raise
+
+    # Audit — high-impact admin action that mutates the FAISS index.
+    try:
+        log_audit(
+            db,
+            admin_id=_admin.id,
+            action="face.cctv_enroll",
+            target_type="user",
+            target_id=user_id,
+            details=(
+                f"room={body.room_code_or_id} added={result['added']} "
+                f"sim_to_phone_mean={result['self_similarity_to_phone_mean']:.3f}"
+            ),
+        )
+    except Exception:
+        logger.warning("log_audit failed for face.cctv_enroll", exc_info=True)
+
+    return CctvEnrollResponse(success=True, user_id=user_id, **result)
 
 
 @router.get("/camera-diagnostic", response_model=CameraDiagnosticResponse)

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Pause, Play, ScanSearch } from 'lucide-react'
-import { formatDistanceToNow } from 'date-fns'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -12,6 +11,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useAuthedImage } from '@/hooks/use-authed-image'
+import { formatTimestamp, formatFullDatetime } from '@/lib/format-time'
 import type { RecognitionEventMessage } from '@/hooks/use-attendance-ws'
 
 type Filter = 'all' | 'matched' | 'missed' | 'ambiguous'
@@ -159,7 +159,6 @@ function RecognitionRow({ event }: { event: RecognitionEventMessage }) {
   const similarity = Math.max(0, Math.min(1, event.similarity))
   const threshold = Math.max(0, Math.min(1, event.threshold_used))
   const when = new Date(event.server_time_ms || Date.now())
-  const relative = formatDistanceToNow(when, { addSuffix: true })
   const name = event.student_name ?? (event.matched ? 'Unknown' : null)
 
   return (
@@ -180,8 +179,8 @@ function RecognitionRow({ event }: { event: RecognitionEventMessage }) {
           <span className="truncate">
             track #{event.track_id} · {event.camera_id}
           </span>
-          <span title={when.toLocaleString()} className="font-mono">
-            sim {(similarity * 100).toFixed(1)}% · {relative}
+          <span title={formatFullDatetime(when)} className="font-mono tabular-nums">
+            sim {(similarity * 100).toFixed(1)}% · {formatTimestamp(when)}
           </span>
         </div>
       </div>
