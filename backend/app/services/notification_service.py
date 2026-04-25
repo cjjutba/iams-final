@@ -11,6 +11,7 @@ coordinates three delivery channels:
 
 import logging
 from datetime import datetime, timezone
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -32,6 +33,7 @@ async def notify(
     reference_id: str | None = None,
     reference_type: str | None = None,
     toast_type: str = "info",
+    severity: str = "info",
     send_email: bool = False,
     email_template: str | None = None,
     email_context: dict | None = None,
@@ -51,6 +53,10 @@ async def notify(
         reference_id: Optional FK to a related entity (attendance, event, …).
         reference_type: Describes what ``reference_id`` points to.
         toast_type: Toast severity — ``success``, ``warning``, ``error``, or ``info``.
+        severity: Persisted severity tag stored on the Notification row and
+            included in the WebSocket payload. One of
+            ``info``/``success``/``warn``/``error``/``critical``. Drives the
+            unread-critical badge query and frontend styling.
         send_email: Whether this trigger can produce an email.
         email_template: Template name for ``EmailService`` (e.g. ``check_in``).
         email_context: Template variables dict.
@@ -99,9 +105,11 @@ async def notify(
                 "title": title,
                 "message": message,
                 "type": notification_type,
+                "severity": severity,
                 "reference_id": reference_id,
                 "reference_type": reference_type,
-            }
+            },
+            severity=severity,
         )
     except Exception:
         logger.exception(f"Failed to persist notification for user {user_id}")
@@ -115,6 +123,7 @@ async def notify(
             {
                 "type": "notification",
                 "toast_type": toast_type,
+                "severity": severity,
                 "notification_type": notification_type,
                 "title": title,
                 "message": message,
@@ -164,3 +173,164 @@ async def notify_many(
     """
     for uid in user_ids:
         await notify(db, uid, title, message, notification_type, **kwargs)
+
+
+# ── Role / Schedule fan-out helpers (Phase 1) ─────────────────────────────
+#
+# These are role-aware convenience wrappers around ``notify()`` so callers
+# don't have to query for recipients themselves. They are deliberately
+# tolerant of the empty case (return 0 instead of raising) and forward
+# all kwargs to ``notify()`` so per-call severity / dedup / preference_key
+# semantics stay consistent.
+
+
+async def notify_admins(
+    db: Session,
+    title: str,
+    message: str,
+    notification_type: str,
+    *,
+    exclude_user_id: UUID | None = None,
+    **kwargs,
+) -> int:
+    """Fan out a notification to every active admin user.
+
+    Returns the number of recipients notified. Forwards all additional
+    keyword arguments (severity, preference_key, send_email,
+    dedup_window_seconds, etc.) to :func:`notify`.
+
+    Safe when zero admins exist — returns 0 without raising.
+    """
+    from app.models.user import User, UserRole
+
+    admins = (
+        db.query(User)
+        .filter(User.role == UserRole.ADMIN, User.is_active.is_(True))
+        .all()
+    )
+
+    sent = 0
+    for admin in admins:
+        if exclude_user_id is not None and admin.id == exclude_user_id:
+            continue
+        await notify(
+            db,
+            str(admin.id),
+            title,
+            message,
+            notification_type,
+            **kwargs,
+        )
+        sent += 1
+    return sent
+
+
+async def notify_role(
+    db: Session,
+    role,
+    title: str,
+    message: str,
+    notification_type: str,
+    *,
+    exclude_user_id: UUID | None = None,
+    **kwargs,
+) -> int:
+    """Fan out a notification to every active user with the given ``role``.
+
+    ``role`` is a :class:`~app.models.user.UserRole` enum value.
+
+    Returns the number of recipients notified. Safe when no matching
+    users exist — returns 0 without raising.
+    """
+    from app.models.user import User
+
+    users = (
+        db.query(User)
+        .filter(User.role == role, User.is_active.is_(True))
+        .all()
+    )
+
+    sent = 0
+    for user in users:
+        if exclude_user_id is not None and user.id == exclude_user_id:
+            continue
+        await notify(
+            db,
+            str(user.id),
+            title,
+            message,
+            notification_type,
+            **kwargs,
+        )
+        sent += 1
+    return sent
+
+
+async def notify_schedule_participants(
+    db: Session,
+    schedule_id: UUID,
+    title: str,
+    message: str,
+    notification_type: str,
+    *,
+    include_admins: bool = False,
+    exclude_user_id: UUID | None = None,
+    **kwargs,
+) -> int:
+    """Fan out a notification to all participants of a schedule.
+
+    Recipients:
+        * the faculty assigned to the schedule
+        * all students enrolled in the schedule
+        * optionally every active admin (when ``include_admins=True``)
+
+    Returns the number of recipients notified. Safe when the schedule
+    is missing or has no enrollments — returns 0 without raising.
+    """
+    from app.models.enrollment import Enrollment
+    from app.models.schedule import Schedule
+    from app.models.user import User, UserRole
+
+    schedule = db.query(Schedule).filter(Schedule.id == schedule_id).first()
+    if schedule is None:
+        return 0
+
+    # Collect unique recipient IDs first so a single user enrolled +
+    # admin doesn't get the same alert twice in one call.
+    recipient_ids: set[UUID] = set()
+
+    if schedule.faculty_id is not None:
+        recipient_ids.add(schedule.faculty_id)
+
+    enrollment_rows = (
+        db.query(Enrollment.student_id)
+        .filter(Enrollment.schedule_id == schedule_id)
+        .all()
+    )
+    for (student_id,) in enrollment_rows:
+        recipient_ids.add(student_id)
+
+    if include_admins:
+        admin_rows = (
+            db.query(User.id)
+            .filter(User.role == UserRole.ADMIN, User.is_active.is_(True))
+            .all()
+        )
+        for (admin_id,) in admin_rows:
+            recipient_ids.add(admin_id)
+
+    if exclude_user_id is not None:
+        recipient_ids.discard(exclude_user_id)
+
+    sent = 0
+    for uid in recipient_ids:
+        await notify(
+            db,
+            str(uid),
+            title,
+            message,
+            notification_type,
+            **kwargs,
+        )
+        sent += 1
+    return sent

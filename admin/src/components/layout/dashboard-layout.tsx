@@ -23,76 +23,136 @@ function RouteFallback() {
   )
 }
 
+type ToastVariant = 'success' | 'warning' | 'error' | 'info'
+
+function pickToastVariant(
+  toastType: string | undefined,
+  severity: string | undefined,
+): ToastVariant {
+  if (toastType === 'success' || toastType === 'error' || toastType === 'info') {
+    return toastType
+  }
+  if (toastType === 'warn' || toastType === 'warning') return 'warning'
+  // Fall back to severity if toast_type is missing/unknown.
+  if (severity === 'critical' || severity === 'error') return 'error'
+  if (severity === 'warn') return 'warning'
+  if (severity === 'success') return 'success'
+  return 'info'
+}
+
+function showToast(variant: ToastVariant, title: string, description?: string, duration?: number) {
+  const opts: { description?: string; duration?: number } = {}
+  if (description) opts.description = description
+  if (duration) opts.duration = duration
+  switch (variant) {
+    case 'success':
+      toast.success(title, opts)
+      break
+    case 'warning':
+      toast.warning(title, opts)
+      break
+    case 'error':
+      toast.error(title, opts)
+      break
+    case 'info':
+    default:
+      toast.info(title, opts)
+      break
+  }
+}
+
+interface NotificationWsPayload {
+  type?: string
+  notification_type?: string
+  toast_type?: string
+  severity?: string
+  title?: string
+  message?: string
+  // Legacy/extra fields surfaced by individual notification types — kept
+  // available so we can still render rich descriptions for known types.
+  student_name?: string
+  subject_code?: string
+  subject_name?: string
+  status?: string
+  current_rate?: number | string
+  threshold?: number | string
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
 export function DashboardLayout() {
   const { fetchUnreadCount } = useNotificationStore()
 
   useEffect(() => { fetchUnreadCount() }, [fetchUnreadCount])
 
-  useWebSocket((message) => {
-    // Backend sends flat payloads: { type: "notification", notification_type: "early_leave", title, message, ... }
-    const eventType = message.notification_type || message.type
+  useWebSocket((rawMessage) => {
+    if (!isRecord(rawMessage)) return
+    const message = rawMessage as NotificationWsPayload
 
+    // Only handle notification-shaped events here. Other event types
+    // (e.g. attendance_update broadcasts on the attendance WS) come in
+    // via their own dedicated hooks; if they show up on this socket we
+    // ignore them rather than guess.
+    if (message.type !== 'notification') return
+
+    const severity = (message.severity ?? 'info') as string
+    const eventType = message.notification_type || ''
+    const variant = pickToastVariant(message.toast_type, severity)
+
+    // Centralized: every notification event bumps the unread badge.
+    // (Previously only 3 of 7 known event types did this — the bug
+    // that left the bell stuck at zero for camera/security/etc.)
+    useNotificationStore.getState().incrementUnreadCount()
+    if (severity === 'critical' || severity === 'error') {
+      useNotificationStore.getState().incrementCriticalCount()
+    }
+
+    // Build a description: prefer the rich per-type wording when we
+    // recognise the event, else fall back to the generic message body.
+    let description: string | undefined = message.message
+    let duration: number | undefined
     switch (eventType) {
       case 'early_leave':
-        useNotificationStore.getState().incrementUnreadCount()
-        toast.warning('Early Leave Detected', {
-          description: message.student_name
-            ? `${message.student_name} left ${message.subject_code} early`
-            : message.message,
-          duration: 8000,
-        })
+        description = message.student_name && message.subject_code
+          ? `${message.student_name} left ${message.subject_code} early`
+          : message.message
+        duration = 8000
         break
-
       case 'early_leave_return':
-        toast.success('Student Returned', {
-          description: message.student_name
-            ? `${message.student_name} returned to class`
-            : message.message,
-        })
+        description = message.student_name
+          ? `${message.student_name} returned to class`
+          : message.message
         break
-
       case 'check_in':
-        toast(`${message.student_name || 'Student'} checked in`, {
-          description: message.subject_code
-            ? `${message.subject_code} \u2014 ${message.status}`
-            : message.message,
-        })
+        description = message.subject_code
+          ? `${message.subject_code} — ${message.status ?? ''}`.trim()
+          : message.message
         break
-
       case 'session_start':
-        toast.info('Session Started', {
-          description: message.subject_code
-            ? `${message.subject_code} \u2014 ${message.subject_name}`
-            : message.message,
-        })
-        break
-
       case 'session_end':
-        toast.info('Session Ended', {
-          description: message.subject_code
-            ? `${message.subject_code} \u2014 ${message.subject_name}`
-            : message.message,
-        })
+        description = message.subject_code
+          ? `${message.subject_code} — ${message.subject_name ?? ''}`.trim()
+          : message.message
         break
-
       case 'low_attendance_warning':
-        useNotificationStore.getState().incrementUnreadCount()
-        toast.warning('Low Attendance Warning', {
-          description: message.subject_name
-            ? `${message.subject_name}: ${message.current_rate}% (threshold: ${message.threshold}%)`
-            : message.message,
-        })
+        description = message.subject_name
+          ? `${message.subject_name}: ${message.current_rate}% (threshold: ${message.threshold}%)`
+          : message.message
         break
-
       default:
-        if (message.type === 'notification') {
-          useNotificationStore.getState().incrementUnreadCount()
-          toast.info(message.title || 'New Notification', {
-            description: message.message,
-          })
-        }
+        description = message.message
         break
     }
+
+    const title =
+      message.title ||
+      (eventType === 'check_in' && message.student_name
+        ? `${message.student_name} checked in`
+        : 'New Notification')
+
+    showToast(variant, title, description, duration)
   })
 
   return (

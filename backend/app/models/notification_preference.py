@@ -42,6 +42,17 @@ class NotificationPreference(Base):
     attendance_confirmation = Column(Boolean, default=True, nullable=False)
     low_attendance_warning = Column(Boolean, default=True, nullable=False)
 
+    # Admin-facing alert categories (Phase 1 of notifications overhaul).
+    # `audit_alerts` defaults to False because peer-admin audit notifications
+    # are noisy in small teams — opt-in only.
+    camera_alerts = Column(Boolean, nullable=False, default=True, server_default="true")
+    ml_health_alerts = Column(Boolean, nullable=False, default=True, server_default="true")
+    security_alerts = Column(Boolean, nullable=False, default=True, server_default="true")
+    audit_alerts = Column(Boolean, nullable=False, default=False, server_default="false")
+    schedule_conflict_alerts = Column(Boolean, nullable=False, default=True, server_default="true")
+    face_alerts = Column(Boolean, nullable=False, default=True, server_default="true")
+    daily_health_summary = Column(Boolean, nullable=False, default=False, server_default="false")
+
     # Digest types
     daily_digest = Column(Boolean, default=False, nullable=False)
     weekly_digest = Column(Boolean, default=True, nullable=False)

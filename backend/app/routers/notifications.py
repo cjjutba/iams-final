@@ -29,6 +29,14 @@ def get_notifications(
     unread_only: bool = Query(False, description="Only return unread notifications"),
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(50, ge=1, le=200, description="Maximum number of records"),
+    severity: str | None = Query(
+        None,
+        description="Filter by severity (info/success/warn/error/critical)",
+    ),
+    type: str | None = Query(  # noqa: A002 - matches public query-param name
+        None,
+        description="Filter by notification type tag",
+    ),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -40,6 +48,8 @@ def get_notifications(
     - **unread_only**: If true, only return unread notifications
     - **skip**: Number of records to skip (pagination)
     - **limit**: Maximum number of records to return
+    - **severity**: Optional severity filter (info/success/warn/error/critical)
+    - **type**: Optional notification type filter
 
     Returns list of notifications sorted by most recent first.
 
@@ -47,7 +57,14 @@ def get_notifications(
     """
     notification_repo = NotificationRepository(db)
 
-    notifications = notification_repo.get_by_user(str(current_user.id), unread_only=unread_only, skip=skip, limit=limit)
+    notifications = notification_repo.get_by_user(
+        str(current_user.id),
+        unread_only=unread_only,
+        skip=skip,
+        limit=limit,
+        severity=severity,
+        notification_type=type,
+    )
 
     return [NotificationResponse.model_validate(n) for n in notifications]
 
@@ -129,14 +146,18 @@ def get_unread_count(current_user: User = Depends(get_current_user), db: Session
     **Get Unread Notification Count**
 
     Get the count of unread notifications for the current user.
+    Returns both the total unread count and the unread "critical" subset
+    (severity ``error`` or ``critical``) which drives the action-needed
+    badge on the admin sidebar.
 
     Requires authentication.
     """
     notification_repo = NotificationRepository(db)
 
     count = notification_repo.get_unread_count(str(current_user.id))
+    critical = notification_repo.get_unread_critical_count(str(current_user.id))
 
-    return {"unread_count": count}
+    return {"unread_count": count, "unread_critical_count": critical}
 
 
 # ===== Notification Preferences =====
