@@ -33,6 +33,39 @@ import type { FrameUpdateMessage, TrackInfo } from '@/hooks/use-attendance-ws'
 const BUFFER_MAX = 60
 const STALE_MS = 2000
 
+/**
+ * Optional fixed display delay for the bbox overlay path.
+ *
+ * Set via ``VITE_OVERLAY_DISPLAY_DELAY_MS`` (default 0, i.e. disabled).
+ *
+ * Why this exists
+ * ---------------
+ * The admin display pulls the camera SUB stream (e.g. ``eb226-sub``) but
+ * the backend ML pipeline reads the MAIN stream (``eb226``). They are two
+ * independent ffmpeg ``-c copy`` pushes from the cam-relay supervisor, so
+ * their RTP/PTS clocks do NOT line up — the PTS-based aligner above
+ * silently degrades to "latest paint wins". Meanwhile the video path has
+ * a longer end-to-end latency than the WS overlay path (~300 ms WHEP +
+ * jitter buffer vs ~150-200 ms ML+WS post-fps-bump), which makes the
+ * bbox visibly LEAD the video.
+ *
+ * Setting this value to roughly the latency-gap-ms (start at 100, tune
+ * empirically) holds each WS frame for that long before painting it. The
+ * page-total bbox latency goes UP by exactly this amount, which is fine
+ * — the user is already seeing video that's 300 ms behind reality, so
+ * matching the bbox to it doesn't make the page feel slower. It just
+ * stops the "bbox racing ahead" effect.
+ *
+ * When the underlying PTS mismatch is resolved (e.g. via a separate
+ * ``-display`` fanout path so admin and ML share a publisher clock),
+ * set this to 0 to re-enable true frame-accurate PTS alignment via the
+ * rVFC selection loop below.
+ */
+const OVERLAY_DISPLAY_DELAY_MS = Math.max(
+  0,
+  Number(import.meta.env.VITE_OVERLAY_DISPLAY_DELAY_MS ?? 0) || 0,
+)
+
 interface BufferedFrame {
   pts: number
   tracks: TrackInfo[]
@@ -83,6 +116,26 @@ export function useFrameAligner(
   // disable-aligner signal at the consumer level.
   useEffect(() => {
     if (!latestFrame) return
+
+    // Display-delay mode (``VITE_OVERLAY_DISPLAY_DELAY_MS`` > 0). Bypasses
+    // the PTS-aligned rVFC selection entirely and just holds each WS
+    // frame's tracks for a fixed delay before painting them as the
+    // current overlay. Each setTimeout carries its own captured tracks
+    // in closure, so multiple in-flight delays do not interfere; we
+    // intentionally do NOT cancel previous timeouts on a new frame —
+    // letting all frames apply on schedule keeps the overlay updating at
+    // the WS rate, just shifted forward by the delay. On unmount, any
+    // still-pending applies hit ``setAlignedTracks`` on a torn-down
+    // component, which React tolerates as a no-op.
+    if (OVERLAY_DISPLAY_DELAY_MS > 0) {
+      const tracks = latestFrame.tracks
+      setTimeout(() => {
+        lastEmittedTracksRef.current = tracks
+        setAlignedTracks(tracks)
+      }, OVERLAY_DISPLAY_DELAY_MS)
+      return
+    }
+
     if (latestFrame.rtp_pts_90k == null) {
       // No alignment possible — emit immediately so consumer falls back
       // to the latest-only path. We DON'T touch the buffer here so
@@ -104,6 +157,11 @@ export function useFrameAligner(
 
   useEffect(() => {
     if (!enabled || !playerHandle) return
+    // In display-delay mode the previous useEffect drives state directly
+    // via setTimeout, so the rVFC-based PTS selector here would just
+    // clobber those updates on every video frame. Skip the subscription
+    // entirely when delay mode is active.
+    if (OVERLAY_DISPLAY_DELAY_MS > 0) return
 
     let rafHandle: number | null = null
     let pendingTracks: TrackInfo[] | null = null

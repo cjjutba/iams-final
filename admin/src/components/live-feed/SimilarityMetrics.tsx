@@ -36,23 +36,34 @@ function deriveState(track: TrackInfo | null): RecognitionState | null {
 function stateConfig(state: RecognitionState | null): {
   label: string
   className: string
+  dotClassName: string
 } {
   if (state === 'recognized')
     return {
       label: 'Recognized',
-      className: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
+      className:
+        'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30',
+      dotClassName: 'bg-emerald-500',
     }
   if (state === 'unknown')
     return {
       label: 'Unknown',
-      className: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
+      className:
+        'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30',
+      dotClassName: 'bg-amber-500',
     }
   if (state === 'warming_up')
     return {
-      label: 'Detecting…',
-      className: 'bg-blue-500/10 text-blue-600 border-blue-500/20',
+      label: 'Detecting',
+      className:
+        'bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/30',
+      dotClassName: 'bg-sky-500 animate-pulse',
     }
-  return { label: 'No Live Track', className: 'bg-muted text-muted-foreground' }
+  return {
+    label: 'No live track',
+    className: 'bg-muted text-muted-foreground border-border',
+    dotClassName: 'bg-muted-foreground/40',
+  }
 }
 
 function formatAgo(ms: number): string {
@@ -75,6 +86,7 @@ export function SimilarityMetrics({
   const pct = Math.max(0, Math.min(100, confidence * 100))
   const threshPct = THRESHOLD * 100
   const aboveThreshold = confidence >= THRESHOLD
+  const hasScore = !!track && state !== null
 
   const name = track?.name ?? fallbackName ?? 'Unresolved'
   const userId = track?.user_id ?? fallbackUserId
@@ -91,66 +103,95 @@ export function SimilarityMetrics({
     ? formatAgo(performance.now() - lastSeenAtMs)
     : null
 
+  // Color the score number to mirror the bar — green above threshold, sky
+  // (the warming-up color) below — so a glance at the headline tells you
+  // whether the match is strong or weak without parsing the bar.
+  const scoreColor = !hasScore
+    ? 'text-muted-foreground/50'
+    : aboveThreshold
+      ? 'text-emerald-600 dark:text-emerald-400'
+      : 'text-sky-600 dark:text-sky-400'
+
   return (
-    <div className="flex flex-col gap-3 rounded-md border bg-muted/20 p-3">
+    <div className="flex flex-col gap-4 rounded-lg border bg-card/40 p-4">
+      {/* Header: name, ID, status pill */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold">{name}</div>
+          <div className="truncate text-base font-semibold leading-tight">
+            {name}
+          </div>
           {userId && (
-            <div className="truncate font-mono text-[11px] text-muted-foreground">
+            <div className="mt-0.5 truncate font-mono text-[10.5px] text-muted-foreground/80">
               {userId}
             </div>
           )}
         </div>
-        <Badge variant="outline" className={config.className}>
+        <Badge
+          variant="outline"
+          className={`shrink-0 gap-1.5 px-2 py-0.5 text-[11px] font-medium ${config.className}`}
+        >
+          <span
+            className={`inline-block h-1.5 w-1.5 rounded-full ${config.dotClassName}`}
+            aria-hidden
+          />
           {config.label}
         </Badge>
       </div>
 
-      <div className="flex flex-col gap-1">
-        <div className="flex items-baseline justify-between gap-2 text-xs">
-          <span className="text-muted-foreground">Cosine similarity</span>
-          <span className="font-mono text-sm font-semibold">
-            {track ? confidence.toFixed(3) : '—'}
+      {/* Score: large number on the left, bar fills the right */}
+      <div className="flex flex-col gap-2">
+        <div className="flex items-baseline justify-between gap-3">
+          <div className="flex items-baseline gap-2">
+            <span
+              className={`font-mono text-2xl font-semibold tabular-nums ${scoreColor}`}
+            >
+              {hasScore ? confidence.toFixed(3) : '—'}
+            </span>
+            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              cosine similarity
+            </span>
+          </div>
+          <span
+            className={`font-mono text-[10.5px] tabular-nums ${
+              aboveThreshold
+                ? 'text-emerald-600/70 dark:text-emerald-400/70'
+                : 'text-muted-foreground'
+            }`}
+          >
+            min {THRESHOLD.toFixed(2)}
           </span>
         </div>
-        <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
+        <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-muted">
           <div
             className={
               aboveThreshold
-                ? 'h-full rounded-full bg-emerald-500 transition-all'
-                : 'h-full rounded-full bg-blue-500 transition-all'
+                ? 'h-full rounded-full bg-emerald-500 transition-all duration-300'
+                : 'h-full rounded-full bg-sky-500 transition-all duration-300'
             }
             style={{ width: `${pct}%` }}
           />
           <div
-            className="pointer-events-none absolute top-0 h-full w-px bg-foreground/60"
+            className="pointer-events-none absolute top-0 h-full w-px bg-foreground/40"
             style={{ left: `${threshPct}%` }}
             aria-hidden
           />
         </div>
-        <div className="flex justify-between text-[10px] text-muted-foreground">
-          <span>0.0</span>
-          <span className="font-mono">
-            threshold {THRESHOLD.toFixed(2)}
-          </span>
-          <span>1.0</span>
-        </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
+      {/* Footer line: track id, last-seen, status flags */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
         {track?.track_id != null && (
-          <span>
-            Track <span className="font-mono">#{track.track_id}</span>
+          <span className="inline-flex items-center gap-1">
+            <span className="text-muted-foreground/70">Track</span>
+            <span className="font-mono tabular-nums text-foreground/80">
+              #{track.track_id}
+            </span>
           </span>
         )}
-        {agoLabel && (
-          <span>
-            Updated <span className="font-mono">{agoLabel}</span>
-          </span>
-        )}
+        {agoLabel && <span className="font-mono tabular-nums">{agoLabel}</span>}
         {isStale && (
-          <span className="font-medium text-amber-600 dark:text-amber-500">
+          <span className="inline-flex items-center gap-1 font-medium text-amber-600 dark:text-amber-500">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />
             Left frame
           </span>
         )}

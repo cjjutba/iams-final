@@ -91,6 +91,52 @@ class TrackIdentity:
     unknown_attempts: int = 0  # Consecutive FAISS misses since last hit
     best_score_seen: float = 0.0  # Peak cosine similarity across all FAISS attempts
 
+    # Spatial+temporal identity hint inherited from the graveyard.
+    # See settings.IDENTITY_GRAVEYARD_* and RealtimeTracker._lookup_graveyard_hint.
+    # The hint never auto-applies — it just lowers the FAISS commit
+    # threshold for THIS specific user_id when this user comes back as
+    # top-1. If FAISS keeps returning a different user, the hint is
+    # discarded silently after the first non-matching top-1.
+    hint_user_id: str | None = None
+    hint_user_name: str | None = None
+    hint_set_at: float = 0.0
+
+    # Vote-based swap gate (added 2026-04-25 swap-hardening pass).
+    # When this track is already bound to user X but FAISS returns user Y
+    # with confidence > X + RECOGNITION_SWAP_MARGIN, we don't flip
+    # immediately. Instead Y becomes the swap candidate; the streak
+    # increments on every consecutive frame that keeps Y as the top-1
+    # over X, and the swap commits only when streak >=
+    # RECOGNITION_SWAP_MIN_STREAK. Any frame where the binding user X
+    # comes back as top-1 (or a third user Z appears) resets the
+    # candidate. This filters single-frame FAISS noise events that used
+    # to flip the label every reverify in the 0.45-0.55 cross-domain
+    # band, while still allowing genuine identity changes (e.g. ByteTrack
+    # accidentally re-using a track id across two students) to flip in
+    # ~0.6 s at 5 fps backend.
+    swap_candidate_user_id: str | None = None
+    swap_candidate_streak: int = 0
+    swap_candidate_best_conf: float = 0.0
+    swap_candidate_first_seen_at: float = 0.0
+
+
+@dataclass(slots=True)
+class IdentityTombstone:
+    """Recently-expired recognised track. Used by the spatial+temporal
+    identity hint logic to help re-entries lock in faster — see
+    RealtimeTracker._lookup_graveyard_hint and the settings docstring
+    in app.config for the safety rationale.
+
+    Stored fields are intentionally minimal: enough to spatially match a
+    new track and tag it with a hint user_id; FAISS still does the actual
+    identity confirmation.
+    """
+
+    user_id: str
+    name: str | None
+    bbox_center: tuple[float, float]  # normalised (cx, cy)
+    expired_at: float  # wall-clock epoch seconds
+
 
 @dataclass(frozen=True, slots=True)
 class TrackResult:
@@ -219,11 +265,16 @@ class RealtimeTracker:
         # Identity cache: track_id -> TrackIdentity
         self._identity_cache: dict[int, TrackIdentity] = {}
 
-        # Graveyard: recently-expired recognized tracks for spatial inheritance.
-        # When a new track appears near a graveyarded track, it inherits the identity
-        # instantly instead of starting from scratch. Prevents recognized→unknown flicker
-        # when ByteTrack assigns a new track ID after briefly losing detection.
-        self._identity_graveyard: list[TrackIdentity] = []
+        # Graveyard: recently-expired recognized tracks. Stores tombstones
+        # used to seed a spatial+temporal identity HINT on new tracks that
+        # appear in the same place soon after a recognised track died. The
+        # hint lowers the FAISS commit threshold for that specific user
+        # only — it never overrides FAISS top-1 and never inherits blindly,
+        # so a different person walking into the same spot can never
+        # accidentally take the previous identity. See
+        # ``IdentityTombstone``, ``_lookup_graveyard_hint``, and the
+        # IDENTITY_GRAVEYARD_* docstring in app.config for full rationale.
+        self._identity_graveyard: list[IdentityTombstone] = []
 
         # Previous frame bboxes for velocity computation: track_id -> [cx, cy, w, h]
         self._prev_bboxes: dict[int, list[float]] = {}
@@ -401,8 +452,124 @@ class RealtimeTracker:
         t_track_ms = (time.monotonic() - t_track_start) * 1000.0
 
         # ------------------------------------------------------------------
-        # 3. Per-track state update + lazy ArcFace (recognition only on
-        #    tracks that actually need it this frame).
+        # 3a. PRE-PASS — decide which tracks need an ArcFace embedding this
+        #     frame, then run them through ArcFace as ONE batched ONNX call.
+        #
+        #     Why: the previous design called ``embed_from_kps`` once per
+        #     face inside the main loop, which serialised N forward passes
+        #     and N HTTP round-trips to the sidecar. With N=4 active faces
+        #     that was ~120 ms of embed work per frame on the M5 + CoreML
+        #     sidecar; collapsed into a single batched call it's ~30-40 ms.
+        #
+        #     The decision logic must be identical to what the main loop
+        #     would compute, otherwise we'd waste embeds (pre-pass too
+        #     permissive) or lose recognitions (pre-pass too strict).
+        #     ``_should_embed_track`` is shared by both passes. The
+        #     pre-pass is read-only on identity state — no field mutations,
+        #     no _get_or_create_identity (defers creation to the main loop).
+        #     Per-frame reverify-cap accounting is done locally in the
+        #     pre-pass; the main loop trusts the decision dict instead of
+        #     recomputing.
+        # ------------------------------------------------------------------
+        prepass_decisions: dict[int, dict] = {}
+        pending_kps_list: list[np.ndarray] = []
+        pending_track_ids: list[int] = []
+        adaptive_reverify_interval = self._compute_adaptive_reverify_interval(tracked)
+
+        # Per-frame budget caps. Reverify cap was already in place; the
+        # first-recognition cap is the 40+ faces guardrail — without it
+        # a 30-student "everyone walks in together" wave would queue 30
+        # ArcFace passes in one frame and crater the live overlay's fps
+        # for ~half a second.
+        max_first_rec = max(1, int(settings.MAX_FIRST_RECOGNITIONS_PER_FRAME))
+        prepass_reverify_count = 0
+        prepass_first_rec_count = 0
+        for i, track_id in enumerate(tracked.tracker_id):
+            track_id = int(track_id)
+            kps = track_kps.get(track_id)
+            bbox = tracked.xyxy[i]
+
+            decision = self._should_embed_track(
+                track_id=track_id,
+                bbox=bbox,
+                kps=kps,
+                frame=frame,
+                now=now,
+                reverify_interval=adaptive_reverify_interval,
+                reverify_count_so_far=prepass_reverify_count,
+            )
+
+            # First-recognition cap. Pending tracks above the per-frame
+            # budget get deferred to a later frame — their decision flips
+            # to "no embed this frame" so the main loop won't try to
+            # consume an embedding that doesn't exist. Track is created
+            # normally; it just stays in "warming_up" one extra frame.
+            if (
+                decision["needs_recognition"]
+                and decision["quality_passed"]
+                and decision.get("is_first_recognition")
+                and prepass_first_rec_count >= max_first_rec
+            ):
+                decision = dict(decision)
+                decision["needs_recognition"] = False
+                decision["quality_passed"] = False
+
+            prepass_decisions[track_id] = decision
+
+            if decision["needs_recognition"] and decision.get("is_reverify"):
+                prepass_reverify_count += 1
+            if (
+                decision["needs_recognition"]
+                and decision.get("is_first_recognition")
+            ):
+                prepass_first_rec_count += 1
+
+            if decision["needs_recognition"] and decision["quality_passed"] and kps is not None:
+                pending_kps_list.append(kps)
+                pending_track_ids.append(track_id)
+
+        # ------------------------------------------------------------------
+        # 3b. BATCH EMBED — one ArcFace forward pass for everyone who needs
+        #     one this frame. On the sidecar path this is also one HTTP
+        #     round-trip (one JPEG encode + one POST instead of N).
+        # ------------------------------------------------------------------
+        embeddings_by_track: dict[int, np.ndarray] = {}
+        t_embed_total_ms = 0.0
+        if pending_kps_list:
+            emb_t0 = time.monotonic()
+            try:
+                embs = self._insight.embed_from_kps_batch(frame, pending_kps_list)
+                if embs.shape[0] != len(pending_track_ids):
+                    raise RuntimeError(
+                        f"embed batch size mismatch: got {embs.shape[0]}, expected {len(pending_track_ids)}"
+                    )
+                for tid, emb in zip(pending_track_ids, embs):
+                    # Treat all-zero rows (degenerate alignment) as "no embed"
+                    if float(np.linalg.norm(emb)) < 1e-6:
+                        continue
+                    embeddings_by_track[tid] = emb
+            except Exception as exc:
+                # Fallback: per-face embed if the batched call failed (sidecar
+                # restart, network blip, ORT error). One bad batch should not
+                # blank the whole frame's overlays — fall through and let any
+                # successful single-face calls still light up.
+                logger.warning(
+                    "Batched embed failed (n=%d): %s; falling back to per-face",
+                    len(pending_kps_list), exc,
+                )
+                for tid, kps in zip(pending_track_ids, pending_kps_list):
+                    try:
+                        embeddings_by_track[tid] = self._insight.embed_from_kps(frame, kps)
+                    except Exception:
+                        logger.debug(
+                            "Per-face embed fallback also failed for track %d", tid,
+                            exc_info=True,
+                        )
+            t_embed_total_ms = (time.monotonic() - emb_t0) * 1000.0
+
+        # ------------------------------------------------------------------
+        # 3. Per-track state update + recognition decisions (using the
+        #    pre-computed batched embeddings).
         # ------------------------------------------------------------------
         results: list[TrackResult] = []
         active_track_ids: set[int] = set()
@@ -413,9 +580,7 @@ class RealtimeTracker:
         pending_recognitions: list[
             tuple[TrackIdentity, np.ndarray, np.ndarray, float, list[int]]
         ] = []
-        reverify_count = 0
-        t_embed_total_ms = 0.0
-        embeddings_computed = 0
+        embeddings_computed = len(embeddings_by_track)
 
         for i, track_id in enumerate(tracked.tracker_id):
             track_id = int(track_id)
@@ -451,88 +616,19 @@ class RealtimeTracker:
                     identity.is_static = True
                     logger.info("Track %d marked as static (poster/portrait), skipping recognition", track_id)
 
-            # -------- Decide up-front whether this track needs an embedding --------
+            # -------- Decision + embedding lookup (computed in pre-pass) --------
             #
-            # This is the key change vs. the old pipeline: embeddings are no
-            # longer free (pre-computed by ``app.get()``). Each embedding we
-            # request here costs one full ArcFace forward pass (~8 ms CPU).
-            # For a classroom of 5 students sitting through a 1.5-hour class,
-            # we want to pay that cost once per new track + once every
-            # REVERIFY_INTERVAL — not N_faces × every frame.
-            #
-            # The rules below reproduce the previous behavior minus the
-            # per-frame "drift check via anchor similarity" path — drift is
-            # still caught, but now via the periodic re-verify's FAISS
-            # search + identity-swap logic in ``_recognize_batch`` (worst
-            # case: up to REVERIFY_INTERVAL seconds of stale identity before
-            # a swap is detected, which in a stationary classroom is fine).
-            is_first_recognition = identity.recognition_status == "pending"
+            # The pre-pass (above) ran ``_should_embed_track`` for every
+            # detection in this frame and made one batched ArcFace call for
+            # all the qualifying ones. We just consume that decision here —
+            # ``embeddings_by_track[track_id]`` is set iff the pre-pass
+            # decided to embed AND the batch call succeeded for this row.
+            decision = prepass_decisions.get(track_id, {})
+            is_first_recognition = decision.get("is_first_recognition", identity.recognition_status == "pending")
+            needs_recognition = decision.get("needs_recognition", False)
 
-            if identity.is_static:
-                needs_recognition = False
-            elif is_first_recognition:
-                # New / just-drift-reset tracks — always try to recognize now.
-                needs_recognition = True
-            elif identity.recognition_status == "unknown":
-                age = now - identity.first_seen
-                # Graduated retry — same intent as before: aggressive early,
-                # backs off so we don't spam FAISS with hopeless queries.
-                if age < 1.0:
-                    retry_interval = 0.0
-                elif age < 5.0:
-                    retry_interval = 0.3
-                else:
-                    retry_interval = 1.0
-                needs_recognition = (now - identity.last_verified) > retry_interval
-            else:
-                # Recognized track — periodic re-verify only.
-                if identity.last_drift_time > 0 and (now - identity.last_drift_time) < 3.0:
-                    reverify_interval = 1.0
-                else:
-                    reverify_interval = settings.REVERIFY_INTERVAL
-                needs_recognition = (now - identity.last_verified) > reverify_interval
-
-            # Stagger re-verifications: cap at MAX_REVERIFIES_PER_FRAME.
-            # New/pending tracks are NOT capped (they must be recognized ASAP).
-            is_reverify = needs_recognition and identity.recognition_status == "recognized"
-            if is_reverify:
-                if reverify_count >= MAX_REVERIFIES_PER_FRAME:
-                    needs_recognition = False
-                else:
-                    reverify_count += 1
-
-            # -------- Embedding + quality (only if we're going to use it) --------
-            embedding: np.ndarray | None = None
-            quality_passed = False
-            if needs_recognition and kps is not None:
-                # Quality gate first (cheap, ~1 ms). Bypass for pending tracks
-                # so a slightly blurry first frame still gets a shot at FAISS
-                # — the "warm up first, commit later" logic downstream already
-                # handles noisy first recognitions.
-                if is_first_recognition:
-                    quality_passed = True
-                else:
-                    x1p, y1p, x2p, y2p = bbox.astype(int)
-                    x1p, y1p = max(0, x1p), max(0, y1p)
-                    x2p, y2p = min(self._frame_w, x2p), min(self._frame_h, y2p)
-                    crop = frame[y1p:y2p, x1p:x2p]
-                    if crop.size > 0:
-                        quality_passed, _ = assess_recognition_quality(crop)
-
-                if quality_passed:
-                    emb_t0 = time.monotonic()
-                    try:
-                        embedding = self._insight.embed_from_kps(frame, kps)
-                        embeddings_computed += 1
-                    except Exception as exc:
-                        # A single bad crop shouldn't kill the frame — log
-                        # and continue; the track stays pending and we'll
-                        # retry next frame with fresh kps.
-                        logger.debug(
-                            "embed_from_kps failed for track %d: %s", track_id, exc
-                        )
-                        embedding = None
-                    t_embed_total_ms += (time.monotonic() - emb_t0) * 1000.0
+            embedding = embeddings_by_track.get(track_id)
+            quality_passed = embedding is not None
 
             # Accumulate quality-passed embeddings for temporal aggregation
             # on first-recognition paths. ``maxlen=5`` FIFO so re-verifies
@@ -871,7 +967,7 @@ class RealtimeTracker:
                 "recognized",
                 "recognized",
             )
-        recognition_state = self._derive_recognition_state(identity)
+        recognition_state = self._derive_recognition_state(identity, now=now)
         return (
             identity.user_id,
             identity.name,
@@ -881,14 +977,22 @@ class RealtimeTracker:
         )
 
     @staticmethod
-    def _derive_recognition_state(identity: TrackIdentity) -> str:
+    def _derive_recognition_state(identity: TrackIdentity, now: float | None = None) -> str:
         """Collapse the tracker's internal bookkeeping into a three-value signal
         for the overlay: ``"recognized"`` | ``"warming_up"`` | ``"unknown"``.
 
         Rules (evaluated top to bottom):
 
         1. ``recognition_status == "recognized"`` → ``"recognized"``.
-        2. The track has been FAISS-rejected at least ``UNKNOWN_CONFIRM_ATTEMPTS``
+        2. Wall-clock ceiling: a track that has been visible for more than
+           ``MAX_WARMING_UP_SECONDS`` and is still not recognised commits to
+           ``"unknown"`` regardless of score. Without this the
+           "stay-in-warming-up if best score is near threshold" rule below
+           had no upper bound — a track whose best sim sat in the dead
+           zone between ``score_ceiling`` and ``RECOGNITION_THRESHOLD``
+           (typically a 5-pt window) stayed blue forever. The 2026-04-25
+           "stuck Detecting" UX bug was exactly this case.
+        3. The track has been FAISS-rejected at least ``UNKNOWN_CONFIRM_ATTEMPTS``
            times **and** its best-seen cosine score is comfortably below
            ``RECOGNITION_THRESHOLD - UNKNOWN_CONFIRM_MARGIN`` → ``"unknown"``.
            Both clauses matter: a face hovering near threshold (e.g. peak 0.36 with
@@ -896,7 +1000,7 @@ class RealtimeTracker:
            cleaner frame is likely imminent, while a face that has never produced a
            score above, say, 0.20 is clearly not enrolled and earns the red label
            quickly.
-        3. Everything else (including fresh ``"pending"`` tracks and ``"unknown"``
+        4. Everything else (including fresh ``"pending"`` tracks and ``"unknown"``
            tracks still inside the confirm window) → ``"warming_up"`` so the
            overlay renders the neutral "Detecting…" label.
         """
@@ -904,6 +1008,19 @@ class RealtimeTracker:
             return "recognized"
         confirm_attempts = settings.UNKNOWN_CONFIRM_ATTEMPTS
         score_ceiling = settings.RECOGNITION_THRESHOLD - settings.UNKNOWN_CONFIRM_MARGIN
+
+        # Wall-clock ceiling on warming_up. Kicks in regardless of score so
+        # the dead zone between score_ceiling and RECOGNITION_THRESHOLD
+        # can't trap a track in "Detecting…" forever. ``now`` is optional
+        # for backwards compatibility with callers (tests etc.) that
+        # didn't pass it; in that case the ceiling is skipped and behaviour
+        # falls back to the score-based gates below.
+        if (
+            now is not None
+            and identity.first_seen > 0.0
+            and (now - identity.first_seen) > settings.MAX_WARMING_UP_SECONDS
+        ):
+            return "unknown"
 
         # Fast-commit path for obvious unknowns (added 2026-04-25). A face
         # whose peak similarity has stayed below
@@ -924,24 +1041,174 @@ class RealtimeTracker:
             return "unknown"
         return "warming_up"
 
+    def _compute_adaptive_reverify_interval(self, tracked) -> float:
+        """Scale REVERIFY_INTERVAL up when many tracks are present.
+
+        Re-verifying every ``REVERIFY_INTERVAL`` seconds is fine for a
+        small classroom but burns embed budget when N grows. This keeps
+        the per-frame embed work roughly bounded:
+
+          effective = REVERIFY_INTERVAL × max(1.0, N / N_baseline)
+
+        At ``N_baseline=5`` (typical classroom), the interval is the
+        configured value. At N=10 it doubles. At N=20 it quadruples.
+        Re-verification is purely an identity-drift safety net — slowing
+        it down only delays the *detection* of an identity swap, never
+        the initial recognition (first-recognition is uncapped).
+        """
+        n_tracks = len(tracked.tracker_id) if tracked is not None else 0
+        baseline = max(1.0, float(settings.ADAPTIVE_REVERIFY_BASELINE_TRACKS))
+        scale = max(1.0, n_tracks / baseline)
+        return float(settings.REVERIFY_INTERVAL) * scale
+
+    def _should_embed_track(
+        self,
+        *,
+        track_id: int,
+        bbox: np.ndarray,
+        kps: np.ndarray | None,
+        frame: np.ndarray,
+        now: float,
+        reverify_interval: float,
+        reverify_count_so_far: int,
+    ) -> dict:
+        """Read-only decision: would this track need an ArcFace embed now?
+
+        Mirrors the legacy in-loop decision so the pre-pass and main loop
+        agree exactly. Returns a dict the caller can stash in
+        ``prepass_decisions[track_id]`` and consult inside the main loop
+        instead of recomputing.
+
+        Returns:
+            ``{"needs_recognition": bool, "quality_passed": bool,
+               "is_first_recognition": bool, "is_reverify": bool}``
+        """
+        # No keypoints means we cannot align — never embed.
+        if kps is None:
+            return {
+                "needs_recognition": False,
+                "quality_passed": False,
+                "is_first_recognition": False,
+                "is_reverify": False,
+            }
+
+        identity = self._identity_cache.get(track_id)
+        # New track: identity will be created in the main loop. Treat as
+        # first-recognition with quality bypassed so the first frame gets
+        # one shot at FAISS — same behaviour the old in-loop logic had.
+        if identity is None:
+            return {
+                "needs_recognition": True,
+                "quality_passed": True,
+                "is_first_recognition": True,
+                "is_reverify": False,
+            }
+
+        is_first_recognition = identity.recognition_status == "pending"
+
+        # Decision tree — must match the order of the original in-loop logic.
+        if identity.is_static:
+            needs_recognition = False
+        elif is_first_recognition:
+            needs_recognition = True
+        elif identity.recognition_status == "unknown":
+            age = now - identity.first_seen
+            if age < 1.0:
+                retry_interval = 0.0
+            elif age < 5.0:
+                retry_interval = 0.3
+            else:
+                retry_interval = 1.0
+            needs_recognition = (now - identity.last_verified) > retry_interval
+        else:
+            # Recognised track — drift-aware periodic re-verify.
+            if identity.last_drift_time > 0 and (now - identity.last_drift_time) < 3.0:
+                effective_interval = 1.0
+            else:
+                effective_interval = reverify_interval
+            needs_recognition = (now - identity.last_verified) > effective_interval
+
+        # Re-verify cap: pending/unknown tracks are uncapped (must be
+        # recognised ASAP); recognised re-verifies share a per-frame budget.
+        is_reverify = needs_recognition and identity.recognition_status == "recognized"
+        if is_reverify and reverify_count_so_far >= MAX_REVERIFIES_PER_FRAME:
+            needs_recognition = False
+            is_reverify = False
+
+        # Quality gate — bypass for pending tracks (warming-up logic
+        # downstream tolerates a noisy first frame). For everything else,
+        # check the bbox crop for blur/brightness/size before paying the
+        # ArcFace cost.
+        quality_passed = False
+        if needs_recognition:
+            if is_first_recognition:
+                quality_passed = True
+            else:
+                x1p, y1p, x2p, y2p = bbox.astype(int)
+                x1p, y1p = max(0, x1p), max(0, y1p)
+                x2p, y2p = min(self._frame_w, x2p), min(self._frame_h, y2p)
+                crop = frame[y1p:y2p, x1p:x2p]
+                if crop.size > 0:
+                    quality_passed, _ = assess_recognition_quality(crop)
+
+        return {
+            "needs_recognition": needs_recognition,
+            "quality_passed": quality_passed,
+            "is_first_recognition": is_first_recognition,
+            "is_reverify": is_reverify,
+        }
+
     def _get_or_create_identity(self, track_id: int, now: float, bbox: np.ndarray | None = None) -> TrackIdentity:
         """Get existing identity or create a new one (always goes through FAISS).
 
-        We NEVER blindly inherit identity from graveyard spatially — that caused
-        wrong identities to stick when person A leaves and person B enters the
-        same spot. Every new track must earn its identity through FAISS recognition.
-
-        The graveyard is kept only so that AFTER FAISS recognizes the new track,
-        we can verify the identity matches what was there before (future use).
+        We NEVER blindly inherit identity from the graveyard. The new track
+        is always created with a clean ``recognition_status='pending'`` and
+        must earn its identity through FAISS. What the graveyard CAN do is
+        seed a *hint* on the new identity — when there's exactly one
+        recently-expired recognised track in spatial proximity, the new
+        track gets ``hint_user_id`` set to that user. The hint then lowers
+        the FAISS commit threshold ONLY for that specific user_id, only if
+        FAISS independently returns the hint user as top-1. So if a
+        different person walks into the same spot, FAISS top-1 is someone
+        else and the hint is silently discarded — never inherited blindly.
         """
         if track_id not in self._identity_cache:
             jitter = random.uniform(0, settings.REVERIFY_INTERVAL)
-            self._identity_cache[track_id] = TrackIdentity(
+            ident = TrackIdentity(
                 track_id=track_id,
                 first_seen=now,
                 last_seen=now,
                 last_verified=now - jitter,
             )
+
+            # Spatial+temporal identity hint. Only fires when bbox is
+            # provided AND exactly one tombstone is in proximity (see
+            # _lookup_graveyard_hint safety logic).
+            if bbox is not None and self._frame_w > 0 and self._frame_h > 0:
+                bbox_norm = [
+                    float(bbox[0]) / self._frame_w,
+                    float(bbox[1]) / self._frame_h,
+                    float(bbox[2]) / self._frame_w,
+                    float(bbox[3]) / self._frame_h,
+                ]
+                tomb = self._lookup_graveyard_hint(bbox_norm, now)
+                if tomb is not None:
+                    ident.hint_user_id = tomb.user_id
+                    ident.hint_user_name = tomb.name
+                    ident.hint_set_at = now
+                    self._consume_tombstone(tomb)
+                    logger.info(
+                        "Track %d created with identity hint user=%s name=%s "
+                        "(tombstone aged %.1fs at center (%.2f, %.2f))",
+                        track_id,
+                        tomb.user_id[:8],
+                        tomb.name,
+                        now - tomb.expired_at,
+                        tomb.bbox_center[0],
+                        tomb.bbox_center[1],
+                    )
+
+            self._identity_cache[track_id] = ident
         return self._identity_cache[track_id]
 
     def _resolve_name(self, user_id: str) -> str | None:
@@ -1003,6 +1270,8 @@ class RealtimeTracker:
             user_id = result.get("user_id")
             confidence = result.get("confidence", 0.0)
             is_ambiguous = result.get("is_ambiguous", False)
+            top1_user_id = result.get("top1_user_id")
+            top1_score = float(result.get("top1_score", 0.0))
 
             # Track peak cosine across the entire life of this track, not just
             # accepted matches. Feeds the _derive_recognition_state gate so faces
@@ -1010,6 +1279,63 @@ class RealtimeTracker:
             # flipping to "unknown" the moment UNKNOWN_CONFIRM_ATTEMPTS is hit.
             if confidence > identity.best_score_seen:
                 identity.best_score_seen = float(confidence)
+
+            # ----- Spatial+temporal identity hint rescue --------------
+            #
+            # A new track that inherited a hint from the graveyard
+            # (someone recently recognised left this spot, came back) gets
+            # a relaxed FAISS commit threshold for ONLY that user. The
+            # safety guard is double:
+            #   (1) FAISS top-1 must equal the hint user — random FAISS
+            #       chatter for some other student doesn't trigger.
+            #   (2) Score must still clear the relaxed threshold
+            #       (RECOGNITION_THRESHOLD - GRAVEYARD_RELAXED_DELTA).
+            # If the wrong person walked into the same spot, their FAISS
+            # top-1 will be themselves (or no one) — never the hint user
+            # at the relaxed threshold — so this never produces a wrong
+            # accept. The hint expires after one application: either the
+            # rescue lands and the track becomes recognised normally, or
+            # we drop the hint after the first non-confirming top-1 so
+            # subsequent frames don't keep checking it.
+            if (
+                user_id is None
+                and identity.hint_user_id is not None
+                and top1_user_id is not None
+                and settings.IDENTITY_GRAVEYARD_TTL_SECONDS > 0
+            ):
+                relaxed_threshold = (
+                    settings.RECOGNITION_THRESHOLD
+                    - settings.IDENTITY_GRAVEYARD_RELAXED_THRESHOLD_DELTA
+                )
+                if top1_user_id == identity.hint_user_id and top1_score >= relaxed_threshold:
+                    logger.info(
+                        "Track %d HINT-RESCUED: %s at sim %.3f (relaxed thr %.2f, full thr %.2f)",
+                        identity.track_id,
+                        identity.hint_user_name or top1_user_id[:8],
+                        top1_score,
+                        relaxed_threshold,
+                        settings.RECOGNITION_THRESHOLD,
+                    )
+                    user_id = top1_user_id
+                    confidence = top1_score
+                    is_ambiguous = False
+                    # Burn the hint so we don't keep spamming this rescue
+                    # log on every subsequent reverify of the same track.
+                    identity.hint_user_id = None
+                    identity.hint_user_name = None
+                else:
+                    # Top-1 came back as someone else (or below relaxed).
+                    # Drop the hint so the track doesn't keep checking
+                    # against a stale spatial guess.
+                    if top1_user_id != identity.hint_user_id:
+                        logger.debug(
+                            "Track %d hint discarded: top1=%s != hint=%s",
+                            identity.track_id,
+                            top1_user_id[:8] if top1_user_id else "NONE",
+                            identity.hint_user_id[:8],
+                        )
+                        identity.hint_user_id = None
+                        identity.hint_user_name = None
 
             logger.debug(
                 "[TRACK-SCORE] track=%d user=%s confidence=%.4f ambiguous=%s status=%s",
@@ -1112,6 +1438,33 @@ class RealtimeTracker:
                         and is_stable_reverify
                         and confidence >= settings.ADAPTIVE_ENROLL_MIN_CONFIDENCE):
                         self._try_adaptive_enroll(user_id, search_embedding, now)
+
+                    # Auto CCTV enrolment — opportunistic capture of real
+                    # CCTV embeddings during the student's first attended
+                    # sessions. The enroller has its own gates (lifetime
+                    # cap, sustained-stability, capture spacing); we just
+                    # offer every confident recognition and let it decide.
+                    # Cost on the realtime hot path is negligible (one
+                    # dict lookup + a few comparisons); commit happens on
+                    # a background executor when a buffer fills.
+                    try:
+                        from app.services.auto_cctv_enroller import auto_cctv_enroller
+                        auto_cctv_enroller.offer_capture(
+                            user_id=user_id,
+                            track_id=identity.track_id,
+                            embedding=search_embedding,
+                            crop_bgr=live_crop_np,
+                            confidence=confidence,
+                            frames_seen=identity.frames_seen,
+                            room_stream_key=self._camera_id,
+                        )
+                    except Exception:
+                        # Auto-enrol must NEVER break recognition. Log
+                        # and continue.
+                        logger.debug(
+                            "auto-cctv offer failed for track %d", identity.track_id,
+                            exc_info=True,
+                        )
             elif identity.recognition_status == "recognized":
                 # Already recognized — don't downgrade on a single bad frame.
                 # Do not bump unknown_attempts either: a re-verify dip on a known
@@ -1515,7 +1868,12 @@ class RealtimeTracker:
         )
 
     def _expire_lost_tracks(self, now: float, active_track_ids: set[int] | None = None) -> None:
-        """Remove stale tracks from identity cache."""
+        """Remove stale tracks from identity cache.
+
+        Recognised tracks leave a tombstone in the graveyard so the next
+        new track in the same spatial neighbourhood gets a hint pointing
+        at the prior identity. See ``_lookup_graveyard_hint``.
+        """
         if active_track_ids is None:
             active_track_ids = set()
 
@@ -1526,8 +1884,89 @@ class RealtimeTracker:
             if tid not in active_track_ids and (now - identity.last_seen) > stale_threshold
         ]
         for tid in to_remove:
+            ident = self._identity_cache[tid]
+            # Tombstone capture: only for recognised tracks (Unknown +
+            # warming_up tombstones would just spam the graveyard with
+            # no identity signal). Requires last_bbox so we have a
+            # spatial anchor to match against.
+            if (
+                settings.IDENTITY_GRAVEYARD_TTL_SECONDS > 0
+                and ident.recognition_status == "recognized"
+                and ident.user_id is not None
+                and ident.last_bbox is not None
+            ):
+                cx = (ident.last_bbox[0] + ident.last_bbox[2]) / 2.0
+                cy = (ident.last_bbox[1] + ident.last_bbox[3]) / 2.0
+                self._identity_graveyard.append(
+                    IdentityTombstone(
+                        user_id=ident.user_id,
+                        name=ident.name,
+                        bbox_center=(cx, cy),
+                        expired_at=now,
+                    )
+                )
             del self._identity_cache[tid]
             self._prev_bboxes.pop(tid, None)
+
+        # Bound the graveyard: prune anything past TTL on each expire pass.
+        # Cheap (graveyard is typically <20 entries even in a busy room).
+        if self._identity_graveyard:
+            ttl = settings.IDENTITY_GRAVEYARD_TTL_SECONDS
+            self._identity_graveyard = [
+                t for t in self._identity_graveyard
+                if (now - t.expired_at) <= ttl
+            ]
+
+    def _lookup_graveyard_hint(
+        self, bbox_norm: list[float], now: float
+    ) -> IdentityTombstone | None:
+        """Return the single tombstone within spatial + temporal proximity, or None.
+
+        Safety rule: hint is set ONLY when there is exactly one viable
+        tombstone in the spatial neighbourhood. If two recently-expired
+        recognised tracks both sit within the radius, we have no way to
+        know which one re-entered the frame — return None and let FAISS
+        decide unaided.
+        """
+        if not self._identity_graveyard:
+            return None
+        ttl = settings.IDENTITY_GRAVEYARD_TTL_SECONDS
+        if ttl <= 0:
+            return None
+        max_dist = settings.IDENTITY_GRAVEYARD_MAX_DIST_NORMALIZED
+
+        cx = (bbox_norm[0] + bbox_norm[2]) / 2.0
+        cy = (bbox_norm[1] + bbox_norm[3]) / 2.0
+
+        candidates: list[IdentityTombstone] = []
+        for tomb in self._identity_graveyard:
+            if (now - tomb.expired_at) > ttl:
+                continue
+            tcx, tcy = tomb.bbox_center
+            # Use Chebyshev (max) distance so the radius is a square in
+            # normalised space — matches operator intuition of "near here"
+            # better than Euclidean and is faster.
+            if max(abs(cx - tcx), abs(cy - tcy)) > max_dist:
+                continue
+            candidates.append(tomb)
+
+        if len(candidates) == 1:
+            return candidates[0]
+        # 0 candidates → no nearby recent identity, hint stays None.
+        # >1 candidates → ambiguous, refuse to hint (defensive).
+        return None
+
+    def _consume_tombstone(self, tomb: IdentityTombstone) -> None:
+        """Remove a tombstone after a new track inherited it as hint.
+
+        We only let one new track inherit any given tombstone — without
+        this, two simultaneously-spawning new tracks near the same dead
+        spot would both claim the same identity hint.
+        """
+        try:
+            self._identity_graveyard.remove(tomb)
+        except ValueError:
+            pass
 
     @staticmethod
     def _compute_iou(box_a: np.ndarray, box_b: np.ndarray) -> float:

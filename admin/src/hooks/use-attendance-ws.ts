@@ -127,11 +127,28 @@ export interface RecognitionEventMessage {
   student_name?: string | null
 }
 
+// Live-display fast-lane message — broadcast at ~LIVE_DISPLAY_BROADCAST_HZ
+// (default 1 Hz) by the realtime pipeline for each recognized track.
+// Independent of `recognition_event` (which is throttled to one-per-10s
+// for audit-trail persistence). Inline base64 JPEG so the admin Face
+// Comparison sheet can render without a follow-up HTTP fetch — see
+// `useServerSideCrop`. Not persisted to DB or disk.
+export interface LiveCropUpdateMessage {
+  type: 'live_crop_update'
+  schedule_id: string
+  user_id: string
+  track_id: number
+  crop_b64: string
+  captured_at_ms: number
+  similarity: number
+}
+
 export type AttendanceWsMessage =
   | FrameUpdateMessage
   | AttendanceSummaryMessage
   | SessionEventMessage
   | RecognitionEventMessage
+  | LiveCropUpdateMessage
   | { type?: string; event?: string; [key: string]: unknown }
 
 /** Bounded ring-buffer size for the recognition-event stream.
@@ -266,6 +283,12 @@ interface UseAttendanceWsReturn {
   latestSessionEvent: SessionEventMessage | null
   /** Newest-first bounded log of recognition events seen this session. */
   recognitionEvents: RecognitionEventMessage[]
+  /** Latest live-display crop per user_id. Updated by `live_crop_update` WS
+   *  messages (broadcast at LIVE_DISPLAY_BROADCAST_HZ, default 1 Hz, by the
+   *  realtime pipeline). Consumed by the admin Face Comparison sheet's Live
+   *  Crop view to render at ~1 fps without paying the 10 s evidence
+   *  persistence throttle. Keyed on user_id; latest wins. */
+  liveCrops: Record<string, LiveCropUpdateMessage>
   /** Rolling end-to-end latency stats over the last ``LATENCY_BUFFER_MAX`` frame_updates. */
   latencyStats: LatencyStats | null
   /** Trigger a CSV download of every collected sample for the thesis appendix. */
@@ -296,6 +319,13 @@ export function useAttendanceWs(scheduleId: string | null | undefined): UseAtten
   const [latestSummary, setLatestSummary] = useState<AttendanceSummaryMessage | null>(null)
   const [latestSessionEvent, setLatestSessionEvent] = useState<SessionEventMessage | null>(null)
   const [recognitionEvents, setRecognitionEvents] = useState<RecognitionEventMessage[]>([])
+  // Latest live-display crop per user. Pruned implicitly by overwriting the
+  // existing entry whenever a fresher one arrives — old crops linger only
+  // until the user is re-recognized. We don't bother time-pruning here:
+  // entries are ~50 KB each, the map is bounded by the size of the
+  // class roster, and the consumer (use-server-side-crop) decides whether
+  // a crop is too stale to display via its own age check.
+  const [liveCrops, setLiveCrops] = useState<Record<string, LiveCropUpdateMessage>>({})
   const [latencyStats, setLatencyStats] = useState<LatencyStats | null>(null)
 
   // Latency samples live in a ref, not state — pushing a sample on every
@@ -424,6 +454,20 @@ export function useAttendanceWs(scheduleId: string | null | undefined): UseAtten
               }
               return next
             })
+          } else if (data.type === 'live_crop_update') {
+            // Fast-lane live-display crop, ~1 Hz per recognized track.
+            // Replace any existing entry for the same user — newest wins.
+            // Skip stale broadcasts where captured_at_ms is older than
+            // what we already have (out-of-order delivery is rare on
+            // localhost but cheap to defend against).
+            const msg = data as LiveCropUpdateMessage
+            setLiveCrops((prev) => {
+              const existing = prev[msg.user_id]
+              if (existing && existing.captured_at_ms >= msg.captured_at_ms) {
+                return prev
+              }
+              return { ...prev, [msg.user_id]: msg }
+            })
           }
           // Other message types (scan_result, pong, etc.) are ignored here —
           // the realtime pipeline sends them but the admin live-feed page
@@ -540,6 +584,7 @@ export function useAttendanceWs(scheduleId: string | null | undefined): UseAtten
     latestSummary,
     latestSessionEvent,
     recognitionEvents,
+    liveCrops,
     latencyStats,
     downloadLatencyCsv,
     clearLatencySamples,

@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { useAuthedImage } from './use-authed-image'
-import type { RecognitionEventMessage } from './use-attendance-ws'
+import type {
+  LiveCropUpdateMessage,
+  RecognitionEventMessage,
+} from './use-attendance-ws'
 import type { LiveCropResult } from '@/types'
 
 /**
@@ -37,10 +40,14 @@ export function useServerSideCrop({
   scheduleId,
   userId,
   recognitionEvents,
+  liveCrop,
 }: {
   scheduleId: string
   userId: string | null
   recognitionEvents: RecognitionEventMessage[]
+  /** Fast-lane live-display crop (~1 Hz) for this user. Overrides the
+   *  recognition_event fallback when present. See LiveCropSource type. */
+  liveCrop: LiveCropUpdateMessage | null
 }): LiveCropResult {
   const enabled = !!scheduleId && !!userId
 
@@ -62,17 +69,44 @@ export function useServerSideCrop({
   // Throttled "shown" event — the source of truth for what URL the panel
   // is currently displaying. Update at most every THROTTLE_MS so the image
   // doesn't flicker at recognition fps.
+  //
+  // Selection-change reset is folded into this same effect (rather than a
+  // separate `useEffect([scheduleId, userId])` reset) because effect order
+  // matters: a separate reset effect that fires after this one would clobber
+  // the initial setShown on first mount and the panel would hang on
+  // "Waiting for first frame…" forever (or until the *next* matching
+  // event arrived). Detecting a selection swap by comparing the new event's
+  // identity vs. the currently-shown event's identity avoids that race.
   const [shown, setShown] = useState<RecognitionEventMessage | null>(null)
   const lastSwapAtRef = useRef<number>(0)
 
   useEffect(() => {
-    if (!newest) {
-      // No matching event yet — leave the previously shown crop in place
-      // (or null on first run). This is the "loading" state for status.
+    // Disabled selection or no matching event yet — clear any previously
+    // shown crop so a newly opened sheet for an unrecognized student
+    // doesn't briefly inherit the last visible one.
+    if (!enabled || !newest) {
+      if (shown !== null) setShown(null)
       return
     }
+    // Same event already showing — nothing to do.
     if (shown?.event_id === newest.event_id) return
 
+    // Selection changed (different schedule or student) → swap immediately,
+    // bypassing the throttle so the operator sees the new selection's
+    // first frame the moment they switch.
+    const isFreshSelection =
+      !shown ||
+      shown.schedule_id !== newest.schedule_id ||
+      shown.student_id !== newest.student_id
+    if (isFreshSelection) {
+      setShown(newest)
+      lastSwapAtRef.current = performance.now()
+      return
+    }
+
+    // Same selection, newer event → throttle the visible swap so we don't
+    // churn the <img src> at 10 fps. The latest event at the throttle
+    // boundary wins.
     const now = performance.now()
     const elapsed = now - lastSwapAtRef.current
     if (elapsed >= THROTTLE_MS) {
@@ -80,23 +114,32 @@ export function useServerSideCrop({
       lastSwapAtRef.current = now
       return
     }
-    // Defer the swap so the *latest* event at the throttle boundary wins.
     const timer = setTimeout(() => {
       setShown(newest)
       lastSwapAtRef.current = performance.now()
     }, THROTTLE_MS - elapsed)
     return () => clearTimeout(timer)
-  }, [newest, shown?.event_id])
-
-  // Reset when the selection changes — otherwise the previous student's
-  // crop briefly bleeds through while the next one's events arrive.
-  useEffect(() => {
-    setShown(null)
-    lastSwapAtRef.current = 0
-  }, [scheduleId, userId])
+  }, [enabled, newest, shown])
 
   const cropUrl = shown?.crop_urls?.live ?? null
   const { src, loading, error } = useAuthedImage(cropUrl)
+
+  // Fast-lane override candidate: when a `live_crop_update` for this exact
+  // (schedule, user) is present, the panel will render its inline base64
+  // JPEG and skip the recognition_event fallback below. The pipeline
+  // broadcasts these at ~1 Hz (LIVE_DISPLAY_BROADCAST_HZ) so the panel
+  // refreshes ~once per second instead of inheriting evidence_writer's
+  // 10 s persistence throttle. We still call all hooks unconditionally so
+  // the fallback is ready the moment the live broadcast stops landing.
+  const liveDataUrl = useMemo(() => {
+    if (!enabled || !liveCrop) return null
+    if (
+      liveCrop.schedule_id !== scheduleId ||
+      liveCrop.user_id !== userId
+    )
+      return null
+    return `data:image/jpeg;base64,${liveCrop.crop_b64}`
+  }, [enabled, liveCrop, scheduleId, userId])
 
   const status: LiveCropResult['status'] = useMemo(() => {
     if (!enabled) return 'idle'
@@ -106,6 +149,16 @@ export function useServerSideCrop({
     if (src) return 'ok'
     return 'loading'
   }, [enabled, error, shown, loading, src])
+
+  // Branch on the final result (not the hooks).
+  if (liveDataUrl && liveCrop) {
+    return {
+      status: 'ok',
+      dataUrl: liveDataUrl,
+      capturedAt: liveCrop.captured_at_ms,
+      resolutionHint: { sourceWidth: 2304, sourceHeight: 1296, isSubStream: false },
+    }
+  }
 
   return {
     status,

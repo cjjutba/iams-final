@@ -4,7 +4,7 @@ Schedule Schemas
 Request and response models for class schedules.
 """
 
-from datetime import time
+from datetime import date, time
 from uuid import UUID
 
 from pydantic import BaseModel, Field, computed_field, field_validator
@@ -130,6 +130,12 @@ class StudentInfo(BaseModel):
     first_name: str
     last_name: str
     email: str
+    # Whether the student has an active face registration (computed via JOIN
+    # against face_registrations in the get_enrolled_students endpoint). The
+    # admin Schedule Detail page surfaces this so operators can see at a
+    # glance who's ready for face-based attendance vs. who still needs to
+    # complete the multi-angle capture flow in the student APK.
+    has_face_registered: bool = False
 
     class Config:
         from_attributes = True
@@ -145,3 +151,28 @@ class ScheduleConfigUpdate(BaseModel):
     """Faculty-facing config update for a schedule (subset of fields)."""
 
     early_leave_timeout_minutes: int = Field(..., ge=1, le=15)
+
+
+class SessionSummary(BaseModel):
+    """Per-day attendance roll-up for one schedule.
+
+    Each row corresponds to a unique date on which attendance_records exist
+    for the given schedule. The session start/end times are the schedule's
+    canonical window — actual session boundaries are inferable from
+    presence_logs.scan_time but those are noisy and not needed at this
+    granularity.
+    """
+
+    date: date
+    start_time: time
+    end_time: time
+    present: int = 0
+    late: int = 0
+    absent: int = 0
+    early_leave: int = 0
+    excused: int = 0
+    # Sum of (present + late) / total enrolled for the session, expressed
+    # as a percentage rounded to one decimal. None when total_records is 0
+    # so the UI can render "—" rather than "0.0%".
+    attendance_rate: float | None = None
+    total_records: int = 0

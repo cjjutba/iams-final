@@ -131,6 +131,17 @@ async def lifespan(app: FastAPI):
             # Background listener for FAISS reload notifications (multi-worker sync)
             app.state.faiss_subscriber_task = asyncio.create_task(faiss_manager.subscribe_index_changes())
 
+            # Bootstrap auto-CCTV-enroller from DB so it stays one-shot
+            # across restarts. Cheap (one aggregate query); flag-checked
+            # so the work is skipped entirely when AUTO_CCTV_ENROLL_ENABLED
+            # is false. Wrapped in try so a DB hiccup doesn't break boot.
+            try:
+                if settings.AUTO_CCTV_ENROLL_ENABLED:
+                    from app.services.auto_cctv_enroller import auto_cctv_enroller
+                    await asyncio.to_thread(auto_cctv_enroller.bootstrap_from_db)
+            except Exception:
+                logger.exception("AutoCctvEnroller bootstrap failed (non-fatal)")
+
             # JIT the SCRFD ONNX graph now so the first real session pipeline
             # doesn't pay the ~3-5s warmup tax on its first frame. (No-op if
             # the realtime path will route through the sidecar — but cheap

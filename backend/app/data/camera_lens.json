@@ -1,0 +1,63 @@
+{
+  "_comment": [
+    "Per-camera lens distortion parameters used by the registration-time CCTV",
+    "embedding synthesizer (backend/app/services/face_service.py:_generate_cctv_simulated_embeddings)",
+    "and the calibrate-camera helper (backend/scripts/calibrate_camera_lens.py).",
+    "",
+    "Keyed by Room.stream_key (lowercase, matches mediamtx path).",
+    "",
+    "Distortion model: OpenCV's standard radial+tangential 5-coefficient model.",
+    "k1, k2, k3 are radial; p1, p2 are tangential. Negative k1 = barrel (wide-angle).",
+    "Positive k1 = pincushion (telephoto). Most security cameras are barrel.",
+    "",
+    "Values below are SPEC-DERIVED APPROXIMATIONS. For production deployment, run",
+    "    python -m scripts.calibrate_camera_lens --stream-key eb226 --image checkerboard.jpg",
+    "to compute the actual coefficients from a printed checkerboard target. The",
+    "approximations here are good enough to materially improve recognition over",
+    "no per-camera distortion, but they are not perfect — calibrated values can",
+    "lift recognition another ~5-10% in match similarity.",
+    "",
+    "Sources:",
+    "  - Reolink CX810 spec sheet: 95° horizontal FOV, 8 MP sensor",
+    "  - Reolink P340 spec sheet: ~110° horizontal FOV, 12 MP sensor",
+    "  - k1/k2/k3 estimated from FOV using the Brown-Conrady distortion approximation"
+  ],
+  "profiles": {
+    "eb226": {
+      "model": "reolink_cx810",
+      "fov_horizontal_deg": 95,
+      "sensor_megapixels": 8,
+      "distortion_k1": -0.15,
+      "distortion_k2": 0.02,
+      "distortion_p1": 0.0,
+      "distortion_p2": 0.0,
+      "distortion_k3": -0.001,
+      "color_temperature_shift_k": -200,
+      "comment": "Normal lens, mild barrel distortion. Reolink stock white-balance reads slightly cooler than phone selfies."
+    },
+    "eb227": {
+      "model": "reolink_p340",
+      "fov_horizontal_deg": 110,
+      "sensor_megapixels": 12,
+      "distortion_k1": -0.30,
+      "distortion_k2": 0.08,
+      "distortion_p1": 0.0,
+      "distortion_p2": 0.0,
+      "distortion_k3": -0.005,
+      "color_temperature_shift_k": -250,
+      "comment": "Wide-angle lens, noticeable barrel distortion. Faces near frame edges visibly stretched."
+    }
+  },
+  "default": {
+    "model": "generic_cctv",
+    "fov_horizontal_deg": 100,
+    "sensor_megapixels": 8,
+    "distortion_k1": -0.20,
+    "distortion_k2": 0.04,
+    "distortion_p1": 0.0,
+    "distortion_p2": 0.0,
+    "distortion_k3": -0.002,
+    "color_temperature_shift_k": -200,
+    "comment": "Fallback profile when a stream_key has no entry above. Conservative middle-of-the-road values."
+  }
+}

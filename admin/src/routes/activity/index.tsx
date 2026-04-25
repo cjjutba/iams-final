@@ -201,6 +201,11 @@ export default function ActivityPage() {
 
   const scheduleFilter = searchParams.get('schedule_id') ?? ''
   const studentFilter = searchParams.get('student_id') ?? ''
+  // `actor_id` is set when the operator deep-links from a user-detail page
+  // (e.g. /users/:id "View activity log" item). It scopes the feed to
+  // events that user authored. There's no UI control to set it from this
+  // page — only the deep-link, plus a chip below that clears it.
+  const actorFilter = searchParams.get('actor_id') ?? ''
 
   const [studentInput, setStudentInput] = useState(studentFilter)
   const [scheduleInput, setScheduleInput] = useState(scheduleFilter)
@@ -229,8 +234,9 @@ export default function ActivityPage() {
       out.severity = Array.from(selectedSeverities).join(',')
     if (scheduleFilter) out.schedule_id = scheduleFilter
     if (studentFilter) out.student_id = studentFilter
+    if (actorFilter) out.actor_id = actorFilter
     return out
-  }, [selectedCategories, selectedSeverities, scheduleFilter, studentFilter])
+  }, [selectedCategories, selectedSeverities, scheduleFilter, studentFilter, actorFilter])
 
   // Initial 15-min replay so the page isn't empty on mount.
   const { data: initialData, isLoading: isInitialLoading } = useActivityEvents(restFilters)
@@ -260,6 +266,13 @@ export default function ActivityPage() {
     },
     onEvent: useCallback(
       (ev: ActivityEvent) => {
+        // Client-side actor filter: the WS hook subscribes by category /
+        // severity / schedule / student but not actor_id, so when the URL
+        // pins an actor we drop incoming events that don't match. Without
+        // this, deep-linking to /activity?actor_id=X would mix that
+        // admin's events with everyone else's as new ones streamed in.
+        if (actorFilter && ev.actor_id !== actorFilter) return
+
         if (paused) {
           bufferRef.current = [ev, ...bufferRef.current].slice(0, MAX_BUFFER)
           setBufferedCount(bufferRef.current.length)
@@ -272,7 +285,7 @@ export default function ActivityPage() {
           return [ev, ...prev].slice(0, MAX_BUFFER)
         })
       },
-      [paused],
+      [paused, actorFilter],
     ),
   })
 
@@ -328,6 +341,14 @@ export default function ActivityPage() {
     setStudentInput('')
     setScheduleInput('')
     setSearchParams(new URLSearchParams())
+  }
+
+  // Targeted clear for the actor pin (deep-link from a user-detail page).
+  // Operators usually want to drop just this and keep their other filters.
+  const clearActorFilter = () => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('actor_id')
+    setSearchParams(next)
   }
 
   const visibleEvents = liveEvents.slice(0, MAX_VISIBLE)
@@ -523,13 +544,34 @@ export default function ActivityPage() {
                 selectedCategories.size === 0 &&
                 selectedSeverities.size === 0 &&
                 !scheduleFilter &&
-                !studentFilter
+                !studentFilter &&
+                !actorFilter
               }
             >
               <X className="h-4 w-4 mr-1" />
               Clear all
             </Button>
           </div>
+
+          {actorFilter && (
+            <div className="flex items-center gap-2 rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs">
+              <span className="font-medium text-blue-700 dark:text-blue-400">
+                Pinned to actor
+              </span>
+              <span className="font-mono text-[11px] text-foreground">
+                {actorFilter.slice(0, 8)}…{actorFilter.slice(-4)}
+              </span>
+              <button
+                type="button"
+                onClick={clearActorFilter}
+                className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium text-blue-700 transition hover:bg-blue-500/20 dark:text-blue-400"
+                aria-label="Clear actor filter"
+              >
+                <X className="h-3 w-3" />
+                Clear
+              </button>
+            </div>
+          )}
         </CardContent>
       </Card>
 

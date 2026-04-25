@@ -3,6 +3,7 @@ import type {
   ScheduleResponse,
   ScheduleCreate,
   ScheduleUpdate,
+  ScheduleSessionSummary,
   StudentEnrollmentsPage,
 } from '@/types'
 
@@ -13,6 +14,10 @@ export const schedulesService = {
     api.get<ScheduleResponse>(`/schedules/${id}`).then(r => r.data),
   getEnrolledStudents: (id: string) =>
     api.get(`/schedules/${id}/students`).then(r => r.data),
+  getSessions: (id: string, params?: { start_date?: string; end_date?: string; limit?: number }) =>
+    api
+      .get<ScheduleSessionSummary[]>(`/schedules/${id}/sessions`, { params })
+      .then(r => r.data),
   create: (data: ScheduleCreate) =>
     api.post<ScheduleResponse>('/schedules/', data).then(r => r.data),
   update: (id: string, data: ScheduleUpdate) =>

@@ -94,6 +94,15 @@ class SessionPipeline:
         # index). Keyed on track_id only because there's no user association.
         self._unknown_emitted: set[int] = set()
 
+        # Per-(user_id, track_id) monotonic timestamp of last
+        # `live_crop_update` WS broadcast. Independent of
+        # `_recognized_captured` (audit-trail one-shot per track) and of
+        # evidence_writer's 10 s persistence throttle — drives the admin
+        # Face Comparison sheet's Live Crop fast lane. See
+        # `_broadcast_live_display_crops` and
+        # `settings.LIVE_DISPLAY_BROADCAST_HZ`.
+        self._last_live_display_broadcast: dict[tuple[str, int], float] = {}
+
     async def start(self) -> None:
         """Initialize services and start the processing loop."""
         from app.models.face_registration import FaceRegistration
@@ -330,6 +339,12 @@ class SessionPipeline:
                         # the exact frame the ML saw. No-op when ENABLE_REDIS
                         # is false.
                         self._capture_newly_recognized_crops(frame, track_frame)
+                        # Live-display fast lane: broadcast the latest crop
+                        # for each recognized track at LIVE_DISPLAY_BROADCAST_HZ
+                        # so the admin Face Comparison panel ticks at ~1 fps
+                        # instead of inheriting the 10 s evidence-persistence
+                        # throttle. No DB / disk writes — pure WS broadcast.
+                        self._broadcast_live_display_crops(frame, track_frame)
                         # Emit RECOGNITION_MISS once per track that commits
                         # to recognition_state="unknown". This is the tri-
                         # state gating described in config.py — once a track
@@ -556,6 +571,98 @@ class SessionPipeline:
                     return
 
             asyncio.create_task(self._save_live_crop(fresh_copy, t))
+
+    def _broadcast_live_display_crops(self, frame, track_frame) -> None:
+        """Fan out async ``live_crop_update`` WS broadcasts for each recognized
+        track that's due (per LIVE_DISPLAY_BROADCAST_HZ).
+
+        Distinct from `_capture_newly_recognized_crops` (one-shot per
+        track, persisted to Redis for the audit-trail crop endpoint) and
+        from the evidence_writer's `recognition_event` broadcast (10 s
+        persistence throttle). This channel is broadcast-only — no DB
+        rows, no disk writes — so the admin Face Comparison sheet's Live
+        Crop view can refresh at ~1 fps even while the audit trail
+        rate-limits to one entry per 10 s for static subjects.
+
+        Per-track timing is enforced here (sync entry point), JPEG encode
+        + WS broadcast happen on the default executor to keep the
+        pipeline thread responsive. Frame buffer aliasing is defended
+        with a `frame.copy()` shared across all tracks dispatched in
+        this iteration.
+        """
+        if not track_frame.tracks or frame is None:
+            return
+        hz = settings.LIVE_DISPLAY_BROADCAST_HZ
+        if hz <= 0:
+            return
+        interval = 1.0 / hz
+        now = time.monotonic()
+
+        fresh_copy = None
+        for t in track_frame.tracks:
+            if t.recognition_state != "recognized":
+                continue
+            if not t.user_id or not t.is_active:
+                continue
+            key = (t.user_id, int(t.track_id))
+            last = self._last_live_display_broadcast.get(key, 0.0)
+            if (now - last) < interval:
+                continue
+            self._last_live_display_broadcast[key] = now
+
+            if fresh_copy is None:
+                try:
+                    fresh_copy = frame.copy()
+                except Exception:
+                    logger.debug(
+                        "frame.copy() failed; skipping live display broadcast batch",
+                        exc_info=True,
+                    )
+                    # Roll the throttle key back so the next frame retries.
+                    self._last_live_display_broadcast.pop(key, None)
+                    return
+
+            asyncio.create_task(self._dispatch_live_display_crop(fresh_copy, t))
+
+    async def _dispatch_live_display_crop(self, frame, track) -> None:
+        """Encode + broadcast a single live_crop_update WS message.
+
+        Failures are swallowed — the live-display channel is a UX
+        nicety; if encoding or the WS hiccups, the panel falls back to
+        the slower recognition_event stream automatically.
+        """
+        try:
+            loop = asyncio.get_event_loop()
+
+            def _encode() -> bytes | None:
+                crop = crop_face_with_margin(frame, track.bbox)
+                return encode_jpeg(crop)
+
+            jpeg_bytes = await loop.run_in_executor(None, _encode)
+            if not jpeg_bytes:
+                return
+
+            from app.routers.websocket import ws_manager
+
+            await ws_manager.broadcast_attendance(
+                self.schedule_id,
+                {
+                    "type": "live_crop_update",
+                    "schedule_id": self.schedule_id,
+                    "user_id": str(track.user_id),
+                    "track_id": int(track.track_id),
+                    "crop_b64": base64.b64encode(jpeg_bytes).decode("ascii"),
+                    "captured_at_ms": int(time.time() * 1000),
+                    "similarity": float(track.confidence),
+                },
+            )
+        except Exception:
+            logger.debug(
+                "live display broadcast failed for user=%s track_id=%s",
+                getattr(track, "user_id", "?"),
+                getattr(track, "track_id", "?"),
+                exc_info=True,
+            )
 
     async def _save_live_crop(self, frame, track) -> None:
         """Crop, encode, and LPUSH a JPEG into the per-user Redis ring buffer.

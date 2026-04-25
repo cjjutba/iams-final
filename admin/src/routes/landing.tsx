@@ -32,18 +32,29 @@ export default function LandingPage() {
             Intelligent Attendance Monitoring System
           </p>
 
-          <div className="mt-8 w-full max-w-[240px]">
+          <div className="mt-8 flex w-full max-w-[260px] flex-col gap-3">
             <Button
               asChild
               className="h-12 w-full gap-2 text-sm font-semibold uppercase tracking-wide"
               size="lg"
             >
-              <a href="/iams.apk" download>
+              <a href="/iams-student.apk" download>
                 <Download className="h-4 w-4" />
-                Download App
+                Download Student App
               </a>
             </Button>
-            <p className="mt-2.5 text-xs text-muted-foreground">
+            <Button
+              asChild
+              variant="outline"
+              className="h-12 w-full gap-2 text-sm font-semibold uppercase tracking-wide"
+              size="lg"
+            >
+              <a href="/iams-faculty.apk" download>
+                <Download className="h-4 w-4" />
+                Download Faculty App
+              </a>
+            </Button>
+            <p className="text-center text-xs text-muted-foreground">
               Available for Android
             </p>
           </div>

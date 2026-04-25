@@ -78,9 +78,46 @@ class Settings(BaseSettings):
     )
     RECOGNITION_MARGIN: float = 0.06  # Min gap between top-1 and top-2 scores (reduced for similar-looking students)
     RECOGNITION_TOP_K: int = 3  # Number of neighbors to search in FAISS
+
+    # ───────────────────────────────────────────────────────────────────────
+    # Identity-swap hardening (added 2026-04-25 after the live EB227 swap
+    # incident where two near-threshold faces traded labels frame-to-frame).
+    # The original tracker accepted a swap on a single frame whose new
+    # match exceeded the bound user's score by 0.05; at sim 0.45-0.50
+    # (CCTV cross-domain noise band) the next frame's noise routinely
+    # produced 0.06+ deltas, so the binding flipped on every reverify.
+    #
+    # The hardened path requires BOTH a larger margin AND sustained
+    # consensus across multiple frames before the binding flips. Tuned to
+    # be a no-op when sims are comfortably high (e.g. CCTV-enrolled users
+    # at 0.75+) and a strict gate when sims hover in the 0.45-0.55 band
+    # where a 1-frame flip is most likely a noise event, not a real
+    # identity change.
+    # ───────────────────────────────────────────────────────────────────────
+    RECOGNITION_SWAP_MARGIN: float = 0.10  # Was hardcoded 0.05 — too small at near-threshold sims
+    RECOGNITION_SWAP_MIN_STREAK: int = 3  # Consecutive frames a candidate must beat the bound user before the swap commits
+
+    # Frame-level mutual exclusion: when two tracks in the same frame both
+    # claim the same user_id as their top-1 (collision), resolve as a
+    # bipartite assignment using top-K candidates so each user_id is bound
+    # to at most one track per frame. The loser of an assignment falls
+    # back to its top-2 if that clears RECOGNITION_THRESHOLD; otherwise
+    # the track stays in warming_up (no green wrong-name label is ever
+    # rendered). Set False to fall back to the legacy greedy "highest
+    # confidence wins, others drop" behaviour from the post-hoc dedup at
+    # the end of process().
+    RECOGNITION_FRAME_MUTEX_ENABLED: bool = True
     USE_GPU: bool = True  # Use GPU if available, fallback to CPU
     MIN_FACE_IMAGES: int = 3  # Minimum images for registration
     MAX_FACE_IMAGES: int = 5  # Maximum images for registration
+
+    # CCTV-side embedding synthesis: variants per (face_crop, camera).
+    # Each registration generates 5 phone embeddings + (5 × N_cameras × variants)
+    # synthetic embeddings tuned to each known camera's lens+colour profile.
+    # 2 variants ≈ 20 sim vectors for a 2-camera classroom setup; bump to 3
+    # for more pose diversity at the cost of larger per-user FAISS clusters.
+    # Capped at 5 to keep the index size reasonable for ≥100 enrolled students.
+    SIM_VARIANTS_PER_CAMERA: int = 2
 
     # Face Quality Gating
     QUALITY_GATE_ENABLED: bool = True
@@ -138,6 +175,93 @@ class Settings(BaseSettings):
     # ByteTrack / Track Lifecycle
     TRACK_LOST_TIMEOUT: float = 2.0  # Seconds before removing lost track (coasting period)
     REVERIFY_INTERVAL: float = 5.0  # Re-run ArcFace on existing tracks (seconds)
+    # Adaptive re-verify cadence: when N tracks > BASELINE the per-track
+    # interval scales linearly so per-frame embed budget stays roughly
+    # bounded. Set to 0 / 1 to effectively disable scaling. See
+    # RealtimeTracker._compute_adaptive_reverify_interval. Tuned for the
+    # typical 4-6 student classroom on the M5 + CoreML sidecar.
+    ADAPTIVE_REVERIFY_BASELINE_TRACKS: int = 5
+
+    # Hard wall-clock ceiling on the "warming_up" overlay state. The
+    # near-threshold-stay-in-warming-up rule in
+    # RealtimeTracker._derive_recognition_state used to be open-ended —
+    # if a track's best-seen sim sat between (RECOGNITION_THRESHOLD - margin)
+    # and RECOGNITION_THRESHOLD, the overlay stayed blue ("Detecting…")
+    # forever on the theory that a cleaner frame might tip it over. In
+    # practice that produced "stuck Detecting" UX (2026-04-25 — a real
+    # user near the camera whose phone-only embedding produced sims in
+    # the 0.40-0.44 dead zone). After this many seconds since first_seen
+    # we commit to "unknown" regardless of score, so the operator knows
+    # the system gave up on this face and can prompt CCTV-side enrolment.
+    MAX_WARMING_UP_SECONDS: float = 8.0
+
+    # Per-frame budget cap on first-recognition embeddings. Re-verifies
+    # are already capped (MAX_REVERIFIES_PER_FRAME) so a stable scene's
+    # embed cost is bounded; first-recognition was historically uncapped
+    # because new faces "must lock in fast". That assumption breaks at
+    # 30+ students walking in together — the embed wave dwarfs the
+    # per-frame budget and the live overlay stutters for ~half a second.
+    # Capping at 10 means latecomers in a 40-student class lock in 0.5-1 s
+    # after the rush instead of all in one bursting frame, while small
+    # rooms (≤10 fresh tracks) see no behaviour change.
+    MAX_FIRST_RECOGNITIONS_PER_FRAME: int = 10
+
+    # Auto CCTV enrolment — captures real CCTV embeddings opportunistically
+    # during a student's first sessions, with no operator action and no
+    # student UI. Trigger fires once per user lifetime when:
+    #   (a) student is recognised at sim >= AUTO_CCTV_ENROLL_MIN_CONFIDENCE
+    #       for >= AUTO_CCTV_ENROLL_MIN_STABLE_FRAMES frames in a row
+    #   (b) they have fewer than AUTO_CCTV_ENROLL_LIFETIME_CAP rows in
+    #       face_embeddings with angle_label like 'cctv_%'
+    #   (c) at least AUTO_CCTV_ENROLL_CAPTURE_INTERVAL_S seconds since
+    #       the last successful capture
+    # On trigger, the realtime tracker buffers the recognition embedding +
+    # crop. After AUTO_CCTV_ENROLL_TARGET_CAPTURES samples are collected,
+    # they're committed to FAISS + DB + disk in a background thread via
+    # the same path as scripts/cctv_enroll.py. Self-similarity check still
+    # applies — captures whose mean sim to existing phone vectors is below
+    # AUTO_CCTV_ENROLL_MIN_SELF_SIM are dropped without commit.
+    #
+    # Default OFF until you've observed dry-run logs and are happy with
+    # the trigger rate.
+    AUTO_CCTV_ENROLL_ENABLED: bool = False
+    AUTO_CCTV_ENROLL_MIN_CONFIDENCE: float = 0.60
+    AUTO_CCTV_ENROLL_MIN_STABLE_FRAMES: int = 60
+    AUTO_CCTV_ENROLL_TARGET_CAPTURES: int = 5
+    AUTO_CCTV_ENROLL_CAPTURE_INTERVAL_S: float = 5.0
+    AUTO_CCTV_ENROLL_LIFETIME_CAP: int = 5
+    AUTO_CCTV_ENROLL_MIN_SELF_SIM: float = 0.30
+    AUTO_CCTV_ENROLL_DRY_RUN: bool = False  # If True, log what would be committed but don't write
+
+    # Spatial+temporal identity hint (the "graveyard") for handling
+    # intermittent visibility — a student who turns their head, briefly
+    # walks off camera, or gets occluded loses their ByteTrack ID and
+    # comes back as a new track. Without this, every re-entry has to
+    # re-recognise from scratch and can land in the dead zone (sim
+    # 0.30-0.45) for the same student whose phone-only enrolment was
+    # marginal at this CCTV distance.
+    #
+    # When a recognised track expires, we record a tombstone with its
+    # last bbox center. When a new track appears within
+    # GRAVEYARD_MAX_DIST_NORMALIZED of EXACTLY ONE recent tombstone
+    # (within GRAVEYARD_TTL_SECONDS), the new track gets a hint pointing
+    # at the previous identity. The hint is then **independently
+    # confirmed** by FAISS — only if the same user comes back as top-1
+    # at sim >= (RECOGNITION_THRESHOLD - GRAVEYARD_RELAXED_THRESHOLD_DELTA)
+    # do we commit. The hint never overrides FAISS top-1: if a different
+    # user comes back as top-1 at full threshold, the hint is silently
+    # discarded.
+    #
+    # Safety: setting GRAVEYARD_TTL_SECONDS=0 disables the feature
+    # entirely (the lookup short-circuits). The previous attempt at
+    # spatial inheritance (CLAUDE.md) was unsafe because it inherited
+    # blindly; this version requires FAISS confirmation, so a wrong
+    # person walking into the same spot can never inherit — they'd
+    # have to actually FAISS-match to the previous user, which is
+    # exactly the legitimate signal.
+    IDENTITY_GRAVEYARD_TTL_SECONDS: float = 30.0
+    IDENTITY_GRAVEYARD_MAX_DIST_NORMALIZED: float = 0.15
+    IDENTITY_GRAVEYARD_RELAXED_THRESHOLD_DELTA: float = 0.10
     TRACK_CONFIRM_FRAMES: int = 1  # Recognize immediately on first detection
 
     # Drift Detection (track ID swap detection)
@@ -313,6 +437,25 @@ class Settings(BaseSettings):
     # match → ambiguous, etc.) bypass the throttle so we never lose a
     # genuine signal. Set to 0 to disable.
     RECOGNITION_EVIDENCE_THROTTLE_S: float = 10.0
+
+    # Live-display broadcast rate for the admin Face Comparison panel —
+    # an independent fast lane that bypasses the 10 s evidence-persistence
+    # throttle so the operator UI feels live for static subjects.
+    #
+    # Distinction:
+    #   - RECOGNITION_EVIDENCE_THROTTLE_S (above): gates DB rows + disk
+    #     JPEGs + the `recognition_event` WS message used by the Recognition
+    #     Stream panel. 10 s is right for an audit trail.
+    #   - LIVE_DISPLAY_BROADCAST_HZ (here): gates an ephemeral
+    #     `live_crop_update` WS message used only by the Face Comparison
+    #     sheet's Live Crop view. No DB/disk writes — pure broadcast.
+    #
+    # Bandwidth: ~50 KB JPEG × 1 Hz × N recognized students. At N=5 that
+    # is ~250 KB/s on the per-schedule WS, trivial on LAN. Bump down for
+    # heavier classrooms or remote operators on slower links. Set to 0 to
+    # disable the fast lane entirely (panel falls back to the 10 s
+    # recognition_event cadence).
+    LIVE_DISPLAY_BROADCAST_HZ: float = 1.0
 
     # Margin around the SCRFD bbox before cropping for the audit trail.
     # 0.35 means the crop expands 35 % outward on each side, giving a head

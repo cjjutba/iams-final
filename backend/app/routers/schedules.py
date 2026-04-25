@@ -4,14 +4,17 @@ Schedules Router
 API endpoints for class schedule management.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import logger
 from app.database import get_db
+from app.models.attendance_record import AttendanceRecord, AttendanceStatus
 from app.models.enrollment import Enrollment
+from app.models.face_registration import FaceRegistration
 from app.models.schedule import Schedule
 from app.models.user import User, UserRole
 from app.repositories.schedule_repository import ScheduleRepository
@@ -21,6 +24,7 @@ from app.schemas.schedule import (
     ScheduleResponse,
     ScheduleUpdate,
     ScheduleWithStudents,
+    SessionSummary,
 )
 from app.services import session_manager
 from app.utils.dependencies import get_current_user, require_role
@@ -224,6 +228,23 @@ def get_enrolled_students(
 
     students = schedule_repo.get_enrolled_students(schedule_id)
 
+    # Single batch lookup so we don't N+1 face_registrations per row. The
+    # set comprehension narrows to active registrations only — the model
+    # has a unique constraint on user_id but `is_active` can flip false
+    # when an admin resets a student's face from the user detail page.
+    student_ids = [s.id for s in students]
+    registered_ids: set[str] = set()
+    if student_ids:
+        rows = (
+            db.query(FaceRegistration.user_id)
+            .filter(
+                FaceRegistration.user_id.in_(student_ids),
+                FaceRegistration.is_active.is_(True),
+            )
+            .all()
+        )
+        registered_ids = {str(r[0]) for r in rows}
+
     # Convert to response format
     response = _serialize_schedule(schedule)
     student_info = [
@@ -233,11 +254,100 @@ def get_enrolled_students(
             "first_name": s.first_name,
             "last_name": s.last_name,
             "email": s.email,
+            "has_face_registered": str(s.id) in registered_ids,
         }
         for s in students
     ]
 
     return ScheduleWithStudents(**response.model_dump(), enrolled_students=student_info)
+
+
+@router.get(
+    "/{schedule_id}/sessions",
+    response_model=list[SessionSummary],
+    status_code=status.HTTP_200_OK,
+)
+def get_schedule_sessions(
+    schedule_id: str,
+    start_date: date | None = Query(None, description="Earliest session date (inclusive)"),
+    end_date: date | None = Query(None, description="Latest session date (inclusive)"),
+    limit: int = Query(50, ge=1, le=500, description="Max sessions to return"),
+    current_user: User = Depends(require_role(UserRole.FACULTY, UserRole.ADMIN)),
+    db: Session = Depends(get_db),
+):
+    """**Get Session History** (Faculty/Admin Only)
+
+    List past sessions for a schedule with per-status counts and the
+    derived attendance rate. A "session" is the set of attendance_records
+    sharing the same `date` for this schedule_id. Ordered newest first
+    and capped by `limit` (default 50).
+
+    Each row carries the schedule's canonical start/end window — the
+    actual session boundaries are inferable from presence_logs but at
+    this granularity the schedule window is what operators expect.
+    """
+    schedule_repo = ScheduleRepository(db)
+    schedule = schedule_repo.get_by_id(schedule_id)
+    if not schedule:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
+
+    import uuid as _uuid
+
+    schedule_uuid = _uuid.UUID(schedule_id) if isinstance(schedule_id, str) else schedule_id
+
+    # Single GROUP BY date,status pass — one row per (date, status) pair.
+    # We pivot client-side because the conditional COUNT pattern below
+    # works on both Postgres and SQLite without engine-specific filter
+    # syntax.
+    q = (
+        db.query(
+            AttendanceRecord.date.label("date"),
+            AttendanceRecord.status.label("status"),
+            func.count(AttendanceRecord.id).label("n"),
+        )
+        .filter(AttendanceRecord.schedule_id == schedule_uuid)
+        .group_by(AttendanceRecord.date, AttendanceRecord.status)
+    )
+    if start_date is not None:
+        q = q.filter(AttendanceRecord.date >= start_date)
+    if end_date is not None:
+        q = q.filter(AttendanceRecord.date <= end_date)
+
+    grouped: dict[date, dict[str, int]] = {}
+    for row in q.all():
+        d = row.date
+        # SQLAlchemy returns the enum's value (a string) on Postgres; on
+        # SQLite it's the enum object. Normalize to the string value.
+        status_val = row.status.value if hasattr(row.status, "value") else str(row.status)
+        bucket = grouped.setdefault(d, {})
+        bucket[status_val] = bucket.get(status_val, 0) + int(row.n)
+
+    sessions: list[SessionSummary] = []
+    for d in sorted(grouped.keys(), reverse=True)[:limit]:
+        b = grouped[d]
+        present = b.get(AttendanceStatus.PRESENT.value, 0)
+        late = b.get(AttendanceStatus.LATE.value, 0)
+        absent = b.get(AttendanceStatus.ABSENT.value, 0)
+        early_leave = b.get(AttendanceStatus.EARLY_LEAVE.value, 0)
+        excused = b.get(AttendanceStatus.EXCUSED.value, 0)
+        total = present + late + absent + early_leave + excused
+        rate = round(((present + late) / total) * 100, 1) if total > 0 else None
+        sessions.append(
+            SessionSummary(
+                date=d,
+                start_time=schedule.start_time,
+                end_time=schedule.end_time,
+                present=present,
+                late=late,
+                absent=absent,
+                early_leave=early_leave,
+                excused=excused,
+                attendance_rate=rate,
+                total_records=total,
+            )
+        )
+
+    return sessions
 
 
 @router.post("/", response_model=ScheduleResponse, status_code=status.HTTP_201_CREATED)

@@ -160,37 +160,88 @@ class RemoteInsightFaceModel:
         return out
 
     def embed_from_kps(self, frame: np.ndarray, kps: np.ndarray) -> np.ndarray:
-        """Run ArcFace via the sidecar for one face's 5-point landmarks.
+        """Single-face convenience wrapper — delegates to the batched path.
 
-        Single-face wrapper around the sidecar's batch ``/embed``
-        endpoint. The realtime tracker calls this once per face that
-        needs embedding, so we re-encode + send the frame each time.
-        Per-call overhead is ~7-10 ms (JPEG encode + loopback HTTP); a
-        future optimisation could batch when multiple faces hit the
-        same frame, but at typical N=1-3 the delta is small.
+        Kept on the API surface so callers that only have one face don't
+        have to wrap+unwrap a list themselves.
         """
+        out = self.embed_from_kps_batch(frame, [kps])
+        if out.shape[0] == 0:
+            raise RuntimeError("sidecar /embed returned no embeddings")
+        return out[0]
+
+    def embed_from_kps_batch(
+        self,
+        frame: np.ndarray,
+        kps_list: list[np.ndarray],
+    ) -> np.ndarray:
+        """Run ArcFace on N faces via the sidecar in ONE round-trip.
+
+        The realtime tracker accumulates all faces that need embedding
+        on a given frame, then makes one call here. We:
+
+          1. JPEG-encode the source frame ONCE (~5-10 ms)
+          2. Base64-encode + POST ONCE (~3-5 ms loopback)
+          3. Sidecar runs ONE cv2.dnn.blobFromImages + ONE ONNX
+             session.run for all N faces — see ml-sidecar/main.py
+          4. Receive [N, 512] in one response
+
+        At N=4 this saves ~50 ms vs the previous sequential per-face
+        path. Per-call overhead floor stays at the JPEG-encode + RTT
+        (~10 ms) so single-face callers pay roughly the same as before.
+
+        Args:
+            frame: BGR ndarray — the single source frame all faces are
+                in. Coordinate space of every kps must match.
+            kps_list: List of [5, 2] landmark arrays. Empty list returns
+                an empty [0, 512] array without making a network call.
+
+        Returns:
+            [N, 512] float32 L2-normalized embeddings, in the same order
+            as ``kps_list``. Numerically identical to per-face calls.
+
+        Raises:
+            RuntimeError: JPEG encode failure, sidecar HTTP failure,
+                or unexpected response shape.
+        """
+        if not kps_list:
+            return np.zeros((0, 512), dtype=np.float32)
+
         jpeg = self._encode_jpeg(frame)
         if jpeg is None:
             raise RuntimeError("could not JPEG-encode frame for /embed")
 
-        kps_list = np.asarray(kps, dtype=np.float32).tolist()
+        # Convert all kps to plain Python lists for JSON serialisation.
+        # The sidecar validates shape on its end so we don't need to here.
+        kps_payload = [
+            np.asarray(k, dtype=np.float32).tolist() for k in kps_list
+        ]
 
         payload = {
             "jpeg_b64": base64.b64encode(jpeg).decode("ascii"),
-            "kps": [kps_list],
+            "kps": kps_payload,
         }
         try:
             resp = self._client.post(f"{self._base_url}/embed", json=payload)
             resp.raise_for_status()
             body = resp.json()
         except Exception as exc:
-            logger.warning("Sidecar /embed failed: %s", exc)
+            logger.warning("Sidecar /embed (batch=%d) failed: %s", len(kps_list), exc)
             raise RuntimeError(f"sidecar /embed failed: {exc}") from exc
 
         emb_list = body.get("embeddings") or []
-        if not emb_list:
-            raise RuntimeError("sidecar /embed returned no embeddings")
-        return np.asarray(emb_list[0], dtype=np.float32)
+        if len(emb_list) != len(kps_list):
+            raise RuntimeError(
+                f"sidecar /embed returned {len(emb_list)} embeddings; "
+                f"requested {len(kps_list)}"
+            )
+        arr = np.asarray(emb_list, dtype=np.float32)
+        if arr.shape != (len(kps_list), 512):
+            raise RuntimeError(
+                f"sidecar /embed returned shape {arr.shape}; "
+                f"expected ({len(kps_list)}, 512)"
+            )
+        return arr
 
     # ------------------------------------------------------------------
     # Internals

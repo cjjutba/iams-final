@@ -54,9 +54,16 @@ interface WhepPlayerProps {
   onVideoSize?: (width: number, height: number) => void
   /** Fires once the player commits to a path — useful for the "showing main fallback" hint. */
   onActivePathChange?: (streamKey: string, isFallback: boolean) => void
+  /**
+   * Fires whenever the connection status changes. Lets the parent gate
+   * overlays (bounding boxes, click targets) on `'playing'` so they don't
+   * render on top of the "Connecting…" placeholder while frame data is
+   * already streaming over the WebSocket.
+   */
+  onStatusChange?: (status: PlayerStatus) => void
 }
 
-type PlayerStatus = 'idle' | 'connecting' | 'playing' | 'error'
+export type PlayerStatus = 'idle' | 'connecting' | 'playing' | 'error'
 
 /**
  * WebRTC WHEP client for the mediamtx live stream.
@@ -70,7 +77,7 @@ type PlayerStatus = 'idle' | 'connecting' | 'playing' | 'error'
  * - We DELETE the resource on unmount to free mediamtx's reader slot.
  */
 export const WhepPlayer = forwardRef<WhepPlayerHandle, WhepPlayerProps>(function WhepPlayer(
-  { streamKey, fallbackStreamKey, baseUrl, className, onVideoSize, onActivePathChange },
+  { streamKey, fallbackStreamKey, baseUrl, className, onVideoSize, onActivePathChange, onStatusChange },
   ref,
 ) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -78,6 +85,12 @@ export const WhepPlayer = forwardRef<WhepPlayerHandle, WhepPlayerProps>(function
   const resourceUrlRef = useRef<string | null>(null)
   const [status, setStatus] = useState<PlayerStatus>('idle')
   const [errorMsg, setErrorMsg] = useState<string>('')
+
+  // Notify parent on status transitions so overlays can be gated on
+  // 'playing' instead of just "WS data has arrived".
+  useEffect(() => {
+    onStatusChange?.(status)
+  }, [status, onStatusChange])
 
   // Per-decoded-frame subscribers (live-feed plan 2026-04-25 Step 3c).
   // The set is mutated by ``onVideoFrame`` (returned via the imperative

@@ -3,12 +3,14 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Loader2, Play, Square, Video } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { WhepPlayer, type WhepPlayerHandle } from '@/components/live-feed/WhepPlayer'
+import { WhepPlayer, type WhepPlayerHandle, type PlayerStatus } from '@/components/live-feed/WhepPlayer'
 import { DetectionOverlay } from '@/components/live-feed/DetectionOverlay'
 import { AttendancePanel } from '@/components/live-feed/AttendancePanel'
 import { RecognitionPanel } from '@/components/live-feed/RecognitionPanel'
 import { OverlayClickTargets } from '@/components/live-feed/OverlayClickTargets'
 import { TrackDetailSheet } from '@/components/live-feed/TrackDetailSheet'
+import { SessionStatusPill } from '@/components/live-feed/SessionStatusPill'
+import { VideoHud } from '@/components/live-feed/VideoHud'
 import { useAttendanceWs } from '@/hooks/use-attendance-ws'
 import { useFrameAligner } from '@/hooks/use-frame-aligner'
 import { useSchedule, useRoom, useSessionStartEligibility } from '@/hooks/use-queries'
@@ -19,7 +21,7 @@ import { useTrackSelectionStore } from '@/stores/track-selection.store'
 import api from '@/services/api'
 
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 
 /**
@@ -126,10 +128,18 @@ export default function ScheduleLivePage() {
   // Sub paths are provisioned by scripts/iams-cam-relay.sh + the
   // `~^.+-sub$` path in deploy/mediamtx.onprem.yml.
   //
-  // We tried main-as-default on 2026-04-25 to get sharper images for the
-  // thesis demo — it produced the dual-reader contention described above.
-  // Don't re-enable without first solving the contention (separate
-  // ffmpeg fanout to a `-display` path, or HLS for admin instead of WHEP).
+  // We tried main-as-default on 2026-04-25, then RETESTED 2026-04-25
+  // evening after the ML-sidecar split (hoping the sidecar's offload of
+  // CPU SCRFD would relieve the contention). It did NOT — "Stream
+  // unavailable / WebRTC disconnected" reproduced cleanly on EB226 under
+  // the same dual-reader pattern, and the player auto-fell-back to sub.
+  // Confirms the failure mode is at the mediamtx publisher→reader fanout
+  // layer, not the api-gateway compute side. Don't re-enable without
+  // first solving the contention (separate ffmpeg fanout to a `-display`
+  // path so each consumer has its own publisher; HLS for admin instead
+  // of WHEP; or backend display-delay buffering on the WS overlay path
+  // so sub-stream sync is achieved by adding latency, not by changing
+  // source).
   const displayStreamKey = useMemo(() => {
     return streamKey ? `${streamKey}-sub` : null
   }, [streamKey])
@@ -159,6 +169,7 @@ export default function ScheduleLivePage() {
     latestSummary,
     latestSessionEvent,
     recognitionEvents,
+    liveCrops,
     latencyStats,
     downloadLatencyCsv,
     clearLatencySamples,
@@ -167,9 +178,20 @@ export default function ScheduleLivePage() {
   const playerRef = useRef<WhepPlayerHandle>(null)
   const [videoSize, setVideoSize] = useState<{ width: number; height: number } | null>(null)
   const [activeStream, setActiveStream] = useState<{ key: string; isFallback: boolean } | null>(null)
+  const [playerStatus, setPlayerStatus] = useState<PlayerStatus>('idle')
   const handleActivePathChange = useCallback((key: string, isFallback: boolean) => {
     setActiveStream({ key, isFallback })
   }, [])
+  const handleStatusChange = useCallback((status: PlayerStatus) => {
+    setPlayerStatus(status)
+  }, [])
+
+  // Hide bbox overlays + click targets until the WebRTC stream is actually
+  // playing. WS frame_update events can arrive before the video element
+  // has its first decoded frame (during SDP/ICE negotiation), which used
+  // to draw stale boxes on top of the "Connecting to <key>…" placeholder
+  // — misleading UX where labels appear without a video to anchor them.
+  const overlaysVisible = playerStatus === 'playing'
 
   // RTP-PTS-based frame aligner (live-feed plan 2026-04-25 Step 3c).
   // Behind ``VITE_ENABLE_FRAME_ALIGN`` so we can A/B against the
@@ -361,17 +383,30 @@ export default function ScheduleLivePage() {
   return (
     <div className="flex flex-col gap-4 p-4 md:p-6">
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => navigate(`/schedules/${scheduleId}`)}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-2">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => navigate(`/schedules/${scheduleId}`)}
+            aria-label="Back to schedule"
+            title="Back to schedule"
+            className="-ml-2 mt-0.5 h-8 w-8 shrink-0"
+          >
             <ArrowLeft className="h-4 w-4" />
           </Button>
-          <div>
-            <h1 className="text-xl font-semibold leading-tight">
-              {schedule.subject_code} — {schedule.subject_name}
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              {room.name}{room.building ? ` · ${room.building}` : ''} · Stream: <span className="font-mono">{streamKey}</span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-xl font-semibold leading-tight">
+                {schedule.subject_code}{' '}
+                <span className="text-muted-foreground">·</span>{' '}
+                <span className="font-normal">{schedule.subject_name}</span>
+              </h1>
+              <SessionStatusPill sessionActive={sessionActive} eligibility={eligibility} />
+            </div>
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              {room.name}
+              {room.building ? ` · ${room.building}` : ''}
             </p>
           </div>
         </div>
@@ -384,7 +419,11 @@ export default function ScheduleLivePage() {
               disabled={sessionLoading}
               className="gap-2"
             >
-              {sessionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
+              {sessionLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Square className="h-4 w-4" />
+              )}
               End Session
             </Button>
           ) : (
@@ -394,7 +433,11 @@ export default function ScheduleLivePage() {
               title={startButtonTitle}
               className="gap-2"
             >
-              {sessionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              {sessionLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4" />
+              )}
               Start Session
             </Button>
           )}
@@ -413,103 +456,32 @@ export default function ScheduleLivePage() {
                 className="h-full w-full"
                 onVideoSize={(w, h) => setVideoSize({ width: w, height: h })}
                 onActivePathChange={handleActivePathChange}
+                onStatusChange={handleStatusChange}
               />
-              <OverlayClickTargets
-                tracks={latestFrame?.tracks ?? []}
-                videoElement={playerRef.current?.videoElement ?? null}
-                videoSize={videoSize}
-              />
-              <DetectionOverlay
-                tracks={frameAlignEnabled ? alignedTracks : (latestFrame?.tracks ?? [])}
-                videoElement={playerRef.current?.videoElement ?? null}
-                videoSize={videoSize}
-                selectedTrackId={selectedTrackId}
+              {overlaysVisible && (
+                <>
+                  <OverlayClickTargets
+                    tracks={latestFrame?.tracks ?? []}
+                    videoElement={playerRef.current?.videoElement ?? null}
+                    videoSize={videoSize}
+                  />
+                  <DetectionOverlay
+                    tracks={frameAlignEnabled ? alignedTracks : (latestFrame?.tracks ?? [])}
+                    videoElement={playerRef.current?.videoElement ?? null}
+                    videoSize={videoSize}
+                    selectedTrackId={selectedTrackId}
+                  />
+                </>
+              )}
+              <VideoHud
+                latestFrame={latestFrame}
+                latencyStats={latencyStats}
+                onDownloadCsv={downloadLatencyCsv}
+                onClearSamples={clearLatencySamples}
+                fallbackActive={activeStream?.isFallback ?? false}
+                fallbackKey={activeStream?.key}
               />
             </div>
-            {(latestFrame || activeStream?.isFallback) && (
-              <div className="flex flex-wrap items-center gap-4 border-t px-4 py-2 text-xs text-muted-foreground">
-                {latestFrame && (
-                  <>
-                    <span>
-                      Backend FPS: <span className="font-mono">{(latestFrame.fps ?? 0).toFixed(1)}</span>
-                    </span>
-                    {latestFrame.processing_ms != null && (
-                      <span>
-                        Latency: <span className="font-mono">{latestFrame.processing_ms.toFixed(0)} ms</span>
-                      </span>
-                    )}
-                    <span>
-                      Tracks: <span className="font-mono">{latestFrame.tracks.length}</span>
-                    </span>
-                    {/*
-                      Per-stage timing readout (added 2026-04-25, live-feed
-                      plan Step 2a). Only renders when the backend
-                      broadcasts the new fields — older builds quietly omit
-                      them. ``det/embed/faiss/other`` ms tells the
-                      operator at a glance which stage is eating the
-                      per-frame budget; useful for verifying Step 2b's
-                      CoreML re-export after deploy.
-                    */}
-                    {(latestFrame.det_ms != null ||
-                      latestFrame.embed_ms != null ||
-                      latestFrame.faiss_ms != null ||
-                      latestFrame.other_ms != null) && (
-                      <span className="font-mono opacity-80">
-                        det:{(latestFrame.det_ms ?? 0).toFixed(0)} embed:
-                        {(latestFrame.embed_ms ?? 0).toFixed(0)} faiss:
-                        {(latestFrame.faiss_ms ?? 0).toFixed(0)} other:
-                        {(latestFrame.other_ms ?? 0).toFixed(0)} ms
-                      </span>
-                    )}
-                    {/*
-                      End-to-end latency probe (thesis Objective 2). Each
-                      frame_update with detected_at_ms produces a sample
-                      (Date.now() - detected_at_ms) — the wall-clock
-                      delay from FrameGrabber drain to this hook
-                      receiving the WS message. p50/p95 are recomputed
-                      every 500 ms in the hook to keep this strip cheap.
-                      Download dumps the rolling buffer (≤5000 samples)
-                      to CSV for the thesis appendix.
-                    */}
-                    {latencyStats && (
-                      <span
-                        className="font-mono opacity-80"
-                        title="End-to-end: backend frame-grab → admin WS message receive (Date.now() − detected_at_ms)"
-                      >
-                        E2E p50:{latencyStats.p50Ms.toFixed(0)} p95:
-                        {latencyStats.p95Ms.toFixed(0)} (n=
-                        {latencyStats.count})
-                      </span>
-                    )}
-                    <span className="ml-auto flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={downloadLatencyCsv}
-                        disabled={!latencyStats || latencyStats.count === 0}
-                        className="rounded border px-2 py-0.5 font-mono text-[11px] hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
-                        title="Download every collected latency sample as CSV"
-                      >
-                        Download latency CSV
-                      </button>
-                      <button
-                        type="button"
-                        onClick={clearLatencySamples}
-                        disabled={!latencyStats || latencyStats.count === 0}
-                        className="rounded border px-2 py-0.5 font-mono text-[11px] hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
-                        title="Reset the rolling latency buffer for a fresh measurement run"
-                      >
-                        Reset
-                      </button>
-                    </span>
-                  </>
-                )}
-                {activeStream?.isFallback && (
-                  <span className="ml-auto text-amber-600 dark:text-amber-500">
-                    Sub stream unavailable — showing <span className="font-mono">{activeStream.key}</span> (main)
-                  </span>
-                )}
-              </div>
-            )}
           </CardContent>
         </Card>
 
@@ -534,28 +506,8 @@ export default function ScheduleLivePage() {
         isConnected={isConnected}
         scheduleId={scheduleId ?? ''}
         recognitionEvents={recognitionEvents}
+        liveCrops={liveCrops}
       />
-
-      {sessionActive === false && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm font-medium text-muted-foreground">Session not running</CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm text-muted-foreground">
-            {eligibility && !eligibility.allowed ? (
-              <>
-                The video stream is live but attendance cannot be started right now.
-                <span className="mt-1 block font-medium text-foreground">{eligibility.message}</span>
-              </>
-            ) : (
-              <>
-                The video stream is live but attendance is not being marked. Click{' '}
-                <span className="font-medium text-foreground">Start Session</span> to begin presence tracking.
-              </>
-            )}
-          </CardContent>
-        </Card>
-      )}
     </div>
   )
 }

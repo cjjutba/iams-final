@@ -10,6 +10,7 @@ import {
 import { useRegisteredFaces } from '@/hooks/use-registered-faces'
 import type {
   FrameUpdateMessage,
+  LiveCropUpdateMessage,
   RecognitionEventMessage,
   TrackInfo,
 } from '@/hooks/use-attendance-ws'
@@ -31,10 +32,15 @@ interface Props {
   isConnected: boolean
   scheduleId: string
   // Same WS recognition-event stream the right-hand Recognition Stream
-  // panel consumes. The Live Crop section picks the newest matching
-  // event for the selected user so the image ticks forward instead of
-  // freezing on the first captured frame. See use-server-side-crop.ts.
+  // panel consumes. Used by the Live Crop section as a *fallback* when
+  // no fast-lane broadcast has arrived for the selected user yet.
   recognitionEvents: RecognitionEventMessage[]
+  // Latest live-display broadcast keyed by user_id, ~1 Hz fast lane
+  // independent of the 10 s evidence-persistence throttle. The sheet
+  // looks up the entry matching the currently selected user and hands
+  // it to LiveCropPanel; the live broadcast wins over the slower
+  // recognition_event fallback when present. See use-server-side-crop.
+  liveCrops: Record<string, LiveCropUpdateMessage>
 }
 
 function resolveTrack(
@@ -95,6 +101,7 @@ export function TrackDetailSheet({
   isConnected,
   scheduleId,
   recognitionEvents,
+  liveCrops,
 }: Props) {
   const { selectedTrackId, selectedUserId, clear } = useTrackSelectionStore()
   const isOpen = selectedTrackId !== null || selectedUserId !== null
@@ -147,16 +154,19 @@ export function TrackDetailSheet({
     >
       <SheetContent
         side="right"
-        className="flex w-full flex-col gap-0 overflow-y-auto sm:max-w-lg"
+        className="flex w-full flex-col gap-0 overflow-y-auto p-0 sm:max-w-lg"
       >
-        <SheetHeader>
-          <SheetTitle>Face Comparison</SheetTitle>
-          <SheetDescription>
+        {/* Sticky header — keeps the sheet's identity anchored when the
+            content scrolls. Padding lives here, not on SheetContent, so
+            the sticky band can span the full width with a clean hairline. */}
+        <SheetHeader className="sticky top-0 z-10 space-y-1 border-b bg-background/95 px-5 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+          <SheetTitle className="text-base">Face Comparison</SheetTitle>
+          <SheetDescription className="text-[11.5px] text-muted-foreground">
             Registered angles vs. the live detection from the classroom camera.
           </SheetDescription>
         </SheetHeader>
 
-        <div className="flex flex-col gap-4 px-4 pb-6">
+        <div className="flex flex-col gap-5 px-5 pb-6 pt-4">
           <SimilarityMetrics
             track={track}
             fallbackUserId={effectiveUserId}
@@ -166,36 +176,55 @@ export function TrackDetailSheet({
             isStale={isStale}
           />
 
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <section className="flex flex-col gap-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Registered
-              </h3>
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+            <section className="flex flex-col gap-2.5">
+              <SectionHeading>Registered</SectionHeading>
               <RegisteredFaceGallery data={registrationData} />
             </section>
 
-            <section className="flex flex-col gap-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Live Crop
-              </h3>
+            <section className="flex flex-col gap-2.5">
+              <SectionHeading>Live Crop</SectionHeading>
               <LiveCropPanel
                 source={{
                   kind: 'server',
                   scheduleId,
                   userId: effectiveUserId,
                   recognitionEvents,
+                  liveCrop: effectiveUserId
+                    ? (liveCrops[effectiveUserId] ?? null)
+                    : null,
                 }}
               />
             </section>
           </div>
 
-          <p className="text-[11px] leading-snug text-muted-foreground">
-            Schedule <span className="font-mono">{scheduleId}</span>. Cosine
-            similarity and matched identity come from the ML pipeline's FAISS
-            lookup broadcast over the attendance WebSocket.
-          </p>
+          {/* Footer — schedule UUID truncated; full content available on
+              hover/focus via title attribute. The boilerplate description
+              that used to live here is in the sheet header now. */}
+          <div
+            className="mt-1 flex items-center gap-1.5 border-t pt-3 text-[10px] text-muted-foreground/70"
+            title={`Schedule ${scheduleId}`}
+          >
+            <span className="uppercase tracking-wider">Schedule</span>
+            <span className="font-mono tabular-nums">
+              {scheduleId.slice(0, 8)}
+            </span>
+            <span className="ml-auto">via FAISS WebSocket</span>
+          </div>
         </div>
       </SheetContent>
     </Sheet>
+  )
+}
+
+/**
+ * Section heading for the Registered / Live Crop columns. Centralised so
+ * the typographic rhythm is identical and any future tweak is one edit.
+ */
+function SectionHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <h3 className="px-0.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+      {children}
+    </h3>
   )
 }

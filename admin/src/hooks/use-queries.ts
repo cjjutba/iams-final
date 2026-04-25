@@ -31,6 +31,7 @@ export const queryKeys = {
     list: (params?: { day?: number }) => ['schedules', 'list', params] as const,
     detail: (id: string) => ['schedules', 'detail', id] as const,
     students: (id: string) => ['schedules', 'students', id] as const,
+    sessions: (id: string) => ['schedules', 'sessions', id] as const,
   },
   rooms: {
     all: ['rooms'] as const,
@@ -226,6 +227,15 @@ export function useScheduleStudents(id: string) {
     queryKey: queryKeys.schedules.students(id),
     queryFn: () => schedulesService.getEnrolledStudents(id),
     enabled: !!id,
+  })
+}
+
+export function useScheduleSessions(id: string, params?: { limit?: number }) {
+  return useQuery({
+    queryKey: [...queryKeys.schedules.sessions(id), params?.limit ?? 50],
+    queryFn: () => schedulesService.getSessions(id, { limit: params?.limit ?? 50 }),
+    enabled: !!id,
+    staleTime: 30_000,
   })
 }
 

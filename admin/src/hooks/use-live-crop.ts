@@ -32,6 +32,7 @@ export function useLiveCrop(source: LiveCropSource): LiveCropResult {
     scheduleId: !isClient ? source.scheduleId : '',
     userId: !isClient ? source.userId : null,
     recognitionEvents: !isClient ? source.recognitionEvents : EMPTY_EVENTS,
+    liveCrop: !isClient ? source.liveCrop : null,
   })
 
   return isClient ? clientResult : serverResult
