@@ -2,6 +2,7 @@ import { Bell, Inbox } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
+import { isToday, isYesterday } from 'date-fns'
 import { useAuthStore } from '@/stores/auth.store'
 import { useNotificationStore } from '@/stores/notification.store'
 import { notificationsService } from '@/services/notifications.service'
@@ -25,6 +26,26 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Breadcrumbs } from './breadcrumbs'
 import { NotificationRow } from '@/components/notifications/notification-row'
 import type { Notification } from '@/types'
+
+// Phase 8: bucket the popover's notifications into Today / Yesterday /
+// Earlier so users can scan recent activity at a glance. Empty buckets
+// are dropped so the popover stays compact.
+type NotificationDateGroup = { label: string; items: Notification[] }
+
+function groupNotificationsByDate(notifications: Notification[]): NotificationDateGroup[] {
+  const groups: NotificationDateGroup[] = [
+    { label: 'Today', items: [] },
+    { label: 'Yesterday', items: [] },
+    { label: 'Earlier', items: [] },
+  ]
+  for (const n of notifications) {
+    const d = new Date(n.created_at)
+    if (isToday(d)) groups[0].items.push(n)
+    else if (isYesterday(d)) groups[1].items.push(n)
+    else groups[2].items.push(n)
+  }
+  return groups.filter((g) => g.items.length > 0)
+}
 
 export function Header() {
   const { user, logout } = useAuthStore()
@@ -129,11 +150,16 @@ export function Header() {
                   <span className="text-sm text-muted-foreground">No notifications</span>
                 </div>
               ) : (
-                notifications
-                  .slice(0, 5)
-                  .map((notif) => (
-                    <NotificationRow key={notif.id} notification={notif} variant="compact" />
-                  ))
+                groupNotificationsByDate(notifications.slice(0, 5)).map((group) => (
+                  <div key={group.label}>
+                    <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground bg-muted/40">
+                      {group.label}
+                    </div>
+                    {group.items.map((notif) => (
+                      <NotificationRow key={notif.id} notification={notif} variant="compact" />
+                    ))}
+                  </div>
+                ))
               )}
             </div>
             <div className="border-t px-4 py-2 text-center">

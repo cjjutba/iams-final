@@ -811,6 +811,45 @@ async def deregister_face(user_id: str, current_user: User = Depends(get_current
     face_service = FaceService(db)
     await face_service.deregister_face(user_id)
 
+    # Phase-4: when an admin removes a student's face registration, notify
+    # the student that they need to re-enroll. Self-service deregistration
+    # (a student deleting their own face) is intentionally NOT notified —
+    # they already know.
+    if (
+        current_user.role != UserRole.STUDENT
+        and str(current_user.id) != user_id
+    ):
+        try:
+            from app.services.notification_service import notify
+
+            target_user = db.query(User).filter(User.id == user_id).first()
+            student_full_name = (
+                f"{target_user.first_name or ''} {target_user.last_name or ''}".strip()
+                if target_user
+                else ""
+            )
+            await notify(
+                db,
+                user_id=user_id,
+                title="Face re-registration required",
+                message=(
+                    "An administrator has reset your face registration. "
+                    "Please open the IAMS app and submit new face captures."
+                ),
+                notification_type="face_re_registration_required",
+                severity="info",
+                preference_key=None,
+                send_email=True,
+                email_template="face_re_registration_required",
+                email_context={"student_name": student_full_name},
+                dedup_window_seconds=0,
+                reference_id=str(user_id),
+                reference_type="user",
+                toast_type="info",
+            )
+        except Exception:
+            logger.exception("Failed to notify student of face re-registration request")
+
     return {"success": True, "message": "Face deregistered successfully"}
 
 

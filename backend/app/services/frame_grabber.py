@@ -244,6 +244,56 @@ class FrameGrabber:
                 exc_info=True,
             )
 
+    def _get_main_loop(self):
+        """Resolve the FastAPI app's asyncio loop captured at startup.
+
+        Returns the loop or None if unavailable (e.g. during tests where
+        the app isn't running). Performs the import lazily so this module
+        can still be imported by unit tests without dragging in main.
+        """
+        try:
+            from app.main import app  # FastAPI app instance, has state.loop
+
+            return getattr(app.state, "loop", None)
+        except Exception:
+            return None
+
+    def _emit_camera_health_admin(
+        self,
+        *,
+        is_healthy: bool,
+    ) -> None:
+        """Best-effort admin-bell health notification.
+
+        Runs from the daemon stderr / drain threads. Schedules the
+        coroutine on the captured FastAPI loop via run_coroutine_threadsafe.
+        Always swallows exceptions — never crashes the FrameGrabber.
+        """
+        try:
+            from app.services import health_notifier
+
+            short = self._short_url()
+            health_notifier.report_health_threadsafe(
+                self._get_main_loop(),
+                resource=f"camera:{short}",
+                is_healthy=is_healthy,
+                down_title=f"Camera offline: {short}",
+                down_message="Camera stream stopped publishing frames",
+                down_type="camera_offline",
+                recovered_title=f"Camera recovered: {short}",
+                recovered_message="Camera stream is publishing frames again",
+                recovered_type="camera_recovered",
+                preference_key="camera_alerts",
+                reference_type="room",
+                reference_id=short,
+                down_severity="error",
+            )
+        except Exception:
+            logger.debug(
+                "FrameGrabber: failed to schedule admin camera notify",
+                exc_info=True,
+            )
+
     def stop(self) -> None:
         """Signal the drain thread to exit and release FFmpeg."""
         if self._stop_event.is_set():
@@ -408,6 +458,8 @@ class FrameGrabber:
                                 f"Camera publisher offline: {self._short_url()}"
                             ),
                         )
+                        # Admin-bell notification (transition tracked).
+                        self._emit_camera_health_admin(is_healthy=False)
                     continue
                 logger.warning("FFmpeg [%s]: %s", self._url, msg)
         except Exception:
@@ -499,6 +551,8 @@ class FrameGrabber:
                         f"Camera publisher online: {self._short_url()}"
                     ),
                 )
+                # Admin-bell recovery notification (transition tracked).
+                self._emit_camera_health_admin(is_healthy=True)
             self._consecutive_failures = 0
             self._publisher_offline_logged = False
 

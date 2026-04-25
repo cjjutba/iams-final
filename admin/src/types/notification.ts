@@ -36,3 +36,13 @@ export interface NotificationPreference {
 }
 
 export type NotificationPreferenceUpdate = Partial<NotificationPreference>
+
+// Phase 8: per-type and per-severity unread counts for the sidebar.
+// Returned by GET /api/v1/notifications/stats. The keys are open-ended
+// (the backend groups by whatever `type` strings exist in the DB), so
+// we type them as Record<string, number> instead of an enum.
+export interface NotificationStats {
+  by_type: Record<string, number>
+  by_severity: Record<string, number>
+  total: number
+}

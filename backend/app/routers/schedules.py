@@ -27,6 +27,7 @@ from app.schemas.schedule import (
     SessionSummary,
 )
 from app.services import session_manager
+from app.services.notification_service import notify, notify_schedule_participants
 from app.utils.dependencies import get_current_user, require_role
 
 router = APIRouter()
@@ -351,7 +352,7 @@ def get_schedule_sessions(
 
 
 @router.post("/", response_model=ScheduleResponse, status_code=status.HTTP_201_CREATED)
-def create_schedule(
+async def create_schedule(
     schedule_data: ScheduleCreate,
     current_user: User = Depends(require_role(UserRole.ADMIN)),
     db: Session = Depends(get_db),
@@ -399,11 +400,96 @@ def create_schedule(
     except Exception:
         logger.warning("log_audit failed for schedule.create", exc_info=True)
 
+    # Schedule conflict warning (informational; do NOT abort the create).
+    # Checks for overlapping schedules on the same day for the same faculty.
+    try:
+        if schedule.faculty_id and schedule.day_of_week is not None:
+            conflicts = (
+                db.query(Schedule)
+                .filter(
+                    Schedule.faculty_id == schedule.faculty_id,
+                    Schedule.day_of_week == schedule.day_of_week,
+                    Schedule.id != schedule.id,
+                    Schedule.is_active.is_(True),
+                    Schedule.start_time < schedule.end_time,
+                    Schedule.end_time > schedule.start_time,
+                )
+                .all()
+            )
+            if conflicts:
+                conflict_codes = ", ".join(c.subject_code for c in conflicts)
+                await notify(
+                    db,
+                    user_id=str(current_user.id),
+                    title="Schedule conflict warning",
+                    message=(
+                        f"Faculty already has {len(conflicts)} schedule(s) "
+                        f"overlapping this slot: {conflict_codes}."
+                    ),
+                    notification_type="schedule_conflict_warning",
+                    severity="warn",
+                    preference_key="schedule_conflict_alerts",
+                    send_email=False,
+                    dedup_window_seconds=0,
+                    reference_id=(
+                        f"conflict:{schedule.faculty_id}:"
+                        f"{schedule.day_of_week}:{schedule.start_time}"
+                    ),
+                    reference_type="composite_key",
+                    toast_type="warning",
+                )
+    except Exception:
+        logger.exception("Failed to emit schedule conflict warning")
+
+    # Notify the assigned faculty of the new schedule.
+    if schedule.faculty_id is not None:
+        try:
+            day_labels = [
+                "Monday", "Tuesday", "Wednesday", "Thursday",
+                "Friday", "Saturday", "Sunday",
+            ]
+            day_name = (
+                day_labels[schedule.day_of_week]
+                if schedule.day_of_week is not None
+                and 0 <= schedule.day_of_week <= 6
+                else str(schedule.day_of_week)
+            )
+            room_name = schedule.room.name if schedule.room else "TBD"
+            await notify(
+                db,
+                user_id=str(schedule.faculty_id),
+                title=f"Schedule assigned: {schedule.subject_code}",
+                message=(
+                    f"You have been assigned a new schedule: "
+                    f"{schedule.subject_code} on {day_name} from "
+                    f"{schedule.start_time} to {schedule.end_time} "
+                    f"in {room_name}."
+                ),
+                notification_type="schedule_assigned",
+                severity="info",
+                preference_key=None,
+                send_email=True,
+                email_template="schedule_assigned",
+                email_context={
+                    "subject_code": schedule.subject_code,
+                    "day_of_week": day_name,
+                    "start_time": str(schedule.start_time),
+                    "end_time": str(schedule.end_time),
+                    "room_name": room_name,
+                },
+                dedup_window_seconds=0,
+                reference_id=str(schedule.id),
+                reference_type="schedule",
+                toast_type="info",
+            )
+        except Exception:
+            logger.exception("Failed to notify faculty of schedule assignment")
+
     return _serialize_schedule(schedule)
 
 
 @router.patch("/{schedule_id}", response_model=ScheduleResponse, status_code=status.HTTP_200_OK)
-def update_schedule(
+async def update_schedule(
     schedule_id: str,
     update_data: ScheduleUpdate,
     current_user: User = Depends(require_role(UserRole.ADMIN)),
@@ -423,6 +509,17 @@ def update_schedule(
 
     # Filter out None values
     update_dict = {k: v for k, v in update_data.model_dump().items() if v is not None}
+
+    # Snapshot old field values BEFORE applying the patch so we can diff
+    # for the participant-facing notification message.
+    before = schedule_repo.get_by_id(schedule_id)
+    old_room_id = before.room_id if before else None
+    old_room_name = (
+        before.room.name if before and before.room else None
+    )
+    old_start_time = before.start_time if before else None
+    old_end_time = before.end_time if before else None
+    old_day_of_week = before.day_of_week if before else None
 
     schedule = schedule_repo.update(schedule_id, update_dict)
 
@@ -453,11 +550,64 @@ def update_schedule(
     except Exception:
         logger.warning("log_audit failed for schedule.update", exc_info=True)
 
+    # Build a human-readable diff and notify schedule participants when
+    # any of the user-visible fields actually changed.
+    try:
+        changes: list[str] = []
+        if old_room_id is not None and old_room_id != schedule.room_id:
+            new_room_name = schedule.room.name if schedule.room else "TBD"
+            changes.append(
+                f"Room: {old_room_name or 'TBD'} -> {new_room_name}"
+            )
+        if old_start_time is not None and old_start_time != schedule.start_time:
+            changes.append(
+                f"Start time: {old_start_time} -> {schedule.start_time}"
+            )
+        if old_end_time is not None and old_end_time != schedule.end_time:
+            changes.append(
+                f"End time: {old_end_time} -> {schedule.end_time}"
+            )
+        if (
+            old_day_of_week is not None
+            and old_day_of_week != schedule.day_of_week
+        ):
+            changes.append(
+                f"Day: {old_day_of_week} -> {schedule.day_of_week}"
+            )
+        if changes:
+            await notify_schedule_participants(
+                db,
+                schedule_id=schedule.id,
+                title=f"Schedule updated: {schedule.subject_code}",
+                message=(
+                    f"Changes to your schedule for {schedule.subject_code}: "
+                    + "; ".join(changes)
+                ),
+                notification_type="schedule_updated",
+                severity="info",
+                preference_key=None,
+                send_email=True,
+                email_template="schedule_updated",
+                email_context={
+                    "subject_code": schedule.subject_code,
+                    "changes": changes,
+                },
+                dedup_window_seconds=300,
+                reference_id=str(schedule.id),
+                reference_type="schedule",
+                toast_type="info",
+                include_admins=False,
+            )
+    except Exception:
+        logger.exception(
+            "Failed to notify schedule participants of update"
+        )
+
     return _serialize_schedule(schedule)
 
 
 @router.delete("/{schedule_id}", status_code=status.HTTP_200_OK)
-def delete_schedule(
+async def delete_schedule(
     schedule_id: str, current_user: User = Depends(require_role(UserRole.ADMIN)), db: Session = Depends(get_db)
 ):
     """
@@ -476,6 +626,41 @@ def delete_schedule(
     target = schedule_repo.get_by_id(schedule_id)
     target_subject_code = target.subject_code if target else None
     target_subject_name = target.subject_name if target else None
+
+    # Notify participants BEFORE the delete so we can still resolve the
+    # faculty + enrollment FKs even if the delete is a hard-delete.
+    if target is not None:
+        try:
+            await notify_schedule_participants(
+                db,
+                schedule_id=target.id,
+                title=f"Class cancelled: {target.subject_code}",
+                message=(
+                    f"The class {target.subject_code} on day "
+                    f"{target.day_of_week} {target.start_time}-"
+                    f"{target.end_time} has been deleted."
+                ),
+                notification_type="schedule_deleted",
+                severity="warn",
+                preference_key=None,
+                send_email=True,
+                email_template="schedule_deleted",
+                email_context={
+                    "subject_code": target.subject_code,
+                    "day_of_week": str(target.day_of_week),
+                    "start_time": str(target.start_time),
+                    "end_time": str(target.end_time),
+                },
+                dedup_window_seconds=0,
+                reference_id=str(target.id),
+                reference_type="schedule",
+                toast_type="warning",
+                include_admins=False,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to notify schedule participants of deletion"
+            )
 
     schedule_repo.delete(schedule_id)
 
@@ -587,7 +772,7 @@ def update_schedule_config(
 
 
 @router.post("/{schedule_id}/enroll/{student_user_id}", status_code=status.HTTP_201_CREATED)
-def enroll_student(
+async def enroll_student(
     schedule_id: str,
     student_user_id: str,
     current_user: User = Depends(require_role(UserRole.ADMIN)),
@@ -620,6 +805,34 @@ def enroll_student(
 
     logger.info(f"Manual enrollment: {student.email} -> {schedule.subject_code} by {current_user.email}")
 
+    # Notify the student of their new enrollment.
+    try:
+        room_name = schedule.room.name if schedule.room else "TBD"
+        await notify(
+            db,
+            user_id=str(student.id),
+            title=f"Enrolled: {schedule.subject_code}",
+            message=f"You have been enrolled in {schedule.subject_code}.",
+            notification_type="enrollment_added",
+            severity="info",
+            preference_key=None,
+            send_email=True,
+            email_template="enrollment_added",
+            email_context={
+                "subject_code": schedule.subject_code,
+                "day_of_week": str(schedule.day_of_week),
+                "start_time": str(schedule.start_time),
+                "end_time": str(schedule.end_time),
+                "room_name": room_name,
+            },
+            dedup_window_seconds=0,
+            reference_id=str(enrollment.id),
+            reference_type="enrollment",
+            toast_type="info",
+        )
+    except Exception:
+        logger.exception("Failed to notify student of enrollment")
+
     try:
         from app.utils.audit import log_audit
 
@@ -650,7 +863,7 @@ def enroll_student(
 
 
 @router.delete("/{schedule_id}/enroll/{student_user_id}", status_code=status.HTTP_200_OK)
-def unenroll_student(
+async def unenroll_student(
     schedule_id: str,
     student_user_id: str,
     current_user: User = Depends(require_role(UserRole.ADMIN)),
@@ -674,6 +887,33 @@ def unenroll_student(
     # even though the FK rows are gone.
     student = db.query(User).filter(User.id == student_user_id).first()
     schedule = db.query(Schedule).filter(Schedule.id == schedule_id).first()
+
+    # Notify the student BEFORE the delete so we still have the IDs and
+    # subject_code for the message body / email context.
+    if student is not None and schedule is not None:
+        try:
+            await notify(
+                db,
+                user_id=str(student.id),
+                title=f"Unenrolled: {schedule.subject_code}",
+                message=(
+                    f"You have been removed from {schedule.subject_code}."
+                ),
+                notification_type="enrollment_removed",
+                severity="info",
+                preference_key=None,
+                send_email=True,
+                email_template="enrollment_removed",
+                email_context={
+                    "subject_code": schedule.subject_code,
+                },
+                dedup_window_seconds=0,
+                reference_id=enrollment_id,
+                reference_type="enrollment",
+                toast_type="info",
+            )
+        except Exception:
+            logger.exception("Failed to notify student of unenrollment")
 
     db.delete(enrollment)
     db.commit()

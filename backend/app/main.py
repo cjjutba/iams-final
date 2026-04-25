@@ -81,6 +81,15 @@ async def lifespan(app: FastAPI):
     logger.info(f"Debug mode: {settings.DEBUG}")
     logger.info(f"API prefix: {settings.API_PREFIX}")
 
+    # ── Health-notifier bootstrap ─────────────────────────────────
+    # Capture the running event loop so daemon threads (FrameGrabber stderr
+    # drain, etc.) can schedule notification coros via run_coroutine_threadsafe.
+    # mark_boot() starts the 60s grace window so spurious deploy-time
+    # transitions don't fire admin alerts.
+    from app.services import health_notifier
+    app.state.loop = asyncio.get_running_loop()
+    health_notifier.mark_boot()
+
     # ── Database ──────────────────────────────────────────────────
     db_connected = await asyncio.to_thread(check_db_connection)
     if not db_connected:
@@ -127,6 +136,20 @@ async def lifespan(app: FastAPI):
                     db.close()
             except Exception as e:
                 logger.error(f"FAISS reconciliation failed: {e}")
+                await health_notifier.emit_one_shot(
+                    title="FAISS reconciliation failed",
+                    message=(
+                        f"FAISS index reconciliation failed at startup: {e}. "
+                        "Face recognition may be degraded."
+                    ),
+                    notification_type="faiss_reconcile_failed",
+                    severity="critical",
+                    preference_key="ml_health_alerts",
+                    reference_id="faiss_reconcile",
+                    reference_type="ml_index",
+                    dedup_window_seconds=300,
+                    toast_type="error",
+                )
 
             # Background listener for FAISS reload notifications (multi-worker sync)
             app.state.faiss_subscriber_task = asyncio.create_task(faiss_manager.subscribe_index_changes())
@@ -177,11 +200,43 @@ async def lifespan(app: FastAPI):
                             provider_summary,
                         )
                         sidecar_bound = True
+                        # Recovery transition fires only if the sidecar
+                        # had previously been recorded as down.
+                        await health_notifier.report_health(
+                            resource="ml_sidecar",
+                            is_healthy=True,
+                            down_title="ML sidecar unavailable",
+                            down_message=(
+                                f"ML sidecar at {settings.ML_SIDECAR_URL} failed health probe "
+                                "— using slower in-process inference"
+                            ),
+                            down_type="ml_sidecar_down",
+                            recovered_title="ML sidecar recovered",
+                            recovered_message="ML sidecar is responding again",
+                            recovered_type="ml_sidecar_recovered",
+                            preference_key="ml_health_alerts",
+                            down_severity="warn",
+                        )
                     else:
                         logger.warning(
                             "ML sidecar at %s did not pass health probe — "
                             "falling back to in-process inference",
                             settings.ML_SIDECAR_URL,
+                        )
+                        await health_notifier.report_health(
+                            resource="ml_sidecar",
+                            is_healthy=False,
+                            down_title="ML sidecar unavailable",
+                            down_message=(
+                                f"ML sidecar at {settings.ML_SIDECAR_URL} failed health probe "
+                                "— using slower in-process inference"
+                            ),
+                            down_type="ml_sidecar_down",
+                            recovered_title="ML sidecar recovered",
+                            recovered_message="ML sidecar is responding again",
+                            recovered_type="ml_sidecar_recovered",
+                            preference_key="ml_health_alerts",
+                            down_severity="warn",
                         )
                         try:
                             remote.close()
@@ -310,6 +365,19 @@ async def lifespan(app: FastAPI):
                     logger.warning(
                         f"FAISS health check: mismatch detected — "
                         f"FAISS has {faiss_count} vectors, DB has {active_count} active registrations"
+                    )
+                    await health_notifier.emit_one_shot(
+                        title="FAISS index mismatch detected",
+                        message=(
+                            f"FAISS contains {faiss_count} vectors but DB has "
+                            f"{active_count} active registrations"
+                        ),
+                        notification_type="faiss_mismatch",
+                        severity="error",
+                        preference_key="ml_health_alerts",
+                        reference_id="faiss_mismatch",
+                        reference_type="ml_index",
+                        dedup_window_seconds=1800,
                     )
                 else:
                     logger.debug(f"FAISS health check: in sync ({active_count} vectors)")
@@ -583,6 +651,29 @@ async def lifespan(app: FastAPI):
                                 exc_info=True,
                             )
 
+                        # Admin-bell notification mirroring the system event.
+                        # Dedup keyed on the room so back-to-back rolling
+                        # sessions don't fan out duplicate alerts.
+                        try:
+                            await health_notifier.emit_one_shot(
+                                title=f"Camera offline for {subject_code or room_id}",
+                                message=(
+                                    f"Session is starting in room {room_id} but no "
+                                    f"camera is available — ML pipeline inactive"
+                                ),
+                                notification_type="camera_offline",
+                                severity="error",
+                                preference_key="camera_alerts",
+                                reference_id=str(room_id),
+                                reference_type="room",
+                                dedup_window_seconds=600,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "[lifecycle] camera_offline admin notify failed",
+                                exc_info=True,
+                            )
+
                     # Send session-start notifications (fire-and-forget)
                     try:
                         from app.services.notification_service import notify as _notify
@@ -727,6 +818,142 @@ async def lifespan(app: FastAPI):
                             exc_info=True,
                         )
 
+                    # Phase-5: marked_absent_session_end + session_zero_recognition
+                    # ────────────────────────────────────────────────────────
+                    # Once the auto-end has fired, look at today's attendance
+                    # rows for this schedule. Anyone in the enrollment list
+                    # without a row was never recognised — they get a personal
+                    # "marked absent" notification. If NO rows exist at all
+                    # for an enrolled class, that's an anomaly (camera /
+                    # recognition pipeline issue) and faculty + admins get a
+                    # session_zero_recognition alert. All of this is wrapped
+                    # in its own try/except so a query failure here can't
+                    # abort the lifecycle loop.
+                    try:
+                        from datetime import date as _date
+
+                        from app.models.attendance_record import AttendanceRecord
+                        from app.services.notification_service import (
+                            notify as _notify_one,
+                        )
+                        from app.services.notification_service import notify_admins
+
+                        session_date = _date.today()
+                        session_date_str = session_date.isoformat()
+
+                        db = SessionLocal()
+                        try:
+                            attendance_rows = (
+                                db.query(AttendanceRecord)
+                                .filter(
+                                    AttendanceRecord.schedule_id == sid,
+                                    AttendanceRecord.date == session_date,
+                                )
+                                .all()
+                            )
+                            present_ids = {
+                                str(a.student_id) for a in attendance_rows
+                            }
+                            enrolled_id_set = {str(s) for s in student_ids}
+                            absent_ids = enrolled_id_set - present_ids
+
+                            # Per-student "you were marked absent" fan-out.
+                            for student_id in absent_ids:
+                                try:
+                                    await _notify_one(
+                                        db,
+                                        student_id,
+                                        f"Marked absent: {subject_code}",
+                                        (
+                                            f"You were marked absent for "
+                                            f"{subject_code} on {session_date_str}."
+                                        ),
+                                        "marked_absent_session_end",
+                                        severity="warn",
+                                        preference_key="attendance_confirmation",
+                                        send_email=False,
+                                        dedup_window_seconds=0,
+                                        reference_id=f"absent:{sid}:{session_date_str}",
+                                        reference_type="attendance",
+                                        toast_type="warning",
+                                    )
+                                except Exception:
+                                    logger.debug(
+                                        "[lifecycle] marked_absent_session_end "
+                                        "notify failed for student %s",
+                                        student_id,
+                                        exc_info=True,
+                                    )
+
+                            # Zero-recognition guardrail: nobody got matched
+                            # at all despite an enrolled class. Likely camera
+                            # offline / ML pipeline missing — flag faculty +
+                            # admins with email so it doesn't slip past.
+                            if not attendance_rows and enrolled_id_set:
+                                try:
+                                    if faculty_id:
+                                        await _notify_one(
+                                            db,
+                                            faculty_id,
+                                            f"No attendance recorded: {subject_code}",
+                                            (
+                                                f"Session for {subject_code} "
+                                                f"ended with zero recognized "
+                                                f"check-ins despite "
+                                                f"{len(enrolled_id_set)} "
+                                                f"enrolled students. Camera or "
+                                                f"recognition issue?"
+                                            ),
+                                            "session_zero_recognition",
+                                            severity="warn",
+                                            preference_key="anomaly_alerts",
+                                            send_email=False,
+                                            dedup_window_seconds=0,
+                                            reference_id=f"zero_recog:{sid}:{session_date_str}",
+                                            reference_type="schedule",
+                                            toast_type="warning",
+                                        )
+                                except Exception:
+                                    logger.debug(
+                                        "[lifecycle] session_zero_recognition "
+                                        "faculty notify failed",
+                                        exc_info=True,
+                                    )
+
+                                try:
+                                    await notify_admins(
+                                        db,
+                                        title=f"Zero recognition in {subject_code}",
+                                        message=(
+                                            f"Session ended with zero check-ins "
+                                            f"(schedule {sid}). May indicate "
+                                            f"camera or ML pipeline issue."
+                                        ),
+                                        notification_type="session_zero_recognition",
+                                        severity="warn",
+                                        preference_key="anomaly_alerts",
+                                        send_email=True,
+                                        dedup_window_seconds=0,
+                                        reference_id=f"zero_recog:{sid}:{session_date_str}",
+                                        reference_type="schedule",
+                                        toast_type="warning",
+                                    )
+                                except Exception:
+                                    logger.debug(
+                                        "[lifecycle] session_zero_recognition "
+                                        "admin notify failed",
+                                        exc_info=True,
+                                    )
+                        finally:
+                            db.close()
+                    except Exception:
+                        logger.warning(
+                            "[lifecycle] marked_absent_session_end / "
+                            "session_zero_recognition fan-out failed for %s",
+                            subject_code,
+                            exc_info=True,
+                        )
+
                 except Exception:
                     logger.exception(f"[lifecycle] Failed to end session {sid}")
 
@@ -745,6 +972,7 @@ async def lifespan(app: FastAPI):
         from app.services.notification_jobs import (
             run_anomaly_detection,
             run_daily_digest,
+            run_daily_health_summary,
             run_low_attendance_check,
             run_notification_cleanup,
             run_weekly_digest,
@@ -756,6 +984,22 @@ async def lifespan(app: FastAPI):
             hour=settings.DAILY_DIGEST_HOUR,
             minute=0,
             id="daily_digest",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+            coalesce=True,
+        )
+
+        # Daily health summary at 06:00 UTC — admins only, opt-in via the
+        # daily_health_summary preference (default off). Headline addition
+        # of Phase 7: gives operators a single bell ping with camera /
+        # recognition / error counts so silent regressions get noticed.
+        scheduler.add_job(
+            run_daily_health_summary,
+            "cron",
+            hour=6,
+            minute=0,
+            id="daily_health_summary",
             replace_existing=True,
             max_instances=1,
             misfire_grace_time=3600,

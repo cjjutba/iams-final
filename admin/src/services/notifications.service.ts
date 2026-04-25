@@ -1,5 +1,10 @@
 import api from './api'
-import type { Notification, NotificationPreference, NotificationPreferenceUpdate } from '@/types'
+import type {
+  Notification,
+  NotificationPreference,
+  NotificationPreferenceUpdate,
+  NotificationStats,
+} from '@/types'
 
 export interface NotificationListOptions {
   unread_only?: boolean
@@ -46,6 +51,14 @@ export const notificationsService = {
       .then((r): UnreadCountResponse => ({
         unread_count: r.data.unread_count ?? 0,
         unread_critical_count: r.data.unread_critical_count ?? 0,
+      })),
+  stats: () =>
+    api
+      .get<NotificationStats>('/notifications/stats')
+      .then((r): NotificationStats => ({
+        by_type: r.data.by_type ?? {},
+        by_severity: r.data.by_severity ?? {},
+        total: r.data.total ?? 0,
       })),
   getPreferences: () =>
     api.get<NotificationPreference>('/notifications/preferences').then((r) => r.data),

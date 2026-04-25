@@ -103,19 +103,32 @@ class SessionPipeline:
         # `settings.LIVE_DISPLAY_BROADCAST_HZ`.
         self._last_live_display_broadcast: dict[tuple[str, int], float] = {}
 
+        # Frame-staleness watchdog. Updated on every successful frame read
+        # in the run loop; if no fresh frame arrives within 30s while the
+        # session is active, fire a one-shot admin notification. Reset on
+        # next fresh frame so we re-warn after a recovery + new stall.
+        self._last_frame_at: float = time.monotonic()
+        self._stale_warned: bool = False
+
     async def start(self) -> None:
         """Initialize services and start the processing loop."""
+        from app.models.face_embedding import FaceEmbedding
         from app.models.face_registration import FaceRegistration
         from app.models.room import Room
         from app.models.user import User
         from app.services.ml.faiss_manager import faiss_manager
-        from app.services.ml.inference import get_realtime_model
+        from app.services.ml.inference import get_liveness_model, get_realtime_model
 
         # Either the in-process InsightFaceModel (Docker CPU) or the
         # RemoteInsightFaceModel proxy → native macOS sidecar. The
         # selector is bound once during gateway lifespan based on
         # ML_SIDECAR_URL + a /health probe. See app/services/ml/inference.py.
         insightface_model = get_realtime_model()
+        # Optional liveness backend. None when LIVENESS_ENABLED=false or
+        # when the sidecar's /health reports liveness_loaded=false. The
+        # tracker treats None as "no liveness gating this session" — the
+        # broadcast still emits liveness_state="unknown" for every track.
+        liveness_model = get_liveness_model()
 
         db = self._db_factory()
         try:
@@ -314,8 +327,46 @@ class SessionPipeline:
                                 self.schedule_id[:8],
                                 _consecutive_none // int(settings.PROCESSING_FPS),
                             )
+                        # Frame-staleness admin notification — fires once
+                        # per stall (>30s without a fresh frame) while the
+                        # session is supposed to be active. Reset by the
+                        # next successful frame read below.
+                        if (
+                            not self._stale_warned
+                            and (time.monotonic() - self._last_frame_at) > 30.0
+                        ):
+                            self._stale_warned = True
+                            try:
+                                from app.services import health_notifier
+
+                                room_label = self._subject_code or self.room_id or self.schedule_id[:8]
+                                await health_notifier.emit_one_shot(
+                                    title=f"Frame feed stalled in {room_label}",
+                                    message=(
+                                        "No frames received for >30s while "
+                                        "session is active — check camera"
+                                    ),
+                                    notification_type="frame_stale",
+                                    severity="warn",
+                                    preference_key="camera_alerts",
+                                    reference_id=f"frame_stale:{self.room_id or self.schedule_id}",
+                                    reference_type="room",
+                                    dedup_window_seconds=300,
+                                    toast_type="warning",
+                                )
+                            except Exception:
+                                logger.debug(
+                                    "Pipeline %s: frame_stale notify failed",
+                                    self.schedule_id[:8],
+                                    exc_info=True,
+                                )
                     if frame is not None:
                         _consecutive_none = 0
+                        # Refresh staleness watchdog — fresh frame arrived,
+                        # so any prior stall has resolved. Re-arm the warn
+                        # flag so a future stall triggers a new alert.
+                        self._last_frame_at = time.monotonic()
+                        self._stale_warned = False
                         # Run CPU-intensive ML work in thread executor.
                         # ``rtp_pts_90k`` is propagated through the tracker
                         # onto ``TrackFrame`` so the broadcaster can ship
@@ -828,6 +879,98 @@ class SessionPipeline:
         except Exception:
             logger.debug("RECOGNITION_MISS emit failed", exc_info=True)
 
+        # Phase-4: fan out unknown_person_detected admin + faculty
+        # notifications. Scheduled as a background task because this
+        # method runs synchronously on the pipeline thread; we don't
+        # want notification fan-out (DB query for admins, email I/O)
+        # to block the next frame.
+        try:
+            asyncio.create_task(self._notify_unknown_person_detected(track))
+        except Exception:
+            logger.debug(
+                "unknown_person_detected: failed to schedule notification task",
+                exc_info=True,
+            )
+
+    async def _notify_unknown_person_detected(self, track) -> None:
+        """Async fan-out of the unknown_person_detected notification.
+
+        Notifies admins (with email) + the assigned faculty (in-app only).
+        Students are intentionally excluded — telling them an unknown
+        person was in the room could leak information or cause panic.
+
+        Dedup window of 10 minutes is keyed on
+        (schedule_id, tracker_id) so a single composite key suppresses
+        duplicate notifications across pipeline restarts within that
+        window. Failures are swallowed — notifications are best-effort.
+        """
+        try:
+            from app.database import SessionLocal
+            from app.services.notification_service import notify, notify_admins
+
+            tracker_id = int(track.track_id)
+            schedule_id = self.schedule_id
+            room_label = self._subject_code or self.room_id or schedule_id[:8]
+            ref_id = f"unknown:{schedule_id}:{tracker_id}"
+
+            with SessionLocal() as db:
+                # Faculty-only notification — bypass
+                # notify_schedule_participants because that helper also
+                # fans out to enrolled students, which we don't want
+                # for unknown-person events.
+                if self._faculty_id:
+                    try:
+                        await notify(
+                            db,
+                            self._faculty_id,
+                            f"Unknown person detected in {room_label}",
+                            (
+                                f"An unrecognized face was detected in "
+                                f"{room_label} during this session."
+                            ),
+                            "unknown_person_detected",
+                            severity="warn",
+                            preference_key="security_alerts",
+                            send_email=False,
+                            dedup_window_seconds=600,
+                            reference_id=ref_id,
+                            reference_type="recognition_event",
+                            toast_type="warning",
+                        )
+                    except Exception:
+                        logger.debug(
+                            "unknown_person_detected: faculty notify failed",
+                            exc_info=True,
+                        )
+
+                try:
+                    await notify_admins(
+                        db,
+                        title=f"Unknown person in {room_label}",
+                        message=(
+                            f"Unrecognized face detected in {room_label} "
+                            f"(tracker {tracker_id}). Manual review may be needed."
+                        ),
+                        notification_type="unknown_person_detected",
+                        severity="warn",
+                        preference_key="security_alerts",
+                        send_email=True,
+                        dedup_window_seconds=600,
+                        reference_id=ref_id,
+                        reference_type="recognition_event",
+                        toast_type="warning",
+                    )
+                except Exception:
+                    logger.debug(
+                        "unknown_person_detected: admin notify failed",
+                        exc_info=True,
+                    )
+        except Exception:
+            logger.debug(
+                "unknown_person_detected: notification fan-out failed",
+                exc_info=True,
+            )
+
     async def _broadcast_stream_status(self, frames_missing: bool) -> None:
         """Notify clients whether the camera stream is healthy."""
         try:
@@ -1024,6 +1167,70 @@ class SessionPipeline:
                             "check_in_time": event.get("check_in_time", ""),
                         },
                     )
+
+                # Phase-5: late arrival distinction. track_presence_service
+                # already encodes the late-vs-present decision into
+                # ``event["status"]`` (computed against
+                # ``settings.GRACE_PERIOD_MINUTES`` past schedule.start_time).
+                # When the status is "late" we layer an additional
+                # ``late_arrival`` notification on top of the existing
+                # ``check_in`` confirmation so students + faculty see the
+                # distinction in the bell + activity feed. Email is left off
+                # — the check_in email above already carries the same
+                # information; this is purely an in-app surface.
+                status_value = str(event.get("status") or "").lower()
+                if status_value == "late":
+                    student_name = event.get("student_name") or "A student"
+                    attendance_id = event.get("attendance_id")
+                    ref_id = (
+                        str(attendance_id)
+                        if attendance_id
+                        else f"late:{self.schedule_id}:{student_id}"
+                    )
+
+                    if student_id:
+                        try:
+                            await _notify(
+                                db,
+                                student_id,
+                                "Late arrival recorded",
+                                f"You arrived late to {subject_code}. Attendance was marked as LATE.",
+                                "late_arrival",
+                                severity="warn",
+                                preference_key="attendance_confirmation",
+                                send_email=False,
+                                dedup_window_seconds=0,
+                                reference_id=ref_id,
+                                reference_type="attendance",
+                                toast_type="warning",
+                            )
+                        except Exception:
+                            logger.debug(
+                                "late_arrival: student notify failed",
+                                exc_info=True,
+                            )
+
+                    if self._faculty_id:
+                        try:
+                            await _notify(
+                                db,
+                                self._faculty_id,
+                                "Student arrived late",
+                                f"{student_name} arrived late to {subject_code}.",
+                                "late_arrival",
+                                severity="info",
+                                preference_key="attendance_confirmation",
+                                send_email=False,
+                                dedup_window_seconds=0,
+                                reference_id=ref_id,
+                                reference_type="attendance",
+                                toast_type="info",
+                            )
+                        except Exception:
+                            logger.debug(
+                                "late_arrival: faculty notify failed",
+                                exc_info=True,
+                            )
 
             elif event_type == "early_leave":
                 student_id = event.get("student_id")

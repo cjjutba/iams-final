@@ -85,6 +85,18 @@ async def notify(
                     reference_id,
                     dedup_window_seconds,
                 )
+                # Phase 8: structured log so dedup-skips show up in
+                # observability tooling alongside successful emissions.
+                logger.info(
+                    "notification_deduped",
+                    extra={
+                        "notification_type": notification_type,
+                        "user_id": str(user_id),
+                        "reason": "dedup_window",
+                        "reference_id": reference_id,
+                        "reference_type": reference_type,
+                    },
+                )
                 return
         except Exception:
             # Dedup check is best-effort — never block delivery on it.
@@ -95,11 +107,24 @@ async def notify(
         pref = db.query(NotificationPreference).filter(NotificationPreference.user_id == user_id).first()
         if pref and not getattr(pref, preference_key, True):
             logger.debug(f"Notification suppressed for user {user_id}: {preference_key} disabled")
+            # Phase 8: structured log so preference-disabled skips are
+            # visible in observability tooling.
+            logger.info(
+                "notification_deduped",
+                extra={
+                    "notification_type": notification_type,
+                    "user_id": str(user_id),
+                    "reason": "preference_disabled",
+                    "preference_key": preference_key,
+                    "reference_id": reference_id,
+                    "reference_type": reference_type,
+                },
+            )
             return
 
     # ── 2. Create DB row (always) ────────────────────────────────
     try:
-        repo.create(
+        notification = repo.create(
             {
                 "user_id": user_id,
                 "title": title,
@@ -110,6 +135,22 @@ async def notify(
                 "reference_type": reference_type,
             },
             severity=severity,
+        )
+        # Phase 8: structured log so every successful emission is
+        # pickup-able by JSON log handlers / Prometheus exporters.
+        logger.info(
+            "notification_emitted",
+            extra={
+                "notification_type": notification_type,
+                "severity": severity,
+                "user_id": str(user_id),
+                "preference_key": preference_key,
+                "send_email": send_email,
+                "deduped": False,
+                "reference_id": reference_id,
+                "reference_type": reference_type,
+                "notification_id": str(notification.id) if notification is not None else None,
+            },
         )
     except Exception:
         logger.exception(f"Failed to persist notification for user {user_id}")

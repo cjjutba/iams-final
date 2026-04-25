@@ -315,6 +315,40 @@ async def start_session(
                     except Exception as pipe_err:
                         logger.error(f"Failed to start SessionPipeline: {pipe_err}")
 
+        # Phase-5: manual session start notification fan-out. The lifecycle
+        # scheduler emits its own ``session_start`` row when the schedule
+        # auto-starts inside its window; this is the operator-driven variant
+        # so faculty + students can tell the difference between "system
+        # auto-started this on schedule" vs "an admin/faculty hit Start".
+        try:
+            from app.services.notification_service import (
+                notify_schedule_participants,
+            )
+
+            subject_code_str = (
+                schedule.subject_code if schedule else body.schedule_id
+            )
+            await notify_schedule_participants(
+                db,
+                schedule_id=str(body.schedule_id),
+                title=f"Session started: {subject_code_str}",
+                message=(
+                    f"Class session for {subject_code_str} has been started "
+                    f"by an administrator."
+                ),
+                notification_type="session_start_manual",
+                severity="info",
+                preference_key=None,
+                send_email=False,
+                dedup_window_seconds=300,
+                reference_id=str(body.schedule_id),
+                reference_type="schedule",
+                toast_type="info",
+                include_admins=True,
+            )
+        except Exception:
+            logger.exception("Failed to emit session_start_manual notification")
+
         return SessionStartResponse(
             schedule_id=session_state.schedule_id,
             started_at=session_state.start_time,
@@ -402,6 +436,39 @@ async def end_session(
                 logger.info(f"Identity cache cleared for room {room_id}, schedule {schedule_id}")
             except Exception as cache_err:
                 logger.error(f"Failed to clear identity cache: {cache_err}")
+
+        # Phase-5: manual session end notification fan-out. Distinct
+        # notification type from the lifecycle scheduler's ``session_end``
+        # row so consumers can tell the operator-driven case apart from the
+        # natural end-of-window case (which fires from main.py at end_time).
+        try:
+            from app.services.notification_service import (
+                notify_schedule_participants,
+            )
+
+            subject_code_str = (
+                schedule.subject_code if schedule else schedule_id
+            )
+            await notify_schedule_participants(
+                db,
+                schedule_id=str(schedule_id),
+                title=f"Session ended early: {subject_code_str}",
+                message=(
+                    f"Class session for {subject_code_str} has been ended "
+                    f"by an administrator."
+                ),
+                notification_type="session_end_manual",
+                severity="warn",
+                preference_key=None,
+                send_email=False,
+                dedup_window_seconds=300,
+                reference_id=str(schedule_id),
+                reference_type="schedule",
+                toast_type="warning",
+                include_admins=True,
+            )
+        except Exception:
+            logger.exception("Failed to emit session_end_manual notification")
 
         # Build summary
         return SessionEndResponse(

@@ -160,6 +160,32 @@ def get_unread_count(current_user: User = Depends(get_current_user), db: Session
     return {"unread_count": count, "unread_critical_count": critical}
 
 
+@router.get("/stats", status_code=status.HTTP_200_OK)
+def get_notification_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    **Get Notification Stats**
+
+    Return per-type and per-severity unread counts for the current user.
+    Used by the notifications history page sidebar to show counts per
+    category. Returns:
+
+    ```json
+    {
+      "by_type": {"check_in": 3, "early_leave": 1, ...},
+      "by_severity": {"info": 5, "warn": 2, "error": 1, "critical": 0},
+      "total": 8
+    }
+    ```
+
+    Requires authentication.
+    """
+    notification_repo = NotificationRepository(db)
+    return notification_repo.get_unread_stats(str(current_user.id))
+
+
 # ===== Notification Preferences =====
 
 
@@ -208,10 +234,12 @@ class BroadcastRequest(BaseModel):
     target: str  # 'all', 'students', 'faculty', 'admin'
     title: str
     message: str
+    severity: str | None = None  # info / success / warn / error / critical
+    send_email: bool | None = False
 
 
 @router.post("/broadcast", status_code=status.HTTP_201_CREATED)
-def broadcast_notification(
+async def broadcast_notification(
     data: BroadcastRequest,
     current_user: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
@@ -226,41 +254,80 @@ def broadcast_notification(
     - **message**: Notification body text
 
     Requires admin authentication.
+
+    Implementation note (Phase 7 unification): this endpoint now delegates
+    to ``notify_role`` instead of writing Notification rows directly. We
+    intentionally pass ``preference_key=None`` so broadcasts always reach
+    every recipient regardless of their granular preferences — preserving
+    the legacy "broadcast = unconditional" behaviour. The originating
+    admin is excluded from their own broadcast via ``exclude_user_id``.
     """
-    if data.target == "all":
-        users = db.query(User).filter(User.is_active.is_(True)).all()
-    elif data.target in ("students", "faculty", "admin"):
-        role_map = {"students": UserRole.STUDENT, "faculty": UserRole.FACULTY, "admin": UserRole.ADMIN}
-        users = db.query(User).filter(User.role == role_map[data.target], User.is_active.is_(True)).all()
-    else:
+    from app.services.notification_service import notify_role
+
+    valid_targets = {"all", "students", "faculty", "admin"}
+    if data.target not in valid_targets:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid target. Must be 'all', 'students', 'faculty', or 'admin'",
         )
 
-    notifications_list = [
-        Notification(user_id=user.id, type="broadcast", title=data.title, message=data.message) for user in users
-    ]
-    db.add_all(notifications_list)
-    db.commit()
+    role_map = {
+        "students": UserRole.STUDENT,
+        "faculty": UserRole.FACULTY,
+        "admin": UserRole.ADMIN,
+    }
 
-    # Send email to users who have email_enabled
-    emails_sent = 0
-    if settings.EMAIL_ENABLED:
-        try:
-            from app.models.notification_preference import NotificationPreference
-            from app.services.email_service import EmailService
+    severity = data.severity or "info"
+    send_email = bool(data.send_email)
 
-            email_service = EmailService()
-            email_recipients = []
-            for user in users:
-                pref = db.query(NotificationPreference).filter(NotificationPreference.user_id == user.id).first()
-                if pref and pref.email_enabled and user.email:
-                    email_recipients.append(user.email)
-            if email_recipients:
-                email_service.send_broadcast_email(email_recipients, data.title, data.message)
-                emails_sent = len(email_recipients)
-        except Exception as e:
-            logger.error(f"Failed to send broadcast emails: {e}")
+    total = 0
+    try:
+        if data.target == "all":
+            for role in (UserRole.STUDENT, UserRole.FACULTY, UserRole.ADMIN):
+                count = await notify_role(
+                    db,
+                    role=role,
+                    title=data.title,
+                    message=data.message,
+                    notification_type="broadcast",
+                    severity=severity,
+                    # Broadcasts intentionally bypass the per-user preference
+                    # gate — legacy behaviour the admin UI relies on.
+                    preference_key=None,
+                    send_email=send_email,
+                    dedup_window_seconds=0,
+                    reference_id=None,
+                    reference_type="broadcast",
+                    toast_type="info",
+                    exclude_user_id=str(current_user.id),
+                )
+                total += count
+        else:
+            role = role_map[data.target]
+            total = await notify_role(
+                db,
+                role=role,
+                title=data.title,
+                message=data.message,
+                notification_type="broadcast",
+                severity=severity,
+                preference_key=None,
+                send_email=send_email,
+                dedup_window_seconds=0,
+                reference_id=None,
+                reference_type="broadcast",
+                toast_type="info",
+                exclude_user_id=str(current_user.id),
+            )
+    except Exception as e:
+        logger.error(f"Broadcast dispatch failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to dispatch broadcast",
+        ) from e
 
-    return {"success": True, "message": f"Notification sent to {len(users)} users ({emails_sent} emails)"}
+    return {
+        "success": True,
+        "message": f"Notification sent to {total} users",
+        "recipients": total,
+    }

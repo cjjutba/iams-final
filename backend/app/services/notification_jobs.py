@@ -579,6 +579,37 @@ async def run_anomaly_detection() -> None:
                                 toast_type="warning",
                             )
 
+                            # Mirror to admins so the system-wide audience
+                            # sees every anomaly. Faculty notification has
+                            # its own dedup; admin sees them all so we set
+                            # dedup_window_seconds=0 here.
+                            try:
+                                from app.services.notification_service import (
+                                    notify_admins,
+                                )
+
+                                await notify_admins(
+                                    db,
+                                    title="Attendance Anomaly (admin)",
+                                    message=(
+                                        f"{student_name} has {el_count} early "
+                                        f"leaves in {sched.subject_code} over "
+                                        f"the past 7 days."
+                                    ),
+                                    notification_type="anomaly_alert_admin",
+                                    severity="warn",
+                                    preference_key="anomaly_alerts",
+                                    send_email=False,
+                                    dedup_window_seconds=0,
+                                    reference_id=str(anomaly.id),
+                                    reference_type="attendance_anomaly",
+                                    toast_type="warning",
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "Failed to notify admins of early-leave anomaly"
+                                )
+
                     # --- SUDDEN_DROP ---
                     prior_records = (
                         db.query(AttendanceRecord)
@@ -657,6 +688,35 @@ async def run_anomaly_detection() -> None:
                                     toast_type="warning",
                                 )
 
+                                # Mirror to admins (see EARLY_LEAVE_PATTERN
+                                # branch above for the rationale).
+                                try:
+                                    from app.services.notification_service import (
+                                        notify_admins,
+                                    )
+
+                                    await notify_admins(
+                                        db,
+                                        title="Sudden Attendance Drop (admin)",
+                                        message=(
+                                            f"{student_name}'s attendance in "
+                                            f"{sched.subject_code} dropped from "
+                                            f"{prior_rate:.0f}% to {this_rate:.0f}%."
+                                        ),
+                                        notification_type="anomaly_alert_admin",
+                                        severity="warn",
+                                        preference_key="anomaly_alerts",
+                                        send_email=False,
+                                        dedup_window_seconds=0,
+                                        reference_id=str(anomaly.id),
+                                        reference_type="attendance_anomaly",
+                                        toast_type="warning",
+                                    )
+                                except Exception:
+                                    logger.exception(
+                                        "Failed to notify admins of sudden-drop anomaly"
+                                    )
+
                 except Exception:
                     logger.warning(
                         "[anomaly] Failed for student %s in schedule %s",
@@ -704,5 +764,114 @@ async def run_notification_cleanup() -> None:
     except Exception:
         logger.exception("[notification_cleanup] Job failed")
         db.rollback()
+    finally:
+        db.close()
+
+
+# =====================================================================
+# 6. Daily Health Summary
+# =====================================================================
+
+
+async def run_daily_health_summary() -> int:
+    """Generate and send a daily system-health digest to admins.
+
+    Aggregates camera-configuration count, recognition volume in the last
+    24 hours, and error-severity activity events. Sent to admins who have
+    opted-in via ``daily_health_summary`` (preference defaults to off).
+
+    Each stat is wrapped in its own try/except so a single query failure
+    just degrades that line in the summary instead of killing the digest.
+
+    Returns the number of admins notified.
+    """
+    from app.services.notification_service import notify_admins
+
+    db = SessionLocal()
+    try:
+        now = _utcnow()
+        yesterday = now - timedelta(days=1)
+
+        stats: dict[str, object] = {}
+
+        # --- Cameras configured ---
+        try:
+            from app.models.room import Room
+
+            total_rooms = db.query(Room).count()
+            rooms_with_camera = (
+                db.query(Room)
+                .filter(Room.camera_endpoint.isnot(None))
+                .filter(Room.camera_endpoint != "")
+                .count()
+            )
+            stats["cameras"] = f"{rooms_with_camera}/{total_rooms} configured"
+        except Exception:
+            logger.exception("[daily_health_summary] camera stat failed")
+            stats["cameras"] = "(query failed)"
+
+        # --- Recognitions in last 24h ---
+        try:
+            from app.models.attendance_record import AttendanceRecord
+
+            recognition_count = (
+                db.query(AttendanceRecord)
+                .filter(AttendanceRecord.created_at >= yesterday)
+                .count()
+            )
+            stats["recognitions_24h"] = recognition_count
+        except Exception:
+            logger.exception("[daily_health_summary] recognition stat failed")
+            stats["recognitions_24h"] = "(query failed)"
+
+        # --- Activity-event errors in last 24h ---
+        try:
+            from app.models.activity_event import ActivityEvent
+
+            error_count = (
+                db.query(ActivityEvent)
+                .filter(ActivityEvent.severity.in_(["error", "ERROR"]))
+                .filter(ActivityEvent.created_at >= yesterday)
+                .count()
+            )
+            stats["errors_24h"] = error_count
+        except Exception:
+            logger.exception("[daily_health_summary] error stat failed")
+            stats["errors_24h"] = "(query failed)"
+
+        summary_lines = [
+            f"Cameras: {stats['cameras']}",
+            f"Recognitions (24h): {stats['recognitions_24h']}",
+            f"Errors (24h): {stats['errors_24h']}",
+        ]
+        summary_message = "\n".join(summary_lines)
+
+        try:
+            count = await notify_admins(
+                db,
+                title="Daily IAMS health summary",
+                message=summary_message,
+                notification_type="daily_health_summary",
+                severity="info",
+                # opt-in: preference defaults to off so admins don't get
+                # surprise email noise after upgrade.
+                preference_key="daily_health_summary",
+                send_email=True,
+                email_template=None,  # falls back to message body in email
+                email_context=stats,
+                dedup_window_seconds=0,
+                reference_id=f"daily_health:{now.date().isoformat()}",
+                reference_type="digest",
+                toast_type="info",
+            )
+            logger.info("[daily_health_summary] Sent to %d admins", count)
+            return count
+        except Exception:
+            logger.exception("[daily_health_summary] notify_admins failed")
+            return 0
+
+    except Exception:
+        logger.exception("[daily_health_summary] Job failed")
+        return 0
     finally:
         db.close()

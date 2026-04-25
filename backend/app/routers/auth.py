@@ -142,7 +142,7 @@ def register(
 
 @router.post("/login", response_model=TokenResponse, status_code=status.HTTP_200_OK)
 @limiter.limit(settings.RATE_LIMIT_AUTH)
-def login(
+async def login(
     request: Request,
     body: LoginRequest,
     db: Session = Depends(get_db),
@@ -153,8 +153,58 @@ def login(
     Authenticate user and receive access tokens.
     Rate limited to 10 requests/minute.
     """
+    import logging as _logging
+
+    from app.services import security_tracker
+    from app.services.notification_service import notify_admins
+    from app.utils.exceptions import AuthenticationError
+
+    _logger = _logging.getLogger(__name__)
+
     auth_service = AuthService(db)
-    user, tokens = auth_service.login(body.identifier, body.password)
+    try:
+        user, tokens = auth_service.login(body.identifier, body.password)
+    except AuthenticationError:
+        # Phase-4: track failed-login bursts and notify admins on the
+        # exact attempt that crosses the threshold (3 in 5 min). The
+        # tracker is idempotent on missing Redis — degrades to no-op.
+        try:
+            count, just_crossed = await security_tracker.record_failed_login(
+                body.identifier
+            )
+            if just_crossed:
+                try:
+                    await notify_admins(
+                        db,
+                        title="Failed login burst detected",
+                        message=(
+                            "3+ failed login attempts in 5 minutes for one "
+                            "identifier. Possible credential probing."
+                        ),
+                        notification_type="failed_login_burst",
+                        severity="warn",
+                        preference_key="security_alerts",
+                        send_email=True,
+                        dedup_window_seconds=900,
+                        reference_id=(
+                            f"login_burst:"
+                            f"{security_tracker.hash_identifier(body.identifier)}"
+                        ),
+                        reference_type="composite_key",
+                        toast_type="warning",
+                    )
+                except Exception:
+                    _logger.exception("Failed to notify admins of login burst")
+        except Exception:
+            _logger.exception("Failed to record failed login attempt")
+        # Re-raise so the global IAMS handler turns this into a 401.
+        raise
+
+    # Phase-4: successful login resets the burst counter for this identifier.
+    try:
+        await security_tracker.clear_failed_login(body.identifier)
+    except Exception:
+        _logger.exception("Failed to clear failed-login counter")
 
     # Record the login in both audit_logs (legacy) and activity_events
     # (System Activity page). The log_audit helper derives the event type
@@ -238,7 +288,7 @@ def get_current_user_info(
 
 
 @router.post("/forgot-password", status_code=status.HTTP_200_OK)
-def forgot_password(
+async def forgot_password(
     request_obj: Request,
     body: ForgotPasswordRequest,
     db: Session = Depends(get_db),
@@ -250,8 +300,49 @@ def forgot_password(
     Always returns success to prevent email enumeration attacks.
     Rate limited to 10 requests/minute.
     """
+    import logging as _logging
+
+    _logger = _logging.getLogger(__name__)
+
     auth_service = AuthService(db)
-    return auth_service.forgot_password(body.email)
+    result = auth_service.forgot_password(body.email)
+
+    # Phase-4: drop an in-app notification on the affected user's bell.
+    # send_email=False because the actual reset *link* is sent by the
+    # auth_service flow with its own email; this is the in-app
+    # bell/toast confirmation. Only emitted when the email maps to a
+    # real account — silently no-op for unknown emails so the route's
+    # enumeration-safe response shape is preserved.
+    try:
+        target_user = (
+            db.query(User).filter(User.email == body.email).first()
+            if body.email
+            else None
+        )
+        if target_user is not None:
+            from app.services.notification_service import notify
+
+            await notify(
+                db,
+                user_id=str(target_user.id),
+                title="Password reset requested",
+                message=(
+                    "A password reset was requested for your account. "
+                    "Check your email for the reset link."
+                ),
+                notification_type="password_reset_requested",
+                severity="info",
+                preference_key=None,
+                send_email=False,
+                dedup_window_seconds=300,
+                reference_id=str(target_user.id),
+                reference_type="user",
+                toast_type="info",
+            )
+    except Exception:
+        _logger.exception("Failed to notify user of password reset request")
+
+    return result
 
 
 # ===================================================================
@@ -261,7 +352,7 @@ def forgot_password(
 
 @router.post("/change-password", status_code=status.HTTP_200_OK)
 @limiter.limit(settings.RATE_LIMIT_AUTH)
-def change_password(
+async def change_password(
     request: Request,
     body: PasswordChange,
     current_user: User = Depends(get_current_user),
@@ -273,12 +364,45 @@ def change_password(
     Change the current user's password.
     Rate limited to 10 requests/minute.
     """
+    import logging as _logging
+
+    _logger = _logging.getLogger(__name__)
+
     auth_service = AuthService(db)
     auth_service.change_password(
         str(current_user.id),
         body.old_password,
         body.new_password,
     )
+
+    # Phase-4: notify the user that their password changed. Critical for
+    # detecting account compromise — if it wasn't them, they need to act.
+    try:
+        from app.services.notification_service import notify
+
+        await notify(
+            db,
+            user_id=str(current_user.id),
+            title="Password changed",
+            message=(
+                "Your password was changed. If this wasn't you, contact "
+                "an administrator immediately."
+            ),
+            notification_type="password_changed",
+            severity="info",
+            preference_key="security_alerts",
+            send_email=True,
+            email_template="password_changed",
+            email_context={
+                "user_name": current_user.full_name or current_user.email,
+            },
+            dedup_window_seconds=0,
+            reference_id=str(current_user.id),
+            reference_type="user",
+            toast_type="info",
+        )
+    except Exception:
+        _logger.exception("Failed to notify user of password change")
 
     return {"success": True, "message": "Password changed successfully"}
 

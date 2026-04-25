@@ -7,6 +7,7 @@ Data access layer for Notification operations.
 import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.notification import Notification
@@ -94,6 +95,47 @@ class NotificationRepository:
             )
             .count()
         )
+
+    def get_unread_stats(self, user_id: str) -> dict:
+        """Return per-type and per-severity unread counts for the user.
+
+        Used by the notifications history page sidebar to show counts per
+        category. The frontend buckets the per-type counts into
+        higher-level groups (Operational Health, Security & Recognition,
+        etc.) — the backend stays agnostic to that grouping.
+
+        Returns:
+            {
+                "by_type": {"check_in": 3, "early_leave": 1, ...},
+                "by_severity": {"info": 5, "warn": 2, "error": 1, "critical": 0},
+                "total": 8,
+            }
+        """
+        uid = _to_uuid(user_id)
+
+        # Per-type counts
+        type_rows = (
+            self.db.query(Notification.type, func.count(Notification.id))
+            .filter(Notification.user_id == uid, Notification.read.is_(False))
+            .group_by(Notification.type)
+            .all()
+        )
+        by_type = {ntype: int(count) for ntype, count in type_rows}
+
+        # Per-severity counts
+        severity_rows = (
+            self.db.query(Notification.severity, func.count(Notification.id))
+            .filter(Notification.user_id == uid, Notification.read.is_(False))
+            .group_by(Notification.severity)
+            .all()
+        )
+        by_severity = {sev: int(count) for sev, count in severity_rows}
+
+        return {
+            "by_type": by_type,
+            "by_severity": by_severity,
+            "total": sum(by_type.values()),
+        }
 
     def create(self, notification_data: dict, *, severity: str = "info") -> Notification:
         """

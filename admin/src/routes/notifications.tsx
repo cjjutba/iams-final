@@ -63,6 +63,78 @@ const KNOWN_TYPES = [
   'system',
 ] as const
 
+// Phase 8: type-grouped sidebar buckets. The category labels are admin
+// UX, not a backend contract — types not in any bucket fall through and
+// stay reachable via the legacy "All types" dropdown. Keep aligned with
+// the ~30 notification_type tags emitted by notification_service.py.
+const NOTIFICATION_CATEGORIES: Record<string, string[]> = {
+  'Operational Health': [
+    'camera_offline',
+    'camera_recovered',
+    'rtsp_connection_failed',
+    'frame_stale',
+    'ml_sidecar_down',
+    'ml_sidecar_recovered',
+    'faiss_mismatch',
+    'faiss_reconcile_failed',
+    'redis_connection_lost',
+  ],
+  'Security & Recognition': [
+    'unknown_person_detected',
+    'face_registration_pending_review',
+    'face_registration_approved',
+    'face_registration_rejected',
+    'face_re_registration_required',
+    'failed_login_burst',
+    'password_changed',
+    'password_reset_requested',
+  ],
+  'Attendance & Sessions': [
+    'check_in',
+    'late_arrival',
+    'early_leave',
+    'early_leave_return',
+    'marked_absent_session_end',
+    'session_start',
+    'session_end',
+    'session_start_manual',
+    'session_end_manual',
+    'session_zero_recognition',
+    'low_attendance_warning',
+    'anomaly_alert',
+    'anomaly_alert_admin',
+  ],
+  'Account & Schedule': [
+    'user_created',
+    'user_deactivated',
+    'user_reactivated',
+    'user_role_changed',
+    'schedule_assigned',
+    'schedule_updated',
+    'schedule_deleted',
+    'schedule_conflict_warning',
+    'enrollment_added',
+    'enrollment_removed',
+  ],
+  'System': [
+    'settings_changed',
+    'recognition_threshold_changed',
+    'daily_digest',
+    'weekly_digest',
+    'daily_health_summary',
+    'broadcast',
+    'system',
+  ],
+}
+
+const CATEGORY_ORDER = [
+  'Operational Health',
+  'Security & Recognition',
+  'Attendance & Sessions',
+  'Account & Schedule',
+  'System',
+] as const
+
 type ReadFilter = 'all' | 'unread'
 
 const PAGE_SIZE = 50
@@ -77,6 +149,10 @@ export default function NotificationsPage() {
   )
   const [typeFilter, setTypeFilter] = useState<string>('all')
   const [readFilter, setReadFilter] = useState<ReadFilter>('all')
+  // Phase 8: active sidebar category. When non-null, the request still
+  // fetches unfiltered (server only supports a single `type`) but the
+  // client-side filter narrows to the category's type list.
+  const [activeCategory, setActiveCategory] = useState<string | null>(null)
   const [page, setPage] = useState(0)
 
   // We always fetch a single severity-or-all batch from the server and
@@ -89,15 +165,24 @@ export default function NotificationsPage() {
       ? Array.from(selectedSeverities)[0]
       : undefined
 
+  // When a category is active, the type dropdown is overridden — the
+  // backend only accepts a single `type` value, so we fetch unfiltered
+  // and narrow client-side to the category's full type list.
+  const serverTypeFilter = activeCategory
+    ? undefined
+    : typeFilter !== 'all'
+      ? typeFilter
+      : undefined
+
   const queryParams = useMemo(
     () => ({
       unread_only: readFilter === 'unread',
-      type: typeFilter !== 'all' ? typeFilter : undefined,
+      type: serverTypeFilter,
       severity: serverSeverity,
       skip: page * PAGE_SIZE,
       limit: PAGE_SIZE,
     }),
-    [readFilter, typeFilter, serverSeverity, page],
+    [readFilter, serverTypeFilter, serverSeverity, page],
   )
 
   const { data: notifications = [], isLoading, isFetching, refetch } = useQuery({
@@ -105,14 +190,41 @@ export default function NotificationsPage() {
     queryFn: () => notificationsService.list(queryParams),
   })
 
-  const filtered = useMemo(() => {
-    if (selectedSeverities.size === ALL_SEVERITIES.length) {
-      return notifications
+  // Phase 8: per-category unread counts for the sidebar. Invalidated
+  // alongside ['notifications'] whenever a row is mutated (mark-read,
+  // delete, mark-all-read, clear-all) so the badges stay in sync.
+  const { data: stats } = useQuery({
+    queryKey: ['notification-stats'],
+    queryFn: () => notificationsService.stats(),
+  })
+
+  const categoryUnreadCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    const byType = stats?.by_type ?? {}
+    for (const [label, types] of Object.entries(NOTIFICATION_CATEGORIES)) {
+      let n = 0
+      for (const t of types) n += byType[t] ?? 0
+      counts[label] = n
     }
-    return notifications.filter((n) =>
-      selectedSeverities.has((n.severity ?? 'info') as NotificationSeverity),
-    )
-  }, [notifications, selectedSeverities])
+    return counts
+  }, [stats])
+
+  const totalUnread = stats?.total ?? 0
+
+  const filtered = useMemo(() => {
+    let result = notifications
+    // Apply category narrowing (client-side) when active.
+    if (activeCategory) {
+      const allowed = new Set(NOTIFICATION_CATEGORIES[activeCategory] ?? [])
+      result = result.filter((n) => allowed.has(n.type))
+    }
+    if (selectedSeverities.size !== ALL_SEVERITIES.length) {
+      result = result.filter((n) =>
+        selectedSeverities.has((n.severity ?? 'info') as NotificationSeverity),
+      )
+    }
+    return result
+  }, [notifications, selectedSeverities, activeCategory])
 
   const toggleSeverity = (sev: NotificationSeverity) => {
     setPage(0)
@@ -130,11 +242,21 @@ export default function NotificationsPage() {
     setSelectedSeverities(new Set(ALL_SEVERITIES))
     setTypeFilter('all')
     setReadFilter('all')
+    setActiveCategory(null)
+    setPage(0)
+  }
+
+  const selectCategory = (category: string | null) => {
+    setActiveCategory(category)
+    // Picking a category overrides the legacy single-type dropdown so
+    // the two filters can't fight each other.
+    if (category !== null) setTypeFilter('all')
     setPage(0)
   }
 
   const invalidateAll = async () => {
     await queryClient.invalidateQueries({ queryKey: ['notifications'] })
+    await queryClient.invalidateQueries({ queryKey: ['notification-stats'] })
     await fetchUnreadCount()
   }
 
@@ -180,7 +302,8 @@ export default function NotificationsPage() {
   const hasFilters =
     selectedSeverities.size !== ALL_SEVERITIES.length ||
     typeFilter !== 'all' ||
-    readFilter !== 'all'
+    readFilter !== 'all' ||
+    activeCategory !== null
 
   // Server returns up to PAGE_SIZE items. If we got a full page, assume
   // there might be more. The backend doesn't currently return a total
@@ -231,155 +354,221 @@ export default function NotificationsPage() {
         </div>
       </div>
 
-      <div className="rounded-md border bg-muted/30 p-4">
-        <div className="flex flex-wrap items-end gap-4">
-          <div className="flex flex-col gap-1.5">
-            <span className="text-xs uppercase tracking-wide text-muted-foreground">
-              Severity
-            </span>
-            <div className="flex flex-wrap gap-1.5">
-              {ALL_SEVERITIES.map((sev) => {
-                const active = selectedSeverities.has(sev)
-                return (
-                  <button
-                    key={sev}
-                    type="button"
-                    onClick={() => toggleSeverity(sev)}
+      <div className="grid gap-6 md:grid-cols-[220px_1fr]">
+        <aside className="space-y-1">
+          <div className="px-2 pb-2 text-xs uppercase tracking-wide text-muted-foreground">
+            Categories
+          </div>
+          <button
+            type="button"
+            onClick={() => selectCategory(null)}
+            className={cn(
+              'flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors',
+              activeCategory === null
+                ? 'bg-primary/10 font-medium text-foreground ring-1 ring-inset ring-primary/30'
+                : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+            )}
+          >
+            <span>All</span>
+            {totalUnread > 0 && (
+              <span
+                className={cn(
+                  'inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px] font-medium',
+                  activeCategory === null
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted text-muted-foreground',
+                )}
+              >
+                {totalUnread > 99 ? '99+' : totalUnread}
+              </span>
+            )}
+          </button>
+          {CATEGORY_ORDER.map((label) => {
+            const active = activeCategory === label
+            const count = categoryUnreadCounts[label] ?? 0
+            return (
+              <button
+                key={label}
+                type="button"
+                onClick={() => selectCategory(label)}
+                className={cn(
+                  'flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors',
+                  active
+                    ? 'bg-primary/10 font-medium text-foreground ring-1 ring-inset ring-primary/30'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                )}
+              >
+                <span className="truncate">{label}</span>
+                {count > 0 && (
+                  <span
                     className={cn(
-                      'rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset transition-colors',
+                      'inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px] font-medium',
                       active
-                        ? 'bg-primary text-primary-foreground ring-primary'
-                        : 'bg-background text-muted-foreground ring-border hover:bg-muted',
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-muted text-muted-foreground',
                     )}
                   >
-                    {SEVERITY_LABELS[sev]}
-                  </button>
-                )
-              })}
+                    {count > 99 ? '99+' : count}
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </aside>
+
+        <div className="space-y-6">
+          <div className="rounded-md border bg-muted/30 p-4">
+            <div className="flex flex-wrap items-end gap-4">
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Severity
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {ALL_SEVERITIES.map((sev) => {
+                    const active = selectedSeverities.has(sev)
+                    return (
+                      <button
+                        key={sev}
+                        type="button"
+                        onClick={() => toggleSeverity(sev)}
+                        className={cn(
+                          'rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset transition-colors',
+                          active
+                            ? 'bg-primary text-primary-foreground ring-primary'
+                            : 'bg-background text-muted-foreground ring-border hover:bg-muted',
+                        )}
+                      >
+                        {SEVERITY_LABELS[sev]}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Type
+                </span>
+                <Select
+                  value={typeFilter}
+                  onValueChange={(v) => {
+                    setTypeFilter(v)
+                    setPage(0)
+                  }}
+                  disabled={activeCategory !== null}
+                >
+                  <SelectTrigger className="h-9 w-56">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All types</SelectItem>
+                    {KNOWN_TYPES.map((t) => (
+                      <SelectItem key={t} value={t}>
+                        {t}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Read state
+                </span>
+                <Select
+                  value={readFilter}
+                  onValueChange={(v) => {
+                    setReadFilter(v as ReadFilter)
+                    setPage(0)
+                  }}
+                >
+                  <SelectTrigger className="h-9 w-40">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="unread">Unread only</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {hasFilters && (
+                <Button variant="ghost" onClick={resetFilters} className="h-9">
+                  Clear filters
+                </Button>
+              )}
+
+              <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+                {isFetching && <Loader2 className="h-3 w-3 animate-spin" />}
+                <span>
+                  {filtered.length} {filtered.length === 1 ? 'notification' : 'notifications'} on
+                  this page
+                </span>
+                <Button variant="outline" size="sm" onClick={() => refetch()} className="h-7">
+                  Refresh
+                </Button>
+              </div>
             </div>
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <span className="text-xs uppercase tracking-wide text-muted-foreground">
-              Type
-            </span>
-            <Select
-              value={typeFilter}
-              onValueChange={(v) => {
-                setTypeFilter(v)
-                setPage(0)
-              }}
-            >
-              <SelectTrigger className="h-9 w-56">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All types</SelectItem>
-                {KNOWN_TYPES.map((t) => (
-                  <SelectItem key={t} value={t}>
-                    {t}
-                  </SelectItem>
+          <div className="overflow-hidden rounded-md border">
+            {isLoading ? (
+              <div className="flex h-64 items-center justify-center text-muted-foreground">
+                <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                <span className="text-sm">Loading notifications...</span>
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="flex h-64 flex-col items-center justify-center gap-2 text-center">
+                <Inbox className="h-10 w-10 text-muted-foreground/50" />
+                <p className="text-sm font-medium text-muted-foreground">
+                  {hasFilters ? 'No notifications match your filters' : 'No notifications yet'}
+                </p>
+                {hasFilters && (
+                  <Button variant="ghost" size="sm" onClick={resetFilters}>
+                    Clear filters
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <div>
+                {filtered.map((notification) => (
+                  <NotificationRow
+                    key={notification.id}
+                    notification={notification}
+                    variant="expanded"
+                    onMarkRead={handleMarkRead}
+                    onDelete={handleDelete}
+                  />
                 ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <span className="text-xs uppercase tracking-wide text-muted-foreground">
-              Read state
-            </span>
-            <Select
-              value={readFilter}
-              onValueChange={(v) => {
-                setReadFilter(v as ReadFilter)
-                setPage(0)
-              }}
-            >
-              <SelectTrigger className="h-9 w-40">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                <SelectItem value="unread">Unread only</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {hasFilters && (
-            <Button variant="ghost" onClick={resetFilters} className="h-9">
-              Clear filters
-            </Button>
-          )}
-
-          <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-            {isFetching && <Loader2 className="h-3 w-3 animate-spin" />}
-            <span>
-              {filtered.length} {filtered.length === 1 ? 'notification' : 'notifications'} on
-              this page
-            </span>
-            <Button variant="outline" size="sm" onClick={() => refetch()} className="h-7">
-              Refresh
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      <div className="overflow-hidden rounded-md border">
-        {isLoading ? (
-          <div className="flex h-64 items-center justify-center text-muted-foreground">
-            <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-            <span className="text-sm">Loading notifications...</span>
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="flex h-64 flex-col items-center justify-center gap-2 text-center">
-            <Inbox className="h-10 w-10 text-muted-foreground/50" />
-            <p className="text-sm font-medium text-muted-foreground">
-              {hasFilters ? 'No notifications match your filters' : 'No notifications yet'}
-            </p>
-            {hasFilters && (
-              <Button variant="ghost" size="sm" onClick={resetFilters}>
-                Clear filters
-              </Button>
+              </div>
             )}
           </div>
-        ) : (
-          <div>
-            {filtered.map((notification) => (
-              <NotificationRow
-                key={notification.id}
-                notification={notification}
-                variant="expanded"
-                onMarkRead={handleMarkRead}
-                onDelete={handleDelete}
-              />
-            ))}
-          </div>
-        )}
-      </div>
 
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-muted-foreground">
-          Page {page + 1}
-        </p>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!hasPrevPage || isFetching}
-            onClick={() => setPage((p) => Math.max(0, p - 1))}
-          >
-            <ChevronLeft className="mr-1 h-3.5 w-3.5" />
-            Previous
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!hasNextPage || isFetching}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            Next
-            <ChevronRight className="ml-1 h-3.5 w-3.5" />
-          </Button>
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-muted-foreground">
+              Page {page + 1}
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!hasPrevPage || isFetching}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+              >
+                <ChevronLeft className="mr-1 h-3.5 w-3.5" />
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!hasNextPage || isFetching}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Next
+                <ChevronRight className="ml-1 h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
