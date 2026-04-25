@@ -19,6 +19,20 @@ import { useUsers } from '@/hooks/use-queries'
 import type { UserResponse } from '@/types'
 import { CreateUserDialog } from './create-user-dialog'
 import { UserActionsCell } from './user-actions'
+import { tokenMatches, joinHaystack, isoDateHaystackParts } from '@/lib/search'
+
+function buildAdminHaystack(u: UserResponse): string {
+  return joinHaystack([
+    u.first_name,
+    u.last_name,
+    `${u.first_name} ${u.last_name}`,
+    u.email,
+    u.phone,
+    u.is_active ? 'Active' : 'Inactive',
+    u.email_verified ? 'Verified' : 'Not Verified',
+    ...isoDateHaystackParts(u.created_at),
+  ])
+}
 
 type StatusFilter = 'all' | 'active' | 'inactive'
 type EmailFilter = 'all' | 'verified' | 'not_verified'
@@ -87,6 +101,7 @@ export default function AdminsPage() {
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [emailFilter, setEmailFilter] = useState<EmailFilter>('all')
+  const [searchQuery, setSearchQuery] = useState('')
   const [isPending, startTransition] = useTransition()
 
   const filtered = useMemo(() => {
@@ -97,10 +112,15 @@ export default function AdminsPage() {
     if (emailFilter === 'verified') result = result.filter((a) => a.email_verified)
     else if (emailFilter === 'not_verified') result = result.filter((a) => !a.email_verified)
 
-    return result
-  }, [admins, statusFilter, emailFilter])
+    if (searchQuery.trim()) {
+      result = result.filter((a) => tokenMatches(buildAdminHaystack(a), searchQuery))
+    }
 
-  const hasFilters = statusFilter !== 'all' || emailFilter !== 'all'
+    return result
+  }, [admins, statusFilter, emailFilter, searchQuery])
+
+  const hasFilters =
+    statusFilter !== 'all' || emailFilter !== 'all' || searchQuery.trim().length > 0
 
   function handleFilterChange<T>(setter: (v: T) => void) {
     return (value: string) => {
@@ -112,6 +132,7 @@ export default function AdminsPage() {
     startTransition(() => {
       setStatusFilter('all')
       setEmailFilter('all')
+      setSearchQuery('')
     })
   }
 
@@ -172,8 +193,10 @@ export default function AdminsPage() {
         columns={columns}
         data={filtered}
         isLoading={showSkeleton}
-        searchColumn="first_name"
-        searchPlaceholder="Search admins..."
+        searchPlaceholder="Search by name, email, status..."
+        globalFilter={searchQuery}
+        onGlobalFilterChange={(v) => startTransition(() => setSearchQuery(v))}
+        globalFilterFn={() => true}
         toolbar={filterToolbar}
         onRowClick={(row) => navigate(`/users/${row.id}`, { state: { role: 'admin' } })}
       />

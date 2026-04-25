@@ -5,7 +5,11 @@ import { Input } from "@/components/ui/input"
 
 interface DataTableToolbarProps<TData> {
   table: Table<TData>
+  /** Single-column filter mode — bound to a specific accessorKey. */
   searchColumn?: string
+  /** Multi-field controlled search query (TanStack globalFilter). */
+  globalFilter?: string
+  onGlobalFilterChange?: (value: string) => void
   searchPlaceholder?: string
   children?: React.ReactNode
 }
@@ -13,10 +17,21 @@ interface DataTableToolbarProps<TData> {
 export function DataTableToolbar<TData>({
   table,
   searchColumn,
+  globalFilter,
+  onGlobalFilterChange,
   searchPlaceholder = "Search...",
   children,
 }: DataTableToolbarProps<TData>) {
-  const column = searchColumn ? table.getColumn(searchColumn) : undefined
+  // Global filter takes precedence — when the consumer passes a setter
+  // we drive the input from `globalFilter` regardless of `searchColumn`.
+  const useGlobal = onGlobalFilterChange !== undefined
+  const column = !useGlobal && searchColumn ? table.getColumn(searchColumn) : undefined
+
+  const value = useGlobal ? (globalFilter ?? "") : ((column?.getFilterValue() as string) ?? "")
+  const onChange = useGlobal
+    ? (next: string) => onGlobalFilterChange!(next)
+    : (next: string) => column?.setFilterValue(next)
+  const disabled = !useGlobal && !column
 
   return (
     <div className="flex items-center justify-between gap-4 py-4">
@@ -24,10 +39,10 @@ export function DataTableToolbar<TData>({
         <SearchIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
         <Input
           placeholder={searchPlaceholder}
-          value={(column?.getFilterValue() as string) ?? ""}
-          onChange={(e) => column?.setFilterValue(e.target.value)}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
           className="pl-8"
-          disabled={!column}
+          disabled={disabled}
         />
       </div>
       {children && (

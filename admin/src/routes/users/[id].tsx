@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState, useTransition } from 'react'
 import { useNavigate, useParams, useLocation } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useBreadcrumbStore } from '@/stores/breadcrumb.store'
@@ -54,6 +54,22 @@ import {
 import type { UserRole, AttendanceRecord } from '@/types'
 import { formatStatus } from '@/types/attendance'
 import { EditUserDialog } from './edit-user-dialog'
+import { tokenMatches, joinHaystack, isoDateHaystackParts } from '@/lib/search'
+
+function buildAttendanceHaystackForRecord(r: AttendanceRecord): string {
+  return joinHaystack([
+    r.student_name,
+    r.subject_code,
+    r.remarks,
+    formatStatus(r.status),
+    r.status,
+    r.date,
+    ...isoDateHaystackParts(r.date),
+    ...isoDateHaystackParts(r.check_in_time),
+    ...isoDateHaystackParts(r.check_out_time),
+    `${Math.round(r.presence_score)}%`,
+  ])
+}
 
 const roleBadgeVariant: Record<UserRole, 'default' | 'secondary' | 'outline'> = {
   student: 'default',
@@ -95,6 +111,15 @@ export default function UserDetailPage() {
     id!,
     !!user && user.role === 'student',
   )
+
+  const [attendanceSearch, setAttendanceSearch] = useState('')
+  const [, startAttendanceSearchTransition] = useTransition()
+  const filteredAttendance = useMemo(() => {
+    if (!attendanceSearch.trim()) return attendance
+    return attendance.filter((r: AttendanceRecord) =>
+      tokenMatches(buildAttendanceHaystackForRecord(r), attendanceSearch),
+    )
+  }, [attendance, attendanceSearch])
 
   const { data: allSchedules = [], isLoading: schedulesLoading } = useSchedules()
   const facultySchedules =
@@ -459,10 +484,12 @@ export default function UserDetailPage() {
           <h3 className="text-lg font-semibold mb-4">Attendance History</h3>
           <DataTable
             columns={attendanceColumns}
-            data={attendance}
+            data={filteredAttendance}
             isLoading={attendanceLoading}
-            searchColumn="subject_code"
-            searchPlaceholder="Search by subject..."
+            searchPlaceholder="Search by subject, status, date, score..."
+            globalFilter={attendanceSearch}
+            onGlobalFilterChange={(v) => startAttendanceSearchTransition(() => setAttendanceSearch(v))}
+            globalFilterFn={() => true}
           />
         </div>
       )}

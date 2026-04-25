@@ -1,36 +1,40 @@
 import { useState } from 'react'
 import { formatDistanceToNow } from 'date-fns'
-import { AlertTriangle, Clock, ImageOff, Loader2 } from 'lucide-react'
+import { AlertTriangle, Clock, ImageOff, Loader2, Radio } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useRecognitions } from '@/hooks/use-queries'
 import { useAuthedImage } from '@/hooks/use-authed-image'
+import { useStudentRecognitionWs } from '@/hooks/use-student-recognition-ws'
+import { cn } from '@/lib/utils'
 import type { RecognitionEvent } from '@/types'
 
 interface Props {
   studentId: string
+  /** Visible row cap. Older events stay in the underlying buffer. */
   limit?: number
 }
 
 /**
  * Per-student "Recent Detections" column rendered inside the Face
- * Verification card. Each row shows the live probe crop, a score bar with
- * the threshold marker, and the timestamp/subject/camera. Matched events
- * link their registered-angle crop so the admin can visually confirm the
- * similarity.
+ * Verification card on the Student Record Detail page.
+ *
+ * Data source is the realtime per-student WebSocket — see
+ * `useStudentRecognitionWs` for REST backfill + WS push + dedup details.
+ * The list updates live as the pipeline fires new recognition events for
+ * this student, no polling and no page refresh required.
+ *
+ * Each row shows the live probe crop, a score bar with the threshold
+ * marker, and the timestamp/subject/camera. Matched events link their
+ * registered-angle crop so the admin can visually confirm similarity.
  */
 export function DetectionHistoryList({ studentId, limit = 10 }: Props) {
   const [showMore, setShowMore] = useState(false)
-  const pageLimit = showMore ? Math.min(50, limit * 5) : limit
+  const { events, isConnected, isLoading, error } =
+    useStudentRecognitionWs(studentId)
 
-  const { data, isLoading, isError, error } = useRecognitions({
-    student_id: studentId,
-    limit: pageLimit,
-  })
-
-  if (isLoading) {
+  if (isLoading && events.length === 0) {
     return (
       <div className="space-y-2">
         {Array.from({ length: 4 }).map((_, i) => (
@@ -40,21 +44,17 @@ export function DetectionHistoryList({ studentId, limit = 10 }: Props) {
     )
   }
 
-  if (isError) {
+  if (error && events.length === 0) {
     return (
       <div className="flex flex-col items-center gap-2 rounded-md border border-dashed border-amber-500/40 p-6 text-center text-sm text-amber-600 dark:text-amber-500">
         <AlertTriangle className="h-6 w-6" aria-hidden />
         <span>Failed to load detection history</span>
-        <span className="text-xs text-muted-foreground">
-          {(error as Error)?.message ?? 'Unknown error'}
-        </span>
+        <span className="text-xs text-muted-foreground">{error.message}</span>
       </div>
     )
   }
 
-  const items = data?.items ?? []
-
-  if (items.length === 0) {
+  if (events.length === 0) {
     return (
       <div className="flex flex-col items-center gap-2 rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
         <Clock className="h-6 w-6" aria-hidden />
@@ -62,18 +62,33 @@ export function DetectionHistoryList({ studentId, limit = 10 }: Props) {
         <span className="text-xs">
           Events will appear as the pipeline recognizes this student in class.
         </span>
+        <ConnectionDot isConnected={isConnected} />
       </div>
     )
   }
 
+  // The WS buffer holds up to 200 events; show `limit` by default then let
+  // the user expand inline up to the full buffer. Older events fall off the
+  // back as new ones arrive — that's acceptable for a "recent" view.
+  const expandedCap = Math.min(events.length, Math.max(50, limit * 5))
+  const visibleCount = showMore ? expandedCap : Math.min(limit, events.length)
+  const visible = events.slice(0, visibleCount)
+  const canExpand = !showMore && events.length > visibleCount
+
   return (
     <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <ConnectionDot isConnected={isConnected} />
+        <span className="text-[11px] text-muted-foreground">
+          {visible.length} of {events.length}
+        </span>
+      </div>
       <ul className="flex flex-col gap-2 max-h-[480px] overflow-y-auto pr-1">
-        {items.map((event) => (
+        {visible.map((event) => (
           <DetectionRow key={event.event_id} event={event} />
         ))}
       </ul>
-      {data?.next_cursor && !showMore && (
+      {canExpand && (
         <Button
           variant="outline"
           size="sm"
@@ -83,12 +98,27 @@ export function DetectionHistoryList({ studentId, limit = 10 }: Props) {
           Show more
         </Button>
       )}
-      {showMore && data?.next_cursor && (
+      {showMore && events.length >= expandedCap && (
         <div className="text-center text-[11px] text-muted-foreground">
-          Showing {items.length} recent detections — open the audit page for full history.
+          Showing {visible.length} recent detections — open the audit page for full history.
         </div>
       )}
     </div>
+  )
+}
+
+function ConnectionDot({ isConnected }: { isConnected: boolean }) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1.5 text-[11px]',
+        isConnected ? 'text-emerald-600 dark:text-emerald-500' : 'text-muted-foreground',
+      )}
+      title={isConnected ? 'Live — updates in real time' : 'Disconnected — showing cached results'}
+    >
+      <Radio className={cn('h-3 w-3', isConnected && 'animate-pulse')} aria-hidden />
+      {isConnected ? 'Live' : 'Offline'}
+    </span>
   )
 }
 

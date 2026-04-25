@@ -23,6 +23,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 
+import cv2
 import numpy as np
 import supervision as sv
 from scipy.optimize import linear_sum_assignment
@@ -111,12 +112,30 @@ class TrackResult:
 
 @dataclass(frozen=True, slots=True)
 class TrackFrame:
-    """Result of processing one frame through the realtime tracker."""
+    """Result of processing one frame through the realtime tracker.
+
+    Per-stage timing fields (``det_ms``, ``embed_ms``, ``faiss_ms``) are
+    propagated to the WS ``frame_update`` payload so the admin live page
+    HUD can show where the per-frame budget is going. ``other_ms`` =
+    ``processing_ms - det_ms - embed_ms - faiss_ms`` is computed at the
+    broadcast site and not stored here.
+
+    ``rtp_pts_90k`` carries the upstream RTSP/RTP source PTS (90 kHz
+    timebase) for the frame this result describes, captured by
+    ``FrameGrabber.grab_with_pts()``. It travels through the WS payload
+    so the admin live overlay can align the bbox draw to the matching
+    video frame on the WHEP-played ``<video>`` element. None when the
+    grabber didn't capture PTS (test mocks, legacy callers).
+    """
 
     tracks: list[TrackResult]
     fps: float
     processing_ms: float
     timestamp: float
+    det_ms: float = 0.0
+    embed_ms: float = 0.0
+    faiss_ms: float = 0.0
+    rtp_pts_90k: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -208,8 +227,14 @@ class RealtimeTracker:
     # Public API
     # ------------------------------------------------------------------
 
-    def process(self, frame: np.ndarray) -> TrackFrame:
+    def process(self, frame: np.ndarray, rtp_pts_90k: int | None = None) -> TrackFrame:
         """Process one BGR frame: detect → track → recognize (new only).
+
+        ``rtp_pts_90k`` is the upstream RTSP/RTP PTS captured by the
+        ``FrameGrabber`` alongside this frame. It is opaque to the
+        tracker — we propagate it through ``TrackFrame`` so the
+        broadcaster can ship it to the admin overlay for video-aligned
+        bbox rendering (live-feed plan 2026-04-25 Step 3).
 
         Pipeline shape (industry-standard tiered video analytics pattern —
         DeepStream / AWS Rekognition Streams / Azure Video Analyzer all use
@@ -266,6 +291,8 @@ class RealtimeTracker:
                 fps=1000.0 / max(duration_ms, 0.1),
                 processing_ms=duration_ms,
                 timestamp=now,
+                det_ms=t_det_ms,
+                rtp_pts_90k=rtp_pts_90k,
             )
 
         # Split the detection records into parallel arrays. ``kpss`` carries
@@ -320,6 +347,8 @@ class RealtimeTracker:
                 fps=1000.0 / max(duration_ms, 0.1),
                 processing_ms=duration_ms,
                 timestamp=now,
+                det_ms=t_det_ms,
+                rtp_pts_90k=rtp_pts_90k,
             )
         bboxes, confidences, kpss = zip(*filtered)
         bboxes = list(bboxes)
@@ -548,17 +577,45 @@ class RealtimeTracker:
                 # frame + bbox are still in scope. A fresh bbox crop (not the
                 # aligned 112x112 ArcFace input) is used for the audit trail
                 # so the admin UI can show the student "as captured in frame".
-                x1p, y1p, x2p, y2p = bbox.astype(int)
-                x1p, y1p = max(0, x1p), max(0, y1p)
-                x2p, y2p = min(self._frame_w, x2p), min(self._frame_h, y2p)
+                #
+                # Margin + upscale (added 2026-04-25): the previous code did
+                # a tight bbox-only crop, which produced ~60×80 px crops on
+                # classroom-distance faces. Once scaled into the recognition
+                # stream panel UI those rendered as mush. We now expand the
+                # crop by EVIDENCE_CROP_MARGIN_PCT (default 35 %), then
+                # upscale tiny results to a long-edge target so the panel
+                # always renders sharp. Operates on the source frame so the
+                # crop is the highest-fidelity copy we have access to.
+                x1f, y1f, x2f, y2f = (float(v) for v in bbox)
+                bw = x2f - x1f
+                bh = y2f - y1f
+                margin = settings.EVIDENCE_CROP_MARGIN_PCT
+                x1p = max(0, int(x1f - margin * bw))
+                y1p = max(0, int(y1f - margin * bh))
+                x2p = min(self._frame_w, int(x2f + margin * bw))
+                y2p = min(self._frame_h, int(y2f + margin * bh))
                 live_crop_np = frame[y1p:y2p, x1p:x2p]
                 # Fallback: skip the evidence row if the crop collapsed to
                 # zero area — we'd have nothing to store.
                 if live_crop_np.size == 0:
                     continue
-                # Copy to decouple from the frame buffer; the evidence writer
-                # may JPEG-encode this after a brief queue wait.
-                live_crop_np = live_crop_np.copy()
+                # Upscale-to-target so the recognition panel UI doesn't
+                # render a 60-px crop scaled 4× into a 240-px box (which
+                # is what produced the "blurred face" complaint on
+                # 2026-04-25). cv2.resize with INTER_CUBIC produces a
+                # noticeably sharper upscale than the browser's CSS
+                # bilinear scaling.
+                target = settings.EVIDENCE_CROP_TARGET_LONG_EDGE
+                ch, cw = live_crop_np.shape[:2]
+                long_edge = max(ch, cw)
+                if 0 < long_edge < target:
+                    scale = target / float(long_edge)
+                    new_size = (max(1, int(cw * scale)), max(1, int(ch * scale)))
+                    live_crop_np = cv2.resize(live_crop_np, new_size, interpolation=cv2.INTER_CUBIC)
+                else:
+                    # Copy to decouple from the frame buffer; the evidence
+                    # writer may JPEG-encode this after a brief queue wait.
+                    live_crop_np = live_crop_np.copy()
                 det_score = 0.0
                 try:
                     det_score = float(tracked.confidence[i])
@@ -737,6 +794,10 @@ class RealtimeTracker:
             fps=1000.0 / max(duration_ms, 0.1),
             processing_ms=duration_ms,
             timestamp=now,
+            det_ms=t_det_ms,
+            embed_ms=t_embed_total_ms,
+            faiss_ms=t_faiss_ms,
+            rtp_pts_90k=rtp_pts_90k,
         )
 
     def get_recognized_user_ids(self) -> set[str]:
@@ -814,6 +875,19 @@ class RealtimeTracker:
             return "recognized"
         confirm_attempts = settings.UNKNOWN_CONFIRM_ATTEMPTS
         score_ceiling = settings.RECOGNITION_THRESHOLD - settings.UNKNOWN_CONFIRM_MARGIN
+
+        # Fast-commit path for obvious unknowns (added 2026-04-25). A face
+        # whose peak similarity has stayed below
+        # ``UNKNOWN_FAST_COMMIT_SCORE`` (default 0.10) for at least
+        # ``UNKNOWN_FAST_COMMIT_ATTEMPTS`` frames is clearly not enrolled
+        # — flip to red immediately rather than make the operator wait the
+        # full UNKNOWN_CONFIRM_ATTEMPTS window. See config.py for rationale.
+        if (
+            identity.unknown_attempts >= settings.UNKNOWN_FAST_COMMIT_ATTEMPTS
+            and identity.best_score_seen < settings.UNKNOWN_FAST_COMMIT_SCORE
+        ):
+            return "unknown"
+
         if (
             identity.unknown_attempts >= confirm_attempts
             and identity.best_score_seen < score_ceiling
@@ -1042,6 +1116,7 @@ class RealtimeTracker:
                         det_score=det_score,
                         bbox_px=bbox_px,
                         user_id=user_id,
+                        student_name=resolved_name,
                         confidence=float(confidence),
                         is_ambiguous=bool(is_ambiguous),
                     )
@@ -1063,6 +1138,7 @@ class RealtimeTracker:
         det_score: float,
         bbox_px: list[int],
         user_id: str | None,
+        student_name: str | None,
         confidence: float,
         is_ambiguous: bool,
     ) -> None:
@@ -1112,6 +1188,7 @@ class RealtimeTracker:
         draft = RecognitionEventDraft(
             schedule_id=str(self._schedule_id),
             student_id=str(user_id) if user_id else None,
+            student_name=student_name if matched else None,
             track_id=int(identity.track_id),
             camera_id=str(self._camera_id),
             frame_idx=int(self._frame_counter),

@@ -68,6 +68,12 @@ class ConnectionManager:
     def __init__(self):
         self._attendance_clients: dict[str, set[WebSocket]] = defaultdict(set)
         self._alert_clients: dict[str, set[WebSocket]] = defaultdict(set)
+        # Per-student fanout for the Student Record Detail page's "Recent
+        # detections" panel. Mirrors the schedule channel: every persisted
+        # recognition_event with a non-null student_id is also broadcast
+        # here so an open student-detail page updates in real time without
+        # waiting for the next REST poll.
+        self._student_clients: dict[str, set[WebSocket]] = defaultdict(set)
         # Activity clients are a flat set keyed by filter spec — per-connection
         # filters are server-side-applied on each incoming message.
         self._activity_clients: set[ActivityClient] = set()
@@ -91,6 +97,19 @@ class ConnectionManager:
 
     def remove_alert_client(self, user_id: str, ws: WebSocket):
         self._alert_clients[user_id].discard(ws)
+
+    async def add_student_client(self, student_id: str, ws: WebSocket):
+        """Subscribe a viewer to a student's live recognition_event stream."""
+        await ws.accept()
+        self._student_clients[student_id].add(ws)
+        logger.debug(
+            "WS student client added for %s (total: %d)",
+            student_id,
+            len(self._student_clients[student_id]),
+        )
+
+    def remove_student_client(self, student_id: str, ws: WebSocket):
+        self._student_clients[student_id].discard(ws)
 
     async def add_activity_client(self, client: ActivityClient):
         """Accept a /ws/events viewer (admin live-tail stream)."""
@@ -150,6 +169,37 @@ class ConnectionManager:
             await r.publish(channel, payload)
         except Exception as e:
             logger.warning("Redis alert publish failed for %s: %s", user_id, e)
+
+    async def broadcast_student(self, student_id: str, data: dict) -> None:
+        """Push ``data`` to all local viewers of one student, then publish to
+        Redis so other workers fan out to their local viewers too.
+
+        Used by the recognition-evidence writer to push real-time
+        ``recognition_event`` messages to the Student Record Detail page.
+        """
+        dead = []
+        for ws in list(self._student_clients.get(student_id, set())):
+            try:
+                await ws.send_json(data)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self._student_clients[student_id].discard(ws)
+
+        await self._redis_publish_student(student_id, data)
+
+    async def _redis_publish_student(self, student_id: str, data: dict) -> None:
+        """Publish a per-student message to the shared Redis subchannel."""
+        channel = f"{settings.REDIS_WS_CHANNEL}:student:{student_id}"
+        try:
+            from app.redis_client import get_redis
+
+            r = await get_redis()
+            enriched = {**data, "origin_pid": os.getpid(), "_student_id": student_id}
+            payload = json.dumps(enriched, default=str)
+            await r.publish(channel, payload)
+        except Exception as e:
+            logger.warning("Redis student publish failed for %s: %s", student_id, e)
 
     async def broadcast_scan_result(
         self,
@@ -259,6 +309,7 @@ class ConnectionManager:
                         # Determine channel type by suffix parts:
                         #   Alert:      ws_broadcast:alert:{user_id}
                         #   Activity:   ws_broadcast:activity:global
+                        #   Student:    ws_broadcast:student:{student_id}
                         #   Attendance: ws_broadcast:{schedule_id}
                         parts = channel.split(":")
                         if len(parts) >= 3 and parts[-2] == "alert":
@@ -272,6 +323,18 @@ class ConnectionManager:
                                     dead_alerts.append(ws)
                             for ws in dead_alerts:
                                 self._alert_clients[user_id].discard(ws)
+                        elif len(parts) >= 3 and parts[-2] == "student":
+                            # Per-student recognition_event — forward to
+                            # student-scoped clients on this worker.
+                            student_id = parts[-1]
+                            dead_students = []
+                            for ws in list(self._student_clients.get(student_id, set())):
+                                try:
+                                    await ws.send_json(data)
+                                except Exception:
+                                    dead_students.append(ws)
+                            for ws in dead_students:
+                                self._student_clients[student_id].discard(ws)
                         elif len(parts) >= 3 and parts[-2] == "activity":
                             # Activity event — fan out to all matching
                             # /ws/events viewers, applying per-connection
@@ -490,6 +553,86 @@ async def events_websocket(websocket: WebSocket):
         logger.warning("Unexpected error on activity events WS", exc_info=True)
     finally:
         ws_manager.remove_activity_client(client)
+
+
+@router.websocket("/student/{student_id}")
+async def student_recognition_websocket(websocket: WebSocket, student_id: str):
+    """Admin-only per-student stream of ``recognition_event`` messages.
+
+    Powers the Student Record Detail page's "Recent detections" panel — every
+    FAISS decision the writer persists for this student is fanned out here in
+    real time, so the panel updates without polling. Other recognition_event
+    messages (for other students, or misses with no student_id) are NOT sent
+    on this channel.
+
+    Auth pattern matches /ws/events: token must resolve to an active admin
+    user. Faculty/student roles are rejected with 4003 because the recognition
+    audit trail (probe crops + similarity scores) is admin-only data.
+    """
+    token = websocket.query_params.get("token")
+    if token is None:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+    try:
+        payload = verify_token(token)
+    except Exception:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+
+    user_id_raw = payload.get("user_id")
+    if not user_id_raw:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+
+    # Validate the student_id is a real UUID early — saves us from holding
+    # an open socket against a bogus path that will never receive messages.
+    try:
+        import uuid as _uuid
+
+        _uuid.UUID(student_id)
+    except Exception:
+        await websocket.close(code=4400, reason="Invalid student_id")
+        return
+
+    # Admin role check — same pattern as events_websocket.
+    try:
+        import uuid as _uuid
+
+        from app.database import SessionLocal
+        from app.models.user import User, UserRole
+
+        db = SessionLocal()
+        try:
+            user = (
+                db.query(User)
+                .filter(User.id == _uuid.UUID(str(user_id_raw)))
+                .first()
+            )
+        finally:
+            db.close()
+    except Exception:
+        logger.warning("Student WS auth lookup failed", exc_info=True)
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+
+    if user is None or not user.is_active or user.role != UserRole.ADMIN:
+        await websocket.close(code=4003, reason="Forbidden")
+        return
+
+    await ws_manager.add_student_client(student_id, websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        logger.warning(
+            "Unexpected error on student WS for %s", student_id, exc_info=True
+        )
+    finally:
+        ws_manager.remove_student_client(student_id, websocket)
 
 
 @router.websocket("/{user_id}")

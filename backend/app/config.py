@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     INSIGHTFACE_MODEL: str = "buffalo_l"
     INSIGHTFACE_DET_SIZE: int = 640  # 640 for best accuracy with main stream (480 for sub-stream)
     INSIGHTFACE_DET_THRESH: float = 0.3  # Detection confidence minimum (lowered for distant CCTV faces)
+    # Static-shape ONNX model pack name (relative to ~/.insightface/models/).
+    # When the named pack exists on disk, the loader prefers it over the
+    # upstream INSIGHTFACE_MODEL because static-shape ONNX is required for
+    # CoreMLExecutionProvider to delegate to the Apple Neural Engine. See
+    # backend/scripts/export_static_models.py and the live-feed plan dated
+    # 2026-04-25 (Step 2b). Set to the empty string to opt out and use the
+    # dynamic-shape upstream model.
+    INSIGHTFACE_STATIC_PACK_NAME: str = "buffalo_l_static"
     FAISS_INDEX_PATH: str = "data/faiss/faces.index"
     RECOGNITION_THRESHOLD: float = (
         0.38  # Cosine similarity threshold — CCTV cross-domain typically 0.35-0.55 without adaptive help
@@ -124,6 +132,19 @@ class Settings(BaseSettings):
     # a truly unauthorised face still gets red-flagged quickly.
     UNKNOWN_CONFIRM_ATTEMPTS: int = 15
     UNKNOWN_CONFIRM_MARGIN: float = 0.05
+
+    # Fast-commit path for *obvious* unknowns (added 2026-04-25 alongside
+    # the live-feed-overlay deploy). When a track's best-seen similarity
+    # stays under UNKNOWN_FAST_COMMIT_SCORE for at least
+    # UNKNOWN_FAST_COMMIT_ATTEMPTS frames, commit to ``unknown`` even if
+    # UNKNOWN_CONFIRM_ATTEMPTS hasn't been reached yet. Rationale: a face
+    # producing 0.0 / 0.0 / 0.0 cosine similarity is clearly not enrolled
+    # — making the operator wait the full warm-up window for *that* case
+    # is wasted UX. Faces that score near threshold (e.g. 0.30 vs 0.38)
+    # still go through the gentle UNKNOWN_CONFIRM_ATTEMPTS gate so a real
+    # student with brief blur isn't red-flagged.
+    UNKNOWN_FAST_COMMIT_SCORE: float = 0.10
+    UNKNOWN_FAST_COMMIT_ATTEMPTS: int = 3
 
     # Track-Based Presence
     EARLY_LEAVE_TIMEOUT: float = 300.0  # Fallback: 5 min absent before early-leave alert (per-schedule override in DB)
@@ -243,10 +264,22 @@ class Settings(BaseSettings):
     # ───────────────────────────────────────────────────────────────────────
     ENABLE_RECOGNITION_EVIDENCE: bool = True  # Master switch — capture writer lifecycle
     RECOGNITION_EVIDENCE_CROP_ROOT: str = "/var/lib/iams/crops"  # Inside the container
-    RECOGNITION_EVIDENCE_CROP_QUALITY: int = 75  # JPEG quality; 75 is a good size/quality knee
+    RECOGNITION_EVIDENCE_CROP_QUALITY: int = 92  # JPEG quality; bumped 75 → 92 on 2026-04-25 — the recognition panel UI showed visibly mushy crops at 75
     RECOGNITION_EVIDENCE_QUEUE_SIZE: int = 1000  # Drop threshold — pipeline must never back-pressure
     RECOGNITION_EVIDENCE_BATCH_ROWS: int = 50  # DB flush trigger — whichever comes first
     RECOGNITION_EVIDENCE_BATCH_MS: int = 500  # DB flush interval
+
+    # Margin around the SCRFD bbox before cropping for the audit trail.
+    # 0.35 means the crop expands 35 % outward on each side, giving a head
+    # + shoulders framing instead of a tight face-only crop. Added
+    # 2026-04-25 — without margin, classroom-distance crops at 60×80 px
+    # rendered as mush in the admin recognition stream panel.
+    EVIDENCE_CROP_MARGIN_PCT: float = 0.35
+    # Upscale target (long edge) for tiny crops. Faces shot at >5 m on a
+    # 1280×720 source frame yield ~50 px crops; we upscale to 240 px with
+    # INTER_CUBIC so the panel renders sharp instead of asking the
+    # browser to bilinear-upscale a 50-px JPEG into a 240-px display box.
+    EVIDENCE_CROP_TARGET_LONG_EDGE: int = 240
 
     # Retention — daily APScheduler job prunes crops + rows past these limits.
     # Dry-run is ON by default until the operator has confirmed at least one

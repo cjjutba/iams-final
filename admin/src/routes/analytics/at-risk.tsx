@@ -1,3 +1,4 @@
+import { useMemo, useState, useTransition } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
 import { ArrowLeft } from 'lucide-react'
@@ -9,6 +10,18 @@ import { Button } from '@/components/ui/button'
 import { useAtRiskStudents } from '@/hooks/use-queries'
 import type { AtRiskStudent } from '@/types'
 import { formatStatus } from '@/types/attendance'
+import { tokenMatches, joinHaystack } from '@/lib/search'
+
+function buildAtRiskHaystack(s: AtRiskStudent): string {
+  return joinHaystack([
+    s.student_name,
+    s.student_id,
+    formatStatus(s.risk_level),
+    s.risk_level,
+    `${s.attendance_rate.toFixed(1)}%`,
+    `${s.missed_classes} missed`,
+  ])
+}
 
 const riskColors: Record<string, string> = {
   critical: 'bg-red-100 text-red-800 hover:bg-red-100',
@@ -51,6 +64,13 @@ export default function AtRiskPage() {
   const navigate = useNavigate()
   const { data: students = [], isLoading } = useAtRiskStudents()
 
+  const [searchQuery, setSearchQuery] = useState('')
+  const [, startSearchTransition] = useTransition()
+  const filteredStudents = useMemo(() => {
+    if (!searchQuery.trim()) return students
+    return students.filter((s) => tokenMatches(buildAtRiskHaystack(s), searchQuery))
+  }, [students, searchQuery])
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
@@ -67,10 +87,12 @@ export default function AtRiskPage() {
 
       <DataTable
         columns={columns}
-        data={students}
+        data={filteredStudents}
         isLoading={isLoading}
-        searchPlaceholder="Search students..."
-        searchColumn="student_name"
+        searchPlaceholder="Search by name, risk level, attendance rate..."
+        globalFilter={searchQuery}
+        onGlobalFilterChange={(v) => startSearchTransition(() => setSearchQuery(v))}
+        globalFilterFn={() => true}
         onRowClick={(row) => navigate(`/users/${row.student_id}`, { state: { role: 'student' } })}
       />
     </div>

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useTransition } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
 import { format } from 'date-fns'
@@ -20,6 +20,26 @@ import { useRecognitions } from '@/hooks/use-queries'
 import { useAuthedImage } from '@/hooks/use-authed-image'
 import { recognitionsService } from '@/services/recognitions.service'
 import type { RecognitionEvent, RecognitionListFilters } from '@/types'
+import { tokenMatches, joinHaystack, isoDateHaystackParts } from '@/lib/search'
+
+function buildRecognitionHaystack(e: RecognitionEvent): string {
+  const outcome = e.is_ambiguous ? 'Ambiguous' : e.matched ? 'Match Matched' : 'Miss Missed'
+  return joinHaystack([
+    e.student_name,
+    e.student_id,
+    e.schedule_subject,
+    e.schedule_id,
+    e.camera_id,
+    e.event_id,
+    e.model_name,
+    `track ${e.track_id}`,
+    `frame ${e.frame_idx}`,
+    outcome,
+    `${(e.similarity * 100).toFixed(1)}%`,
+    `${(e.threshold_used * 100).toFixed(0)}%`,
+    ...isoDateHaystackParts(e.created_at),
+  ])
+}
 
 type MatchedFilter = 'all' | 'matched' | 'missed'
 
@@ -50,7 +70,14 @@ export default function RecognitionsPage() {
   )
 
   const { data, isLoading } = useRecognitions(filters)
-  const items = data?.items ?? []
+  const items = useMemo(() => data?.items ?? [], [data])
+
+  const [searchQuery, setSearchQuery] = useState('')
+  const [, startSearchTransition] = useTransition()
+  const filteredItems = useMemo(() => {
+    if (!searchQuery.trim()) return items
+    return items.filter((e) => tokenMatches(buildRecognitionHaystack(e), searchQuery))
+  }, [items, searchQuery])
 
   const applyTextFilters = () => {
     const next = new URLSearchParams(searchParams)
@@ -234,10 +261,12 @@ export default function RecognitionsPage() {
 
       <DataTable
         columns={columns}
-        data={items}
+        data={filteredItems}
         isLoading={isLoading}
-        searchColumn="student_name"
-        searchPlaceholder="Search loaded events..."
+        searchPlaceholder="Search by student, subject, camera, outcome…"
+        globalFilter={searchQuery}
+        onGlobalFilterChange={(v) => startSearchTransition(() => setSearchQuery(v))}
+        globalFilterFn={() => true}
       />
 
       {data?.next_cursor && (

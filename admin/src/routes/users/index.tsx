@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useTransition } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { type ColumnDef } from '@tanstack/react-table'
@@ -49,6 +49,22 @@ import {
   useDeregisterFace,
 } from '@/hooks/use-queries'
 import type { UserResponse, UserRole } from '@/types'
+import { tokenMatches, joinHaystack, isoDateHaystackParts } from '@/lib/search'
+
+function buildUserHaystack(u: UserResponse): string {
+  return joinHaystack([
+    u.first_name,
+    u.last_name,
+    `${u.first_name} ${u.last_name}`,
+    u.email,
+    u.phone,
+    u.role,
+    u.student_id,
+    u.is_active ? 'Active' : 'Inactive',
+    u.email_verified ? 'Verified' : 'Unverified',
+    ...isoDateHaystackParts(u.created_at),
+  ])
+}
 
 const roleBadgeVariant: Record<UserRole, 'default' | 'secondary' | 'outline'> = {
   student: 'default',
@@ -220,6 +236,14 @@ export default function UsersPage() {
   )
   const { data: users = [], isLoading } = useUsers(queryParams)
 
+  const [searchQuery, setSearchQuery] = useState('')
+  const [, startSearchTransition] = useTransition()
+
+  const filteredUsers = useMemo(() => {
+    if (!searchQuery.trim()) return users
+    return users.filter((u) => tokenMatches(buildUserHaystack(u), searchQuery))
+  }, [users, searchQuery])
+
   const columns: ColumnDef<UserResponse>[] = [
     {
       accessorKey: 'first_name',
@@ -296,7 +320,11 @@ export default function UsersPage() {
         <div>
           <h1 className="text-2xl font-semibold">User Management</h1>
           <p className="text-muted-foreground mt-1">
-            {isLoading ? 'Loading users...' : `${users.length} user${users.length !== 1 ? 's' : ''} total`}
+            {isLoading
+              ? 'Loading users...'
+              : searchQuery.trim()
+                ? `${filteredUsers.length} of ${users.length} users`
+                : `${users.length} user${users.length !== 1 ? 's' : ''} total`}
           </p>
         </div>
         <Select value={roleFilter} onValueChange={setRoleFilter}>
@@ -314,10 +342,12 @@ export default function UsersPage() {
 
       <DataTable
         columns={columns}
-        data={users}
+        data={filteredUsers}
         isLoading={isLoading}
-        searchColumn="first_name"
-        searchPlaceholder="Search users..."
+        searchPlaceholder="Search by name, email, role, ID, status..."
+        globalFilter={searchQuery}
+        onGlobalFilterChange={(v) => startSearchTransition(() => setSearchQuery(v))}
+        globalFilterFn={() => true}
         onRowClick={(row) => navigate(`/users/${row.id}`, { state: { role: row.role } })}
       />
     </div>

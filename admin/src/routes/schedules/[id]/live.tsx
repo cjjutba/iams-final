@@ -10,7 +10,9 @@ import { RecognitionPanel } from '@/components/live-feed/RecognitionPanel'
 import { OverlayClickTargets } from '@/components/live-feed/OverlayClickTargets'
 import { TrackDetailSheet } from '@/components/live-feed/TrackDetailSheet'
 import { useAttendanceWs } from '@/hooks/use-attendance-ws'
-import { useSchedule, useRoom } from '@/hooks/use-queries'
+import { useFrameAligner } from '@/hooks/use-frame-aligner'
+import { useSchedule, useRoom, useSessionStartEligibility } from '@/hooks/use-queries'
+import type { SessionEligibility, SessionEligibilityCode } from '@/services/presence.service'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useBreadcrumbStore } from '@/stores/breadcrumb.store'
 import { useTrackSelectionStore } from '@/stores/track-selection.store'
@@ -31,6 +33,67 @@ function deriveStreamKey(cameraEndpoint: string | null | undefined, roomName: st
     if (match?.[1]) return match[1].toLowerCase()
   }
   return roomName.toLowerCase().replace(/\s+/g, '')
+}
+
+function formatClock(date: Date): string {
+  return date
+    .toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })
+    .replace(/^0/, '')
+}
+
+/**
+ * Re-evaluate the server's eligibility snapshot against the current wall
+ * clock. The backend snapshot is the source of truth for ALREADY_RAN_TODAY
+ * and ownership/active-status, but for time-window codes (TOO_EARLY,
+ * AFTER_END) the snapshot becomes stale between polls. This recomputes
+ * those two from `scheduled_start` / `scheduled_end` / `available_at` so
+ * the button flips at the actual minute boundary without a refetch.
+ *
+ * Returns the eligibility unchanged if it's not a window-related code, or
+ * if the original snapshot is missing.
+ */
+function refreshTimeWindow(
+  eligibility: SessionEligibility | undefined,
+  now: Date,
+): SessionEligibility | undefined {
+  if (!eligibility) return eligibility
+
+  // Only TOO_EARLY / AFTER_END / ALLOWED can flip from a clock tick. The
+  // others are sticky for the rest of the day from the server's POV.
+  const windowCodes: SessionEligibilityCode[] = ['ALLOWED', 'TOO_EARLY', 'AFTER_END']
+  if (!windowCodes.includes(eligibility.code)) return eligibility
+
+  const start = new Date(eligibility.scheduled_start)
+  const end = new Date(eligibility.scheduled_end)
+  const availableAt = new Date(eligibility.available_at)
+
+  if (now < availableAt) {
+    return {
+      ...eligibility,
+      allowed: false,
+      code: 'TOO_EARLY',
+      message: `Manual start opens at ${formatClock(availableAt)} (10 minutes before scheduled start).`,
+    }
+  }
+  if (now >= end) {
+    return {
+      ...eligibility,
+      allowed: false,
+      code: 'AFTER_END',
+      message: `This schedule ended at ${formatClock(end)} today.`,
+    }
+  }
+  // Inside the window — let the server's verdict stand (it may still be
+  // RUNNING / ALREADY_RAN_TODAY, which a clock tick cannot resolve).
+  if (eligibility.code === 'ALLOWED') return eligibility
+  // Was TOO_EARLY/AFTER_END from server but clock has rolled into window
+  // — preemptively flip to allowed; the next server poll will confirm.
+  return {
+    ...eligibility,
+    allowed: true,
+    code: 'ALLOWED',
+    message: `Ready to start (within scheduled window ${formatClock(start)}–${formatClock(end)}).`,
+  }
 }
 
 export default function ScheduleLivePage() {
@@ -79,6 +142,17 @@ export default function ScheduleLivePage() {
     setActiveStream({ key, isFallback })
   }, [])
 
+  // RTP-PTS-based frame aligner (live-feed plan 2026-04-25 Step 3c).
+  // Behind ``VITE_ENABLE_FRAME_ALIGN`` so we can A/B against the
+  // post-Step-1 honest-blink behavior. The hook returns the bbox set
+  // that semantically matches whichever video frame the WHEP player
+  // just decoded; passes through ``latestFrame.tracks`` when disabled
+  // or unsupported (Safari, legacy backend).
+  const frameAlignEnabled = String(import.meta.env.VITE_ENABLE_FRAME_ALIGN ?? '') === '1'
+  const alignedTracks = useFrameAligner(playerRef.current, latestFrame, {
+    enabled: frameAlignEnabled,
+  })
+
   const selectedTrackId = useTrackSelectionStore((s) => s.selectedTrackId)
   const selectTrack = useTrackSelectionStore((s) => s.select)
   const clearTrackSelection = useTrackSelectionStore((s) => s.clear)
@@ -89,6 +163,40 @@ export default function ScheduleLivePage() {
 
   const [sessionLoading, setSessionLoading] = useState(false)
   const [sessionActive, setSessionActive] = useState<boolean | null>(null)
+
+  // Server-side eligibility snapshot (refetched every 30s; manual refetch
+  // after a failed Start to pick up ALREADY_RAN_TODAY transitions).
+  const {
+    data: eligibilitySnapshot,
+    refetch: refetchEligibility,
+  } = useSessionStartEligibility(scheduleId)
+
+  // Tick once per second so TOO_EARLY → ALLOWED → AFTER_END transitions
+  // happen at the minute boundary instead of waiting on the next server
+  // poll. Cheap — just a Date assignment and a boolean flip.
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1_000)
+    return () => clearInterval(t)
+  }, [])
+
+  // Effective eligibility = server snapshot reconciled against wall clock.
+  // The "running" verdict from sessionActive (REST/WS) takes precedence
+  // over the server snapshot's RUNNING code, since it updates instantly
+  // on session_start / session_end events.
+  const eligibility = useMemo<SessionEligibility | undefined>(() => {
+    if (sessionActive === true && eligibilitySnapshot) {
+      return { ...eligibilitySnapshot, allowed: false, code: 'RUNNING', message: 'Session is already running.' }
+    }
+    return refreshTimeWindow(eligibilitySnapshot, now)
+  }, [eligibilitySnapshot, sessionActive, now])
+
+  const startButtonDisabled =
+    sessionLoading || (!!eligibility && !eligibility.allowed)
+  const startButtonTitle =
+    eligibility && !eligibility.allowed && eligibility.code !== 'RUNNING'
+      ? eligibility.message
+      : undefined
 
   // Poll session active state on mount + every 10 s.
   // The 10 s cadence is intentionally tighter than the backend's 15 s
@@ -146,10 +254,24 @@ export default function ScheduleLivePage() {
       setSessionActive(true)
       toast.success('Session started')
     } catch (err: unknown) {
-      const msg =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
-        (err instanceof Error ? err.message : 'Failed to start session')
+      // The backend returns a structured detail object for window/owner
+      // gating rejections (`{code, message, ...}`) and a plain string for
+      // older errors. Handle both shapes.
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+      let msg: string
+      if (detail && typeof detail === 'object' && 'message' in detail) {
+        msg = String((detail as { message: unknown }).message)
+      } else if (typeof detail === 'string') {
+        msg = detail
+      } else if (err instanceof Error) {
+        msg = err.message
+      } else {
+        msg = 'Failed to start session'
+      }
       toast.error(msg)
+      // Re-poll eligibility so the button reflects the rejection reason
+      // (especially ALREADY_RAN_TODAY, which we can't predict locally).
+      void refetchEligibility()
     } finally {
       setSessionLoading(false)
     }
@@ -237,7 +359,12 @@ export default function ScheduleLivePage() {
               End Session
             </Button>
           ) : (
-            <Button onClick={startSession} disabled={sessionLoading} className="gap-2">
+            <Button
+              onClick={startSession}
+              disabled={startButtonDisabled}
+              title={startButtonTitle}
+              className="gap-2"
+            >
               {sessionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               Start Session
             </Button>
@@ -264,7 +391,7 @@ export default function ScheduleLivePage() {
                 videoSize={videoSize}
               />
               <DetectionOverlay
-                tracks={latestFrame?.tracks ?? []}
+                tracks={frameAlignEnabled ? alignedTracks : (latestFrame?.tracks ?? [])}
                 videoElement={playerRef.current?.videoElement ?? null}
                 videoSize={videoSize}
                 selectedTrackId={selectedTrackId}
@@ -285,6 +412,26 @@ export default function ScheduleLivePage() {
                     <span>
                       Tracks: <span className="font-mono">{latestFrame.tracks.length}</span>
                     </span>
+                    {/*
+                      Per-stage timing readout (added 2026-04-25, live-feed
+                      plan Step 2a). Only renders when the backend
+                      broadcasts the new fields — older builds quietly omit
+                      them. ``det/embed/faiss/other`` ms tells the
+                      operator at a glance which stage is eating the
+                      per-frame budget; useful for verifying Step 2b's
+                      CoreML re-export after deploy.
+                    */}
+                    {(latestFrame.det_ms != null ||
+                      latestFrame.embed_ms != null ||
+                      latestFrame.faiss_ms != null ||
+                      latestFrame.other_ms != null) && (
+                      <span className="font-mono opacity-80">
+                        det:{(latestFrame.det_ms ?? 0).toFixed(0)} embed:
+                        {(latestFrame.embed_ms ?? 0).toFixed(0)} faiss:
+                        {(latestFrame.faiss_ms ?? 0).toFixed(0)} other:
+                        {(latestFrame.other_ms ?? 0).toFixed(0)} ms
+                      </span>
+                    )}
                   </>
                 )}
                 {activeStream?.isFallback && (
@@ -328,8 +475,17 @@ export default function ScheduleLivePage() {
             <CardTitle className="text-sm font-medium text-muted-foreground">Session not running</CardTitle>
           </CardHeader>
           <CardContent className="text-sm text-muted-foreground">
-            The video stream is live but attendance is not being marked. Click{' '}
-            <span className="font-medium text-foreground">Start Session</span> to begin presence tracking.
+            {eligibility && !eligibility.allowed ? (
+              <>
+                The video stream is live but attendance cannot be started right now.
+                <span className="mt-1 block font-medium text-foreground">{eligibility.message}</span>
+              </>
+            ) : (
+              <>
+                The video stream is live but attendance is not being marked. Click{' '}
+                <span className="font-medium text-foreground">Start Session</span> to begin presence tracking.
+              </>
+            )}
           </CardContent>
         </Card>
       )}

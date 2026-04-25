@@ -66,11 +66,16 @@ MTX_PORT="8554"
 #   the WebRTC decode load stops the jitter buffer from drifting over long
 #   sessions. Overlay boxes use normalized 0–1 coords so they line up with
 #   either profile.
+# Hardware-to-room is swapped: the camera at 192.168.88.10 is physically
+# mounted in EB227, and 192.168.88.11 is physically in EB226. Path keys
+# (eb226 / eb227) stay aligned with rooms.stream_key, so the IP↔key mapping
+# below looks inverted on purpose. Don't "correct" it without re-checking
+# the physical install.
 CAMERAS=(
-  "192.168.88.10 eb226     h264Preview_01_main"
-  "192.168.88.10 eb226-sub h264Preview_01_sub"
-  "192.168.88.11 eb227     h264Preview_01_main"
-  "192.168.88.11 eb227-sub h264Preview_01_sub"
+  "192.168.88.11 eb226     h264Preview_01_main"
+  "192.168.88.11 eb226-sub h264Preview_01_sub"
+  "192.168.88.10 eb227     h264Preview_01_main"
+  "192.168.88.10 eb227-sub h264Preview_01_sub"
 )
 
 # PIDs of child loops — populated as we launch each camera. Used by the

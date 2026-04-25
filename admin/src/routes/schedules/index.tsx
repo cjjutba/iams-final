@@ -62,11 +62,12 @@ import {
 } from '@/components/ui/form'
 import { useSchedules, useCreateSchedule, useUpdateSchedule, useDeleteSchedule, useUsers, useRooms } from '@/hooks/use-queries'
 import type { ScheduleResponse } from '@/types'
+import { tokenMatches, joinHaystack, formatTime12h, DAY_NAMES_MON_FIRST } from '@/lib/search'
 
 // Indexed Monday-first to match the backend's `day_of_week` convention
 // (0=Mon..6=Sun — see backend/scripts/seed_data.py). Do not reorder without
 // also fixing the todayIdx remap below and the Day column in the table.
-const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+const DAY_NAMES = DAY_NAMES_MON_FIRST
 
 type StatusFilter = 'all' | 'active' | 'inactive'
 type DayFilter = 'all' | '0' | '1' | '2' | '3' | '4' | '5' | '6'
@@ -100,12 +101,33 @@ const scheduleFormSchema = z.object({
 })
 
 function formatTime(time: string): string {
-  if (!time) return ''
-  const [hours, minutes] = time.split(':')
-  const h = parseInt(hours, 10)
-  const ampm = h >= 12 ? 'PM' : 'AM'
-  const h12 = h % 12 || 12
-  return `${String(h12)}:${minutes} ${ampm}`
+  return formatTime12h(time)
+}
+
+function buildScheduleHaystack(s: ScheduleResponse): string {
+  return joinHaystack([
+    s.subject_code,
+    s.subject_name,
+    s.faculty ? `${s.faculty.first_name} ${s.faculty.last_name}` : 'Unassigned',
+    s.faculty?.first_name,
+    s.faculty?.last_name,
+    s.faculty_name,
+    s.room?.name ?? 'Unassigned',
+    s.room?.building,
+    s.room_name,
+    DAY_NAMES[s.day_of_week],
+    // Match both 24h "HH:MM" and 12h "7:30 AM" so either typing style hits.
+    s.start_time,
+    s.end_time,
+    formatTime12h(s.start_time),
+    formatTime12h(s.end_time),
+    `${formatTime12h(s.start_time)} - ${formatTime12h(s.end_time)}`,
+    s.is_active ? 'Active' : 'Inactive',
+    s.semester,
+    s.academic_year,
+    s.target_course,
+    s.target_year_level != null ? `Year ${s.target_year_level}` : null,
+  ])
 }
 
 function ActionsCell({
@@ -175,6 +197,7 @@ export default function SchedulesPage() {
   // "classes happening today, earliest to latest." User can flip to
   // "All Days" or "All Status" if they want the full list.
   const [dayFilter, setDayFilter] = useState<DayFilter>(String(todayIdx) as DayFilter)
+  const [searchQuery, setSearchQuery] = useState('')
   const [isPending, startTransition] = useTransition()
 
   const filtered = useMemo(() => {
@@ -183,6 +206,13 @@ export default function SchedulesPage() {
     else if (statusFilter === 'inactive') result = result.filter((s) => !s.is_active)
 
     if (dayFilter !== 'all') result = result.filter((s) => s.day_of_week === parseInt(dayFilter, 10))
+
+    // Multi-field search: matches against subject code/name, faculty,
+    // room, day name, formatted time, status, semester, academic year,
+    // and target course/year. See buildScheduleHaystack().
+    if (searchQuery.trim()) {
+      result = result.filter((s) => tokenMatches(buildScheduleHaystack(s), searchQuery))
+    }
 
     // Sort morning -> evening: by (day_of_week, start_time). When viewing
     // "All Days" this groups days together; when filtered to one day this
@@ -193,13 +223,15 @@ export default function SchedulesPage() {
     })
 
     return result
-  }, [schedules, statusFilter, dayFilter])
+  }, [schedules, statusFilter, dayFilter, searchQuery])
 
   // Treat "default" (today-only + active status) as no explicit filter —
-  // the Clear button only appears once the user has diverged from it.
+  // the Clear button only appears once the user has diverged from it OR
+  // a search query has been entered.
   const hasFilters =
     statusFilter !== 'all' ||
-    (dayFilter !== 'all' && dayFilter !== (String(todayIdx) as DayFilter))
+    (dayFilter !== 'all' && dayFilter !== (String(todayIdx) as DayFilter)) ||
+    searchQuery.trim().length > 0
 
   function handleFilterChange<T>(setter: (v: T) => void) {
     return (value: string) => {
@@ -208,12 +240,13 @@ export default function SchedulesPage() {
   }
 
   function clearFilters() {
-    // "Clear" goes back to the default view (today + active), not to
-    // a wide-open list — otherwise users would have to re-pick today
-    // every time they clear.
+    // "Clear" goes back to the default view (today + active + no search),
+    // not to a wide-open list — otherwise users would have to re-pick
+    // today every time they clear.
     startTransition(() => {
       setStatusFilter('all')
       setDayFilter(String(todayIdx) as DayFilter)
+      setSearchQuery('')
     })
   }
 
@@ -403,8 +436,14 @@ export default function SchedulesPage() {
         columns={columns}
         data={filtered}
         isLoading={showSkeleton}
-        searchColumn="subject_name"
-        searchPlaceholder="Search by subject..."
+        // Multi-field search lives in this component (filtered useMemo
+        // above). The DataTable's globalFilter wiring is purely for the
+        // input's controlled state; the noop globalFilterFn ensures
+        // TanStack does not re-filter the rows we already pre-filtered.
+        globalFilter={searchQuery}
+        onGlobalFilterChange={(v) => startTransition(() => setSearchQuery(v))}
+        globalFilterFn={() => true}
+        searchPlaceholder="Search by subject, faculty, room, day, time, status..."
         toolbar={
           <>
             <Select value={dayFilter} onValueChange={handleFilterChange(setDayFilter)}>

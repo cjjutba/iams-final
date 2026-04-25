@@ -278,7 +278,16 @@ class SessionPipeline:
                 loop_start = time.monotonic()
 
                 try:
-                    frame = self._grabber.grab()
+                    # ``grab_with_pts`` returns ``(frame, rtp_pts_90k)`` so
+                    # the broadcaster can ship the upstream RTP timestamp
+                    # to the admin overlay for video-aligned rendering
+                    # (live-feed plan 2026-04-25 Step 3).
+                    grabbed = self._grabber.grab_with_pts()
+                    if grabbed is None:
+                        frame = None
+                        rtp_pts_90k: int | None = None
+                    else:
+                        frame, rtp_pts_90k = grabbed
                     if frame is None:
                         _consecutive_none += 1
                         # Pause presence tracking after ~2s of missing frames so
@@ -301,8 +310,13 @@ class SessionPipeline:
                             )
                     if frame is not None:
                         _consecutive_none = 0
-                        # Run CPU-intensive ML work in thread executor
-                        track_frame = await loop.run_in_executor(None, self._tracker.process, frame)
+                        # Run CPU-intensive ML work in thread executor.
+                        # ``rtp_pts_90k`` is propagated through the tracker
+                        # onto ``TrackFrame`` so the broadcaster can ship
+                        # it to the admin overlay (live-feed plan Step 3).
+                        track_frame = await loop.run_in_executor(
+                            None, self._tracker.process, frame, rtp_pts_90k
+                        )
 
                         self._frame_count += 1
 
@@ -431,19 +445,44 @@ class SessionPipeline:
                 for t in track_frame.tracks
             ]
 
-            await ws_manager.broadcast_attendance(
-                self.schedule_id,
-                {
-                    "type": "frame_update",
-                    "timestamp": track_frame.timestamp,
-                    "server_time_ms": int(time.time() * 1000),
-                    "frame_sequence": self._frame_sequence,
-                    "frame_size": [settings.FRAME_GRABBER_WIDTH, settings.FRAME_GRABBER_HEIGHT],
-                    "tracks": tracks_data,
-                    "fps": round(track_frame.fps, 1),
-                    "processing_ms": round(track_frame.processing_ms, 1),
-                },
+            # Per-stage timing breakdown for the live HUD. ``other_ms`` is
+            # everything outside the three named stages (NMS, ByteTrack
+            # update, identity-cache bookkeeping, dedup, expiry). When
+            # ``other_ms`` dominates, the bottleneck has moved off ML and
+            # into the rest of the loop — a different debugging path than
+            # the SCRFD/ArcFace optimisations in Step 2b of the
+            # 2026-04-25 live-feed plan.
+            det_ms = round(track_frame.det_ms, 1)
+            embed_ms = round(track_frame.embed_ms, 1)
+            faiss_ms = round(track_frame.faiss_ms, 1)
+            other_ms = round(
+                max(0.0, track_frame.processing_ms - track_frame.det_ms - track_frame.embed_ms - track_frame.faiss_ms),
+                1,
             )
+
+            payload = {
+                "type": "frame_update",
+                "timestamp": track_frame.timestamp,
+                "server_time_ms": int(time.time() * 1000),
+                "frame_sequence": self._frame_sequence,
+                "frame_size": [settings.FRAME_GRABBER_WIDTH, settings.FRAME_GRABBER_HEIGHT],
+                "tracks": tracks_data,
+                "fps": round(track_frame.fps, 1),
+                "processing_ms": round(track_frame.processing_ms, 1),
+                "det_ms": det_ms,
+                "embed_ms": embed_ms,
+                "faiss_ms": faiss_ms,
+                "other_ms": other_ms,
+            }
+            # Upstream RTP 90 kHz timestamp of the source RTSP frame this
+            # update describes. Only emitted when the FrameGrabber
+            # captured it; consumed by the admin overlay's frame-aligner
+            # to draw bboxes on the matching ``requestVideoFrameCallback``
+            # video frame. See live-feed plan 2026-04-25 Step 3.
+            if track_frame.rtp_pts_90k is not None:
+                payload["rtp_pts_90k"] = int(track_frame.rtp_pts_90k)
+
+            await ws_manager.broadcast_attendance(self.schedule_id, payload)
         except Exception:
             logger.debug("Frame update broadcast failed", exc_info=True)
 

@@ -53,6 +53,17 @@ writeTimeout: 30s
 webrtc: yes
 webrtcAddress: :8889
 
+# WHEP RTP timestamp preservation (live-feed plan 2026-04-25 Step 3).
+# The admin overlay's frame-aligner reads `requestVideoFrameCallback().
+# rtpTimestamp` browser-side and matches it against `rtp_pts_90k` from
+# the backend's WebSocket frame_update. That contract holds ONLY because
+# mediamtx forwards the source RTSP RTP timestamps unchanged through the
+# WebRTC egress — it does not re-encode video on this stack. If a future
+# config introduces an `encoder:` directive or any transcoding hop on
+# the WHEP-served paths, the browser-side RTP clock will desync from
+# the backend-side one and the overlay will drift. Keep -c copy for the
+# VPS push and no transcoding on local egress.
+
 # Only advertise the Mac's LAN IP as a WebRTC candidate. Docker-internal
 # addresses (172.x / 127.0.0.1) are unreachable from the admin browser + phone.
 #

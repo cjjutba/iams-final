@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useTransition } from 'react'
 import { Link } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
 import { format } from 'date-fns'
@@ -11,6 +11,22 @@ import { Input } from '@/components/ui/input'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useRecognitionAccessAudit } from '@/hooks/use-queries'
 import type { AccessAuditEntry, AccessAuditFilters } from '@/types'
+import { tokenMatches, joinHaystack, isoDateHaystackParts } from '@/lib/search'
+
+function buildAccessAuditHaystack(e: AccessAuditEntry): string {
+  return joinHaystack([
+    e.viewer_name,
+    e.viewer_user_id,
+    e.event_id,
+    e.crop_kind,
+    e.crop_kind === 'live' ? 'Live' : 'Registered',
+    e.student_name,
+    e.student_id,
+    e.ip,
+    e.user_agent,
+    ...isoDateHaystackParts(e.viewed_at),
+  ])
+}
 
 /**
  * Recognition Access Audit page.
@@ -33,7 +49,15 @@ export default function RecognitionAccessAuditPage() {
   const [filters, setFilters] = useState<AccessAuditFilters>({ limit: 100 })
 
   const { data, isLoading } = useRecognitionAccessAudit(filters)
-  const items = data?.items ?? []
+  const items = useMemo(() => data?.items ?? [], [data])
+
+  const [searchQuery, setSearchQuery] = useState('')
+  const [, startSearchTransition] = useTransition()
+
+  const filteredItems = useMemo(() => {
+    if (!searchQuery.trim()) return items
+    return items.filter((e) => tokenMatches(buildAccessAuditHaystack(e), searchQuery))
+  }, [items, searchQuery])
 
   const apply = () => {
     const next: AccessAuditFilters = { limit: 100 }
@@ -179,10 +203,12 @@ export default function RecognitionAccessAuditPage() {
 
       <DataTable
         columns={columns}
-        data={items}
+        data={filteredItems}
         isLoading={isLoading}
-        searchColumn="viewer_name"
-        searchPlaceholder="Search viewers…"
+        searchPlaceholder="Search by viewer, subject, event, IP…"
+        globalFilter={searchQuery}
+        onGlobalFilterChange={(v) => startSearchTransition(() => setSearchQuery(v))}
+        globalFilterFn={() => true}
       />
 
       {data && data.total > items.length && (

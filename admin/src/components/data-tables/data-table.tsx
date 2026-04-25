@@ -1,5 +1,6 @@
 import {
   type ColumnDef,
+  type Row,
   type SortingState,
   type ColumnFiltersState,
   flexRender,
@@ -30,7 +31,20 @@ interface DataTableProps<TData, TValue> {
   data: TData[]
   isLoading?: boolean
   searchPlaceholder?: string
+  /**
+   * Single-column search (existing behavior). The toolbar's input writes
+   * `setFilterValue` on this column. Use when one accessorKey is enough.
+   */
   searchColumn?: string
+  /**
+   * Multi-field search. Pass a controlled string + setter and a predicate
+   * `(row, query) => boolean`. The toolbar's input writes to this string,
+   * and TanStack runs the predicate against every row. Takes precedence
+   * over `searchColumn` when provided.
+   */
+  globalFilter?: string
+  onGlobalFilterChange?: (value: string) => void
+  globalFilterFn?: (row: Row<TData>, query: string) => boolean
   toolbar?: React.ReactNode
   pageSize?: number
   onRowClick?: (row: TData) => void
@@ -43,6 +57,9 @@ export function DataTable<TData, TValue>({
   isLoading = false,
   searchPlaceholder,
   searchColumn,
+  globalFilter,
+  onGlobalFilterChange,
+  globalFilterFn,
   toolbar,
   pageSize = 10,
   onRowClick,
@@ -51,6 +68,8 @@ export function DataTable<TData, TValue>({
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
 
+  const useGlobalFilter = onGlobalFilterChange !== undefined
+
   // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable({
     data,
@@ -58,12 +77,26 @@ export function DataTable<TData, TValue>({
     state: {
       sorting,
       columnFilters,
+      globalFilter: useGlobalFilter ? (globalFilter ?? "") : undefined,
     },
     initialState: {
       pagination: { pageSize },
     },
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
+    onGlobalFilterChange: useGlobalFilter
+      ? (updater) => {
+          const next =
+            typeof updater === "function"
+              ? (updater as (old: string) => string)(globalFilter ?? "")
+              : (updater as string)
+          onGlobalFilterChange(next)
+        }
+      : undefined,
+    globalFilterFn: globalFilterFn
+      ? (row, _columnId, filterValue: string) =>
+          globalFilterFn(row, (filterValue ?? "").toString())
+      : undefined,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
@@ -76,6 +109,8 @@ export function DataTable<TData, TValue>({
         table={table}
         searchColumn={searchColumn}
         searchPlaceholder={searchPlaceholder}
+        globalFilter={globalFilter}
+        onGlobalFilterChange={onGlobalFilterChange}
       >
         {toolbar}
       </DataTableToolbar>

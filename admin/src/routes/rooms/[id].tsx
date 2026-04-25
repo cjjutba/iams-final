@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useTransition } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useBreadcrumbStore } from '@/stores/breadcrumb.store'
@@ -40,6 +40,29 @@ import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useRoom, useSchedules, useUpdateRoom } from '@/hooks/use-queries'
 import type { ScheduleResponse } from '@/types'
+import { tokenMatches, joinHaystack, formatTime12h, DAY_NAMES_MON_FIRST } from '@/lib/search'
+
+function buildScheduleHaystackForRoom(s: ScheduleResponse): string {
+  return joinHaystack([
+    s.subject_code,
+    s.subject_name,
+    s.faculty ? `${s.faculty.first_name} ${s.faculty.last_name}` : 'Unassigned',
+    s.faculty?.first_name,
+    s.faculty?.last_name,
+    s.faculty_name,
+    DAY_NAMES_MON_FIRST[s.day_of_week],
+    s.start_time,
+    s.end_time,
+    formatTime12h(s.start_time),
+    formatTime12h(s.end_time),
+    `${formatTime12h(s.start_time)} - ${formatTime12h(s.end_time)}`,
+    s.is_active ? 'Active' : 'Inactive',
+    s.semester,
+    s.academic_year,
+    s.target_course,
+    s.target_year_level != null ? `Year ${s.target_year_level}` : null,
+  ])
+}
 
 // Indexed Monday-first to match the backend's `day_of_week` convention
 // (0=Mon..6=Sun — see backend/scripts/seed_data.py).
@@ -98,9 +121,17 @@ export default function RoomDetailPage() {
     }
   }, [room, editOpen, form])
 
-  const roomSchedules = allSchedules.filter(
-    (s: ScheduleResponse) => s.room_id === id,
+  const roomSchedules = useMemo(
+    () => allSchedules.filter((s: ScheduleResponse) => s.room_id === id),
+    [allSchedules, id],
   )
+
+  const [scheduleSearch, setScheduleSearch] = useState('')
+  const [, startScheduleSearchTransition] = useTransition()
+  const filteredRoomSchedules = useMemo(() => {
+    if (!scheduleSearch.trim()) return roomSchedules
+    return roomSchedules.filter((s) => tokenMatches(buildScheduleHaystackForRoom(s), scheduleSearch))
+  }, [roomSchedules, scheduleSearch])
 
   const onSubmit = async (values: EditFormValues) => {
     if (!room) return
@@ -263,9 +294,11 @@ export default function RoomDetailPage() {
         <h3 className="text-lg font-semibold mb-4">Schedules in this Room</h3>
         <DataTable
           columns={scheduleColumns}
-          data={roomSchedules}
-          searchColumn="subject_name"
-          searchPlaceholder="Search by subject..."
+          data={filteredRoomSchedules}
+          searchPlaceholder="Search by subject, faculty, day, time, status..."
+          globalFilter={scheduleSearch}
+          onGlobalFilterChange={(v) => startScheduleSearchTransition(() => setScheduleSearch(v))}
+          globalFilterFn={() => true}
           onRowClick={(row) => navigate(`/schedules/${row.id}`)}
         />
       </div>

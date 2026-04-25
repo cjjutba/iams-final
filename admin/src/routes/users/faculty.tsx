@@ -19,6 +19,20 @@ import { useUsers } from '@/hooks/use-queries'
 import type { UserResponse } from '@/types'
 import { CreateUserDialog } from './create-user-dialog'
 import { UserActionsCell } from './user-actions'
+import { tokenMatches, joinHaystack, isoDateHaystackParts } from '@/lib/search'
+
+function buildFacultyHaystack(u: UserResponse): string {
+  return joinHaystack([
+    u.first_name,
+    u.last_name,
+    `${u.first_name} ${u.last_name}`,
+    u.email,
+    u.phone,
+    u.is_active ? 'Active' : 'Inactive',
+    u.email_verified ? 'Verified' : 'Not Verified',
+    ...isoDateHaystackParts(u.created_at),
+  ])
+}
 
 type StatusFilter = 'all' | 'active' | 'inactive'
 type EmailFilter = 'all' | 'verified' | 'not_verified'
@@ -94,6 +108,7 @@ export default function FacultyPage() {
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [emailFilter, setEmailFilter] = useState<EmailFilter>('all')
+  const [searchQuery, setSearchQuery] = useState('')
   const [isPending, startTransition] = useTransition()
 
   const filtered = useMemo(() => {
@@ -104,10 +119,15 @@ export default function FacultyPage() {
     if (emailFilter === 'verified') result = result.filter((f) => f.email_verified)
     else if (emailFilter === 'not_verified') result = result.filter((f) => !f.email_verified)
 
-    return result
-  }, [faculty, statusFilter, emailFilter])
+    if (searchQuery.trim()) {
+      result = result.filter((f) => tokenMatches(buildFacultyHaystack(f), searchQuery))
+    }
 
-  const hasFilters = statusFilter !== 'all' || emailFilter !== 'all'
+    return result
+  }, [faculty, statusFilter, emailFilter, searchQuery])
+
+  const hasFilters =
+    statusFilter !== 'all' || emailFilter !== 'all' || searchQuery.trim().length > 0
 
   function handleFilterChange<T>(setter: (v: T) => void) {
     return (value: string) => {
@@ -119,6 +139,7 @@ export default function FacultyPage() {
     startTransition(() => {
       setStatusFilter('all')
       setEmailFilter('all')
+      setSearchQuery('')
     })
   }
 
@@ -179,8 +200,10 @@ export default function FacultyPage() {
         columns={columns}
         data={filtered}
         isLoading={showSkeleton}
-        searchColumn="first_name"
-        searchPlaceholder="Search faculty..."
+        searchPlaceholder="Search by name, email, phone, status..."
+        globalFilter={searchQuery}
+        onGlobalFilterChange={(v) => startTransition(() => setSearchQuery(v))}
+        globalFilterFn={() => true}
         toolbar={filterToolbar}
         onRowClick={(row) => navigate(`/users/${row.id}`, { state: { role: 'faculty' } })}
       />

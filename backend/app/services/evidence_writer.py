@@ -80,6 +80,10 @@ class RecognitionEventDraft:
     bbox: dict[str, int]
     live_crop: np.ndarray
     model_name: str
+    # Resolved display name for student_id. Plumbed from realtime_tracker so the
+    # WS broadcast renders the name without a DB hit on the hot path. None for
+    # misses, ambiguous decisions, and orphaned-embedding hits (user row gone).
+    student_name: Optional[str] = None
     # Optional on first-match-for-identity; subsequent events for the same
     # identity reuse the cached ref on the TrackIdentity, so the writer
     # doesn't re-copy the same JPEG 20 times per second.
@@ -441,8 +445,20 @@ class EvidenceWriter:
         self,
         batch: list[tuple[RecognitionEventDraft, str, Optional[str]]],
     ) -> None:
-        """Push a ``recognition_event`` message per row on the schedule's WS
-        channel. No-op if WS routes are disabled (VPS thin profile)."""
+        """Push a ``recognition_event`` message per row.
+
+        Fans out on two channels:
+
+        - The schedule channel (``/ws/attendance/{schedule_id}``) — drives
+          the live-feed page's recognition stream and the bbox identity
+          updates.
+        - The student channel (``/ws/student/{student_id}``) — drives the
+          Student Record Detail page's "Recent detections" panel.
+          Misses + ambiguous decisions have no student_id and are skipped
+          on this channel.
+
+        No-op if WS routes are disabled (VPS thin profile).
+        """
         if not settings.ENABLE_WS_ROUTES:
             return
         try:
@@ -455,6 +471,7 @@ class EvidenceWriter:
                 "event_id": str(draft.event_id),
                 "schedule_id": draft.schedule_id,
                 "student_id": draft.student_id,
+                "student_name": draft.student_name,
                 "track_id": draft.track_id,
                 "camera_id": draft.camera_id,
                 "frame_idx": draft.frame_idx,
@@ -484,6 +501,17 @@ class EvidenceWriter:
                     draft.event_id,
                     exc_info=True,
                 )
+            if draft.student_id:
+                try:
+                    await ws_manager.broadcast_student(
+                        str(draft.student_id), payload
+                    )
+                except Exception:
+                    logger.debug(
+                        "WS broadcast_student failed for event %s",
+                        draft.event_id,
+                        exc_info=True,
+                    )
 
 
 def _with_json_bbox(row: dict[str, Any]) -> dict[str, Any]:

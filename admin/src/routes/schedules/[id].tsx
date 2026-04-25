@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState, useTransition } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useBreadcrumbStore } from '@/stores/breadcrumb.store'
@@ -78,6 +78,7 @@ import {
   useUnenrollStudent,
 } from '@/hooks/use-queries'
 import { usersService } from '@/services/users.service'
+import { tokenMatches, joinHaystack } from '@/lib/search'
 
 // Indexed Monday-first to match the backend's `day_of_week` convention
 // (0=Mon..6=Sun — see backend/scripts/seed_data.py).
@@ -142,6 +143,8 @@ export default function ScheduleDetailPage() {
   const enrollStudent = useEnrollStudent()
   const unenrollStudent = useUnenrollStudent()
   const [unenrollConfirm, setUnenrollConfirm] = useState<{ studentUserId: string; name: string } | null>(null)
+  const [studentSearch, setStudentSearch] = useState('')
+  const [, startStudentSearchTransition] = useTransition()
 
   const scheduleName = schedule ? `${schedule.subject_code} - ${schedule.subject_name}` : null
   usePageTitle(scheduleName ?? 'Schedule Details')
@@ -207,10 +210,28 @@ export default function ScheduleDetailPage() {
   const { data: studentsData, isLoading: studentsLoading, isError: studentsError } = useScheduleStudents(id!)
   const { data: summaryRaw, isLoading: summaryLoading } = useScheduleAttendanceSummary(id!)
 
-  const students = Array.isArray(studentsData)
-    ? studentsData
-    : (studentsData as { students?: EnrolledStudent[] })?.students ?? []
+  const students = useMemo(() => {
+    return Array.isArray(studentsData)
+      ? (studentsData as EnrolledStudent[])
+      : ((studentsData as { students?: EnrolledStudent[] })?.students ?? [])
+  }, [studentsData])
   const summary = summaryRaw as AttendanceSummaryData | null | undefined
+
+  const filteredStudents = useMemo(() => {
+    if (!studentSearch.trim()) return students
+    return students.filter((s) =>
+      tokenMatches(
+        joinHaystack([
+          s.first_name,
+          s.last_name,
+          `${s.first_name} ${s.last_name}`,
+          s.student_id,
+          s.is_active ? 'Active' : 'Inactive',
+        ]),
+        studentSearch,
+      ),
+    )
+  }, [students, studentSearch])
 
   // Load all students when enroll dialog opens
   useEffect(() => {
@@ -223,7 +244,13 @@ export default function ScheduleDetailPage() {
     (students as EnrolledStudent[]).map((s) => s.id)
   )
 
-  const filteredStudents = allStudents.filter(
+  // Renamed from `filteredStudents` to disambiguate from the
+  // schedule-students search at line ~149. This list is the *enrollable*
+  // candidate set inside the Enroll Dialog (everyone not already enrolled
+  // who matches the dialog's separate ``enrollSearch`` input). Renamed
+  // 2026-04-25 alongside the live-feed-overlay deploy because both lists
+  // collided on a single `filteredStudents` const and broke the build.
+  const filteredEnrollableStudents = allStudents.filter(
     (s) =>
       (!s.user_id || !enrolledUserIds.has(s.user_id)) &&
       (enrollSearch === '' ||
@@ -479,10 +506,12 @@ export default function ScheduleDetailPage() {
           ) : (
             <DataTable
               columns={studentColumns}
-              data={students as EnrolledStudent[]}
+              data={filteredStudents}
               isLoading={studentsLoading}
-              searchColumn="first_name"
-              searchPlaceholder="Search students..."
+              searchPlaceholder="Search by name, student ID, status..."
+              globalFilter={studentSearch}
+              onGlobalFilterChange={(v) => startStudentSearchTransition(() => setStudentSearch(v))}
+              globalFilterFn={() => true}
               onRowClick={(row) => navigate(`/users/${row.id}`, { state: { role: 'student' } })}
             />
           )}
@@ -523,12 +552,12 @@ export default function ScheduleDetailPage() {
             onChange={(e) => setEnrollSearch(e.target.value)}
           />
           <div className="max-h-[300px] overflow-y-auto space-y-1">
-            {filteredStudents.length === 0 ? (
+            {filteredEnrollableStudents.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
                 {enrollSearch ? 'No matching students found' : 'All students are already enrolled'}
               </p>
             ) : (
-              filteredStudents.slice(0, 50).map((s) => {
+              filteredEnrollableStudents.slice(0, 50).map((s) => {
                 const isRegistered = !!s.user_id
                 return (
                   <div

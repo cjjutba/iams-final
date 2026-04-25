@@ -17,6 +17,24 @@ import {
 } from '@/components/ui/popover'
 import { useEarlyLeaves } from '@/hooks/use-queries'
 import type { EarlyLeaveAlert } from '@/types'
+import { tokenMatches, joinHaystack, isoDateHaystackParts } from '@/lib/search'
+
+function buildEarlyLeaveHaystack(a: EarlyLeaveAlert): string {
+  return joinHaystack([
+    a.student_name,
+    a.student_student_id,
+    a.subject_code,
+    a.subject_name,
+    a.date,
+    ...isoDateHaystackParts(a.date),
+    ...isoDateHaystackParts(a.detected_at),
+    ...isoDateHaystackParts(a.last_seen_at),
+    ...isoDateHaystackParts(a.returned_at),
+    `${a.consecutive_misses} misses`,
+    a.notified ? 'notified' : 'not notified',
+    a.returned ? 'returned' : 'not returned',
+  ])
+}
 
 const columns: ColumnDef<EarlyLeaveAlert>[] = [
   {
@@ -109,6 +127,7 @@ export default function EarlyLeavesPage() {
   const [endDate, setEndDate] = useState<Date | undefined>(undefined)
   const [startOpen, setStartOpen] = useState(false)
   const [endOpen, setEndOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
   const [isPending, startTransition] = useTransition()
 
   const filtered = useMemo(() => {
@@ -121,15 +140,20 @@ export default function EarlyLeavesPage() {
       const end = format(endDate, 'yyyy-MM-dd')
       result = result.filter((a) => a.date <= end)
     }
+    if (searchQuery.trim()) {
+      result = result.filter((a) => tokenMatches(buildEarlyLeaveHaystack(a), searchQuery))
+    }
     return result
-  }, [alerts, startDate, endDate])
+  }, [alerts, startDate, endDate, searchQuery])
 
-  const hasFilters = startDate !== undefined || endDate !== undefined
+  const hasFilters =
+    startDate !== undefined || endDate !== undefined || searchQuery.trim().length > 0
 
   function clearFilters() {
     startTransition(() => {
       setStartDate(undefined)
       setEndDate(undefined)
+      setSearchQuery('')
     })
   }
 
@@ -204,8 +228,10 @@ export default function EarlyLeavesPage() {
         columns={columns}
         data={filtered}
         isLoading={showSkeleton}
-        searchPlaceholder="Search students..."
-        searchColumn="student_name"
+        searchPlaceholder="Search by student, subject, date, status..."
+        globalFilter={searchQuery}
+        onGlobalFilterChange={(v) => startTransition(() => setSearchQuery(v))}
+        globalFilterFn={() => true}
         toolbar={filterToolbar}
         onRowClick={(row) => navigate(`/users/${row.student_id}`, { state: { role: 'student' } })}
       />

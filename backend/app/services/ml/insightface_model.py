@@ -32,8 +32,10 @@ References:
 
 import base64
 import io
+import os
 import platform
 from dataclasses import dataclass
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -72,6 +74,39 @@ class InsightFaceModel:
             settings.INSIGHTFACE_DET_SIZE,
             settings.INSIGHTFACE_DET_SIZE,
         )
+
+    def _resolve_model_pack(self) -> str:
+        """Pick the static-shape pack if it exists, else fall back to upstream.
+
+        See ``backend/scripts/export_static_models.py`` and the live-feed
+        plan dated 2026-04-25 (Step 2b). The static pack is required for
+        the CoreML execution provider to delegate SCRFD to the Apple
+        Neural Engine; without it ORT silently falls back to CPU and
+        backend FPS stays in the 1-2 range.
+        """
+        static_pack = (settings.INSIGHTFACE_STATIC_PACK_NAME or "").strip()
+        if not static_pack:
+            return self._model_name
+        # Honour ``INSIGHTFACE_HOME`` if set (Docker images mount the
+        # pre-baked model dir at /opt/insightface; dev macs use the
+        # default ~/.insightface).
+        try:
+            root_env = os.environ.get("INSIGHTFACE_HOME")
+            root = Path(root_env) if root_env else Path.home() / ".insightface"
+            candidate = root / "models" / static_pack
+            if candidate.exists():
+                logger.info("Using static-shape model pack: %s", candidate)
+                return static_pack
+            logger.warning(
+                "Static-shape pack '%s' not found at %s — falling back to '%s' (dynamic shapes; "
+                "CoreMLExecutionProvider will not delegate)",
+                static_pack,
+                candidate,
+                self._model_name,
+            )
+        except Exception:
+            logger.debug("Static-pack resolution failed; using upstream", exc_info=True)
+        return self._model_name
 
     def _get_providers(self) -> list[str]:
         """CoreML on macOS (Apple Silicon), CPU everywhere else."""
@@ -112,8 +147,9 @@ class InsightFaceModel:
             )
 
             providers = self._get_providers()
+            resolved_pack = self._resolve_model_pack()
             logger.info(
-                f"Loading InsightFace '{self._model_name}' (providers={providers}, det_size={self._det_size})..."
+                f"Loading InsightFace '{resolved_pack}' (providers={providers}, det_size={self._det_size})..."
             )
             # ``allowed_modules`` pins the loaded ONNX sessions to just the two
             # we use. Without this, buffalo_l eagerly loads landmark_2d_106,
@@ -123,7 +159,7 @@ class InsightFaceModel:
             # For the realtime CCTV path we never consume any of those
             # outputs, so loading and running them is pure overhead.
             self.app = FaceAnalysis(
-                name=self._model_name,
+                name=resolved_pack,
                 providers=providers,
                 allowed_modules=["detection", "recognition"],
             )
@@ -136,6 +172,27 @@ class InsightFaceModel:
             # on the returned object, but get_session_options() returns a COPY
             # — modifications have no effect on the live session.  Removed as
             # dead code.
+
+            # Per-model provider verification. CoreMLExecutionProvider being
+            # in the requested provider list does NOT mean it was actually
+            # selected — ORT silently falls back to CPU when the EP refuses
+            # to delegate (most often because the ONNX has dynamic input
+            # shapes). Log what each model picked so an operator can
+            # confirm Step 2b's static-shape re-export actually took effect
+            # on subsequent boots. See plan dated 2026-04-25.
+            try:
+                for task_name, model in self.app.models.items():
+                    sess = getattr(model, "session", None)
+                    actual = sess.get_providers() if sess is not None else ["<no-session>"]
+                    onnx_path = getattr(model, "model_file", None) or getattr(model, "onnx_file", "<unknown>")
+                    logger.info(
+                        "[insightface] %s (%s) → providers=%s",
+                        task_name,
+                        onnx_path,
+                        actual,
+                    )
+            except Exception:
+                logger.debug("Per-model provider introspection failed", exc_info=True)
 
             logger.info(f"InsightFace '{self._model_name}' loaded successfully")
 

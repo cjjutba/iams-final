@@ -47,6 +47,19 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useRooms, useCreateRoom, useUpdateRoom, useDeleteRoom } from '@/hooks/use-queries'
 import type { Room } from '@/types'
+import { tokenMatches, joinHaystack } from '@/lib/search'
+
+function buildRoomHaystack(r: Room): string {
+  return joinHaystack([
+    r.name,
+    r.building,
+    r.capacity != null ? String(r.capacity) : null,
+    r.capacity != null ? `capacity ${r.capacity}` : null,
+    r.camera_endpoint,
+    r.camera_endpoint ? 'Camera Configured' : 'No Camera',
+    r.is_active ? 'Active' : 'Inactive',
+  ])
+}
 
 type StatusFilter = 'all' | 'active' | 'inactive'
 type CameraFilter = 'all' | 'configured' | 'not_configured'
@@ -305,6 +318,7 @@ export default function RoomsPage() {
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [cameraFilter, setCameraFilter] = useState<CameraFilter>('all')
+  const [searchQuery, setSearchQuery] = useState('')
   const [isPending, startTransition] = useTransition()
 
   const filtered = useMemo(() => {
@@ -315,10 +329,15 @@ export default function RoomsPage() {
     if (cameraFilter === 'configured') result = result.filter((r) => !!r.camera_endpoint)
     else if (cameraFilter === 'not_configured') result = result.filter((r) => !r.camera_endpoint)
 
-    return result
-  }, [rooms, statusFilter, cameraFilter])
+    if (searchQuery.trim()) {
+      result = result.filter((r) => tokenMatches(buildRoomHaystack(r), searchQuery))
+    }
 
-  const hasFilters = statusFilter !== 'all' || cameraFilter !== 'all'
+    return result
+  }, [rooms, statusFilter, cameraFilter, searchQuery])
+
+  const hasFilters =
+    statusFilter !== 'all' || cameraFilter !== 'all' || searchQuery.trim().length > 0
 
   function handleFilterChange<T>(setter: (v: T) => void) {
     return (value: string) => {
@@ -330,6 +349,7 @@ export default function RoomsPage() {
     startTransition(() => {
       setStatusFilter('all')
       setCameraFilter('all')
+      setSearchQuery('')
     })
   }
 
@@ -425,8 +445,10 @@ export default function RoomsPage() {
         columns={columns}
         data={filtered}
         isLoading={showSkeleton}
-        searchColumn="name"
-        searchPlaceholder="Search rooms..."
+        searchPlaceholder="Search by name, building, capacity, status..."
+        globalFilter={searchQuery}
+        onGlobalFilterChange={(v) => startTransition(() => setSearchQuery(v))}
+        globalFilterFn={() => true}
         toolbar={
           <>
             <Select value={statusFilter} onValueChange={handleFilterChange(setStatusFilter)}>

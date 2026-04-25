@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useTransition } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
 import { format } from 'date-fns'
@@ -27,6 +27,23 @@ import { useAttendanceList } from '@/hooks/use-queries'
 import { attendanceService } from '@/services/attendance.service'
 import type { AttendanceRecord, AttendanceStatus } from '@/types'
 import { formatStatus } from '@/types/attendance'
+import { tokenMatches, joinHaystack, isoDateHaystackParts } from '@/lib/search'
+
+function buildAttendanceHaystack(r: AttendanceRecord): string {
+  return joinHaystack([
+    r.student_name,
+    r.student_id,
+    r.subject_code,
+    formatStatus(r.status),
+    r.status,
+    r.remarks,
+    r.date,
+    ...isoDateHaystackParts(r.date),
+    ...isoDateHaystackParts(r.check_in_time),
+    ...isoDateHaystackParts(r.check_out_time),
+    `${Math.round(r.presence_score)}%`,
+  ])
+}
 
 const statusColors: Record<AttendanceStatus, string> = {
   present: 'bg-green-100 text-green-800 hover:bg-green-100',
@@ -97,12 +114,25 @@ export default function AttendancePage() {
 
   const { data: records = [], isLoading } = useAttendanceList(queryParams)
 
-  const hasFilters = startDate !== undefined || endDate !== undefined || statusFilter !== 'all'
+  const [searchQuery, setSearchQuery] = useState('')
+  const [, startTransition] = useTransition()
+
+  const filteredRecords = useMemo(() => {
+    if (!searchQuery.trim()) return records
+    return records.filter((r) => tokenMatches(buildAttendanceHaystack(r), searchQuery))
+  }, [records, searchQuery])
+
+  const hasFilters =
+    startDate !== undefined ||
+    endDate !== undefined ||
+    statusFilter !== 'all' ||
+    searchQuery.trim().length > 0
 
   const clearFilters = () => {
     setStartDate(undefined)
     setEndDate(undefined)
     setStatusFilter('all')
+    setSearchQuery('')
   }
 
   const handleExport = async () => {
@@ -200,7 +230,7 @@ export default function AttendancePage() {
             {isLoading
               ? 'Loading...'
               : hasFilters
-                ? `${records.length} filtered records`
+                ? `${filteredRecords.length} of ${records.length} records`
                 : `${records.length} attendance record${records.length !== 1 ? 's' : ''}`}
           </p>
         </div>
@@ -221,10 +251,12 @@ export default function AttendancePage() {
 
       <DataTable
         columns={columns}
-        data={records}
+        data={filteredRecords}
         isLoading={isLoading}
-        searchPlaceholder="Search students..."
-        searchColumn="student_name"
+        searchPlaceholder="Search by student, subject, status, date..."
+        globalFilter={searchQuery}
+        onGlobalFilterChange={(v) => startTransition(() => setSearchQuery(v))}
+        globalFilterFn={() => true}
         toolbar={filterToolbar}
         onRowClick={(row) => navigate(`/users/${row.student_id}`, { state: { role: 'student' } })}
       />

@@ -18,6 +18,26 @@ import {
 import { useStudentRecords } from '@/hooks/use-queries'
 import type { StudentRecordWithStatus } from '@/types'
 import { CreateUserDialog } from './create-user-dialog'
+import { tokenMatches, joinHaystack, isoDateHaystackParts } from '@/lib/search'
+
+function buildStudentHaystack(s: StudentRecordWithStatus): string {
+  const fullName = [s.first_name, s.middle_name, s.last_name].filter(Boolean).join(' ')
+  return joinHaystack([
+    s.first_name,
+    s.middle_name,
+    s.last_name,
+    fullName,
+    s.email,
+    s.student_id,
+    s.course,
+    s.year_level != null ? `Year ${s.year_level}` : null,
+    s.section ? `Section ${s.section}` : null,
+    s.is_active ? 'Active' : 'Inactive',
+    s.is_registered ? 'Registered' : 'Not Registered',
+    s.has_face_registered ? 'Face Enrolled' : 'Face Not Enrolled',
+    ...isoDateHaystackParts(s.created_at),
+  ])
+}
 
 type AppFilter = 'all' | 'registered' | 'not_registered'
 type FaceFilter = 'all' | 'enrolled' | 'not_enrolled'
@@ -127,6 +147,7 @@ export default function StudentsPage() {
   const [appFilter, setAppFilter] = useState<AppFilter>('all')
   const [faceFilter, setFaceFilter] = useState<FaceFilter>('all')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [searchQuery, setSearchQuery] = useState('')
   const [isPending, startTransition] = useTransition()
 
   const filtered = useMemo(() => {
@@ -140,10 +161,18 @@ export default function StudentsPage() {
     if (statusFilter === 'active') result = result.filter((s) => s.is_active)
     else if (statusFilter === 'inactive') result = result.filter((s) => !s.is_active)
 
-    return result
-  }, [students, appFilter, faceFilter, statusFilter])
+    if (searchQuery.trim()) {
+      result = result.filter((s) => tokenMatches(buildStudentHaystack(s), searchQuery))
+    }
 
-  const hasFilters = appFilter !== 'all' || faceFilter !== 'all' || statusFilter !== 'all'
+    return result
+  }, [students, appFilter, faceFilter, statusFilter, searchQuery])
+
+  const hasFilters =
+    appFilter !== 'all' ||
+    faceFilter !== 'all' ||
+    statusFilter !== 'all' ||
+    searchQuery.trim().length > 0
 
   function handleFilterChange<T>(setter: (v: T) => void) {
     return (value: string) => {
@@ -156,6 +185,7 @@ export default function StudentsPage() {
       setAppFilter('all')
       setFaceFilter('all')
       setStatusFilter('all')
+      setSearchQuery('')
     })
   }
 
@@ -227,8 +257,10 @@ export default function StudentsPage() {
         columns={columns}
         data={filtered}
         isLoading={showSkeleton}
-        searchColumn="first_name"
-        searchPlaceholder="Search students..."
+        searchPlaceholder="Search by name, ID, course, year, status..."
+        globalFilter={searchQuery}
+        onGlobalFilterChange={(v) => startTransition(() => setSearchQuery(v))}
+        globalFilterFn={() => true}
         toolbar={filterToolbar}
         onRowClick={(row) => navigate(`/students/${row.student_id}`)}
       />

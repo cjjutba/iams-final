@@ -9,6 +9,7 @@ import { settingsService } from '@/services/settings.service'
 import { faceService } from '@/services/face.service'
 import { recognitionsService } from '@/services/recognitions.service'
 import { activityService } from '@/services/activity.service'
+import { presenceService } from '@/services/presence.service'
 import type { AdminCreateUser, CreateStudentRecord, UpdateStudentRecord, UserRole, UserUpdate, ScheduleCreate, ScheduleUpdate, RoomCreate, RoomUpdate, NotificationPreferenceUpdate, RecognitionListFilters, ActivityListFilters, AccessAuditFilters, StudentEnrollmentsPage } from '@/types'
 
 // ── Query keys ──────────────────────────────────────────────
@@ -79,6 +80,10 @@ export const queryKeys = {
   },
   settings: {
     all: ['settings'] as const,
+  },
+  presence: {
+    sessionEligibility: (scheduleId: string) =>
+      ['presence', 'session-eligibility', scheduleId] as const,
   },
 }
 
@@ -567,5 +572,30 @@ export function useUpdateSettings() {
   return useMutation({
     mutationFn: (settings: Record<string, string>) => settingsService.update(settings),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: queryKeys.settings.all }) },
+  })
+}
+
+// ── Presence ────────────────────────────────────────────────
+
+/**
+ * Server-side eligibility for the manual Start Session button.
+ *
+ * The window check (today == day_of_week, now in [start - 10min, end))
+ * could be computed entirely client-side, but `ALREADY_RAN_TODAY` is
+ * server-only state (lives in PresenceService._ended_sessions). Polling
+ * this endpoint gives a single source of truth and avoids the awkward
+ * "button appears clickable, click yields 409" UX after a same-day end.
+ *
+ * Refetched every 30s — the button also re-evaluates locally every
+ * second from the wall clock, so the server poll is a backstop for the
+ * one-shot-per-day rule, not the latency-critical signal.
+ */
+export function useSessionStartEligibility(scheduleId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.presence.sessionEligibility(scheduleId ?? ''),
+    queryFn: () => presenceService.getStartEligibility(scheduleId!),
+    enabled: !!scheduleId,
+    refetchInterval: 30_000,
+    staleTime: 10_000,
   })
 }

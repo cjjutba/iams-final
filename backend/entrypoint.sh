@@ -14,6 +14,20 @@
 mkdir -p /var/lib/iams/crops 2>/dev/null || true
 chown -R appuser:appuser /app/data /app/logs /home/appuser/.insightface /var/lib/iams/crops 2>/dev/null || true
 
+# Static-shape ONNX re-export for the CoreML execution provider (live-feed
+# plan 2026-04-25 Step 2b). Idempotent — the script exits 0 without doing
+# work when a matching export already exists in
+# ~/.insightface/models/buffalo_l_static. We run it under appuser so the
+# output files are owned correctly. ``ENABLE_ML=false`` (VPS thin profile)
+# skips this entirely because there is no ML dir to write to and no
+# model loader to verify the work.
+if [ "${ENABLE_ML:-true}" != "false" ]; then
+    INSIGHTFACE_DET_SIZE="${INSIGHTFACE_DET_SIZE:-640}" \
+    INSIGHTFACE_STATIC_PACK_NAME="${INSIGHTFACE_STATIC_PACK_NAME:-buffalo_l_static}" \
+    gosu appuser python -m scripts.export_static_models \
+        || echo "[entrypoint] static-shape ONNX export failed; will run on CPU EP fallback" >&2
+fi
+
 exec gosu appuser uvicorn app.main:app \
     --host 0.0.0.0 \
     --port 8000 \
