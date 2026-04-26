@@ -1,14 +1,20 @@
-import { useMemo, useState, useTransition } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
-import { Download } from 'lucide-react'
+import { Download, SlidersHorizontal } from 'lucide-react'
 
 import { formatTimestamp, formatFullDatetime } from '@/lib/format-time'
 
 import { DataTable } from '@/components/data-tables'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { RecognitionOutcomePill } from '@/components/shared/status-pills'
 import { Input } from '@/components/ui/input'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -16,6 +22,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useRecognitions } from '@/hooks/use-queries'
 import { useAuthedImage } from '@/hooks/use-authed-image'
@@ -74,7 +89,6 @@ export default function RecognitionsPage() {
   const items = useMemo(() => data?.items ?? [], [data])
 
   const [searchQuery, setSearchQuery] = useState('')
-  const [, startSearchTransition] = useTransition()
   const filteredItems = useMemo(() => {
     if (!searchQuery.trim()) return items
     return items.filter((e) => tokenMatches(buildRecognitionHaystack(e), searchQuery))
@@ -125,8 +139,15 @@ export default function RecognitionsPage() {
               {row.original.student_name ?? (row.original.matched ? 'Unknown' : 'Unmatched')}
             </span>
             {row.original.student_id && (
+              // The recognition record's `student_id` field is actually
+              // the user's UUID (the backend stores user UUIDs in that
+              // column). The `/students/:studentId` route expects the
+              // human student ID like "21-A-02177", so we route through
+              // `/users/:id` which accepts UUIDs and renders the same
+              // student detail page when `user.role === 'student'`.
               <Link
-                to={`/students/${row.original.student_id}`}
+                to={`/users/${row.original.student_id}`}
+                state={{ role: 'student' }}
                 className="text-[11px] text-muted-foreground hover:underline"
               >
                 view student
@@ -190,6 +211,176 @@ export default function RecognitionsPage() {
 
   const hasFilters = studentFilter || scheduleFilter || matchedParam !== 'all'
 
+  if (isLoading) {
+    // Mirror the loaded layout (header + DataTable toolbar + table + pagination)
+    // so the cut-over to real data doesn't shift the page. Layout matches the
+    // Students/Faculty/Admins registries for visual consistency across the
+    // admin portal.
+    return (
+      <div className="space-y-6">
+        {/* Page header */}
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-7 w-44" />
+            <Skeleton className="h-4 w-72" />
+          </div>
+          <Skeleton className="h-9 w-32 rounded-md" />
+        </div>
+
+        <div>
+          {/* DataTable toolbar — search + outcome dropdown + More popover */}
+          <div className="flex items-center justify-between gap-4 py-4">
+            <Skeleton className="h-9 w-full max-w-sm rounded-md" />
+            <div className="flex items-center gap-2">
+              <Skeleton className="h-9 w-[150px] rounded-md" />
+              <Skeleton className="h-9 w-20 rounded-md" />
+            </div>
+          </div>
+
+          {/* Table */}
+          <div className="rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>When</TableHead>
+                  <TableHead>Student</TableHead>
+                  <TableHead>Schedule</TableHead>
+                  <TableHead>Outcome</TableHead>
+                  <TableHead>Sim / Thr</TableHead>
+                  <TableHead>Live</TableHead>
+                  <TableHead>Registered</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <TableRow key={`recog-skel-${String(i)}`}>
+                    <TableCell>
+                      <Skeleton className="h-3 w-24" />
+                    </TableCell>
+                    <TableCell>
+                      <div className="space-y-1.5">
+                        <Skeleton className="h-4 w-32" />
+                        <Skeleton className="h-3 w-20" />
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-40" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-5 w-16 rounded-full" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-24" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-10 w-10 rounded" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-10 w-10 rounded" />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* Pagination */}
+          <div className="flex items-center justify-between px-2 py-4">
+            <Skeleton className="h-4 w-44" />
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-8 w-[70px] rounded-md" />
+              </div>
+              <div className="flex items-center gap-1">
+                <Skeleton className="h-8 w-8 rounded-md" />
+                <Skeleton className="h-8 w-8 rounded-md" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Toolbar slot for the DataTable — same shape as the Students /
+  // Faculty / Admins registries so the page reads as one consistent
+  // surface across the admin portal. Outcome is the primary filter
+  // (always visible); the rare-touched Student/Schedule UUID inputs
+  // live behind a "More" popover with an active-count badge.
+  const idFilterCount = (studentFilter ? 1 : 0) + (scheduleFilter ? 1 : 0)
+  const filterToolbar = (
+    <>
+      <Select
+        value={matchedParam}
+        onValueChange={(v) => setMatched(v as MatchedFilter)}
+      >
+        <SelectTrigger className="w-[150px] h-9">
+          <SelectValue placeholder="Outcome" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All outcomes</SelectItem>
+          <SelectItem value="matched">Matched only</SelectItem>
+          <SelectItem value="missed">Missed only</SelectItem>
+        </SelectContent>
+      </Select>
+
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button variant="outline" className="h-9">
+            <SlidersHorizontal className="h-3.5 w-3.5 mr-1.5" />
+            More
+            {idFilterCount > 0 && (
+              <Badge variant="secondary" className="ml-1.5 h-4 px-1">
+                {idFilterCount}
+              </Badge>
+            )}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-80 space-y-3">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground">
+              Student ID
+            </label>
+            <Input
+              value={studentInput}
+              onChange={(e) => setStudentInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && applyTextFilters()}
+              placeholder="UUID"
+              className="h-8 font-mono text-xs"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground">
+              Schedule ID
+            </label>
+            <Input
+              value={scheduleInput}
+              onChange={(e) => setScheduleInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && applyTextFilters()}
+              placeholder="UUID"
+              className="h-8 font-mono text-xs"
+            />
+          </div>
+          <Button onClick={applyTextFilters} size="sm" className="w-full">
+            Apply
+          </Button>
+        </PopoverContent>
+      </Popover>
+
+      {hasFilters && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={clearAll}
+          className="h-9 px-2 text-muted-foreground"
+        >
+          Clear
+        </Button>
+      )}
+    </>
+  )
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -211,60 +402,15 @@ export default function RecognitionsPage() {
         </Button>
       </div>
 
-      <div className="flex flex-wrap items-end gap-3 rounded-md border bg-muted/30 p-4">
-        <div className="flex flex-col gap-1">
-          <label className="text-xs uppercase tracking-wide text-muted-foreground">
-            Student ID
-          </label>
-          <Input
-            value={studentInput}
-            onChange={(e) => setStudentInput(e.target.value)}
-            placeholder="UUID"
-            className="h-9 w-64 font-mono text-xs"
-          />
-        </div>
-        <div className="flex flex-col gap-1">
-          <label className="text-xs uppercase tracking-wide text-muted-foreground">
-            Schedule ID
-          </label>
-          <Input
-            value={scheduleInput}
-            onChange={(e) => setScheduleInput(e.target.value)}
-            placeholder="UUID"
-            className="h-9 w-64 font-mono text-xs"
-          />
-        </div>
-        <div className="flex flex-col gap-1">
-          <label className="text-xs uppercase tracking-wide text-muted-foreground">
-            Outcome
-          </label>
-          <Select value={matchedParam} onValueChange={(v) => setMatched(v as MatchedFilter)}>
-            <SelectTrigger className="h-9 w-36">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All</SelectItem>
-              <SelectItem value="matched">Matched only</SelectItem>
-              <SelectItem value="missed">Missed only</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <Button onClick={applyTextFilters}>Apply</Button>
-        {hasFilters && (
-          <Button variant="ghost" onClick={clearAll}>
-            Clear
-          </Button>
-        )}
-      </div>
-
       <DataTable
         columns={columns}
         data={filteredItems}
         isLoading={isLoading}
         searchPlaceholder="Search by student, subject, camera, outcome…"
         globalFilter={searchQuery}
-        onGlobalFilterChange={(v) => startSearchTransition(() => setSearchQuery(v))}
+        onGlobalFilterChange={setSearchQuery}
         globalFilterFn={() => true}
+        toolbar={filterToolbar}
       />
 
       {data?.next_cursor && (

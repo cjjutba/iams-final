@@ -44,6 +44,21 @@ if [ ! -x "${SUPERVISOR}" ]; then
   chmod +x "${SUPERVISOR}"
 fi
 
+# Distant-face plan 2026-04-26 Phase 1: re-export the static-shape ONNX
+# pack against the host's ~/.insightface/models/ so the sidecar's first
+# load picks up any new det_size from .env.onprem. Idempotent — if the
+# requested shape already matches the on-disk sidecar JSON marker, this
+# is a near-instant no-op. Errors here are non-fatal: the script just
+# warns, the sidecar still boots, and the operator gets a clear log
+# when CoreML falls back to CPU at /health-check time.
+EXPORT_HELPER="${REPO_ROOT}/scripts/export-static-models.sh"
+if [ -x "${EXPORT_HELPER}" ]; then
+  if ! "${EXPORT_HELPER}" >> "${LOG_FILE}" 2>&1; then
+    echo "WARN: ${EXPORT_HELPER} failed — sidecar may load with stale det_size." >&2
+    echo "      Tail ${LOG_FILE} for the exporter's error and re-run manually." >&2
+  fi
+fi
+
 echo "$(date '+%Y-%m-%d %H:%M:%S') === ml-sidecar started by start-ml-sidecar.sh ===" >> "${LOG_FILE}"
 nohup "${SUPERVISOR}" >> "${LOG_FILE}" 2>&1 < /dev/null &
 SUP_PID=$!

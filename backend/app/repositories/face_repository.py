@@ -265,3 +265,67 @@ class FaceRepository:
             .filter(FaceRegistration.is_active)
             .all()
         )
+
+    def get_cctv_embeddings_by_user(
+        self,
+        user_id: str,
+        room_key: str | None = None,
+    ) -> list[FaceEmbedding]:
+        """Return CCTV-domain embeddings for a user, optionally narrowed to one room.
+
+        Used by the sliding-window auto-enroller to (a) compute the per-room
+        capture count and (b) pick the lowest-quality candidate to evict
+        when the cap is reached. ``room_key=None`` returns rows for both
+        room-scoped (``cctv_<room>_<idx>``) and legacy (``cctv_<idx>``)
+        labels; pass an specific room key to get just that room's rows;
+        pass ``"_legacy"`` to get only the legacy rows.
+        """
+        from app.utils.cctv_label import normalize_room_key, parse_cctv_label
+
+        registration = self.get_by_user(user_id)
+        if registration is None:
+            return []
+        rows = (
+            self.db.query(FaceEmbedding)
+            .filter(
+                FaceEmbedding.registration_id == registration.id,
+                FaceEmbedding.angle_label.like("cctv_%"),
+            )
+            .all()
+        )
+        if room_key is None:
+            return rows
+        wanted_room: str | None
+        if room_key == "_legacy":
+            wanted_room = None
+        else:
+            wanted_room = normalize_room_key(room_key)
+        out: list[FaceEmbedding] = []
+        for r in rows:
+            parsed_room, parsed_idx = parse_cctv_label(r.angle_label)
+            if parsed_idx is None:
+                continue
+            if parsed_room == wanted_room:
+                out.append(r)
+        return out
+
+    def delete_embeddings_by_faiss_ids(self, faiss_ids: list[int]) -> int:
+        """Hard-delete FaceEmbedding rows by FAISS id.
+
+        Used by the sliding-window auto-enroller to evict the
+        lowest-quality CCTV captures before adding new ones. Caller is
+        responsible for (a) removing the same FAISS ids from
+        ``faiss_manager.user_map`` and (b) deleting the corresponding
+        ``image_storage_key`` files. This is a DB-only delete; both
+        sides must succeed for the row to be cleanly retired.
+
+        Returns the number of rows deleted.
+        """
+        if not faiss_ids:
+            return 0
+        deleted = (
+            self.db.query(FaceEmbedding)
+            .filter(FaceEmbedding.faiss_id.in_(faiss_ids))
+            .delete(synchronize_session=False)
+        )
+        return int(deleted or 0)

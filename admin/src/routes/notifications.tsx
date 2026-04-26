@@ -23,6 +23,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { notificationsService } from '@/services/notifications.service'
 import { useNotificationStore } from '@/stores/notification.store'
@@ -511,9 +512,27 @@ export default function NotificationsPage() {
 
           <div className="overflow-hidden rounded-md border">
             {isLoading ? (
-              <div className="flex h-64 items-center justify-center text-muted-foreground">
-                <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                <span className="text-sm">Loading notifications...</span>
+              // Skeleton list — matches NotificationRow's expanded layout:
+              // severity rail (left), icon, two-line title/body, timestamp.
+              <div className="divide-y">
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <div
+                    key={`notif-skel-${String(i)}`}
+                    className="flex items-start gap-3 p-4"
+                  >
+                    <Skeleton className="mt-1 h-10 w-1 rounded-full" />
+                    <Skeleton className="mt-0.5 h-8 w-8 rounded-full" />
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <Skeleton className="h-4 w-44" />
+                        <Skeleton className="h-4 w-16 rounded-full" />
+                      </div>
+                      <Skeleton className="h-3 w-3/4 max-w-md" />
+                      <Skeleton className="h-3 w-24" />
+                    </div>
+                    <Skeleton className="h-7 w-7 rounded-md" />
+                  </div>
+                ))}
               </div>
             ) : filtered.length === 0 ? (
               <EmptyState

@@ -32,6 +32,7 @@ import subprocess
 import threading
 import time
 
+import cv2
 import numpy as np
 
 from app.config import settings
@@ -93,6 +94,7 @@ class FrameGrabber:
         fps: float | None = None,
         capture_rtp_pts: bool = True,
         dedup_repeats: bool = False,
+        stream_key: str | None = None,
     ) -> None:
         self._url = rtsp_url
         self._stale_timeout = stale_timeout
@@ -100,6 +102,48 @@ class FrameGrabber:
         self._height = height or settings.FRAME_GRABBER_HEIGHT
         self._fps = fps or settings.FRAME_GRABBER_FPS
         self._frame_bytes = self._width * self._height * 3  # BGR24
+
+        # Distant-face plan 2026-04-26 Phase 4b — lens undistortion.
+        # When ``stream_key`` matches an entry in
+        # ``settings.LENS_UNDISTORTION_COEFFS``, we pre-compute the
+        # cv2.remap inputs once (lookup tables; ~3 MB for a 1080p
+        # frame) and apply them per-grab. ``stream_key`` is the same
+        # short name as ``rooms.stream_key`` (e.g. "eb226" /
+        # "eb226-back"). Falls through to no-op when no coeffs are
+        # configured for this key.
+        self._stream_key = stream_key
+        self._undistort_map1: np.ndarray | None = None
+        self._undistort_map2: np.ndarray | None = None
+        if stream_key:
+            try:
+                from app.services.ml.lens_undistort import (
+                    build_undistort_maps,
+                    parse_lens_undistortion_config,
+                )
+
+                coeffs_map = parse_lens_undistortion_config(
+                    settings.LENS_UNDISTORTION_COEFFS
+                )
+                coeffs = coeffs_map.get(stream_key)
+                if coeffs is not None:
+                    self._undistort_map1, self._undistort_map2 = build_undistort_maps(
+                        coeffs, self._width, self._height
+                    )
+                    logger.info(
+                        "FrameGrabber lens undistortion enabled for %s "
+                        "(fx=%.1f fy=%.1f, k1=%.4f k2=%.4f)",
+                        stream_key,
+                        coeffs.fx,
+                        coeffs.fy,
+                        coeffs.k1,
+                        coeffs.k2,
+                    )
+            except Exception:
+                logger.exception(
+                    "Failed to build undistort maps for stream_key=%s "
+                    "— falling back to no undistortion",
+                    stream_key,
+                )
         # When True, FFmpeg is launched with -vf showinfo + -copyts so the
         # input PTS is parseable from stderr. Live-feed plan Step 3a.
         # Disable for unit tests that mock the FFmpeg binary — they don't
@@ -217,7 +261,36 @@ class FrameGrabber:
                 return None
 
             self._last_served_time = self._frame_time
-            return self._latest_frame, self._latest_pts, self._latest_capture_ms
+            frame_out = self._latest_frame
+            pts_out = self._latest_pts
+            cap_ms_out = self._latest_capture_ms
+
+        # Distant-face plan 2026-04-26 Phase 4b — apply pre-computed
+        # undistortion map outside the lock so the drain thread can
+        # keep producing frames while we remap. cv2.remap with the
+        # CV_16SC2 map type is ~3-5 ms for 1920×1080 on the M5;
+        # negligible relative to SCRFD inference cost. Skipped when
+        # no coeffs were configured for this stream_key.
+        if (
+            self._undistort_map1 is not None
+            and self._undistort_map2 is not None
+        ):
+            try:
+                frame_out = cv2.remap(
+                    frame_out,
+                    self._undistort_map1,
+                    self._undistort_map2,
+                    interpolation=cv2.INTER_LINEAR,
+                    borderMode=cv2.BORDER_CONSTANT,
+                )
+            except Exception:
+                logger.debug(
+                    "FrameGrabber undistort failed for %s — returning raw frame",
+                    self._stream_key,
+                    exc_info=True,
+                )
+
+        return frame_out, pts_out, cap_ms_out
 
     def is_alive(self) -> bool:
         """Return True if the drain thread is running."""

@@ -59,11 +59,24 @@ DEFAULT_INSIGHTFACE_HOME = Path.home() / ".insightface"
 
 @dataclass(frozen=True)
 class ModelSpec:
-    """One ONNX model to re-export with a fixed input shape."""
+    """One ONNX model to re-export with a fixed input shape.
+
+    ``source_filename`` is what we read from the upstream pack; defaults
+    to ``onnx_filename`` when not specified. Distinct field so the
+    SCRFD-34G swap (Phase 4a) can read ``scrfd_34g.onnx`` while still
+    writing the result out as ``det_10g.onnx`` — InsightFace's loader
+    only looks for the canonical name, and we don't want to fork the
+    loader.
+    """
 
     onnx_filename: str
     input_name: str
     input_shape: tuple[int, int, int, int]  # (N, C, H, W)
+    source_filename: str | None = None  # defaults to onnx_filename
+
+    @property
+    def src_name(self) -> str:
+        return self.source_filename or self.onnx_filename
 
 
 # SCRFD detector and ArcFace recognizer files inside ``buffalo_l``.
@@ -91,14 +104,39 @@ def _resolve_specs(det_size: int) -> list[tuple[str, ModelSpec]]:
     matches what ``FaceAnalysis.prepare()`` will request at runtime — the
     EP only delegates if the shape it sees at inference matches the
     shape baked into the graph.
+
+    Detector swap (distant-face plan 2026-04-26 Phase 4a):
+      The ``DETECTOR_ONNX_FILENAME`` env var picks which SCRFD variant
+      to bake. ``det_10g.onnx`` (default, ships in buffalo_l) is the
+      WIDER FACE Hard 83.05% baseline. ``scrfd_34g.onnx`` (the heavier
+      sibling, +2.24 AP, ~2× wall-clock) must be downloaded separately
+      from the InsightFace model zoo and dropped into
+      ``~/.insightface/models/buffalo_l/scrfd_34g.onnx`` before
+      re-running this script.
+
+      The script writes the chosen variant out as ``det_10g.onnx``
+      regardless inside the static pack, so the InsightFace loader
+      finds it under the canonical name. (Renaming the bake
+      file-stem would require also patching FaceAnalysis's loader,
+      which we don't want to do.) The sidecar's /health response
+      includes the providers list per task — that's how an operator
+      verifies the swap took effect.
     """
+    detector_source = os.environ.get("DETECTOR_ONNX_FILENAME", "det_10g.onnx")
     return [
         (
             "buffalo_l",
             ModelSpec(
+                # Always write as det_10g.onnx — that's the filename
+                # InsightFace's FaceAnalysis loader looks for. When
+                # DETECTOR_ONNX_FILENAME != det_10g.onnx (e.g. the
+                # 34G swap), we copy that source onto disk under the
+                # canonical name so the loader picks it up
+                # transparently.
                 onnx_filename="det_10g.onnx",
                 input_name=SCRFD_INPUT_NAME,
                 input_shape=(1, 3, det_size, det_size),
+                source_filename=detector_source,
             ),
         ),
         (
@@ -231,9 +269,20 @@ def export(det_size: int, out_subdir: str = "buffalo_l_static") -> Path:
     # Export each model (or, for ArcFace where the input is already fixed,
     # just copy + re-validate).
     for pack_name, spec in _resolve_specs(det_size):
-        src = models_root / pack_name / spec.onnx_filename
+        src = models_root / pack_name / spec.src_name
         dst = out_dir / spec.onnx_filename
         if not src.exists():
+            # Phase 4a: SCRFD-34G isn't part of the buffalo_l zip — the
+            # operator must download it manually. Surface a more
+            # actionable error in that case.
+            if spec.src_name != spec.onnx_filename:
+                raise FileNotFoundError(
+                    f"DETECTOR_ONNX_FILENAME={spec.src_name!r} is set, but "
+                    f"{src} is missing. Download the SCRFD-34G ONNX from "
+                    f"the InsightFace model zoo "
+                    f"(https://github.com/deepinsight/insightface/tree/master/detection/scrfd) "
+                    f"and place it under {src.parent} before re-running."
+                )
             raise FileNotFoundError(
                 f"Source ONNX missing: {src}. Has InsightFace downloaded the "
                 f"buffalo_l pack on this machine yet?"

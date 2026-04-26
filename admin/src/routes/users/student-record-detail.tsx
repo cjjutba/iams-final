@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useTransition } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useBreadcrumbStore } from '@/stores/breadcrumb.store'
@@ -359,7 +359,6 @@ export default function StudentRecordDetailPage() {
   )
 
   const [attendanceSearch, setAttendanceSearch] = useState('')
-  const [, startAttendanceSearchTransition] = useTransition()
   const [statusFilter, setStatusFilter] = useState<'all' | AttendanceStatusKey>('all')
 
   const filteredAttendance = useMemo(() => {
@@ -700,10 +699,189 @@ export default function StudentRecordDetailPage() {
   ]
 
   if (isLoading) {
+    // Mirror the loaded layout (Back → Header → At a glance → Profile →
+    // Attendance History → Enrolled Schedules) so the cut-over to real
+    // data doesn't shift the page. Each block is sized to match its
+    // eventual counterpart's width, height, and rhythm.
     return (
       <div className="space-y-6">
-        <Skeleton className="h-8 w-32" />
-        <Skeleton className="h-64 w-full" />
+        {/* Back to Students */}
+        <Skeleton className="h-9 w-36 rounded-md" />
+
+        {/* ── Header Card (avatar + name + 5 badges + actions) ─────── */}
+        <Card>
+          <CardHeader>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex min-w-0 items-start gap-4">
+                <Skeleton className="h-16 w-16 shrink-0 rounded-full" />
+                <div className="min-w-0 space-y-2">
+                  <Skeleton className="h-7 w-64" />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Skeleton className="h-6 w-24 rounded-md" />
+                    <Skeleton className="h-5 w-16 rounded-full" />
+                    <Skeleton className="h-5 w-16 rounded-full" />
+                    <Skeleton className="h-5 w-24 rounded-full" />
+                    <Skeleton className="h-5 w-28 rounded-full" />
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-9 w-20 rounded-md" />
+                <Skeleton className="h-9 w-9 rounded-md" />
+              </div>
+            </div>
+          </CardHeader>
+        </Card>
+
+        {/* ── At a glance — 5 OverviewStat cards ───────────────────── */}
+        <Card>
+          <CardHeader className="pb-3">
+            <Skeleton className="h-5 w-28" />
+            <Skeleton className="mt-1.5 h-3 w-72" />
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-5">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="space-y-1.5 rounded-md border bg-card px-4 py-3"
+                >
+                  <Skeleton className="h-3 w-24" />
+                  <Skeleton className="mt-1 h-7 w-16" />
+                  <Skeleton className="mt-1 h-3 w-20" />
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ── Profile (5 MetaItems in a 3-col grid) ────────────────── */}
+        <Card>
+          <CardHeader className="pb-3">
+            <Skeleton className="h-5 w-20" />
+          </CardHeader>
+          <Separator />
+          <CardContent className="pt-6">
+            <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="space-y-1.5">
+                  <Skeleton className="h-3 w-20" />
+                  <Skeleton className="h-4 w-44" />
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ── Attendance History (heatmap + filter pills + table) ───── */}
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="space-y-1.5">
+                <Skeleton className="h-5 w-44" />
+                <Skeleton className="h-3 w-72" />
+              </div>
+              <Skeleton className="h-8 w-28 rounded-md" />
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            {/* Heatmap */}
+            <Skeleton className="h-12 w-full rounded-md" />
+
+            {/* Filter chip row */}
+            <div className="flex flex-wrap items-center gap-2">
+              <Skeleton className="h-3 w-12" />
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-6 w-16 rounded-full" />
+              ))}
+            </div>
+
+            {/* Search bar (DataTable toolbar) */}
+            <Skeleton className="h-9 w-full max-w-sm rounded-md" />
+
+            {/* Table — borderless variant from DataTable */}
+            <div>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Subject</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Score</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <TableRow key={`stud-att-skel-${String(i)}`}>
+                      <TableCell>
+                        <Skeleton className="h-4 w-24" />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className="h-4 w-40" />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className="h-5 w-20 rounded-full" />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className="h-4 w-12" />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ── Enrolled Schedules ───────────────────────────────────── */}
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="space-y-1.5">
+                <Skeleton className="h-5 w-44" />
+                <Skeleton className="h-3 w-60" />
+              </div>
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-8 w-44 rounded-md" />
+                <Skeleton className="h-8 w-40 rounded-md" />
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Code</TableHead>
+                  <TableHead>Subject</TableHead>
+                  <TableHead>Day · Time</TableHead>
+                  <TableHead>Faculty</TableHead>
+                  <TableHead className="w-10" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <TableRow key={`stud-enr-skel-${String(i)}`}>
+                    <TableCell>
+                      <Skeleton className="h-3 w-16" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-40" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-32" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-32" />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Skeleton className="ml-auto h-8 w-8 rounded-md" />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       </div>
     )
   }
@@ -1014,9 +1192,7 @@ export default function StudentRecordDetailPage() {
               isLoading={attendanceLoading}
               searchPlaceholder="Search by subject, status, date, score..."
               globalFilter={attendanceSearch}
-              onGlobalFilterChange={(v) =>
-                startAttendanceSearchTransition(() => setAttendanceSearch(v))
-              }
+              onGlobalFilterChange={setAttendanceSearch}
               globalFilterFn={() => true}
               borderless
               onRowClick={(row) => {

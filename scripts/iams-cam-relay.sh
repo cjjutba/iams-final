@@ -78,6 +78,49 @@ CAMERAS=(
   "192.168.88.10 eb227-sub h264Preview_01_sub"
 )
 
+# Distant-face plan 2026-04-26 Phase 2a — cropped back-row streams.
+#
+# Format: "source_stream_key target_stream_key crop_geometry"
+#   - source: a key that is also published in CAMERAS above (we feed off
+#     localhost:8554/<source>, which is the Mac mediamtx already
+#     receiving the main stream — no extra Reolink draw).
+#   - target: the new mediamtx path the cropped stream will publish to,
+#     e.g. eb226-back. Must NOT collide with anything in CAMERAS.
+#   - crop_geometry: ffmpeg crop filter args, "W:H:X:Y", in source-frame
+#     pixels. The default below crops the upper 60 % of the 2304x1296
+#     main stream, which on a wide-angle classroom camera covers the
+#     back rows where students sit furthest from the lens.
+#
+# Why this is a separate array (not a CAMERAS row): cropped streams
+# require re-encode (ffmpeg `crop` filter cannot be combined with `-c
+# copy`). The CAMERAS path uses `-c copy` and stays on the camera-pull
+# loop body. The cropped path runs a different ffmpeg invocation (libx264
+# encode), with its own restart loop, so we keep the two pipelines
+# distinct.
+#
+# To opt out (single-camera testing, or rooms that don't have a back
+# wall worth zooming in on), comment the entries you don't want.
+# Disabling all entries returns the relay to its pre-Phase-2 behaviour.
+#
+# IMPORTANT: the target key (e.g. eb226-back) is what the api-gateway's
+# secondary FrameGrabber binds to — see settings.BACKROW_CROP_STREAMS in
+# backend/app/config.py. Edit both files in lockstep when adding/removing
+# rooms.
+CROPPED_STREAMS=(
+  "eb226 eb226-back 2304:780:0:0"
+  "eb227 eb227-back 2304:780:0:0"
+)
+# x264 preset for the cropped re-encode. Tuning notes:
+#   - veryfast = ~30 % CPU per stream on M5 for 2304x780@30fps; perceptually
+#     identical for face-detection use cases.
+#   - ultrafast saves another 5 % CPU but inflates bitrate ~50 %, which makes
+#     the WebRTC fan-out path noisier downstream. Don't go below veryfast.
+CROPPED_X264_PRESET="${IAMS_CAM_RELAY_X264_PRESET:-veryfast}"
+# Same low-latency tuning as the main pull. CRF 26 keeps the encoded bitrate
+# in the ~2-3 Mbps range — high enough for SCRFD to keep the cropped face
+# detail.
+CROPPED_X264_CRF="${IAMS_CAM_RELAY_X264_CRF:-26}"
+
 # PIDs of child loops — populated as we launch each camera. Used by the
 # signal trap to tear everything down cleanly on launchd shutdown.
 CHILD_PIDS=()
@@ -133,6 +176,52 @@ run_camera() {
       "${output_url}"
     local rc=$?
     echo "$(date '+%Y-%m-%d %H:%M:%S') [${stream_key}] ffmpeg exited rc=${rc} — restart in 3 s"
+    sleep 3
+  done
+}
+
+# Cropped stream loop. Pulls from the local mediamtx (which is receiving
+# the corresponding main stream from run_camera above), runs ffmpeg with a
+# `crop` filter + libx264 re-encode, and publishes the result back to
+# mediamtx under a new path. The output is what the api-gateway's
+# back-row FrameGrabber consumes for distant-face detection.
+#
+# Why pull from mediamtx instead of the camera directly:
+#  - one TCP connection to the camera, not two — Reolink's RTSP daemon
+#    flakes when juggling multiple concurrent main-stream readers.
+#  - mediamtx already reaps the main stream, so the cropped variant is
+#    "free" from the camera's POV.
+run_cropped_stream() {
+  local source_key="$1"
+  local target_key="$2"
+  local crop_geom="$3"
+  local input_url="rtsp://${MTX_HOST}:${MTX_PORT}/${source_key}"
+  local output_url="rtsp://${MTX_HOST}:${MTX_PORT}/${target_key}"
+  while true; do
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [${target_key}] cropped ffmpeg starting" \
+         "— ${source_key} crop=${crop_geom} -> ${target_key}"
+    "${FFMPEG}" \
+      -hide_banner -loglevel warning \
+      -fflags +genpts+nobuffer \
+      -flags low_delay \
+      -rtsp_transport tcp \
+      -timeout 5000000 \
+      -i "${input_url}" \
+      -an \
+      -vf "crop=${crop_geom}" \
+      -c:v libx264 \
+      -preset "${CROPPED_X264_PRESET}" \
+      -tune zerolatency \
+      -crf "${CROPPED_X264_CRF}" \
+      -g 30 \
+      -keyint_min 30 \
+      -pix_fmt yuv420p \
+      -f rtsp \
+      -rtsp_transport tcp \
+      "${output_url}"
+    local rc=$?
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [${target_key}] cropped ffmpeg exited rc=${rc}" \
+         "— restart in 3 s"
     sleep 3
   done
 }
@@ -229,7 +318,8 @@ run_watchdog() {
   done
 }
 
-echo "$(date '+%Y-%m-%d %H:%M:%S') [supervisor] IAMS camera relay starting (${#CAMERAS[@]} stream(s))"
+echo "$(date '+%Y-%m-%d %H:%M:%S') [supervisor] IAMS camera relay starting" \
+     "(${#CAMERAS[@]} primary stream(s), ${#CROPPED_STREAMS[@]} cropped stream(s))"
 
 for cam_spec in "${CAMERAS[@]}"; do
   # shellcheck disable=SC2086
@@ -238,6 +328,24 @@ for cam_spec in "${CAMERAS[@]}"; do
   CHILD_PIDS+=("$!")
   echo "$(date '+%Y-%m-%d %H:%M:%S') [supervisor] launched loop pid=$! for $2"
 done
+
+# Cropped streams launch AFTER main streams so the source paths exist by
+# the time the cropped ffmpeg tries to RTSP-DESCRIBE them. With set -u in
+# effect, an empty CROPPED_STREAMS array would expand to "" and trip the
+# loop's set --; gate on the count.
+if [ "${#CROPPED_STREAMS[@]}" -gt 0 ]; then
+  # Give run_camera 2-3 s to establish its publish so the very first
+  # cropped ffmpeg doesn't race-fail on a 404 from mediamtx. Subsequent
+  # restarts are handled by the per-stream `while true` loop.
+  sleep 3
+  for crop_spec in "${CROPPED_STREAMS[@]}"; do
+    # shellcheck disable=SC2086
+    set -- ${crop_spec}
+    run_cropped_stream "$1" "$2" "$3" &
+    CHILD_PIDS+=("$!")
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [supervisor] launched cropped loop pid=$! for $2 (crop=$3)"
+  done
+fi
 
 # Launch the watchdog only if ffprobe is available. Otherwise the supervisor
 # falls back to ffmpeg-exits-only failure detection (pre-2026-04-22 behaviour).

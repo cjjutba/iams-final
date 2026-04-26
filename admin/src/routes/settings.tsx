@@ -52,17 +52,66 @@ export default function SettingsPage() {
   }
 
   if (isLoading) {
+    // Mirror the loaded layout (header + Save button + Semester
+    // Configuration card + Notification Preferences card) so the
+    // cut-over to real data doesn't shift the page.
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-semibold">Settings</h1>
-          <p className="text-muted-foreground mt-1">Loading settings...</p>
+        {/* Page header */}
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-7 w-28" />
+            <Skeleton className="h-4 w-72" />
+          </div>
+          <Skeleton className="h-9 w-24 rounded-md" />
         </div>
-        <div className="space-y-4">
-          {Array.from({ length: 2 }).map((_, i) => (
-            <Skeleton key={`settings-skeleton-${String(i)}`} className="h-40 w-full" />
-          ))}
-        </div>
+
+        {/* Semester Configuration card */}
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-5 w-52" />
+            <Skeleton className="mt-1.5 h-3 w-72" />
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Skeleton className="h-3 w-32" />
+                <Skeleton className="h-9 w-full rounded-md" />
+              </div>
+              <div className="space-y-2">
+                <Skeleton className="h-3 w-28" />
+                <Skeleton className="h-9 w-full rounded-md" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Notification Preferences card */}
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-5 w-52" />
+            <Skeleton className="mt-1.5 h-3 w-64" />
+          </CardHeader>
+          <CardContent className="space-y-1">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="flex items-center justify-between py-3">
+                <div className="space-y-1.5">
+                  <Skeleton className="h-4 w-44" />
+                  <Skeleton className="h-3 w-72 max-w-full" />
+                </div>
+                <Skeleton className="h-6 w-11 rounded-full" />
+              </div>
+            ))}
+            <Separator className="my-3" />
+            <div className="flex items-center justify-between py-3">
+              <div className="space-y-1.5">
+                <Skeleton className="h-4 w-56" />
+                <Skeleton className="h-3 w-80 max-w-full" />
+              </div>
+              <Skeleton className="h-9 w-20 rounded-md" />
+            </div>
+          </CardContent>
+        </Card>
       </div>
     )
   }
@@ -141,7 +190,35 @@ function NotificationPreferencesCard() {
   }
 
   if (isLoading) {
-    return <Skeleton className="h-64 w-full" />
+    // Mirror the loaded NotificationPreferencesCard layout so the
+    // cut-over doesn't shift the page when only this card is loading.
+    return (
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-5 w-52" />
+          <Skeleton className="mt-1.5 h-3 w-64" />
+        </CardHeader>
+        <CardContent className="space-y-1">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="flex items-center justify-between py-3">
+              <div className="space-y-1.5">
+                <Skeleton className="h-4 w-44" />
+                <Skeleton className="h-3 w-72 max-w-full" />
+              </div>
+              <Skeleton className="h-6 w-11 rounded-full" />
+            </div>
+          ))}
+          <Separator className="my-3" />
+          <div className="flex items-center justify-between py-3">
+            <div className="space-y-1.5">
+              <Skeleton className="h-4 w-56" />
+              <Skeleton className="h-3 w-80 max-w-full" />
+            </div>
+            <Skeleton className="h-9 w-20 rounded-md" />
+          </div>
+        </CardContent>
+      </Card>
+    )
   }
 
   const items: { key: keyof NotificationPreference; label: string; description: string }[] = [

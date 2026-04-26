@@ -44,6 +44,15 @@ import {
 } from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import {
   useRooms,
   useSchedules,
@@ -467,17 +476,117 @@ export default function RoomsPage() {
     },
   ]
 
+  if (isLoading) {
+    // Mirror the loaded layout (header + toolbar + table + pagination) so
+    // the cut-over to real data doesn't shift the page. Used only on
+    // initial fetch — `isPending` (filter transitions) keeps the toolbar
+    // interactive and uses the DataTable's own row-level skeleton.
+    return (
+      <div className="space-y-6">
+        {/* Page header */}
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-7 w-44" />
+            <Skeleton className="h-4 w-32" />
+          </div>
+          <Skeleton className="h-9 w-32 rounded-md" />
+        </div>
+
+        <div>
+          {/* Toolbar — search + 2 selects */}
+          <div className="flex items-center justify-between gap-4 py-4">
+            <Skeleton className="h-9 w-full max-w-sm rounded-md" />
+            <div className="flex items-center gap-2">
+              <Skeleton className="h-9 w-[130px] rounded-md" />
+              <Skeleton className="h-9 w-[150px] rounded-md" />
+            </div>
+          </div>
+
+          {/* Table — render real header so column proportions auto-size
+              the same as the loaded table. */}
+          <div className="rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Building</TableHead>
+                  <TableHead>Capacity</TableHead>
+                  <TableHead>Schedules</TableHead>
+                  <TableHead>Camera</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="w-[60px]" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <TableRow key={`rooms-skel-${String(i)}`}>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <Skeleton className="h-4 w-24" />
+                        {/* Optional LIVE pill placeholder for some rows */}
+                        {i % 4 === 0 && (
+                          <Skeleton className="h-5 w-20 rounded-full" />
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-32" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-8" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-6" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-5 w-24 rounded-full" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-5 w-16 rounded-full" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="ml-auto h-8 w-8 rounded-md" />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* Pagination */}
+          <div className="flex items-center justify-between px-2 py-4">
+            <Skeleton className="h-4 w-44" />
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-8 w-[70px] rounded-md" />
+              </div>
+              <div className="flex items-center gap-1">
+                <Skeleton className="h-8 w-8 rounded-md" />
+                <Skeleton className="h-8 w-8 rounded-md" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <RoomFormDialog
+          open={dialogOpen}
+          onOpenChange={setDialogOpen}
+          room={editingRoom}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Room Management</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {isLoading
-              ? 'Loading...'
-              : hasFilters
-                ? `${filtered.length} of ${rooms.length} rooms`
-                : `${rooms.length} room${rooms.length !== 1 ? 's' : ''} total`}
+            {hasFilters
+              ? `${filtered.length} of ${rooms.length} rooms`
+              : `${rooms.length} room${rooms.length !== 1 ? 's' : ''} total`}
           </p>
         </div>
         <Button onClick={handleAddNew}>
@@ -492,7 +601,7 @@ export default function RoomsPage() {
         isLoading={showSkeleton}
         searchPlaceholder="Search by name, building, capacity, status..."
         globalFilter={searchQuery}
-        onGlobalFilterChange={(v) => startTransition(() => setSearchQuery(v))}
+        onGlobalFilterChange={setSearchQuery}
         globalFilterFn={() => true}
         toolbar={
           <>

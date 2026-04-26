@@ -159,6 +159,87 @@ class RemoteInsightFaceModel:
             )
         return out
 
+    def detect_tiled(
+        self,
+        frame: np.ndarray,
+        tiles: list,
+        *,
+        include_coarse: bool = True,
+        ios_thresh: float = 0.5,
+    ) -> list[dict]:
+        """Run SCRFD on N tiles via the sidecar's /detect_tiled endpoint.
+
+        Distant-face plan 2026-04-26 Phase 3.
+
+        Args:
+            frame: BGR ndarray, full source frame.
+            tiles: list of ``TileRect`` instances (or any object with
+                ``x0/y0/x1/y1`` int attributes — duck-typed).
+            include_coarse: Pass through to the sidecar; when True, the
+                sidecar runs an extra full-frame SCRFD pass and merges
+                its output with the tiled detections.
+            ios_thresh: IOS threshold for the merge layer.
+
+        Returns:
+            Same shape as ``detect()`` — list of dicts with bbox /
+            det_score / kps in original-frame pixel coords.
+        """
+        if not tiles:
+            # Nothing to tile — fall through to plain detect, which
+            # already proxies via /detect.
+            return self.detect(frame)
+
+        jpeg = self._encode_jpeg(frame)
+        if jpeg is None:
+            raise RuntimeError("could not JPEG-encode frame for /detect_tiled")
+
+        payload = {
+            "jpeg_b64": base64.b64encode(jpeg).decode("ascii"),
+            "tiles": [
+                {
+                    "x0": int(t.x0),
+                    "y0": int(t.y0),
+                    "x1": int(t.x1),
+                    "y1": int(t.y1),
+                }
+                for t in tiles
+            ],
+            "include_coarse": bool(include_coarse),
+            "ios_thresh": float(ios_thresh),
+        }
+
+        try:
+            resp = self._client.post(
+                f"{self._base_url}/detect_tiled",
+                json=payload,
+            )
+            resp.raise_for_status()
+            body = resp.json()
+        except Exception as exc:
+            logger.warning(
+                "Sidecar /detect_tiled (n_tiles=%d) failed: %s",
+                len(tiles),
+                exc,
+            )
+            raise RuntimeError(f"sidecar /detect_tiled failed: {exc}") from exc
+
+        out: list[dict] = []
+        for det in body.get("detections", []):
+            kps_raw = det.get("kps")
+            kps = (
+                np.asarray(kps_raw, dtype=np.float32)
+                if kps_raw is not None
+                else None
+            )
+            out.append(
+                {
+                    "bbox": np.asarray(det["bbox"], dtype=np.float32),
+                    "det_score": float(det["det_score"]),
+                    "kps": kps,
+                }
+            )
+        return out
+
     def embed_from_kps(self, frame: np.ndarray, kps: np.ndarray) -> np.ndarray:
         """Single-face convenience wrapper — delegates to the batched path.
 

@@ -22,8 +22,14 @@ chown -R appuser:appuser /app/data /app/logs /home/appuser/.insightface /var/lib
 # skips this entirely because there is no ML dir to write to and no
 # model loader to verify the work.
 if [ "${ENABLE_ML:-true}" != "false" ]; then
+    # DETECTOR_ONNX_FILENAME (Phase 4a): set to scrfd_34g.onnx to swap
+    # in the heavier SCRFD detector. Defaults to det_10g.onnx (the
+    # buffalo_l pack's stock detector). When swapping, drop the
+    # downloaded scrfd_34g.onnx into ~/.insightface/models/buffalo_l/
+    # first — the export script raises a clear error if it's missing.
     INSIGHTFACE_DET_SIZE="${INSIGHTFACE_DET_SIZE:-640}" \
     INSIGHTFACE_STATIC_PACK_NAME="${INSIGHTFACE_STATIC_PACK_NAME:-buffalo_l_static}" \
+    DETECTOR_ONNX_FILENAME="${DETECTOR_ONNX_FILENAME:-det_10g.onnx}" \
     gosu appuser python -m scripts.export_static_models \
         || echo "[entrypoint] static-shape ONNX export failed; will run on CPU EP fallback" >&2
 fi

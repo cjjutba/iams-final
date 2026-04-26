@@ -154,17 +154,6 @@ async def lifespan(app: FastAPI):
             # Background listener for FAISS reload notifications (multi-worker sync)
             app.state.faiss_subscriber_task = asyncio.create_task(faiss_manager.subscribe_index_changes())
 
-            # Bootstrap auto-CCTV-enroller from DB so it stays one-shot
-            # across restarts. Cheap (one aggregate query); flag-checked
-            # so the work is skipped entirely when AUTO_CCTV_ENROLL_ENABLED
-            # is false. Wrapped in try so a DB hiccup doesn't break boot.
-            try:
-                if settings.AUTO_CCTV_ENROLL_ENABLED:
-                    from app.services.auto_cctv_enroller import auto_cctv_enroller
-                    await asyncio.to_thread(auto_cctv_enroller.bootstrap_from_db)
-            except Exception:
-                logger.exception("AutoCctvEnroller bootstrap failed (non-fatal)")
-
             # JIT the SCRFD ONNX graph now so the first real session pipeline
             # doesn't pay the ~3-5s warmup tax on its first frame. (No-op if
             # the realtime path will route through the sidecar — but cheap
@@ -336,11 +325,34 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("ML disabled (ENABLE_ML=false) — skipping InsightFace + FAISS load")
 
+    # ── Auto-CCTV-Enroller bootstrap ──────────────────────────────
+    # Lives at top level (not nested inside ENABLE_ML) so its visibility
+    # is independent of any ML init failure earlier in lifespan. It only
+    # depends on the DB which was initialized above. The realtime tracker
+    # calls offer_capture() per confident recognition; this query
+    # bootstraps the per-(user, room) lifetime counters from existing
+    # face_embeddings.cctv_* rows so the trigger remains one-shot
+    # across server restarts.
+    if settings.AUTO_CCTV_ENROLL_ENABLED:
+        try:
+            from app.services.auto_cctv_enroller import auto_cctv_enroller
+            await asyncio.to_thread(auto_cctv_enroller.bootstrap_from_db)
+        except Exception:
+            logger.exception("AutoCctvEnroller bootstrap failed (non-fatal)")
+    else:
+        logger.info("Auto-CCTV-enroller disabled (AUTO_CCTV_ENROLL_ENABLED=false)")
+
     # ── Frame Grabbers & Session Pipelines ────────────────────────
     # State dicts are allocated unconditionally so the on-demand + lifecycle
     # helpers can check them without an AttributeError. When ENABLE_FRAME_GRABBERS
     # is false they stay empty.
     app.state.frame_grabbers = {}  # room_id -> FrameGrabber
+    # Back-row (cropped) grabbers — distant-face plan 2026-04-26 Phase 2.
+    # Keyed by ``primary_stream_key`` (matches ``rooms.stream_key``) NOT
+    # room_id, so the SessionPipeline.start() path can look them up
+    # using whatever camera handle the room resolved to. Empty when
+    # BACKROW_CROP_STREAMS is unset or disabled.
+    app.state.backrow_frame_grabbers = {}  # primary_stream_key -> FrameGrabber
     app.state.session_pipelines = {}  # schedule_id -> SessionPipeline
 
     # Pre-open RTSP readers for every room with a configured camera so the
@@ -354,6 +366,7 @@ async def lifespan(app: FastAPI):
         try:
             from app.database import SessionLocal as _SessionLocal
             from app.models.room import Room as _Room
+            from app.services.backrow_streams import parse_backrow_config
             from app.services.frame_grabber import FrameGrabber as _FrameGrabber
 
             _db = _SessionLocal()
@@ -372,6 +385,12 @@ async def lifespan(app: FastAPI):
                         app.state.frame_grabbers[_room_id] = _FrameGrabber(
                             _room.camera_endpoint,
                             dedup_repeats=True,
+                            # Phase 4b: stream_key drives lens
+                            # undistortion lookup. None for rooms
+                            # without a configured stream_key — those
+                            # are treated as "no undistortion" by the
+                            # FrameGrabber's internal lookup.
+                            stream_key=_room.stream_key,
                         )
                         logger.info(
                             "FrameGrabber preloaded for room %s (%s)",
@@ -381,6 +400,42 @@ async def lifespan(app: FastAPI):
                     except Exception:
                         logger.exception(
                             "Failed to preload FrameGrabber for room %s", _room_id
+                        )
+
+                # Distant-face plan 2026-04-26 Phase 2 — preload secondary
+                # FrameGrabbers for any cropped back-row paths configured
+                # in BACKROW_CROP_STREAMS. Same warmup rationale as the
+                # primary loop above; missing cropped publishers (e.g.
+                # before scripts/iams-cam-relay.sh starts publishing
+                # eb226-back) fall through gracefully because the
+                # FrameGrabber's reconnect-on-stale loop tolerates a
+                # delayed publisher.
+                _backrow_entries = parse_backrow_config(settings.BACKROW_CROP_STREAMS)
+                for _entry in _backrow_entries:
+                    if _entry.primary_stream_key in app.state.backrow_frame_grabbers:
+                        continue
+                    try:
+                        # Phase 4b: pass the back-row path as stream_key so
+                        # operators can calibrate the cropped view
+                        # separately if its effective field-of-view warrants
+                        # different undistortion coefficients than the
+                        # parent stream.
+                        app.state.backrow_frame_grabbers[_entry.primary_stream_key] = (
+                            _FrameGrabber(
+                                _entry.rtsp_url,
+                                dedup_repeats=True,
+                                stream_key=_entry.backrow_path,
+                            )
+                        )
+                        logger.info(
+                            "Back-row FrameGrabber preloaded for %s -> %s",
+                            _entry.primary_stream_key,
+                            _entry.rtsp_url,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to preload back-row FrameGrabber for %s",
+                            _entry.primary_stream_key,
                         )
             finally:
                 _db.close()
@@ -505,6 +560,7 @@ async def lifespan(app: FastAPI):
                         room_id = str(schedule.room_id)
                         room = db.query(Room).filter(Room.id == schedule.room_id).first()
                         camera_url = room.camera_endpoint if room else None
+                        room_stream_key = room.stream_key if room else None
 
                         # Fetch faculty_id and enrolled student_ids for notifications
                         faculty_id = str(schedule.faculty_id)
@@ -518,6 +574,12 @@ async def lifespan(app: FastAPI):
                                 "sid": sid,
                                 "room_id": room_id,
                                 "camera_url": camera_url,
+                                # Phase 2 — back-row grabbers are keyed by
+                                # the room's mediamtx stream_key (e.g.
+                                # "eb226"), not the room_id. Pass it
+                                # through so the start path can look up
+                                # the cropped sibling grabber.
+                                "stream_key": room_stream_key,
                                 "subject_code": schedule.subject_code,
                                 "faculty_id": faculty_id,
                                 "student_ids": student_ids,
@@ -601,6 +663,7 @@ async def lifespan(app: FastAPI):
                 sid = info["sid"]
                 room_id = info["room_id"]
                 camera_url = info["camera_url"]
+                stream_key = info.get("stream_key")
                 subject_code = info["subject_code"]
                 faculty_id = info.get("faculty_id")
                 student_ids = info.get("student_ids", [])
@@ -619,7 +682,14 @@ async def lifespan(app: FastAPI):
                     # or a failed preload pass. Either way, ML detection only
                     # runs once a SessionPipeline is attached below.
                     if camera_url and room_id not in app.state.frame_grabbers:
-                        grabber = FrameGrabber(camera_url, dedup_repeats=True)
+                        # Phase 4b: stream_key threads undistortion lookup
+                        # through; safe to pass None when the gather phase
+                        # didn't carry one.
+                        grabber = FrameGrabber(
+                            camera_url,
+                            dedup_repeats=True,
+                            stream_key=stream_key,
+                        )
                         app.state.frame_grabbers[room_id] = grabber
                         logger.info(f"[lifecycle] Created FrameGrabber for room {room_id}")
 
@@ -634,11 +704,23 @@ async def lifespan(app: FastAPI):
                         if not faiss_manager.user_map:
                             faiss_manager.rebuild_user_map_from_db()
 
+                        # Distant-face plan 2026-04-26 Phase 2 — look up
+                        # the back-row grabber when ``BACKROW_CROP_STREAMS``
+                        # has an entry for this room's stream_key. Falls
+                        # back to None when not configured, leaving the
+                        # SessionPipeline in single-grabber Phase 1 mode.
+                        backrow_grabber = None
+                        if stream_key:
+                            backrow_grabber = app.state.backrow_frame_grabbers.get(
+                                stream_key
+                            )
+
                         pipeline = SessionPipeline(
                             schedule_id=sid,
                             grabber=grabber,
                             db_factory=SessionLocal,
                             room_id=room_id,
+                            backrow_grabber=backrow_grabber,
                         )
                         await pipeline.start()
                         app.state.session_pipelines[sid] = pipeline
@@ -1207,6 +1289,7 @@ async def lifespan(app: FastAPI):
                 room = db.query(Room).filter(Room.id == schedule.room_id).first()
                 camera_url = room.camera_endpoint if room else None
                 room_id = str(schedule.room_id)
+                room_stream_key = room.stream_key if room else None
 
                 current_day = now.weekday()
                 current_time = now.time()
@@ -1221,6 +1304,7 @@ async def lifespan(app: FastAPI):
                     "sid": schedule_id,
                     "room_id": room_id,
                     "camera_url": camera_url,
+                    "stream_key": room_stream_key,
                     "subject_code": schedule.subject_code,
                     "should_start": should_start,
                 }
@@ -1239,6 +1323,7 @@ async def lifespan(app: FastAPI):
         sid = info["sid"]
         room_id = info["room_id"]
         camera_url = info["camera_url"]
+        stream_key = info.get("stream_key")
         subject_code = info["subject_code"]
 
         if not camera_url:
@@ -1259,7 +1344,10 @@ async def lifespan(app: FastAPI):
             # room added at runtime or a failed preload.
             if room_id not in app.state.frame_grabbers:
                 app.state.frame_grabbers[room_id] = FrameGrabber(
-                    camera_url, dedup_repeats=True
+                    camera_url,
+                    dedup_repeats=True,
+                    # Phase 4b: stream_key threads undistortion lookup.
+                    stream_key=stream_key,
                 )
                 logger.info("[on-demand] Created FrameGrabber for room %s", room_id)
             grabber = app.state.frame_grabbers[room_id]
@@ -1271,11 +1359,19 @@ async def lifespan(app: FastAPI):
             finally:
                 db.close()
 
+            # Distant-face plan 2026-04-26 Phase 2 — wire back-row grabber
+            # if BACKROW_CROP_STREAMS has an entry for this room. Falls
+            # through to single-grabber Phase 1 mode if not configured.
+            backrow_grabber = None
+            if stream_key and hasattr(app.state, "backrow_frame_grabbers"):
+                backrow_grabber = app.state.backrow_frame_grabbers.get(stream_key)
+
             pipeline = SessionPipeline(
                 schedule_id=sid,
                 grabber=grabber,
                 db_factory=SessionLocal,
                 room_id=room_id,
+                backrow_grabber=backrow_grabber,
             )
             await pipeline.start()
             app.state.session_pipelines[sid] = pipeline
@@ -1334,6 +1430,17 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.error(f"Failed to stop FrameGrabber for room {room_id}: {e}")
         app.state.frame_grabbers.clear()
+    # Distant-face plan 2026-04-26 Phase 2 — stop back-row grabbers too.
+    if hasattr(app.state, "backrow_frame_grabbers"):
+        for _key, _grabber in list(app.state.backrow_frame_grabbers.items()):
+            try:
+                _grabber.stop()
+                logger.info("Back-row FrameGrabber stopped for %s", _key)
+            except Exception as exc:
+                logger.error(
+                    "Failed to stop back-row FrameGrabber for %s: %s", _key, exc
+                )
+        app.state.backrow_frame_grabbers.clear()
 
     # Stop recognition-evidence writer — drains at most a tiny final batch.
     try:

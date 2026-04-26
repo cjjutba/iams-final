@@ -11,6 +11,7 @@ import { useTrackSelectionStore } from '@/stores/track-selection.store'
 
 import { RegisteredFaceGallery } from './RegisteredFaceGallery'
 import { LiveCropPanel } from './LiveCropPanel'
+import { RecognitionDiagnostics } from './RecognitionDiagnostics'
 import { SimilarityMetrics } from './SimilarityMetrics'
 
 export interface TrackDetailBodyProps {
@@ -120,6 +121,12 @@ export function TrackDetailBody({
         lastSeenAtMs={lastSeenAtRef.current}
         isStale={isStale}
       />
+
+      {/* Distant-face plan v2 (2026-04-26) — per-track recognition
+          diagnostics so operators can see top-1 / top-2 / decision_reason
+          inline without grepping dozzle. Renders nothing when track is
+          null (initial open before WS data lands). */}
+      <RecognitionDiagnostics track={track} />
 
       <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
         <section className="flex flex-col gap-2.5">

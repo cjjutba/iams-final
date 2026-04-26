@@ -111,6 +111,17 @@ paths:
   "~^.+-sub$":
     overridePublisher: yes
 
+  # Distant-face plan 2026-04-26 Phase 2a — cropped back-row streams.
+  # `eb226-back`, `eb227-back`, … published by scripts/iams-cam-relay.sh's
+  # `run_cropped_stream` loops. These exist purely to feed the api-gateway's
+  # back-row FrameGrabbers so SCRFD sees ~2× the pixel density on far faces.
+  # They never need to leave the Mac — the faculty APK consumes only the
+  # main streams, and the admin live page can already see the same room
+  # via the main `<key>` and `-sub` paths. Keeping these LOCAL avoids
+  # WAN bandwidth for a stream nobody outside IAMS-Net will ever read.
+  "~^.+-back$":
+    overridePublisher: yes
+
   all_others:
     # Allow publisher reconnection without waiting for old session timeout
     # — important when the RPi relay restarts (power cycle, network blip).

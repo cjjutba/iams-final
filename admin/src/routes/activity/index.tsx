@@ -25,6 +25,7 @@ import {
   ScanFace,
   Settings as SettingsIcon,
   ShieldCheck,
+  SlidersHorizontal,
   StopCircle,
   UserCheck,
   UserCog,
@@ -41,9 +42,22 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
-import { useActivityEvents, useActivityStats } from '@/hooks/use-queries'
+import { Skeleton } from '@/components/ui/skeleton'
+import { useActivityEvents } from '@/hooks/use-queries'
 import { useActivityWs } from '@/hooks/use-activity-ws'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { cn } from '@/lib/utils'
@@ -186,20 +200,18 @@ export default function ActivityPage() {
 
   const [searchParams, setSearchParams] = useSearchParams()
 
-  // Filters parsed from URL — shareable, deep-linkable.
-  const selectedCategories = useMemo(() => {
-    const raw = searchParams.get('category')
-    if (!raw) return new Set<ActivityCategory>()
-    return new Set(
-      raw.split(',').filter(Boolean) as ActivityCategory[],
-    )
-  }, [searchParams])
-
-  const selectedSeverities = useMemo(() => {
-    const raw = searchParams.get('severity')
-    if (!raw) return new Set<ActivitySeverity>()
-    return new Set(raw.split(',').filter(Boolean) as ActivitySeverity[])
-  }, [searchParams])
+  // Filters parsed from URL — shareable, deep-linkable. Single-value to
+  // mirror the dropdown UX of the Students/Faculty/Admins registries; if
+  // a deep-link arrives with a comma list (legacy), we honor only the
+  // first entry for the dropdown display while still passing the raw
+  // string through to the REST/WS filters so the backend behaves
+  // identically.
+  const categoryFilter = (searchParams.get('category') ?? '').split(',')[0] as
+    | ActivityCategory
+    | ''
+  const severityFilter = (searchParams.get('severity') ?? '').split(',')[0] as
+    | ActivitySeverity
+    | ''
 
   const scheduleFilter = searchParams.get('schedule_id') ?? ''
   const studentFilter = searchParams.get('student_id') ?? ''
@@ -230,15 +242,13 @@ export default function ActivityPage() {
       since: isoMinutesAgo(15),
       limit: 200,
     }
-    if (selectedCategories.size)
-      out.category = Array.from(selectedCategories).join(',')
-    if (selectedSeverities.size)
-      out.severity = Array.from(selectedSeverities).join(',')
+    if (categoryFilter) out.category = categoryFilter
+    if (severityFilter) out.severity = severityFilter
     if (scheduleFilter) out.schedule_id = scheduleFilter
     if (studentFilter) out.student_id = studentFilter
     if (actorFilter) out.actor_id = actorFilter
     return out
-  }, [selectedCategories, selectedSeverities, scheduleFilter, studentFilter, actorFilter])
+  }, [categoryFilter, severityFilter, scheduleFilter, studentFilter, actorFilter])
 
   // Initial 15-min replay so the page isn't empty on mount.
   const { data: initialData, isLoading: isInitialLoading } = useActivityEvents(restFilters)
@@ -252,9 +262,6 @@ export default function ActivityPage() {
       setBufferedCount(0)
     }
   }, [initialData])
-
-  // Stats for the top strip.
-  const { data: stats } = useActivityStats(15)
 
   // Attach WS stream — filters are snapshotted at connect time; changing
   // them re-subscribes automatically.
@@ -310,23 +317,21 @@ export default function ActivityPage() {
     setPaused(false)
   }
 
-  const toggleCategory = (cat: ActivityCategory) => {
+  // Select handlers — `'all'` is the sentinel value the dropdown emits
+  // when the user clears the choice. We translate it to "drop the URL
+  // param" so a clean URL means no filter, matching how the Students
+  // registry reads its dropdown state.
+  const setCategoryFilter = (value: string) => {
     const next = new URLSearchParams(searchParams)
-    const current = new Set(selectedCategories)
-    if (current.has(cat)) current.delete(cat)
-    else current.add(cat)
-    if (current.size === 0) next.delete('category')
-    else next.set('category', Array.from(current).join(','))
+    if (!value || value === 'all') next.delete('category')
+    else next.set('category', value)
     setSearchParams(next)
   }
 
-  const toggleSeverity = (sev: ActivitySeverity) => {
+  const setSeverityFilter = (value: string) => {
     const next = new URLSearchParams(searchParams)
-    const current = new Set(selectedSeverities)
-    if (current.has(sev)) current.delete(sev)
-    else current.add(sev)
-    if (current.size === 0) next.delete('severity')
-    else next.set('severity', Array.from(current).join(','))
+    if (!value || value === 'all') next.delete('severity')
+    else next.set('severity', value)
     setSearchParams(next)
   }
 
@@ -356,10 +361,8 @@ export default function ActivityPage() {
   const visibleEvents = liveEvents.slice(0, MAX_VISIBLE)
   const hiddenInBuffer = liveEvents.length - visibleEvents.length
 
-  // Tally of warn/error in the visible window so the header can surface
-  // them as a one-glance health indicator. This is local to what the
-  // operator can actually see scrolling — not the global stats card,
-  // which already covers the 15-min window.
+  // Tally of warn/error in the visible window so the stream header can
+  // surface them as a one-glance health indicator.
   const visibleSeverityCounts = useMemo(() => {
     let warn = 0
     let error = 0
@@ -370,9 +373,111 @@ export default function ActivityPage() {
     return { warn, error }
   }, [visibleEvents])
 
+  if (isInitialLoading && liveEvents.length === 0) {
+    // Mirror the loaded layout (header + filters card + event stream card)
+    // so the cut-over to real data doesn't shift the page. Used only on
+    // first fetch before any WS events have streamed in.
+    return (
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div className="space-y-2">
+            <Skeleton className="h-7 w-44" />
+            <Skeleton className="h-4 w-[28rem] max-w-full" />
+          </div>
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-5 w-16 rounded-full" />
+            <Skeleton className="h-9 w-24 rounded-md" />
+            <Skeleton className="h-9 w-20 rounded-md" />
+            <Skeleton className="h-9 w-20 rounded-md" />
+          </div>
+        </div>
+
+        {/* Filters card */}
+        <Card>
+          <CardHeader className="pb-3">
+            <Skeleton className="h-4 w-16" />
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-col gap-2">
+              <Skeleton className="h-3 w-16" />
+              <div className="flex flex-wrap gap-2">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <Skeleton key={i} className="h-7 w-24 rounded-md" />
+                ))}
+              </div>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Skeleton className="h-3 w-16" />
+              <div className="flex flex-wrap gap-2">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <Skeleton key={i} className="h-7 w-20 rounded-md" />
+                ))}
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1">
+                <Skeleton className="h-3 w-20" />
+                <Skeleton className="h-9 w-full rounded-md" />
+              </div>
+              <div className="flex flex-col gap-1">
+                <Skeleton className="h-3 w-20" />
+                <Skeleton className="h-9 w-full rounded-md" />
+              </div>
+            </div>
+            <div className="flex items-center gap-2 pt-1">
+              <Skeleton className="h-9 w-20 rounded-md" />
+              <Skeleton className="h-9 w-24 rounded-md" />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Event stream card */}
+        <Card className="overflow-hidden">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <Skeleton className="h-4 w-28" />
+              <Skeleton className="h-3 w-20" />
+            </div>
+          </CardHeader>
+          <Separator />
+          <CardContent className="p-0">
+            <div className="divide-y divide-border/60">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div
+                  key={`event-skel-${String(i)}`}
+                  className="flex items-start gap-3 px-4 py-3"
+                >
+                  {/* Severity rail */}
+                  <Skeleton className="mt-1 h-12 w-0.5 rounded-full" />
+                  {/* Icon */}
+                  <Skeleton className="mt-0.5 h-5 w-5 rounded-sm" />
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <Skeleton className="h-3 w-32" />
+                      <Skeleton className="h-3 w-24" />
+                      <Skeleton className="h-3 w-20" />
+                    </div>
+                    <Skeleton className="h-4 w-3/4 max-w-md" />
+                  </div>
+                  <Skeleton className="h-3 w-16" />
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {/* Header — title on the left, all controls (filters + live + exports)
+          right-aligned in one cluster. Single row at desktop widths so the
+          page header looks like a proper toolbar; flex-wrap lets it spill
+          gracefully onto a second line on narrower viewports. The visual
+          divider between the filter group and the live/export group keeps
+          "what to show" and "what to do with it" readable as two intents. */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">System Activity</h1>
@@ -381,10 +486,27 @@ export default function ActivityPage() {
             Thesis-grade evidence; admin-only.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <FilterToolbar
+            categoryFilter={categoryFilter}
+            severityFilter={severityFilter}
+            onCategoryChange={setCategoryFilter}
+            onSeverityChange={setSeverityFilter}
+            scheduleInput={scheduleInput}
+            studentInput={studentInput}
+            scheduleFilter={scheduleFilter}
+            studentFilter={studentFilter}
+            onScheduleInputChange={setScheduleInput}
+            onStudentInputChange={setStudentInput}
+            onApplyTextFilters={applyTextFilters}
+            onClearAll={clearAllFilters}
+          />
+
+          <Separator orientation="vertical" className="mx-1 h-9" />
+
           <LiveIndicator connected={isConnected} paused={paused} />
           {paused ? (
-            <Button onClick={resume} variant="default" size="sm">
+            <Button onClick={resume} variant="default" size="sm" className="h-9">
               <Play className="h-4 w-4 mr-2" />
               Resume
               {bufferedCount > 0 && (
@@ -394,12 +516,12 @@ export default function ActivityPage() {
               )}
             </Button>
           ) : (
-            <Button onClick={() => setPaused(true)} variant="outline" size="sm">
+            <Button onClick={() => setPaused(true)} variant="outline" size="sm" className="h-9">
               <Pause className="h-4 w-4 mr-2" />
               Pause
             </Button>
           )}
-          <Button asChild variant="outline" size="sm">
+          <Button asChild variant="outline" size="sm" className="h-9">
             <a
               href={activityService.exportCsvUrl(restFilters)}
               target="_blank"
@@ -409,7 +531,7 @@ export default function ActivityPage() {
               CSV
             </a>
           </Button>
-          <Button asChild variant="outline" size="sm">
+          <Button asChild variant="outline" size="sm" className="h-9">
             <a
               href={activityService.exportJsonUrl(restFilters)}
               target="_blank"
@@ -422,157 +544,12 @@ export default function ActivityPage() {
         </div>
       </div>
 
-      {/* Live counters strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <Metric
-          label="Events / min"
-          value={stats ? stats.events_per_minute.toFixed(1) : '—'}
-        />
-        <Metric
-          label="Active sessions"
-          value={stats ? String(stats.active_session_count) : '—'}
-        />
-        <Metric
-          label="Attendance"
-          value={stats ? String(stats.by_category.attendance) : '—'}
-          hint="last 15 min"
-        />
-        <Metric
-          label="Recognition"
-          value={stats ? String(stats.by_category.recognition) : '—'}
-          hint="last 15 min"
-        />
-        <Metric
-          label="Warnings"
-          value={stats ? String(stats.by_severity.warn) : '—'}
-          hint="last 15 min"
-          emphasis={stats && stats.by_severity.warn > 0 ? 'warn' : undefined}
-        />
-        <Metric
-          label="Errors"
-          value={stats ? String(stats.by_severity.error) : '—'}
-          hint="last 15 min"
-          emphasis={stats && stats.by_severity.error > 0 ? 'error' : undefined}
-        />
-      </div>
-
-      {/* Filter bar */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-            Filters
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex flex-col gap-2">
-            <label className="text-xs text-muted-foreground">Category</label>
-            <div className="flex flex-wrap gap-2">
-              {CATEGORIES.map((cat) => {
-                const active = selectedCategories.has(cat)
-                return (
-                  <Button
-                    key={cat}
-                    size="sm"
-                    variant={active ? 'default' : 'outline'}
-                    onClick={() => toggleCategory(cat)}
-                    className="h-7 capitalize"
-                  >
-                    {cat}
-                  </Button>
-                )
-              })}
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <label className="text-xs text-muted-foreground">Severity</label>
-            <div className="flex flex-wrap gap-2">
-              {SEVERITIES.map((sev) => {
-                const active = selectedSeverities.has(sev)
-                return (
-                  <Button
-                    key={sev}
-                    size="sm"
-                    variant={active ? 'default' : 'outline'}
-                    onClick={() => toggleSeverity(sev)}
-                    className="h-7 capitalize"
-                  >
-                    {sev}
-                  </Button>
-                )
-              })}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-muted-foreground">
-                Schedule ID
-              </label>
-              <Input
-                value={scheduleInput}
-                onChange={(e) => setScheduleInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && applyTextFilters()}
-                placeholder="UUID"
-                className="h-9 font-mono text-xs"
-              />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-muted-foreground">
-                Student ID
-              </label>
-              <Input
-                value={studentInput}
-                onChange={(e) => setStudentInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && applyTextFilters()}
-                placeholder="UUID"
-                className="h-9 font-mono text-xs"
-              />
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 pt-1">
-            <Button onClick={applyTextFilters} size="sm">
-              Apply
-            </Button>
-            <Button
-              onClick={clearAllFilters}
-              size="sm"
-              variant="ghost"
-              disabled={
-                selectedCategories.size === 0 &&
-                selectedSeverities.size === 0 &&
-                !scheduleFilter &&
-                !studentFilter &&
-                !actorFilter
-              }
-            >
-              <X className="h-4 w-4 mr-1" />
-              Clear all
-            </Button>
-          </div>
-
-          {actorFilter && (
-            <div className="flex items-center gap-2 rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs">
-              <span className="font-medium text-blue-700 dark:text-blue-400">
-                Pinned to actor
-              </span>
-              <span className="font-mono text-[11px] text-foreground">
-                {actorFilter.slice(0, 8)}…{actorFilter.slice(-4)}
-              </span>
-              <button
-                type="button"
-                onClick={clearActorFilter}
-                className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium text-blue-700 transition hover:bg-blue-500/20 dark:text-blue-400"
-                aria-label="Clear actor filter"
-              >
-                <X className="h-3 w-3" />
-                Clear
-              </button>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {/* Actor pin breadcrumb — only rendered when deep-linked from a
+          user-detail page. Lives outside the toolbar cluster because it's
+          a one-line context affordance, not a control. */}
+      {actorFilter && (
+        <ActorPin actorId={actorFilter} onClear={clearActorFilter} />
+      )}
 
       {/* Live stream */}
       <Card className="overflow-hidden">
@@ -682,30 +659,181 @@ function LiveIndicator({
   )
 }
 
-function Metric({
-  label,
-  value,
-  hint,
-  emphasis,
+/**
+ * Filter toolbar — Select-dropdown cluster matching the Students /
+ * Faculty / Admins registries.
+ *
+ * Layout: [Category ▾] [Severity ▾] [More ▾] [Clear]
+ *
+ * Why dropdowns instead of toggle chips:
+ *   - Visual consistency with the rest of the admin portal: every
+ *     other registry-style page filters via 130–150px-wide Select
+ *     triggers, so this page now looks like it belongs.
+ *   - Single-value semantics fit how operators actually filter here
+ *     ("show me only errors", "only attendance events"). Multi-select
+ *     was supported by the old chip UI but no caller ever generated
+ *     deep-links that used it.
+ *   - The Schedule / Student UUID inputs stay behind a "More" popover
+ *     because they're deep-link affordances rarely typed by hand —
+ *     the Students page has no equivalent so there's no consistent
+ *     analogue to copy; a popover keeps the toolbar height identical
+ *     to other pages while preserving the capability.
+ *
+ * The actor-pin breadcrumb (when deep-linked from a user-detail page)
+ * is rendered separately below the header — it's a context affordance,
+ * not a control, and folding it into the toolbar would crowd the row.
+ */
+function FilterToolbar({
+  categoryFilter,
+  severityFilter,
+  onCategoryChange,
+  onSeverityChange,
+  scheduleInput,
+  studentInput,
+  scheduleFilter,
+  studentFilter,
+  onScheduleInputChange,
+  onStudentInputChange,
+  onApplyTextFilters,
+  onClearAll,
 }: {
-  label: string
-  value: string
-  hint?: string
-  emphasis?: 'warn' | 'error'
+  categoryFilter: ActivityCategory | ''
+  severityFilter: ActivitySeverity | ''
+  onCategoryChange: (value: string) => void
+  onSeverityChange: (value: string) => void
+  scheduleInput: string
+  studentInput: string
+  scheduleFilter: string
+  studentFilter: string
+  onScheduleInputChange: (v: string) => void
+  onStudentInputChange: (v: string) => void
+  onApplyTextFilters: () => void
+  onClearAll: () => void
 }) {
-  const valueClass =
-    emphasis === 'error'
-      ? 'text-red-700 dark:text-red-300'
-      : emphasis === 'warn'
-        ? 'text-amber-700 dark:text-amber-300'
-        : ''
+  const idFilterCount = (scheduleFilter ? 1 : 0) + (studentFilter ? 1 : 0)
+  const hasAnyFilter =
+    !!categoryFilter ||
+    !!severityFilter ||
+    !!scheduleFilter ||
+    !!studentFilter
+
   return (
-    <div className="rounded-lg border bg-card p-3">
-      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
-      <div className={`text-xl font-semibold mt-0.5 ${valueClass}`}>{value}</div>
-      {hint && <div className="text-[11px] text-muted-foreground">{hint}</div>}
+    <div className="flex flex-wrap items-center gap-2">
+      <Select
+        value={categoryFilter || 'all'}
+        onValueChange={onCategoryChange}
+      >
+        <SelectTrigger className="w-[170px] h-9">
+          <SelectValue placeholder="Category" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All categories</SelectItem>
+          {CATEGORIES.map((cat) => (
+            <SelectItem key={cat} value={cat} className="capitalize">
+              {cat}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <Select
+        value={severityFilter || 'all'}
+        onValueChange={onSeverityChange}
+      >
+        <SelectTrigger className="w-[160px] h-9">
+          <SelectValue placeholder="Severity" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All severities</SelectItem>
+          {SEVERITIES.map((sev) => (
+            <SelectItem key={sev} value={sev} className="capitalize">
+              {sev}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button variant="outline" className="h-9">
+            <SlidersHorizontal className="h-3.5 w-3.5 mr-1.5" />
+            More
+            {idFilterCount > 0 && (
+              <Badge variant="secondary" className="ml-1.5 h-4 px-1">
+                {idFilterCount}
+              </Badge>
+            )}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-80 space-y-3">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground">
+              Schedule ID
+            </label>
+            <Input
+              value={scheduleInput}
+              onChange={(e) => onScheduleInputChange(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && onApplyTextFilters()}
+              placeholder="UUID"
+              className="h-8 font-mono text-xs"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground">
+              Student ID
+            </label>
+            <Input
+              value={studentInput}
+              onChange={(e) => onStudentInputChange(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && onApplyTextFilters()}
+              placeholder="UUID"
+              className="h-8 font-mono text-xs"
+            />
+          </div>
+          <Button onClick={onApplyTextFilters} size="sm" className="w-full">
+            Apply
+          </Button>
+        </PopoverContent>
+      </Popover>
+
+      {hasAnyFilter && (
+        <Button
+          onClick={onClearAll}
+          variant="ghost"
+          size="sm"
+          className="h-9 px-2 text-muted-foreground"
+        >
+          Clear
+        </Button>
+      )}
+    </div>
+  )
+}
+
+function ActorPin({
+  actorId,
+  onClear,
+}: {
+  actorId: string
+  onClear: () => void
+}) {
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-1.5 text-xs">
+      <span className="font-medium text-blue-700 dark:text-blue-400">
+        Pinned to actor
+      </span>
+      <span className="font-mono text-[11px] text-foreground">
+        {actorId.slice(0, 8)}…{actorId.slice(-4)}
+      </span>
+      <button
+        type="button"
+        onClick={onClear}
+        className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium text-blue-700 transition hover:bg-blue-500/20 dark:text-blue-400"
+        aria-label="Clear actor filter"
+      >
+        <X className="h-3 w-3" />
+        Clear
+      </button>
     </div>
   )
 }

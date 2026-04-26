@@ -1,4 +1,4 @@
-import { useMemo, useState, useTransition } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { type ColumnDef } from '@tanstack/react-table'
@@ -44,6 +44,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import {
   useUsers,
   useDeactivateUser,
@@ -233,7 +242,6 @@ export default function UsersPage() {
   const { data: users = [], isLoading } = useUsers(queryParams)
 
   const [searchQuery, setSearchQuery] = useState('')
-  const [, startSearchTransition] = useTransition()
 
   const filteredUsers = useMemo(() => {
     if (!searchQuery.trim()) return users
@@ -296,17 +304,97 @@ export default function UsersPage() {
     },
   ]
 
+  if (isLoading) {
+    // Mirror the loaded layout (header + role filter + toolbar + table +
+    // pagination) so the cut-over to real data doesn't shift the page.
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-7 w-44" />
+            <Skeleton className="h-4 w-36" />
+          </div>
+          <Skeleton className="h-9 w-[150px] rounded-md" />
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between gap-4 py-4">
+            <Skeleton className="h-9 w-full max-w-sm rounded-md" />
+          </div>
+
+          <div className="rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Student ID</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead className="w-[60px]" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <TableRow key={`users-skel-${String(i)}`}>
+                    <TableCell>
+                      <div className="space-y-1.5">
+                        <Skeleton className="h-4 w-40" />
+                        <Skeleton className="h-3 w-52" />
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-5 w-16 rounded-full" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-20" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-5 w-16 rounded-full" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-5 w-20 rounded-full" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-3 w-24" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="ml-auto h-8 w-8 rounded-md" />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          <div className="flex items-center justify-between px-2 py-4">
+            <Skeleton className="h-4 w-44" />
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-8 w-[70px] rounded-md" />
+              </div>
+              <div className="flex items-center gap-1">
+                <Skeleton className="h-8 w-8 rounded-md" />
+                <Skeleton className="h-8 w-8 rounded-md" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">User Management</h1>
           <p className="text-muted-foreground mt-1">
-            {isLoading
-              ? 'Loading users...'
-              : searchQuery.trim()
-                ? `${filteredUsers.length} of ${users.length} users`
-                : `${users.length} user${users.length !== 1 ? 's' : ''} total`}
+            {searchQuery.trim()
+              ? `${filteredUsers.length} of ${users.length} users`
+              : `${users.length} user${users.length !== 1 ? 's' : ''} total`}
           </p>
         </div>
         <Select value={roleFilter} onValueChange={setRoleFilter}>
@@ -328,7 +416,7 @@ export default function UsersPage() {
         isLoading={isLoading}
         searchPlaceholder="Search by name, email, role, ID, status..."
         globalFilter={searchQuery}
-        onGlobalFilterChange={(v) => startSearchTransition(() => setSearchQuery(v))}
+        onGlobalFilterChange={setSearchQuery}
         globalFilterFn={() => true}
         onRowClick={(row) => navigate(`/users/${row.id}`, { state: { role: row.role } })}
       />

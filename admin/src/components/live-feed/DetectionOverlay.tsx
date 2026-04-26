@@ -56,6 +56,18 @@ function colorForState(state: OverlayState): string {
   return COLOR_WARMING_UP
 }
 
+// Multi-word names ("Sean Myk Daniel", "Jana Crizzia", "Febtwel Adriana")
+// stretch the on-canvas label wider than the bbox itself, which looks bad
+// at classroom distance where the bbox is only ~80-120 px wide. The
+// attendance panel on the right still renders the full name; the overlay
+// just shows the first word for a quick at-a-glance identification.
+function firstNameOnly(fullName: string): string {
+  const trimmed = fullName.trim()
+  if (!trimmed) return trimmed
+  const space = trimmed.search(/\s/)
+  return space === -1 ? trimmed : trimmed.slice(0, space)
+}
+
 function labelForTrack(track: TrackInfo, state: OverlayState): string {
   if (state === 'spoof') {
     // Surface the fused MiniFASNet "real" probability so the operator
@@ -65,7 +77,7 @@ function labelForTrack(track: TrackInfo, state: OverlayState): string {
       : ''
     return `Spoof detected${score}`
   }
-  if (state === 'recognized' && track.name) return track.name
+  if (state === 'recognized' && track.name) return firstNameOnly(track.name)
   if (state === 'unknown') return 'Unknown'
   return 'Detecting…'
 }

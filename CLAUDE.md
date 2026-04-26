@@ -270,6 +270,77 @@ Operator workflows for the recognition layer:
 | `python -m scripts.calibrate_threshold --rooms EB226,EB227 [--csv /tmp/calib.csv]` | Sample N frames from each camera, dump per-user top-1 sim distribution, recommend threshold + margin. |
 | `python -m scripts.cctv_enroll --user-id <uuid> --room EB226 --captures 5` | Add 5 CCTV-domain embeddings to a student who has phone-side registered. Closes the cross-domain gap. Operator must keep ONE student in frame. |
 | `POST /api/v1/face/cctv-enroll/{user_id}` | Same as above via REST (admin-only). Reuses the always-on FrameGrabber if available. |
+| `python -m scripts.preflight_session [--all-today \| --schedule-id <uuid> \| --room EB226]` | **Pre-flight readiness check.** For every enrolled student × room in scope, classify recognition coverage as READY / LIKELY OK / AT RISK / NOT REGISTERED, and emit one-line copy-paste `cctv_enroll` commands for each flagged row. Run 5-10 min before a demo or class to surface students who would appear as "Unknown" cold. Default scope = sessions whose window contains "now"; `--all-today` lists every schedule on the current day_of_week. Exit codes: 0 all READY, 1 some need attention, 2 someone is NOT REGISTERED. |
+
+### Auto CCTV enrolment — sliding-window mode
+
+The `AutoCctvEnroller` service captures real CCTV embeddings in the
+background while sessions are running, with no operator action and no
+student UI. The 2026-04-26 plan
+([docs/plans/2026-04-26-auto-cctv-sliding-window/DESIGN.md](docs/plans/2026-04-26-auto-cctv-sliding-window/DESIGN.md))
+upgraded the original "fill-then-stop at cap=5" design to a continuous
+sliding-window architecture so the cluster can track real face drift
+across a term.
+
+How it works in practice:
+
+1. **Fill phase.** A student is recognised in EB226 → first 5 confident,
+   stable, well-spaced captures buffer → swap-safe gate runs → 5 rows
+   land in `face_embeddings` with label `cctv_eb226_<idx>`. Repeat
+   until the (user, room) reaches `AUTO_CCTV_ENROLL_LIFETIME_CAP=30`.
+2. **Sliding-window phase.** Past the cap, every new buffered batch
+   triggers eviction of the lowest-quality existing CCTV row(s) for
+   that (user, room) before insert. Quality = composite of recognition
+   confidence + crop sharpness (Laplacian variance). Sharper, more-
+   confident captures replace blurry, less-confident ones over time.
+3. **Daily throttle.** At most 2 replacement batches per (user, room)
+   per UTC day, so a single bad-lighting day cannot rewrite half the
+   cluster.
+4. **Swap-safe gate at every commit.** For each new capture, the
+   committer FAISS-searches the live index — if any other user's
+   existing embeddings come closer to the capture than the claimed
+   user's by more than `RECOGNITION_MARGIN`, the entire batch is
+   discarded. This is the structural defence against the 2026-04-25
+   identity-swap incident.
+
+Operator knobs (in `backend/.env.onprem`, see file for full commentary):
+
+```
+AUTO_CCTV_ENROLL_LIFETIME_CAP=30                # Hard upper bound per (user, room)
+AUTO_CCTV_ENROLL_REPLACEMENT_ENABLED=true       # false = legacy hard-stop at cap
+AUTO_CCTV_ENROLL_DAILY_REPLACEMENT_LIMIT=2      # Batches/day past cap, per (user, room)
+AUTO_CCTV_ENROLL_SWAP_SAFE_MARGIN=0.10          # Per-capture cross-user reject margin
+AUTO_CCTV_ENROLL_QUALITY_CONFIDENCE_WEIGHT=0.6  # Weight on confidence in quality score
+AUTO_CCTV_ENROLL_QUALITY_BLUR_WEIGHT=0.4        # Weight on sharpness in quality score
+AUTO_CCTV_ENROLL_BLUR_NORM_MAX=200.0            # Laplacian variance "very sharp" ceiling
+```
+
+**FAISS deletion caveat.** `IndexFlatIP` does not support native
+removal — eviction only purges the row from `face_embeddings` + the
+`faiss_manager.user_map`. The orphan vector remains in the underlying
+index but no top-K result can return it (no user_id maps to it).
+Each eviction increments `_orphans_since_boot` on the singleton; when
+that number gets large (>1000-ish, depends on student count) run
+`docker exec iams-api-gateway-onprem python -m scripts.rebuild_faiss`
+to compact the index. Not urgent — orphans are inert, just bloat.
+
+Operator sanity-check the auto-enroller is doing the right thing:
+
+```bash
+docker exec iams-api-gateway-onprem grep -E "auto-cctv:" /app/logs/app.log | tail -50
+```
+
+Look for lines like:
+- `buffered capture N/5 ... mode=fill` — fill phase, normal during a
+  student's first sessions in a room
+- `buffered capture N/5 ... mode=replace` — sliding-window phase,
+  cluster is at cap and we're considering a refresh
+- `COMMITTED N captures ... mode=replace ... evicted=K` — actual
+  replacement happened
+- `swap-safe gate failed` — a batch was discarded because one capture
+  matched a different user too closely; this is the safety net working
+- `daily replacement throttle reached` — (user, room) is at the daily
+  budget; further refresh will resume tomorrow UTC
 
 History of pain:
 
@@ -304,6 +375,113 @@ snap-then-lerp interpolator so boxes still feel responsive.
 Face registration (student APK → CameraX → upload) uses the same model
 server-side, so registered embeddings live in the same FAISS index and
 identity resolves immediately without a separate reindex.
+
+---
+
+## Passive liveness / anti-spoofing (MiniFASNet)
+
+Phones held up to the camera and printed photos used to pass identity
+recognition cleanly — ArcFace doesn't know it's looking at pixels-of-a-
+face vs. a real face. As of 2026-04-26 the realtime pipeline runs a
+fused MiniFASNet (Silent-Face-Anti-Spoofing, Apache-2.0) check on every
+detected bbox before recognition can commit, and any track flagged as
+spoof is suppressed from attendance updates.
+
+### Where it runs
+
+The two MiniFASNet ONNX submodels (~1.7 MB each) live alongside the
+buffalo_l static pack at `~/.insightface/models/minifasnet/` and are
+loaded by the **ML sidecar** with `CoreMLExecutionProvider` — same
+process that already serves SCRFD + ArcFace. The api-gateway in Docker
+proxies its per-frame liveness calls via `RemoteLivenessModel` over
+`host.docker.internal:8001/liveness`, mirroring the SCRFD/ArcFace path.
+
+```
+Docker api-gateway → POST /liveness (jpeg + bboxes) → sidecar
+                                                       ↓
+                                            MiniFASNetV2 (scale 2.7) +
+                                            MiniFASNetV1SE (scale 4.0)
+                                                       ↓
+                                            fused softmax "real" prob
+```
+
+### Tunables (`backend/.env.onprem`)
+
+```
+LIVENESS_ENABLED=true                # Master flag — false skips gating
+LIVENESS_REAL_THRESHOLD=0.5          # Fused real-prob below this = "spoof"
+LIVENESS_SPOOF_CONSECUTIVE=2         # K consecutive spoof verdicts to suppress
+LIVENESS_REAL_RECOVERY_FRAMES=3      # K consecutive real verdicts to un-suppress
+LIVENESS_RECHECK_INTERVAL_S=5.0      # How often each track is re-probed
+LIVENESS_MAX_PER_FRAME=10            # Per-frame budget cap
+```
+
+The K-of-N debounce (`SPOOF_CONSECUTIVE` + `REAL_RECOVERY_FRAMES`)
+prevents a single noisy verdict from flipping a real student to spoof or
+vice-versa. A new track is NOT pre-emptively marked spoof; only after
+`SPOOF_CONSECUTIVE` confirmed verdicts does suppression flip on.
+
+### One-time pack export
+
+```bash
+backend/venv/bin/pip install torch onnxscript            # ~700 MB, host venv only
+LIVENESS_UPSTREAM_DIR=/tmp/silent-face-anti-spoofing \
+    backend/venv/bin/python -m scripts.export_liveness_models
+./scripts/stop-ml-sidecar.sh && ./scripts/start-ml-sidecar.sh
+docker compose -f deploy/docker-compose.onprem.yml up -d --force-recreate api-gateway
+```
+
+The sidecar's `/health` will then report `liveness.loaded: true` and the
+gateway lifespan logs `Liveness backend bound — pack=...`.
+
+`docker compose restart` is **not** enough — env-file changes only get
+re-read on `up`/`recreate`. Use `--force-recreate` after editing env vars.
+
+### Failure policy
+
+- **Pack missing → degraded (not fatal).** Sidecar reports
+  `liveness.loaded=false`, gateway logs a warning and binds None for the
+  liveness backend, the realtime tracker treats every track as
+  liveness-unknown and recognition continues unimpeded.
+- **Per-call failure (sidecar HTTP error) → frame skip.** Tracker logs
+  once and proceeds. A flaky network blip never blanks the live overlay
+  or freezes recognition.
+- **Spoof verdict → recognition suppressed for this track.** WebSocket
+  payload still emits the track with `liveness_state="spoof"`; admin
+  overlay (`DetectionOverlay.tsx`) renders a red box with "Spoof
+  detected" + percentage instead of an identity binding.
+
+### Operator workflows
+
+| Action | How |
+|---|---|
+| Check sidecar status | `curl -s http://127.0.0.1:8001/health \| jq '.liveness'` |
+| Re-export ONNX pack | `LIVENESS_UPSTREAM_DIR=/tmp/silent-face-anti-spoofing backend/venv/bin/python -m scripts.export_liveness_models --force` |
+| Toggle off in prod | `LIVENESS_ENABLED=false` in `.env.onprem` + `docker compose ... up -d --force-recreate api-gateway` |
+| Tighten threshold | Raise `LIVENESS_REAL_THRESHOLD` (0.5 → 0.7) — more strict; will cause more false-spoofs on real but obscured faces |
+| Loosen sensitivity | Raise `LIVENESS_SPOOF_CONSECUTIVE` (2 → 4) — needs more confirmation before suppressing |
+
+### Known caveats
+
+- **Classroom-distance faces are near the model's training floor**
+  (~40–60 px). Single-frame accuracy degrades; the K-of-N debounce is
+  what makes it usable in practice.
+- **Per-track recheck cadence is 5 s** by default. A track that flips
+  from real-person to phone-screen (or the reverse) takes up to
+  `RECHECK_INTERVAL_S × max(SPOOF_CONSECUTIVE, REAL_RECOVERY_FRAMES)` to
+  catch up — ~15 s worst case.
+- **`docker compose restart` doesn't reload env files.** Always
+  `up -d --force-recreate api-gateway` after editing `.env.onprem`.
+- **The export uses `torch.onnx.export(..., dynamo=False)`** (legacy
+  TorchScript exporter). The new dynamo-based default writes weights to
+  a sidecar `.onnx.data` file via ONNX external-data format, which ORT
+  refuses to load when the InferenceSession's path-validation collides
+  with the external file lookup. The legacy exporter produces a single
+  self-contained ~2 MB ONNX file per submodel.
+- **`conv6_kernel` must match input size.** For 80x80 inputs (the deploy
+  variant) it's `(5, 5)`, computed as `((H+15)//16, (W+15)//16)` per
+  upstream `src/utility.py::get_kernel`. Default `(7, 7)` raises a
+  `size mismatch for conv_6_dw.conv.weight` on state_dict load.
 
 ---
 

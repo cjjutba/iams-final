@@ -31,7 +31,7 @@ from scipy.optimize import linear_sum_assignment
 from app.config import settings
 from app.services.ml.face_quality import assess_recognition_quality
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("iams.realtime_tracker")
 
 # Maximum re-verifications per frame to prevent storms with 50+ faces.
 # New/pending tracks are always recognized immediately (no limit).
@@ -156,6 +156,65 @@ class TrackIdentity:
     liveness_real_streak: int = 0
     liveness_suppressed: bool = False
 
+    # Most recent SCRFD detection score from this track's active frame.
+    # Refreshed every frame the track is matched to a detection; for a
+    # coasting track (is_active=False this frame) the last active value
+    # is retained. Used by the broadcast-time MIN_DISPLAY_DET_SCORE
+    # filter to suppress SCRFD false positives on non-face objects (e.g.
+    # water gallons, wall fixtures) that would otherwise render as
+    # "Unknown" boxes in the admin overlay. See settings.MIN_DISPLAY_DET_SCORE.
+    last_det_score: float = 0.0
+
+    # ──────────────────────────────────────────────────────────────────
+    # Diagnostic state for the admin Track Detail panel (added 2026-04-26
+    # to debug "why is this face Unknown?" scenarios). Captured at every
+    # decision branch in _commit_decision and at every track-not-searched
+    # branch upstream so the operator can see top-1 / top-2 sims and
+    # the exact reason the recognition didn't commit, instead of having
+    # to grep dozzle. Reset by ``RealtimeTracker.reset()``.
+    #
+    # ``last_decision_reason`` is one of (loose enum, kept as str for
+    # forward-compatibility):
+    #   - "matched"                        — happy path, recognised
+    #   - "below_threshold"                — top-1 sim below RECOGNITION_THRESHOLD
+    #   - "below_phone_only_threshold"     — top-1 cleared standard but missed phone-only bonus
+    #   - "ambiguous_margin"               — top-1 vs top-2 margin gate failed
+    #   - "swap_blocked"                   — vote-streak not reached for incumbent swap
+    #   - "mutex_demoted"                  — frame-mutex routed top-1 elsewhere
+    #   - "no_faiss_hit"                   — FAISS returned nothing close enough
+    #   - "orphaned_user_id"               — top-1 user_id not in DB
+    #   - "kps_implausible"                — landmark-sanity filter rejected
+    #   - "quality_gated"                  — crop quality below the gate
+    #   - "reverify_not_due"               — recognised track not due for re-search
+    #   - "no_embedding_budget"            — MAX_REVERIFIES_PER_FRAME exceeded
+    #   - "warming_up"                     — pending track within UNKNOWN_CONFIRM window
+    #   - "no_search_this_frame"           — generic catch-all
+    # ──────────────────────────────────────────────────────────────────
+    last_top1_user_id: str | None = None
+    last_top1_score: float = 0.0
+    last_top2_user_id: str | None = None
+    last_top2_score: float = 0.0
+    last_top1_name: str | None = None
+    last_top2_name: str | None = None
+    last_decision_reason: str = "no_search_this_frame"
+    last_decision_at: float = 0.0  # monotonic seconds
+    # Effective sim threshold the most recent decision used. With the
+    # phone-only bonus applied this is RECOGNITION_THRESHOLD +
+    # RECOGNITION_PHONE_ONLY_THRESHOLD_BONUS; otherwise the bare
+    # RECOGNITION_THRESHOLD. Lets the UI render the correct cutoff bar
+    # without re-deriving the per-user phone-only state client-side.
+    last_effective_threshold: float = 0.0
+    # True when the last decision went through FAISS (not e.g. warming
+    # up coast or reverify-not-due). Lets the UI distinguish
+    # "we looked and the result was X" from "we didn't look".
+    last_decision_searched: bool = False
+    # Did the swap-gate / frame-mutex patch the decision? Carried
+    # separately from ``last_decision_reason`` so the UI can render
+    # both ("blocked AND mutex-demoted" is meaningful when debugging
+    # cross-track contention).
+    last_swap_blocked: bool = False
+    last_mutex_demoted: bool = False
+
 
 @dataclass(slots=True)
 class IdentityTombstone:
@@ -254,6 +313,38 @@ class TrackResult:
     # checked yet (or the pack isn't loaded — clients treat as real).
     liveness_state: str = "unknown"  # "real" | "spoof" | "unknown"
     liveness_score: float = 0.0  # Fused MiniFASNet "real" softmax (0-1)
+
+    # ──────────────────────────────────────────────────────────────────
+    # Diagnostic fields for the admin Track Detail panel (added
+    # 2026-04-26 — distant-face plan v2). Surfaced verbatim from the
+    # parent ``TrackIdentity`` so the WS broadcaster never has to peek
+    # at internal tracker state. All fields are best-effort and
+    # back-compat-safe (older clients that ignore them keep working).
+    # ──────────────────────────────────────────────────────────────────
+    top1_user_id: str | None = None
+    top1_score: float = 0.0
+    top2_user_id: str | None = None
+    top2_score: float = 0.0
+    top1_name: str | None = None
+    top2_name: str | None = None
+    decision_reason: str = "no_search_this_frame"
+    effective_threshold: float = 0.0
+    decision_searched: bool = False
+    swap_blocked: bool = False
+    mutex_demoted: bool = False
+    # Lifetime peak similarity for this track. Lets the UI show "best
+    # 0.61" even when the current frame is 0.40 — useful for diagnosing
+    # tracks that briefly recognised, then got knocked back to warming.
+    best_score_seen: float = 0.0
+    # Number of consecutive UNKNOWN_CONFIRM misses on this track. The UI
+    # can render "3/5 misses, will commit to Unknown after 2 more" so
+    # the operator knows whether the system is about to give up.
+    unknown_attempts: int = 0
+    # Total frames the underlying ByteTrack has held this id. Brand-new
+    # tracks should be in warming_up legitimately; old tracks stuck in
+    # unknown after many frames are a different failure mode worth
+    # surfacing differently.
+    frames_seen: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -410,6 +501,16 @@ class RealtimeTracker:
         self._timing_log_every: int = 5
         self._timing_log_counter: int = 0
 
+        # Distant-face plan 2026-04-26 Phase 3 — tiled detection state.
+        # Lazy-init: built on the first ``process()`` call once we know
+        # the frame dimensions. Reused across frames so the MOG2
+        # background model accumulates context (otherwise every frame
+        # would be treated as fully "active" and motion-gating would be
+        # a no-op).
+        self._tile_rects: list | None = None  # filled on first frame
+        self._tile_rects_for_dims: tuple[int, int] | None = None
+        self._motion_subtractor = None  # cv2.BackgroundSubtractorMOG2 | None
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -477,7 +578,16 @@ class RealtimeTracker:
         # 1. SCRFD detection only — no ArcFace / landmarks / genderage.
         # ------------------------------------------------------------------
         t_det_start = time.monotonic()
-        raw_dets = self._insight.detect(frame) if self._insight.app else []
+        if not self._insight.app:
+            raw_dets = []
+        elif settings.RECOGNITION_TILED_DETECTION_ENABLED:
+            # Distant-face plan 2026-04-26 Phase 3 — tiled detection
+            # path. Only active when the flag is on AND the bound
+            # backend exposes detect_tiled (both the in-process model
+            # and the sidecar proxy do, but unit-test mocks may not).
+            raw_dets = self._detect_tiled_dispatch(frame)
+        else:
+            raw_dets = self._insight.detect(frame)
 
         # Landmark-sanity filter — a real face has eyes above the nose
         # above the mouth, eyes horizontally separated, and a face-height
@@ -773,6 +883,20 @@ class RealtimeTracker:
             identity.last_seen = now
             identity.frames_seen += 1
 
+            # Refresh per-frame SCRFD score so the broadcast-time
+            # MIN_DISPLAY_DET_SCORE filter can suppress un-recognised tracks
+            # that linger at low detection confidence (typical SCRFD false
+            # positives on non-face objects). Wrapped in try/except because
+            # ``tracked.confidence`` is technically optional on
+            # ``supervision.Detections`` — a missing array means no SCRFD
+            # confidence is available, in which case we leave the previous
+            # value alone (don't reset to 0.0, that would suppress real
+            # tracks on the rare frame where confidence is unavailable).
+            try:
+                identity.last_det_score = float(tracked.confidence[i])
+            except Exception:
+                pass
+
             # Compute normalized center for static face detection
             norm_cx = (float(bbox[0]) + float(bbox[2])) / 2.0 / self._frame_w
             norm_cy = (float(bbox[1]) + float(bbox[3])) / 2.0 / self._frame_h
@@ -864,6 +988,7 @@ class RealtimeTracker:
                             status=d_status, is_active=True,
                             recognition_state=d_state,
                             liveness_state=l_state, liveness_score=l_score,
+                            **self._diagnostic_fields(identity),
                         ))
                         continue
 
@@ -995,20 +1120,85 @@ class RealtimeTracker:
                     recognition_state=d_state,
                     liveness_state=l_state,
                     liveness_score=l_score,
+                    **self._diagnostic_fields(identity),
                 )
             )
+
+        # 5a. Identity hand-off — ByteTrack ID-switch recovery.
+        #
+        # Before we paint coasting boxes for any recognised track that
+        # was lost this frame, try to re-attach those identities to the
+        # newborn pending tracks they likely *became*. A face moving
+        # faster than ByteTrack's IoU + Kalman gate can follow at the
+        # current ML inference cadence will get a brand-new track ID on
+        # the new bbox; without this pass the operator sees the old
+        # track painted at the OLD position (the ghost) for up to
+        # ``TRACK_COAST_DISPLAY_S`` AND a separate "Detecting…" box on
+        # the actual face waiting for FAISS to re-confirm.
+        #
+        # The hand-off helper is strict about uniqueness: only commits
+        # when one lost track ↔ one newborn pair survives the proximity
+        # filter. Ambiguous neighbourhoods fall through to the existing
+        # coasting + graveyard path. See the IDENTITY_HANDOFF_* docstring
+        # in app.config for the full safety story.
+        transfers = self._perform_identity_handoff(active_track_ids, now)
+        if transfers:
+            # Newborns that just inherited need their TrackResult rebuilt
+            # so the broadcast carries the inherited identity instead of
+            # the placeholder "Detecting…" they were originally appended
+            # with. Recognition_state flips to "recognized" via
+            # _get_display_identity (which reads the freshly-mutated
+            # identity_cache), so the overlay paints the green name
+            # immediately on the same frame.
+            updated: list[TrackResult] = []
+            for r in results:
+                if r.track_id in transfers:
+                    d_uid, d_name, d_conf, d_status, d_state = self._get_display_identity(
+                        r.track_id, now
+                    )
+                    _ident = self._identity_cache.get(r.track_id)
+                    l_state, l_score = self._liveness_fields(_ident)
+                    updated.append(
+                        TrackResult(
+                            track_id=r.track_id,
+                            bbox=r.bbox,
+                            velocity=r.velocity,
+                            user_id=d_uid,
+                            name=d_name,
+                            confidence=d_conf,
+                            status=d_status,
+                            is_active=r.is_active,
+                            recognition_state=d_state,
+                            liveness_state=l_state,
+                            liveness_score=l_score,
+                            **self._diagnostic_fields(_ident),
+                        )
+                    )
+                else:
+                    updated.append(r)
+            results = updated
 
         # 5b. Add coasting tracks: recognized tracks (or held tracks) that are
         # not detected this frame but were recently seen. This prevents bounding
         # box blinking when SCRFD misses a face for 1-2 frames.
+        #
+        # Cap is ``TRACK_COAST_DISPLAY_S`` (separate from
+        # ``TRACK_LOST_TIMEOUT``): after the display cap expires, we stop
+        # painting the coasting box but the cached identity stays alive
+        # until the longer ``TRACK_LOST_TIMEOUT`` so a re-detection that
+        # lands within the longer window still resumes the same track ID
+        # and a graveyard tombstone can form. Decoupling the two stops
+        # the "ghost lingers for ~3 s" UX without sacrificing the
+        # graveyard's spatial-hint coverage.
+        coast_cap = settings.TRACK_COAST_DISPLAY_S
         for tid, identity in self._identity_cache.items():
             if tid in active_track_ids:
                 continue  # Already in results
             if identity.last_bbox is None:
                 continue
             age = now - identity.last_seen
-            if age > settings.TRACK_LOST_TIMEOUT:
-                continue  # Too old, let it expire
+            if age > coast_cap:
+                continue  # Display gate: stop painting (cache may still hold)
 
             d_uid, d_name, d_conf, d_status, d_state = self._get_display_identity(tid, now)
             if d_status != "recognized":
@@ -1028,6 +1218,7 @@ class RealtimeTracker:
                     recognition_state=d_state,
                     liveness_state=l_state,
                     liveness_score=l_score,
+                    **self._diagnostic_fields(identity),
                 )
             )
 
@@ -1035,6 +1226,17 @@ class RealtimeTracker:
         # 4. Batch FAISS search for all tracks that earned an embedding
         #    this frame.
         # ------------------------------------------------------------------
+        # Drop any newborn that just inherited an identity via the
+        # hand-off pass: FAISS shouldn't second-guess on the same frame
+        # we transferred. Next frame's normal re-verify cadence will
+        # confirm or correct as usual via the swap-gate.
+        if transfers:
+            inherited_ids = set(transfers.keys())
+            pending_recognitions = [
+                entry
+                for entry in pending_recognitions
+                if entry[0].track_id not in inherited_ids
+            ]
         t_faiss_ms = 0.0
         if pending_recognitions:
             t_faiss_start = time.monotonic()
@@ -1046,7 +1248,8 @@ class RealtimeTracker:
             for r in results:
                 if r.track_id in self._identity_cache:
                     d_uid, d_name, d_conf, d_status, d_state = self._get_display_identity(r.track_id, now)
-                    l_state, l_score = self._liveness_fields(self._identity_cache.get(r.track_id))
+                    _ident = self._identity_cache.get(r.track_id)
+                    l_state, l_score = self._liveness_fields(_ident)
                     updated.append(TrackResult(
                         track_id=r.track_id,
                         bbox=r.bbox,
@@ -1059,6 +1262,7 @@ class RealtimeTracker:
                         recognition_state=d_state,
                         liveness_state=l_state,
                         liveness_score=l_score,
+                        **self._diagnostic_fields(_ident),
                     ))
                 else:
                     updated.append(r)
@@ -1091,6 +1295,10 @@ class RealtimeTracker:
                     # immutable by design). Liveness state stays with
                     # the demoted track — its liveness verdict is
                     # independent of which user_id won the dedup.
+                    # Diagnostic state is preserved verbatim, but the
+                    # mutex_demoted flag is forced True so the UI knows
+                    # this track lost a cross-batch contention even
+                    # though it didn't go through the in-batch Hungarian.
                     deduped_results[existing_idx] = TrackResult(
                         track_id=existing.track_id,
                         bbox=existing.bbox,
@@ -1103,6 +1311,20 @@ class RealtimeTracker:
                         recognition_state="warming_up",
                         liveness_state=existing.liveness_state,
                         liveness_score=existing.liveness_score,
+                        top1_user_id=existing.top1_user_id,
+                        top1_score=existing.top1_score,
+                        top2_user_id=existing.top2_user_id,
+                        top2_score=existing.top2_score,
+                        top1_name=existing.top1_name,
+                        top2_name=existing.top2_name,
+                        decision_reason="mutex_demoted",
+                        effective_threshold=existing.effective_threshold,
+                        decision_searched=existing.decision_searched,
+                        swap_blocked=existing.swap_blocked,
+                        mutex_demoted=True,
+                        best_score_seen=existing.best_score_seen,
+                        unknown_attempts=existing.unknown_attempts,
+                        frames_seen=existing.frames_seen,
                     )
                     seen_users[r.user_id] = len(deduped_results)
                     deduped_results.append(r)
@@ -1120,6 +1342,20 @@ class RealtimeTracker:
                         recognition_state="warming_up",
                         liveness_state=r.liveness_state,
                         liveness_score=r.liveness_score,
+                        top1_user_id=r.top1_user_id,
+                        top1_score=r.top1_score,
+                        top2_user_id=r.top2_user_id,
+                        top2_score=r.top2_score,
+                        top1_name=r.top1_name,
+                        top2_name=r.top2_name,
+                        decision_reason="mutex_demoted",
+                        effective_threshold=r.effective_threshold,
+                        decision_searched=r.decision_searched,
+                        swap_blocked=r.swap_blocked,
+                        mutex_demoted=True,
+                        best_score_seen=r.best_score_seen,
+                        unknown_attempts=r.unknown_attempts,
+                        frames_seen=r.frames_seen,
                     ))
                 continue
             if r.user_id:
@@ -1143,6 +1379,12 @@ class RealtimeTracker:
             if not is_dup:
                 deduped_unknown.append(track)
         results = known_tracks + deduped_unknown
+
+        # 7c. Display-time SCRFD score floor (added 2026-04-26).
+        # See ``_apply_display_score_filter`` for the rationale; isolated
+        # so the filter can be unit-tested without spinning up the full
+        # SCRFD + ByteTrack + FAISS stack.
+        results = self._apply_display_score_filter(results)
 
         # 8. Expire lost tracks
         self._expire_lost_tracks(now, active_track_ids)
@@ -1186,6 +1428,12 @@ class RealtimeTracker:
         # new session always fires (even if the same student was throttled
         # 1 s before the previous session ended).
         self._evidence_last_submit.clear()
+        # Distant-face plan 2026-04-26 Phase 3 — drop tile + motion
+        # state so a swap_camera with a different field-of-view
+        # recomputes geometry on the first new frame.
+        self._tile_rects = None
+        self._tile_rects_for_dims = None
+        self._motion_subtractor = None
 
     # ------------------------------------------------------------------
     # Internals
@@ -1309,6 +1557,36 @@ class RealtimeTracker:
         ):
             return "unknown"
         return "warming_up"
+
+    def _diagnostic_fields(self, identity: TrackIdentity | None) -> dict:
+        """Map per-track diagnostic state into the kwargs the TrackResult
+        constructor accepts (added 2026-04-26).
+
+        Returns an empty/default dict when ``identity`` is None so coast
+        / fallback paths don't blow up trying to spread Nothing.
+
+        The fields here are the broadcast-side surface of the
+        ``last_*`` snapshot maintained by ``_record_decision_diagnostic``
+        + ``_record_no_search_diagnostic``. Pure read; never mutates.
+        """
+        if identity is None:
+            return {}
+        return {
+            "top1_user_id": identity.last_top1_user_id,
+            "top1_score": float(identity.last_top1_score),
+            "top1_name": identity.last_top1_name,
+            "top2_user_id": identity.last_top2_user_id,
+            "top2_score": float(identity.last_top2_score),
+            "top2_name": identity.last_top2_name,
+            "decision_reason": identity.last_decision_reason,
+            "effective_threshold": float(identity.last_effective_threshold),
+            "decision_searched": bool(identity.last_decision_searched),
+            "swap_blocked": bool(identity.last_swap_blocked),
+            "mutex_demoted": bool(identity.last_mutex_demoted),
+            "best_score_seen": float(identity.best_score_seen),
+            "unknown_attempts": int(identity.unknown_attempts),
+            "frames_seen": int(identity.frames_seen),
+        }
 
     @staticmethod
     def _liveness_fields(identity: TrackIdentity | None) -> tuple[str, float]:
@@ -2165,6 +2443,115 @@ class RealtimeTracker:
                     d.is_ambiguous = True  # so commit treats this as a non-match
                     d.mutex_demoted = True
 
+    def _record_decision_diagnostic(
+        self,
+        identity: TrackIdentity,
+        d: "_BatchDecision",
+        reason: str,
+        effective_threshold: float,
+        now: float,
+    ) -> None:
+        """Snapshot the FAISS decision into ``identity`` for the live UI.
+
+        Called at the end of ``_commit_decision`` for every track that
+        went through FAISS this frame. The Track Detail panel uses this
+        to render top-1 / top-2 / decision_reason without the operator
+        needing to grep dozzle.
+
+        Diagnostic-only — does NOT influence ``recognition_state`` or
+        any matching logic.
+        """
+        identity.last_top1_user_id = d.top1_user_id
+        identity.last_top1_score = float(d.top1_score)
+        identity.last_top1_name = (
+            self._resolve_name(d.top1_user_id) if d.top1_user_id else None
+        )
+        identity.last_top2_user_id = d.top2_user_id
+        identity.last_top2_score = float(d.top2_score)
+        identity.last_top2_name = (
+            self._resolve_name(d.top2_user_id) if d.top2_user_id else None
+        )
+        identity.last_decision_reason = reason
+        identity.last_decision_at = now
+        identity.last_effective_threshold = float(effective_threshold)
+        identity.last_decision_searched = True
+        identity.last_swap_blocked = bool(d.swap_blocked)
+        identity.last_mutex_demoted = bool(d.mutex_demoted)
+
+    def _record_no_search_diagnostic(
+        self,
+        identity: TrackIdentity,
+        reason: str,
+        now: float,
+    ) -> None:
+        """Snapshot a "track not searched this frame" decision.
+
+        Used by branches outside ``_recognize_batch``: kps-implausible
+        rejection upstream, quality-gate skips, re-verify-not-due,
+        embedding-budget exhaustion. Preserves the previous top-1 /
+        top-2 values from the last actual search so the panel keeps
+        showing useful numbers even when the most recent frame had no
+        FAISS work to do.
+        """
+        identity.last_decision_reason = reason
+        identity.last_decision_at = now
+        identity.last_decision_searched = False
+
+    def _classify_commit_reason(
+        self,
+        d: "_BatchDecision",
+        identity: TrackIdentity,
+        is_ambiguous: bool,
+    ) -> str:
+        """Map a finalised ``_BatchDecision`` to a diagnostic reason string.
+
+        Order of precedence matters: a frame-mutex demotion that ALSO
+        had its swap blocked reports as "mutex_demoted" because that's
+        the reason the operator would actually want surfaced (it's the
+        more "interesting" event of the two).
+        """
+        if d.user_id is not None and not is_ambiguous:
+            return "matched"
+        if d.mutex_demoted:
+            return "mutex_demoted"
+        if d.swap_blocked:
+            return "swap_blocked"
+        if d.top1_user_id is None:
+            return "no_faiss_hit"
+        if d.top1_score < settings.RECOGNITION_THRESHOLD:
+            return "below_threshold"
+        if (
+            d.top1_user_id is not None
+            and d.top1_user_id in self._phone_only
+            and d.top1_score < (
+                settings.RECOGNITION_THRESHOLD
+                + settings.RECOGNITION_PHONE_ONLY_THRESHOLD_BONUS
+            )
+        ):
+            return "below_phone_only_threshold"
+        # Resolved-name lookup happens in _gather_decisions and nulls
+        # user_id when the FAISS hit is orphaned — surface that as a
+        # distinct reason.
+        if d.top1_user_id is not None and self._resolve_name(d.top1_user_id) is None:
+            return "orphaned_user_id"
+        # Ambiguous flag with everything else cleared = top-1/top-2
+        # margin gate caught it (handled inside FAISS search_with_margin).
+        return "ambiguous_margin"
+
+    def _effective_threshold_for(self, user_id: str | None) -> float:
+        """Return the actual sim cutoff used for committing a recognition.
+
+        Phone-only users get the +RECOGNITION_PHONE_ONLY_THRESHOLD_BONUS
+        bump on top of the standard threshold; everyone else gets the
+        bare RECOGNITION_THRESHOLD.
+        """
+        bonus = (
+            settings.RECOGNITION_PHONE_ONLY_THRESHOLD_BONUS
+            if user_id is not None and user_id in self._phone_only
+            else 0.0
+        )
+        return float(settings.RECOGNITION_THRESHOLD + bonus)
+
     def _commit_decision(self, d: _BatchDecision, now: float) -> None:
         """Phase 4 — apply the resolved decision to identity state + emit
         evidence.
@@ -2181,6 +2568,17 @@ class RealtimeTracker:
         resolved_name = d.resolved_name
         is_ambiguous = d.is_ambiguous
         search_embedding = d.search_embedding
+
+        # Diagnostic snapshot — captured BEFORE the branching below so
+        # both happy-path and miss-path commits write a record. Reason
+        # classification uses the post-mutex/post-swap state.
+        diag_reason = self._classify_commit_reason(d, identity, is_ambiguous)
+        diag_threshold = self._effective_threshold_for(
+            d.top1_user_id or d.user_id
+        )
+        self._record_decision_diagnostic(
+            identity, d, diag_reason, diag_threshold, now
+        )
 
         if user_id is not None and not is_ambiguous:
             prev_user_id = identity.user_id
@@ -2259,6 +2657,22 @@ class RealtimeTracker:
                 if not (d.swap_blocked or d.mutex_demoted or d.is_revalidation):
                     try:
                         from app.services.auto_cctv_enroller import auto_cctv_enroller
+                        # Compute Laplacian-variance sharpness on the live
+                        # crop and pass it to the enroller. The enroller
+                        # uses this as half of the composite quality_score
+                        # that drives sliding-window eviction (sharper
+                        # captures evict blurry ones). Cost: one BGR→gray
+                        # + one Laplacian on a small crop, ~0.3 ms — and
+                        # this branch only executes for confident
+                        # recognitions, well-spaced in time, so the per-
+                        # frame budget impact is negligible.
+                        offer_blur: float | None = None
+                        if d.live_crop is not None and d.live_crop.size > 0:
+                            try:
+                                gray = cv2.cvtColor(d.live_crop, cv2.COLOR_BGR2GRAY)
+                                offer_blur = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+                            except Exception:
+                                offer_blur = None
                         auto_cctv_enroller.offer_capture(
                             user_id=user_id,
                             track_id=identity.track_id,
@@ -2267,6 +2681,7 @@ class RealtimeTracker:
                             confidence=confidence,
                             frames_seen=identity.frames_seen,
                             room_stream_key=self._camera_id,
+                            blur_score=offer_blur,
                         )
                     except Exception:
                         logger.debug(
@@ -2820,6 +3235,130 @@ class RealtimeTracker:
 
         return True
 
+    def _detect_tiled_dispatch(self, frame: np.ndarray) -> list[dict]:
+        """Tiled-detection wrapper: motion-gate tiles, then call backend.
+
+        Distant-face plan 2026-04-26 Phase 3.
+
+        - Lazily lays out the tile rectangles once per (frame_w, frame_h);
+          if the input dims change mid-session (e.g. swap_camera with a
+          different cropped sibling), the cache is invalidated.
+        - When motion gating is enabled, computes a downscaled MOG2 mask
+          and selects only tiles whose pixels intersect motion blobs.
+          The backend's coarse pass remains active as a safety net so
+          stationary close-up faces never regress.
+        - Falls through to plain ``detect()`` on any failure (missing
+          backend method, motion subtraction error). Tiled detection is
+          additive recall — never blocks the wide-shot pipeline.
+        """
+        h, w = frame.shape[:2]
+        if h <= 0 or w <= 0:
+            return []
+
+        # Backend missing detect_tiled (e.g. unit-test mock) → fall back
+        # to plain detect so the flag flip stays safe.
+        if not hasattr(self._insight, "detect_tiled"):
+            logger.debug(
+                "RECOGNITION_TILED_DETECTION_ENABLED=true but backend has no "
+                "detect_tiled — falling back to plain detect()"
+            )
+            return self._insight.detect(frame)
+
+        # Lazy import — pulls cv2 BG-sub symbols only on tiled-active path.
+        from app.services.ml.tile_detection import (
+            compute_motion_mask,
+            compute_tile_rects,
+            tile_intersects_mask,
+        )
+
+        # Cache the tile layout per (w, h). Negligible CPU; recomputing
+        # every frame would still be cheap, but caching keeps the
+        # dispatch a hair faster.
+        if (
+            self._tile_rects is None
+            or self._tile_rects_for_dims != (w, h)
+        ):
+            try:
+                self._tile_rects = compute_tile_rects(
+                    frame_w=w,
+                    frame_h=h,
+                    cols=settings.RECOGNITION_TILE_COLS,
+                    rows=settings.RECOGNITION_TILE_ROWS,
+                    overlap_px=settings.RECOGNITION_TILE_OVERLAP_PX,
+                )
+                self._tile_rects_for_dims = (w, h)
+                logger.info(
+                    "Tile layout (re)computed for %dx%d: %d tiles, "
+                    "overlap=%dpx",
+                    w,
+                    h,
+                    len(self._tile_rects),
+                    settings.RECOGNITION_TILE_OVERLAP_PX,
+                )
+            except Exception:
+                logger.exception(
+                    "compute_tile_rects failed; falling back to plain detect()"
+                )
+                return self._insight.detect(frame)
+
+        active_tiles = self._tile_rects
+
+        # Motion-gating step. Skipped when disabled or when the
+        # subtractor's first ~10 frames are still spinning up the BG
+        # model (during warmup we keep all tiles active so we don't
+        # silently drop detections).
+        if (
+            settings.RECOGNITION_TILE_MOTION_GATING_ENABLED
+            and self._tile_rects is not None
+        ):
+            try:
+                if self._motion_subtractor is None:
+                    # detectShadows=True so we can threshold off shadows
+                    # (compute_motion_mask handles that). 500-frame history
+                    # ≈ 50 s at 10 fps — short enough that an empty
+                    # classroom doesn't keep "remembering" yesterday's
+                    # state, long enough that a student sitting still for
+                    # 30 s isn't fully absorbed into background.
+                    self._motion_subtractor = cv2.createBackgroundSubtractorMOG2(
+                        history=500,
+                        varThreshold=16,
+                        detectShadows=True,
+                    )
+                mask = compute_motion_mask(
+                    frame,
+                    self._motion_subtractor,
+                    downscale_dim=settings.RECOGNITION_TILE_MOTION_DOWNSCALE,
+                    dilation_px=settings.RECOGNITION_TILE_MOTION_DILATION_PX,
+                )
+                gated = [
+                    t
+                    for t in self._tile_rects
+                    if tile_intersects_mask(t, mask, w, h)
+                ]
+                # Empty gated list = no motion anywhere. The coarse pass
+                # still runs (configured via RECOGNITION_TILE_INCLUDE_COARSE),
+                # so an empty motion frame falls back to single full-frame
+                # detection rather than an empty result.
+                active_tiles = gated
+            except Exception:
+                logger.debug(
+                    "motion gating failed; passing all tiles to backend",
+                    exc_info=True,
+                )
+
+        try:
+            return self._insight.detect_tiled(
+                frame,
+                active_tiles,
+                include_coarse=settings.RECOGNITION_TILE_INCLUDE_COARSE,
+                ios_thresh=settings.RECOGNITION_TILE_NMM_IOS_THRESH,
+            )
+        except Exception:
+            logger.exception(
+                "detect_tiled failed; falling back to plain detect()"
+            )
+            return self._insight.detect(frame)
+
     def _log_timing(
         self,
         total_ms: float,
@@ -2852,6 +3391,55 @@ class RealtimeTracker:
             other_ms,
             tracks_emitted,
         )
+
+    def _apply_display_score_filter(
+        self,
+        results: list[TrackResult],
+    ) -> list[TrackResult]:
+        """Drop un-recognised active tracks whose SCRFD score is too low.
+
+        Targets the "SCRFD fired on a non-face object" class of false
+        positives (water gallons, ceiling fans, wall sockets) that linger
+        at det_score 0.30-0.45 and would otherwise render as a static
+        "Unknown" box in the admin overlay. Recognised tracks bypass the
+        filter — their FAISS identity binding is far stronger evidence
+        than per-frame SCRFD score noise. Coasting tracks (is_active=False)
+        are also exempt because the coasting code path in step 5b only
+        emits recognised tracks (see ``TRACK_COAST_DISPLAY_S``).
+
+        Internal tracker state is preserved either way — the filter is
+        purely cosmetic on the WS broadcast. If SCRFD scores higher on
+        the same track on a later frame, the box re-appears automatically;
+        if FAISS commits an identity, the track becomes "recognised" and
+        the filter no longer applies.
+
+        Set ``settings.MIN_DISPLAY_DET_SCORE = 0.0`` to disable the filter
+        and revert to legacy behaviour (every detection above
+        INSIGHTFACE_DET_THRESH gets broadcast).
+        """
+        min_display_score = float(getattr(settings, "MIN_DISPLAY_DET_SCORE", 0.0))
+        if min_display_score <= 0.0:
+            return results
+
+        filtered: list[TrackResult] = []
+        for r in results:
+            if not r.is_active:
+                filtered.append(r)
+                continue
+            # Recognised tracks bypass the filter. Use the per-track
+            # display state, NOT user_id alone — a mutex-demoted track
+            # can have user_id=None while its underlying identity is
+            # still bound, and we want to keep painting its bbox so the
+            # operator sees both faces tracked.
+            if r.recognition_state == "recognized":
+                filtered.append(r)
+                continue
+            ident = self._identity_cache.get(r.track_id)
+            track_score = ident.last_det_score if ident is not None else 0.0
+            if track_score >= min_display_score:
+                filtered.append(r)
+            # else: drop. No "warming_up" / "unknown" overlay rendered.
+        return filtered
 
     def _expire_lost_tracks(self, now: float, active_track_ids: set[int] | None = None) -> None:
         """Remove stale tracks from identity cache.
@@ -2953,6 +3541,215 @@ class RealtimeTracker:
             self._identity_graveyard.remove(tomb)
         except ValueError:
             pass
+
+    # ------------------------------------------------------------------
+    # Identity hand-off (ByteTrack ID-switch recovery)
+    # ------------------------------------------------------------------
+
+    def _perform_identity_handoff(
+        self, active_track_ids: set[int], now: float
+    ) -> dict[int, int]:
+        """Transfer identity from recently-lost recognised tracks onto
+        nearby newborn pending tracks. Returns ``{new_tid: old_tid}`` for
+        each transfer that committed.
+
+        See the ``IDENTITY_HANDOFF_*`` docstring in ``app.config`` for the
+        rationale + safety properties. Summary:
+
+        * Looks at every recognised track currently in ``_identity_cache``
+          that did NOT receive a detection this frame (ByteTrack lost it)
+          and was last seen within ``IDENTITY_HANDOFF_MAX_AGE_S``.
+        * Looks at every newborn pending track in ``active_track_ids``
+          that has been seen for at most ``IDENTITY_HANDOFF_MAX_FRAMES_SEEN``
+          frames and has no committed identity yet.
+        * Pairs them by Chebyshev bbox-center distance ≤
+          ``IDENTITY_HANDOFF_MAX_DIST_NORMALIZED``.
+        * Commits a transfer ONLY when the candidate set is unambiguous
+          on both sides (one lost track ↔ one newborn). Ambiguous groups
+          fall through to FAISS (which still has the graveyard hint as a
+          backup once the lost track ages out).
+
+        On commit:
+          * Identity fields (user_id, name, confidence, recognition_status,
+            anchor + buffer embeddings, hold state, oscillation history,
+            best_score_seen) are copied onto the newborn.
+          * ``first_seen`` is preserved so the warming_up wall-clock and
+            oscillation history don't reset.
+          * ``last_verified`` is bumped to ``now`` so the next re-verify
+            cadence starts cleanly.
+          * ``unknown_attempts`` is zeroed (we now have a committed binding).
+          * Liveness state stays per-track (the newborn keeps its own —
+            verdicts are tied to bbox geometry which differs).
+          * The lost track is deleted from ``_identity_cache`` and
+            ``_prev_bboxes`` immediately. The coasting loop in
+            ``process()`` won't paint a ghost for it.
+          * No graveyard tombstone is created — the identity already
+            lives on the newborn so a second hand-off would be wrong.
+        """
+        if not settings.IDENTITY_HANDOFF_ENABLED:
+            return {}
+        if not active_track_ids or not self._identity_cache:
+            return {}
+
+        max_age = float(settings.IDENTITY_HANDOFF_MAX_AGE_S)
+        max_dist = float(settings.IDENTITY_HANDOFF_MAX_DIST_NORMALIZED)
+        max_frames = int(settings.IDENTITY_HANDOFF_MAX_FRAMES_SEEN)
+
+        # ---- Eligible donors: lost recognised tracks ----
+        donors: list[tuple[int, TrackIdentity, float, float]] = []
+        for tid, identity in self._identity_cache.items():
+            if tid in active_track_ids:
+                continue
+            if identity.recognition_status != "recognized":
+                continue
+            if identity.user_id is None or identity.last_bbox is None:
+                continue
+            if (now - identity.last_seen) > max_age:
+                continue
+            cx = (identity.last_bbox[0] + identity.last_bbox[2]) / 2.0
+            cy = (identity.last_bbox[1] + identity.last_bbox[3]) / 2.0
+            donors.append((tid, identity, cx, cy))
+
+        if not donors:
+            return {}
+
+        # ---- Eligible recipients: newborn pending tracks ----
+        recipients: list[tuple[int, TrackIdentity, float, float]] = []
+        for tid in active_track_ids:
+            identity = self._identity_cache.get(tid)
+            if identity is None:
+                continue
+            if identity.recognition_status != "pending":
+                continue
+            if identity.frames_seen > max_frames:
+                continue
+            if identity.last_bbox is None:
+                continue
+            cx = (identity.last_bbox[0] + identity.last_bbox[2]) / 2.0
+            cy = (identity.last_bbox[1] + identity.last_bbox[3]) / 2.0
+            recipients.append((tid, identity, cx, cy))
+
+        if not recipients:
+            return {}
+
+        # ---- Pair candidates within Chebyshev distance ----
+        # Track per-side count so we can enforce strict 1:1 uniqueness
+        # before any commit. ``pair_matches`` carries (donor_tid,
+        # recipient_tid, distance) for every pair within range so the
+        # best-distance pair wins on ties.
+        pair_matches: list[tuple[int, int, float]] = []
+        donor_count: dict[int, int] = {}
+        recipient_count: dict[int, int] = {}
+        for d_tid, _, dcx, dcy in donors:
+            for r_tid, _, rcx, rcy in recipients:
+                dist = max(abs(dcx - rcx), abs(dcy - rcy))
+                if dist > max_dist:
+                    continue
+                pair_matches.append((d_tid, r_tid, dist))
+                donor_count[d_tid] = donor_count.get(d_tid, 0) + 1
+                recipient_count[r_tid] = recipient_count.get(r_tid, 0) + 1
+
+        if not pair_matches:
+            return {}
+
+        pair_matches.sort(key=lambda p: p[2])
+
+        transfers: dict[int, int] = {}
+        used_donors: set[int] = set()
+        used_recipients: set[int] = set()
+        for d_tid, r_tid, dist in pair_matches:
+            if d_tid in used_donors or r_tid in used_recipients:
+                continue
+            # Strict uniqueness: both sides must have exactly one viable
+            # counterpart in the candidate set. Anything more ambiguous
+            # falls through to FAISS + the graveyard.
+            if donor_count.get(d_tid, 0) != 1 or recipient_count.get(r_tid, 0) != 1:
+                continue
+
+            donor_id = self._identity_cache.get(d_tid)
+            recipient_id = self._identity_cache.get(r_tid)
+            if donor_id is None or recipient_id is None:
+                continue
+
+            self._apply_handoff(donor_id, recipient_id, now)
+            # Retire the donor immediately so the coasting loop skips it
+            # and no ghost box reaches the broadcast.
+            self._identity_cache.pop(d_tid, None)
+            self._prev_bboxes.pop(d_tid, None)
+
+            used_donors.add(d_tid)
+            used_recipients.add(r_tid)
+            transfers[r_tid] = d_tid
+
+            logger.info(
+                "Identity hand-off: track %d → %d for user %s (%s) "
+                "dist=%.3f age=%.2fs (ByteTrack ID-switch recovery)",
+                d_tid,
+                r_tid,
+                (donor_id.user_id or "?")[:8],
+                donor_id.name,
+                dist,
+                now - donor_id.last_seen,
+            )
+
+        return transfers
+
+    @staticmethod
+    def _apply_handoff(
+        donor: TrackIdentity, recipient: TrackIdentity, now: float
+    ) -> None:
+        """Copy identity state from a lost recognised track onto a newborn.
+
+        Pulled out so the per-field policy is auditable and so unit tests
+        can exercise the merge directly without needing a full pipeline.
+
+        Fields intentionally NOT copied:
+          * ``track_id``: stays as the recipient's own.
+          * ``first_seen``: stays as the recipient's first detection time
+            so newly visible tracks still trigger any first-seen-driven
+            book-keeping (e.g. evidence writer's first-detection event).
+          * ``last_seen``: kept on the recipient (it WAS detected this
+            frame; the donor was not).
+          * Liveness fields: spoof gating is a function of the live
+            bbox/frame, not identity. The recipient already received a
+            fresh verdict (or will on the next liveness batch).
+          * ``last_drift_time`` / ``drift_strike_count`` / ``last_embedding``:
+            drift bookkeeping resets on each new track — nothing to carry.
+        """
+        recipient.user_id = donor.user_id
+        recipient.name = donor.name
+        recipient.confidence = donor.confidence
+        recipient.recognition_status = donor.recognition_status
+        recipient.last_verified = now
+        recipient.anchor_embedding = donor.anchor_embedding
+        # Buffer extension preserves the temporal-aggregation context the
+        # donor had built up, so the recipient's next re-verify uses the
+        # mature mean instead of a single frame.
+        if donor.embedding_buffer:
+            for emb in donor.embedding_buffer:
+                recipient.embedding_buffer.append(emb)
+        # Hold window mirrors the donor so a re-verify mid-handoff doesn't
+        # flicker the green box back to "Detecting…".
+        recipient.held_user_id = donor.held_user_id
+        recipient.held_name = donor.held_name
+        recipient.held_confidence = donor.held_confidence
+        recipient.held_at = donor.held_at
+        # Lifetime peak stays — used by the warming_up gate.
+        recipient.best_score_seen = max(
+            recipient.best_score_seen, donor.best_score_seen
+        )
+        # We have a committed identity; nothing pending to confirm.
+        recipient.unknown_attempts = 0
+        # Carry oscillation history so a flap-prone identity doesn't get
+        # a clean slate just because ByteTrack swapped IDs on it.
+        if donor.swap_history:
+            for entry in donor.swap_history:
+                recipient.swap_history.append(entry)
+        recipient.oscillation_uncertain_until = donor.oscillation_uncertain_until
+        # Hint becomes redundant — we just bound the same identity.
+        recipient.hint_user_id = None
+        recipient.hint_user_name = None
+        recipient.hint_set_at = 0.0
 
     @staticmethod
     def _compute_iou(box_a: np.ndarray, box_b: np.ndarray) -> float:

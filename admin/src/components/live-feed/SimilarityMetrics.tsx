@@ -16,10 +16,13 @@ interface Props {
   isStale: boolean
 }
 
-// Matches backend `settings.RECOGNITION_THRESHOLD` (0.38) — close enough for a
-// visual threshold marker. Updated 2026-04-22 when it dropped from 0.50 → 0.38
-// alongside the sub-stream + buffalo_l swap. Keep in sync when re-tuning.
-const THRESHOLD = 0.38
+// Fallback when the backend doesn't emit a per-track effective threshold
+// (older builds pre-dating the 2026-04-26 diagnostic plumbing). Matches
+// the current default of 0.50 — keep loosely in sync with
+// settings.RECOGNITION_THRESHOLD if you ever ship a UI build before a
+// backend build, but the backend's per-track ``effective_threshold``
+// should always win when present (it accounts for the phone-only bonus).
+const FALLBACK_THRESHOLD = 0.5
 
 type RecognitionState = 'recognized' | 'warming_up' | 'unknown'
 
@@ -84,8 +87,15 @@ export function SimilarityMetrics({
   const config = stateConfig(state)
   const confidence = track?.confidence ?? 0
   const pct = Math.max(0, Math.min(100, confidence * 100))
-  const threshPct = THRESHOLD * 100
-  const aboveThreshold = confidence >= THRESHOLD
+  // Use the backend's per-track effective threshold when present
+  // (accounts for RECOGNITION_PHONE_ONLY_THRESHOLD_BONUS); fall back to
+  // the static default for older backend builds.
+  const threshold =
+    track?.effective_threshold && track.effective_threshold > 0
+      ? track.effective_threshold
+      : FALLBACK_THRESHOLD
+  const threshPct = threshold * 100
+  const aboveThreshold = confidence >= threshold
   const hasScore = !!track && state !== null
 
   const name = track?.name ?? fallbackName ?? 'Unresolved'
@@ -158,7 +168,7 @@ export function SimilarityMetrics({
                 : 'text-muted-foreground'
             }`}
           >
-            min {THRESHOLD.toFixed(2)}
+            min {threshold.toFixed(2)}
           </span>
         </div>
         <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-muted">

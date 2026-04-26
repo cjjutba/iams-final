@@ -1,4 +1,4 @@
-import { useMemo, useState, useTransition } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
 import { format } from 'date-fns'
@@ -22,6 +22,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { useAttendanceList } from '@/hooks/use-queries'
 import { attendanceService } from '@/services/attendance.service'
 import type { AttendanceRecord } from '@/types'
@@ -135,7 +144,6 @@ export default function AttendancePage() {
   const { data: records = [], isLoading } = useAttendanceList(queryParams)
 
   const [searchQuery, setSearchQuery] = useState('')
-  const [, startTransition] = useTransition()
 
   const filteredRecords = useMemo(() => {
     if (!searchQuery.trim()) return records
@@ -241,17 +249,99 @@ export default function AttendancePage() {
     </>
   )
 
+  if (isLoading) {
+    // Mirror the loaded layout (header + toolbar + table + pagination) so
+    // the cut-over to real data doesn't shift the page.
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-7 w-56" />
+            <Skeleton className="h-4 w-44" />
+          </div>
+          <Skeleton className="h-9 w-32 rounded-md" />
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between gap-4 py-4">
+            <Skeleton className="h-9 w-full max-w-sm rounded-md" />
+            <div className="flex items-center gap-2">
+              <Skeleton className="h-9 w-[150px] rounded-md" />
+              <Skeleton className="h-9 w-[150px] rounded-md" />
+              <Skeleton className="h-9 w-[140px] rounded-md" />
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Student</TableHead>
+                  <TableHead>Subject</TableHead>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Check-in</TableHead>
+                  <TableHead>Check-out</TableHead>
+                  <TableHead>Presence</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <TableRow key={`att-skel-${String(i)}`}>
+                    <TableCell>
+                      <Skeleton className="h-4 w-40" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-3 w-28" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-24" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-5 w-20 rounded-full" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-16" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-16" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-10" />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          <div className="flex items-center justify-between px-2 py-4">
+            <Skeleton className="h-4 w-44" />
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-8 w-[70px] rounded-md" />
+              </div>
+              <div className="flex items-center gap-1">
+                <Skeleton className="h-8 w-8 rounded-md" />
+                <Skeleton className="h-8 w-8 rounded-md" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Attendance Overview</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {isLoading
-              ? 'Loading...'
-              : hasFilters
-                ? `${filteredRecords.length} of ${records.length} records`
-                : `${records.length} attendance record${records.length !== 1 ? 's' : ''}`}
+            {hasFilters
+              ? `${filteredRecords.length} of ${records.length} records`
+              : `${records.length} attendance record${records.length !== 1 ? 's' : ''}`}
           </p>
         </div>
         <Button variant="outline" onClick={() => void handleExport()} disabled={exporting || records.length === 0}>
@@ -275,7 +365,7 @@ export default function AttendancePage() {
         isLoading={isLoading}
         searchPlaceholder="Search by student, subject, status, date..."
         globalFilter={searchQuery}
-        onGlobalFilterChange={(v) => startTransition(() => setSearchQuery(v))}
+        onGlobalFilterChange={setSearchQuery}
         globalFilterFn={() => true}
         toolbar={filterToolbar}
         onRowClick={(row) => navigate(`/users/${row.student_id}`, { state: { role: 'student' } })}

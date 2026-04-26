@@ -215,6 +215,56 @@ export default function ScheduleLivePage() {
     enabled: frameAlignEnabled,
   })
 
+  // Stale-frame TTL safety net (added 2026-04-26 alongside the
+  // backend identity-hand-off pass).
+  //
+  // Both the backend hand-off pass and the tightened coasting display
+  // cap (``TRACK_COAST_DISPLAY_S``) close the common-case "ghost
+  // bounding box" symptom — the operator sees the bbox follow the face
+  // smoothly and ID-switches from ByteTrack get reunited without a
+  // flash of "Detecting…". But neither protects against the catastrophic
+  // case where the backend hangs entirely or the WS connection silently
+  // stalls: in that scenario the last ``frame_update`` would keep
+  // painting forever, indistinguishable from "still alive but no
+  // detections".
+  //
+  // The watchdog: stamp ``Date.now()`` whenever a fresh ``latestFrame``
+  // arrives, and a 250 ms tick re-evaluates whether the latest frame is
+  // older than ``STALE_FRAME_TTL_MS``. When it is, we pass an empty
+  // tracks array to the overlay so the canvas clears — the operator
+  // gets immediate visual feedback that the data path is dead instead
+  // of trusting a frozen overlay.
+  //
+  // 1500 ms is comfortably longer than the worst expected frame
+  // interval (PROCESSING_FPS=5 → 200 ms; even a 3-frame skid stays
+  // under the budget) but short enough that a true stall surfaces
+  // within ~1.5 s.
+  const STALE_FRAME_TTL_MS = 1500
+  const lastFrameReceivedAtRef = useRef<number>(0)
+  useEffect(() => {
+    if (latestFrame) lastFrameReceivedAtRef.current = Date.now()
+  }, [latestFrame])
+  const [framesAreFresh, setFramesAreFresh] = useState(true)
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const last = lastFrameReceivedAtRef.current
+      // No frame yet? Treat as fresh — there's nothing to clear and we
+      // don't want a brief blank state during the WS handshake.
+      if (last === 0) {
+        setFramesAreFresh(true)
+        return
+      }
+      setFramesAreFresh(Date.now() - last <= STALE_FRAME_TTL_MS)
+    }, 250)
+    return () => window.clearInterval(id)
+  }, [])
+
+  const overlayTracks = useMemo(() => {
+    if (!latestFrame) return []
+    if (!framesAreFresh) return []
+    return frameAlignEnabled ? alignedTracks : (latestFrame.tracks ?? [])
+  }, [latestFrame, framesAreFresh, frameAlignEnabled, alignedTracks])
+
   const selectedTrackId = useTrackSelectionStore((s) => s.selectedTrackId)
   const selectTrack = useTrackSelectionStore((s) => s.select)
   const clearTrackSelection = useTrackSelectionStore((s) => s.clear)
@@ -620,12 +670,12 @@ export default function ScheduleLivePage() {
               {overlaysVisible && (
                 <>
                   <OverlayClickTargets
-                    tracks={latestFrame?.tracks ?? []}
+                    tracks={overlayTracks}
                     videoElement={playerRef.current?.videoElement ?? null}
                     videoSize={videoSize}
                   />
                   <DetectionOverlay
-                    tracks={frameAlignEnabled ? alignedTracks : (latestFrame?.tracks ?? [])}
+                    tracks={overlayTracks}
                     videoElement={playerRef.current?.videoElement ?? null}
                     videoSize={videoSize}
                     selectedTrackId={selectedTrackId}

@@ -64,6 +64,37 @@ class Settings(BaseSettings):
     INSIGHTFACE_MODEL: str = "buffalo_l"
     INSIGHTFACE_DET_SIZE: int = 640  # 640 for best accuracy with main stream (480 for sub-stream)
     INSIGHTFACE_DET_THRESH: float = 0.3  # Detection confidence minimum (lowered for distant CCTV faces)
+    # Display floor for SCRFD detection score, applied at WS broadcast time —
+    # NOT at SCRFD's internal detection threshold. Decoupled on purpose:
+    # SCRFD continues running at INSIGHTFACE_DET_THRESH (0.3) so distant /
+    # back-row faces still register internally, but un-recognised tracks
+    # whose live det_score sits below this floor are suppressed from the
+    # admin overlay. This is the cheap fix for "SCRFD hallucinated a face
+    # on the water gallon / ceiling fan / wall socket" false-positive boxes
+    # that don't match anyone in FAISS — they cluster <0.5 score, while real
+    # classroom faces at det_size=960 typically land 0.6-0.9.
+    #
+    # Filter rules:
+    #   - is_active=True + recognition_state != "recognized" + last_det_score
+    #     < floor  →  suppressed (Unknown / warming_up false positives)
+    #   - is_active=True + recognition_state == "recognized"
+    #     →  always shown (identity binding overrides per-frame SCRFD noise)
+    #   - is_active=False (coasting)
+    #     →  always shown (already passed earlier emit gates; coasting is
+    #        for recognised tracks only — see TRACK_COAST_DISPLAY_S)
+    #
+    # Set to 0.0 to disable the floor entirely (legacy behaviour: every
+    # SCRFD detection above INSIGHTFACE_DET_THRESH is broadcast).
+    #
+    # Tuning history:
+    #   - 2026-04-26: introduced at 0.45 after operator reported a static
+    #     "Unknown" box rendering on the EB226 water gallon. Real distant
+    #     faces (e.g. Christian back-row in EB226) sit comfortably above
+    #     this in practice. Lower to 0.40 only if a real student is being
+    #     suppressed; raise toward 0.55 if other non-face hallucinations
+    #     reappear. Always check ``RecognitionDiagnostics.tsx`` /
+    #     ``last_top1_score`` before tightening.
+    MIN_DISPLAY_DET_SCORE: float = 0.45
     # Static-shape ONNX model pack name (relative to ~/.insightface/models/).
     # When the named pack exists on disk, the loader prefers it over the
     # upstream INSIGHTFACE_MODEL because static-shape ONNX is required for
@@ -382,20 +413,88 @@ class Settings(BaseSettings):
     #   - 2026-04-26: lowered to 0.50 alongside the phone-only bonus
     #     reduction. Now any sustained recognition above 0.50 sim
     #     triggers an auto-enrol attempt. Safety against noise still
-    #     comes from the 60-frame stability gate, the 5 s capture
-    #     spacing, and the commit-time self-similarity check
+    #     comes from the AUTO_CCTV_ENROLL_MIN_STABLE_FRAMES gate, the
+    #     5 s capture spacing, and the commit-time self-similarity check
     #     (mean sim against existing phone embeddings >=
     #     AUTO_CCTV_ENROLL_MIN_SELF_SIM). Combined with per-room
     #     auto-enrol state (auto_cctv_enroller.py), this lets a
     #     student who was auto-enrolled in EB226 still trigger fresh
     #     captures the first time they appear in EB227.
     AUTO_CCTV_ENROLL_MIN_CONFIDENCE: float = 0.50
-    AUTO_CCTV_ENROLL_MIN_STABLE_FRAMES: int = 60
+    AUTO_CCTV_ENROLL_MIN_STABLE_FRAMES: int = 20
     AUTO_CCTV_ENROLL_TARGET_CAPTURES: int = 5
     AUTO_CCTV_ENROLL_CAPTURE_INTERVAL_S: float = 5.0
-    AUTO_CCTV_ENROLL_LIFETIME_CAP: int = 5
+    # Hard upper bound on CCTV embeddings per (user, room). Once reached,
+    # new commits enter sliding-window replacement mode (see
+    # AUTO_CCTV_ENROLL_REPLACEMENT_ENABLED) instead of being refused. Bumped
+    # 5 → 15 → 30 across two iterations so the cluster has enough seating-
+    # pose × lighting-band coverage to track real face drift across a term.
+    # Cost analysis at N=200 students × 2 rooms × 30 = 12K vectors lives in
+    # docs/plans/2026-04-26-auto-cctv-sliding-window/DESIGN.md.
+    AUTO_CCTV_ENROLL_LIFETIME_CAP: int = 30
     AUTO_CCTV_ENROLL_MIN_SELF_SIM: float = 0.30
     AUTO_CCTV_ENROLL_DRY_RUN: bool = False  # If True, log what would be committed but don't write
+
+    # ── Sliding-window auto-enrolment (added 2026-04-26) ───────────────
+    # When a (user, room) reaches AUTO_CCTV_ENROLL_LIFETIME_CAP captures,
+    # new commits no longer get rejected — instead the lowest-quality
+    # existing CCTV row for that (user, room) gets evicted to make room.
+    # "Quality" = the value of face_embeddings.quality_score, which the
+    # auto-enroller now writes as a composite of recognition confidence
+    # and crop sharpness (Laplacian variance). NULL quality_score is
+    # treated as the most-evictable.
+    #
+    # FAISS deletion caveat: IndexFlatIP doesn't support native removal,
+    # so eviction only purges the row from face_embeddings + the
+    # faiss_manager.user_map. The orphan vector remains in the FAISS
+    # index but no top-K result can return it (no user_id maps to it).
+    # `python -m scripts.rebuild_faiss` is the periodic cleanup tool.
+    #
+    # Set False to fall back to the pre-2026-04-26 behaviour: append-
+    # only with hard-stop at the cap.
+    AUTO_CCTV_ENROLL_REPLACEMENT_ENABLED: bool = True
+
+    # Daily replacement throttle. Once at the cap, accept at most this
+    # many replacement BATCHES (one batch = AUTO_CCTV_ENROLL_TARGET_CAPTURES
+    # individual captures) per UTC day per (user, room). Stops a single
+    # bad-lighting day from rewriting half the cluster — at 30 captures
+    # and 2 batches/day, the cluster has a half-life of ~3 days under
+    # unfavourable conditions but stays intact under good ones (because
+    # replacement only fires when the new capture's quality beats the
+    # lowest existing). Pre-cap commits (cluster still filling toward
+    # the cap) are unaffected by this throttle.
+    AUTO_CCTV_ENROLL_DAILY_REPLACEMENT_LIMIT: int = 2
+
+    # Composite quality_score weights at intake. Final score for each
+    # captured embedding is:
+    #     quality = QUALITY_CONFIDENCE_WEIGHT * confidence
+    #             + QUALITY_BLUR_WEIGHT * normalized_blur
+    # where normalized_blur = clamp(laplacian_variance / BLUR_NORM_MAX, 0, 1).
+    # Used both for picking the eviction victim AND deciding whether the
+    # new candidate beats the worst existing (same scale on both sides).
+    AUTO_CCTV_ENROLL_QUALITY_CONFIDENCE_WEIGHT: float = 0.6
+    AUTO_CCTV_ENROLL_QUALITY_BLUR_WEIGHT: float = 0.4
+    AUTO_CCTV_ENROLL_BLUR_NORM_MAX: float = 200.0  # Empirical "very sharp" Laplacian variance ceiling on the M5 + Reolink combo
+
+    # Swap-safe commit gate (added 2026-04-26). For each capture in the
+    # buffer, verify that no OTHER user's existing FAISS embeddings
+    # match the capture more closely than the claimed user does (within
+    # this margin). Defends against the 2026-04-25 Desiree↔Ivy Leah
+    # failure mode at the structural level — if even one capture in the
+    # batch is decisively closer to a different student, the entire
+    # batch is dropped and the buffer resets. The default mirrors
+    # RECOGNITION_MARGIN so the same gap that gates realtime decisions
+    # also gates auto-enrol commits.
+    AUTO_CCTV_ENROLL_SWAP_SAFE_MARGIN: float = 0.10
+    # Sighting-gap reset window: if the same (user, room) hasn't been
+    # offered a capture for this many seconds, the stability counter
+    # and buffer reset (treated as a fresh encounter). Track-id changes
+    # WITHIN this window do NOT reset the counter — that's the fix for
+    # ByteTrack re-id flicker preventing students with non-stable tracks
+    # from ever auto-enrolling. 10 s is generous enough to span brief
+    # occlusions / turn-aways but short enough to invalidate stale
+    # buffers when the student actually leaves.
+    AUTO_CCTV_ENROLL_SIGHTING_GAP_S: float = 10.0
 
     # Periodic mean-embedding re-validation interval. Every N frames the
     # tracker walks all currently-recognized tracks, computes the mean
@@ -442,6 +541,79 @@ class Settings(BaseSettings):
     IDENTITY_GRAVEYARD_MAX_DIST_NORMALIZED: float = 0.15
     IDENTITY_GRAVEYARD_RELAXED_THRESHOLD_DELTA: float = 0.10
     TRACK_CONFIRM_FRAMES: int = 1  # Recognize immediately on first detection
+
+    # Same-frame identity hand-off (added 2026-04-26 to fix "ghost
+    # bounding box that lingers behind the face during fast motion").
+    #
+    # When a face moves faster than ByteTrack's IoU + Kalman gate can
+    # follow at the current ML inference cadence, ByteTrack drops the
+    # old track and spawns a brand-new track ID on the new bbox. The old
+    # track is technically "lost" but stays in ``_identity_cache`` for
+    # ``TRACK_LOST_TIMEOUT`` seconds so the coasting loop (which paints
+    # its last bbox even when no detection landed) can bridge brief SCRFD
+    # blink-misses. The unwanted UX consequence: the operator sees the
+    # old recognized identity painted at the OLD position (the "ghost")
+    # AND the newborn track painted at the NEW position with a blue
+    # "Detecting…" label, until the cached track ages out a few seconds
+    # later.
+    #
+    # The hand-off pass runs after the per-track loop in
+    # ``RealtimeTracker.process()``: for every ``recognized`` track that
+    # is in ``_identity_cache`` but did NOT receive a detection this
+    # frame (i.e. ByteTrack lost it), find any newborn ``pending`` track
+    # whose bbox center sits within ``MAX_DIST_NORMALIZED`` of the lost
+    # track's last known center. If exactly one such pair exists with
+    # one-to-one uniqueness on both sides AND the lost track was last
+    # seen no more than ``MAX_AGE_S`` ago AND the newborn has only been
+    # seen for ``MAX_FRAMES_SEEN`` or fewer frames, **transfer** the
+    # full identity from the lost track onto the newborn and immediately
+    # delete the lost track from the cache. Result: the ghost vanishes
+    # and the newborn skips the "Detecting…" blue phase entirely.
+    #
+    # Safety properties:
+    #   * Strict 1:1 uniqueness — both the lost track and the newborn
+    #     track must each have a single viable counterpart. If two
+    #     newborns sit near one lost track (or vice versa), the pass
+    #     refuses to transfer for that ambiguous group; FAISS is the
+    #     fallback. The same defensive principle as the graveyard hint.
+    #   * Inherits ``first_seen`` — so the wall-clock warming_up ceiling
+    #     and oscillation history aren't reset.
+    #   * Embedding buffer is carried over — the newborn doesn't pay
+    #     the per-frame embed cost to refill its buffer before the next
+    #     re-verify.
+    #   * ``last_verified = now`` — re-verify timer restarts so we don't
+    #     re-FAISS in the very next frame.
+    #
+    # Setting ``IDENTITY_HANDOFF_ENABLED=False`` falls back to the
+    # legacy graveyard-only behaviour (which only kicks in *after* the
+    # lost track has aged past TRACK_LOST_TIMEOUT — i.e. several seconds
+    # of visible ghost first).
+    IDENTITY_HANDOFF_ENABLED: bool = True
+    IDENTITY_HANDOFF_MAX_AGE_S: float = 1.5
+    IDENTITY_HANDOFF_MAX_DIST_NORMALIZED: float = 0.20
+    IDENTITY_HANDOFF_MAX_FRAMES_SEEN: int = 3
+
+    # Independent display-coasting cap, distinct from
+    # ``TRACK_LOST_TIMEOUT`` (which controls when the cached identity is
+    # actually deleted from ``_identity_cache``). The coasting loop in
+    # ``RealtimeTracker.process()`` paints a recognised track's last
+    # known bbox even when ByteTrack dropped it, to bridge single-frame
+    # SCRFD blink-misses. Originally gated on ``TRACK_LOST_TIMEOUT``
+    # (2.0 s) — generous enough that fast motion produced long-lived
+    # ghost boxes (the visual artifact the hand-off pass closes for the
+    # common case). When the hand-off pass also can't transfer (e.g.
+    # ambiguous neighbour, or newborn never appeared) the bbox would
+    # still coast for the full 2 s.
+    #
+    # Setting this lower than ``TRACK_LOST_TIMEOUT`` decouples the two
+    # concerns: identity stays in cache (so a re-detection within
+    # TRACK_LOST_TIMEOUT can resume the same track ID and the graveyard
+    # tombstone gets a chance to form), but the *visible* ghost vanishes
+    # after at most TRACK_COAST_DISPLAY_S of inactivity. At PROCESSING_FPS
+    # of 5–20 the default 0.6 s comfortably covers 3–12 SCRFD blink-miss
+    # frames while keeping the worst-case ghost lifetime under one
+    # second.
+    TRACK_COAST_DISPLAY_S: float = 0.6
 
     # Drift Detection (track ID swap detection)
     DRIFT_SIM_THRESHOLD: float = 0.35  # Cosine sim below this = potential track swap (tolerates 40° head turns)
@@ -518,6 +690,118 @@ class Settings(BaseSettings):
     RECOGNITION_FPS: float = 10.0  # Frames/sec for attendance engine recognition loop
     RECOGNITION_MAX_BATCH_SIZE: int = 50  # Max faces per batch forward pass
     RECOGNITION_MAX_DIM: int = 1280  # Cap frame dimension for detection (balances accuracy vs speed)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Distant-face plan 2026-04-26 — Phase 2 (back-row cropped streams) +
+    # Phase 3 (tiled inference) + Phase 4 (polish). Each phase is feature-
+    # flagged so the operator can roll forward / back independently.
+    # ═══════════════════════════════════════════════════════════════════════
+
+    # ── Phase 2: cropped back-row streams ──────────────────────────────
+    # When non-empty, the api-gateway boots a SECONDARY FrameGrabber per
+    # primary stream listed here, pointed at a parallel mediamtx path
+    # (e.g. ``rtsp://mediamtx:8554/eb226-back``) produced by
+    # scripts/iams-cam-relay.sh's ``run_cropped_stream`` loop. The
+    # ``SessionPipeline`` then runs a parallel ``RealtimeTracker`` on
+    # those frames whose ONLY purpose is to feed presence + auto-CCTV
+    # enrol — its detections are NOT broadcast to the admin overlay
+    # (that view shows the wide stream), so coordinate space mismatch
+    # is irrelevant. Identity dedup happens automatically at the
+    # ``TrackPresenceService`` user_id layer.
+    #
+    # Format: comma-separated entries ``primary_key=>backrow_path``.
+    # The primary_key matches ``rooms.stream_key``; the backrow_path is
+    # the mediamtx path the cropped stream publishes to (NOT a full URL —
+    # the grabber prepends ``MEDIAMTX_RTSP_URL``).
+    #
+    # Example: ``eb226=>eb226-back,eb227=>eb227-back``
+    # Empty string disables the secondary grabbers entirely (Phase 1
+    # behaviour). Make sure scripts/iams-cam-relay.sh's CROPPED_STREAMS
+    # array is in lockstep — no point binding to a path that isn't
+    # being published.
+    BACKROW_CROP_STREAMS: str = ""
+
+    # ── Phase 3: tiled / sliced inference ──────────────────────────────
+    # Master switch for the tiled detection path. When True, the realtime
+    # tracker calls ``model.detect_tiled()`` (instead of the global-frame
+    # ``detect()``) which slices the frame into N overlapping tiles, runs
+    # SCRFD on each, remaps coordinates back to global pixel space, and
+    # merges with IOS-NMM (Greedy Non-Maximum Merging using
+    # Intersection-over-Smaller — see SAHI paper arXiv:2202.06934).
+    # Roughly N× the per-frame inference cost in the steady state, so
+    # we pair it with motion-gating below.
+    RECOGNITION_TILED_DETECTION_ENABLED: bool = False
+    # Number of horizontal tiles (height stays full). 3 is the SAHI-research
+    # sweet spot for classroom geometry — students roughly line up
+    # horizontally on benches, so vertical tile boundaries break full-room
+    # rows the least.
+    RECOGNITION_TILE_COLS: int = 3
+    # Number of vertical tiles. 1 = horizontal-only split (recommended for
+    # classroom). 2 = 3×2 grid for very deep rooms; ~6× cost.
+    RECOGNITION_TILE_ROWS: int = 1
+    # Pixel overlap between adjacent tiles. Must exceed the largest
+    # expected face width — a face fully inside a tile dodges the
+    # split-detection failure mode where two halves end up in adjacent
+    # tiles with neither one carrying a full landmark set. 160 px is
+    # ~2× a 75-px close-up face which is comfortably above the
+    # classroom 95th-percentile.
+    RECOGNITION_TILE_OVERLAP_PX: int = 160
+    # Always run a coarse global-frame detection alongside the tiled
+    # passes. Costs +1× full-frame SCRFD per tiled-mode frame but
+    # guarantees no regression on already-detected close-up faces (the
+    # tiled path can drop them when their bbox spans a tile seam without
+    # also being more than half-visible in either tile). The merge layer
+    # dedupes coarse + tiled outputs via IOS-NMM.
+    RECOGNITION_TILE_INCLUDE_COARSE: bool = True
+    # IOS (Intersection-over-Smaller) merge threshold. SAHI default is
+    # 0.5 — anything overlapping ≥ 50 % of the smaller box is treated as
+    # the same detection and merged (instead of suppressed). Tune higher
+    # to keep more candidates on tile seams; lower to merge aggressively.
+    RECOGNITION_TILE_NMM_IOS_THRESH: float = 0.5
+
+    # ── Phase 3: motion-gated tile selection ───────────────────────────
+    # When True, only tiles intersecting motion blobs (computed via
+    # cv2.createBackgroundSubtractorMOG2 + dilation) are dispatched for
+    # SCRFD. Empty / fully-static tiles fall through to "no detections"
+    # without an inference call. In a mostly-seated classroom this
+    # collapses tiled-mode steady-state cost from ~3× to ~1.3× — close
+    # enough to "free" that we can run tiled mode every frame.
+    #
+    # Failure mode: a stationary person in a previously-empty area gets
+    # absorbed by the MOG2 background within ~30 s and stops triggering
+    # detection. To counter, we still run a full-frame coarse pass every
+    # frame (RECOGNITION_TILE_INCLUDE_COARSE above), so seated users
+    # remain detected via the wide-shot path; tiled detection just adds
+    # the back-row recall lift on motion events.
+    RECOGNITION_TILE_MOTION_GATING_ENABLED: bool = True
+    # Motion mask resolution (downsampled). MOG2 cost is quadratic in
+    # input size; a 320×180 mask is ~1 ms per frame on M5 and resolves
+    # tile-level motion fine.
+    RECOGNITION_TILE_MOTION_DOWNSCALE: int = 320
+    # Dilation kernel radius (px in mask space). Bigger = more permissive
+    # (tiles light up even on small motions) but more conservative wrt
+    # false negatives.
+    RECOGNITION_TILE_MOTION_DILATION_PX: int = 16
+
+    # ── Phase 4: polish (SCRFD-34G, undistortion, INTER_CUBIC) ─────────
+    # OpenCV camera-calibration coefficients per stream_key. When set,
+    # ``FrameGrabber`` applies ``cv2.undistort`` between FFmpeg drain and
+    # tracker handoff so wide-angle barrel distortion at frame edges is
+    # straightened (recovers ~30 % effective pixels at the corners on
+    # the 4-mm Reolink lens).
+    #
+    # Format (newline OR comma separated):
+    #   ``<stream_key>:<fx>,<fy>,<cx>,<cy>,<k1>,<k2>,<p1>,<p2>,<k3>``
+    # Calibrate via the OpenCV checkerboard pattern; one coefficient set
+    # per camera. Empty = no undistort applied (default).
+    LENS_UNDISTORTION_COEFFS: str = ""
+    # Set True to flip cv2.INTER_CUBIC for ArcFace input crops smaller
+    # than ARCFACE_TINY_CROP_PX. Defaults to True because the only
+    # downside is ~0.05 ms per crop — minor enough that we just always
+    # do it on small faces. Free quality bump (1-3 % similarity) on
+    # back-row recognitions.
+    ARCFACE_CUBIC_UPSAMPLE_ENABLED: bool = True
+    ARCFACE_TINY_CROP_PX: int = 64
 
     # Service Role (determines which components start)
     # "api-gateway" | "all" (dev)

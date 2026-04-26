@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useTransition } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useLocation } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useBreadcrumbStore } from '@/stores/breadcrumb.store'
@@ -496,7 +496,6 @@ export default function UserDetailPage() {
   )
 
   const [attendanceSearch, setAttendanceSearch] = useState('')
-  const [, startAttendanceSearchTransition] = useTransition()
   const filteredAttendance = useMemo(() => {
     if (!attendanceSearch.trim()) return attendance
     return attendance.filter((r: AttendanceRecord) =>
@@ -669,10 +668,132 @@ export default function UserDetailPage() {
   ]
 
   if (isLoading) {
+    // Mirror the loaded layout (Back → Header → Activity/Teaching stats
+    // → Profile → Schedules/Attendance table) so the cut-over to real
+    // data doesn't shift the page. The role isn't known yet, so the
+    // skeleton uses neutral shapes that cover all three role variants
+    // (admin / faculty / student) — the loaded page may render fewer
+    // sections depending on role, but the skeleton's vertical rhythm
+    // stays close to the largest variant.
     return (
       <div className="space-y-6">
-        <Skeleton className="h-8 w-32" />
-        <Skeleton className="h-64 w-full" />
+        {/* Back to … */}
+        <Skeleton className="h-9 w-36 rounded-md" />
+
+        {/* ── Header card (avatar + name + badges + actions) ────────── */}
+        <Card>
+          <CardHeader>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex min-w-0 items-start gap-4">
+                <Skeleton className="h-16 w-16 shrink-0 rounded-full" />
+                <div className="min-w-0 space-y-2">
+                  <Skeleton className="h-7 w-56" />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Skeleton className="h-5 w-16 rounded-full" />
+                    <Skeleton className="h-5 w-16 rounded-full" />
+                    <Skeleton className="h-5 w-28 rounded-full" />
+                    <Skeleton className="h-6 w-24 rounded-md" />
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-9 w-20 rounded-md" />
+                <Skeleton className="h-9 w-9 rounded-md" />
+              </div>
+            </div>
+          </CardHeader>
+        </Card>
+
+        {/* ── Stats card (4 OverviewStats — teaching/activity summary) ─ */}
+        <Card>
+          <CardHeader className="pb-3">
+            <Skeleton className="h-5 w-40" />
+            <Skeleton className="mt-1.5 h-3 w-72" />
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="space-y-1.5 rounded-md border bg-card px-4 py-3"
+                >
+                  <Skeleton className="h-3 w-24" />
+                  <Skeleton className="mt-1 h-7 w-16" />
+                  <Skeleton className="mt-1 h-3 w-20" />
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ── Profile card (5 MetaItems in 3-col grid) ───────────────── */}
+        <Card>
+          <CardHeader className="pb-3">
+            <Skeleton className="h-5 w-20" />
+          </CardHeader>
+          <Separator />
+          <CardContent className="pt-6">
+            <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="space-y-1.5">
+                  <Skeleton className="h-3 w-20" />
+                  <Skeleton className="h-4 w-44" />
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ── Schedules / Attendance table card ──────────────────────── */}
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="space-y-1.5">
+                <Skeleton className="h-5 w-44" />
+                <Skeleton className="h-3 w-64" />
+              </div>
+              <Skeleton className="h-8 w-44 rounded-md" />
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Code</TableHead>
+                  <TableHead>Subject</TableHead>
+                  <TableHead>Day</TableHead>
+                  <TableHead>Time</TableHead>
+                  <TableHead>Room</TableHead>
+                  <TableHead className="w-12 text-right">Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <TableRow key={`user-skel-${String(i)}`}>
+                    <TableCell>
+                      <Skeleton className="h-3 w-16" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-40" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-12" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-24" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-20" />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Skeleton className="ml-auto h-5 w-16 rounded-full" />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       </div>
     )
   }
@@ -1049,9 +1170,7 @@ export default function UserDetailPage() {
               isLoading={attendanceLoading}
               searchPlaceholder="Search by subject, status, date, score..."
               globalFilter={attendanceSearch}
-              onGlobalFilterChange={(v) =>
-                startAttendanceSearchTransition(() => setAttendanceSearch(v))
-              }
+              onGlobalFilterChange={setAttendanceSearch}
               globalFilterFn={() => true}
               borderless
             />

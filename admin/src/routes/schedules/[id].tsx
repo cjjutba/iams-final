@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState, useTransition } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useDebouncedValue } from '@/hooks/use-debounced-value'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useBreadcrumbStore } from '@/stores/breadcrumb.store'
 import { type ColumnDef } from '@tanstack/react-table'
@@ -301,7 +302,6 @@ export default function ScheduleDetailPage() {
   const [resetFaceConfirm, setResetFaceConfirm] = useState<{ studentUserId: string; name: string } | null>(null)
   const [studentSearch, setStudentSearch] = useState('')
   const [faceFilter, setFaceFilter] = useState<FaceFilter>('all')
-  const [, startStudentSearchTransition] = useTransition()
 
   // Use just the human-readable name for the page title; the breadcrumb leaf
   // renders the same string so we don't compound code+name+time anywhere.
@@ -415,6 +415,11 @@ export default function ScheduleDetailPage() {
 
   const enrolledUserIds = new Set(students.map((s) => s.id))
 
+  // Debounce the dialog's search so a fast typer doesn't re-filter the
+  // whole student record list on every keystroke. Matches the toolbar
+  // behaviour for the rest of the admin portal.
+  const debouncedEnrollSearch = useDebouncedValue(enrollSearch, 300)
+
   // Renamed from `filteredStudents` to disambiguate from the
   // schedule-students search above. This list is the *enrollable*
   // candidate set inside the Enroll Dialog (everyone not already enrolled
@@ -424,8 +429,8 @@ export default function ScheduleDetailPage() {
   const filteredEnrollableStudents = allStudents.filter(
     (s) =>
       (!s.user_id || !enrolledUserIds.has(s.user_id)) &&
-      (enrollSearch === '' ||
-        `${s.first_name} ${s.last_name} ${s.student_id}`.toLowerCase().includes(enrollSearch.toLowerCase()))
+      (debouncedEnrollSearch === '' ||
+        `${s.first_name} ${s.last_name} ${s.student_id}`.toLowerCase().includes(debouncedEnrollSearch.toLowerCase()))
   )
 
   const handleEnroll = async (studentUserId: string, studentName: string) => {
@@ -583,10 +588,197 @@ export default function ScheduleDetailPage() {
   ]
 
   if (isLoading) {
+    // Mirror the loaded layout (Back → Header → Attendance Settings →
+    // Attendance Overview → Sessions → Enrolled Students) so the cut-over
+    // to real data doesn't shift the page. Each skeleton block is sized
+    // to match its eventual counterpart's width, height, and rhythm.
     return (
       <div className="space-y-6">
-        <Skeleton className="h-8 w-32" />
-        <Skeleton className="h-64 w-full" />
+        {/* Back to Schedules */}
+        <Skeleton className="h-9 w-36 rounded-md" />
+
+        {/* ── Header Card ──────────────────────────────────────────── */}
+        <Card>
+          <CardHeader>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0 space-y-2">
+                <Skeleton className="h-7 w-80" />
+                <div className="flex flex-wrap items-center gap-2">
+                  <Skeleton className="h-6 w-32 rounded-md" />
+                  <Skeleton className="h-5 w-16 rounded-full" />
+                  <Skeleton className="h-5 w-14 rounded-full" />
+                  <Skeleton className="h-5 w-14 rounded-full" />
+                  <Skeleton className="h-6 w-20 rounded-full" />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-9 w-28 rounded-md" />
+                <Skeleton className="h-9 w-20 rounded-md" />
+              </div>
+            </div>
+          </CardHeader>
+          <Separator />
+          <CardContent className="pt-6">
+            <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="space-y-1.5">
+                  <Skeleton className="h-3 w-20" />
+                  <Skeleton className="h-4 w-40" />
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ── Attendance Settings Card ─────────────────────────────── */}
+        <Card>
+          <CardHeader className="pb-3">
+            <Skeleton className="h-5 w-44" />
+            <Skeleton className="mt-1.5 h-3 w-[28rem] max-w-full" />
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3 rounded-md border bg-card p-4">
+              <div className="flex items-start gap-2">
+                <Skeleton className="mt-0.5 h-4 w-4 rounded" />
+                <div className="flex-1 space-y-1.5">
+                  <Skeleton className="h-4 w-44" />
+                  <Skeleton className="h-3 w-[26rem] max-w-full" />
+                </div>
+              </div>
+              <div className="space-y-3">
+                <Skeleton className="h-3 w-72 max-w-full" />
+                <div className="flex items-baseline justify-between">
+                  <Skeleton className="h-3 w-20" />
+                  <Skeleton className="h-7 w-14" />
+                </div>
+                <Skeleton className="h-2 w-full rounded-full" />
+                <div className="flex items-center justify-between">
+                  <Skeleton className="h-3 w-12" />
+                  <Skeleton className="h-3 w-24" />
+                  <Skeleton className="h-3 w-12" />
+                </div>
+                <div className="flex justify-end pt-1">
+                  <Skeleton className="h-8 w-20 rounded-md" />
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ── Attendance Overview Card ─────────────────────────────── */}
+        <Card>
+          <CardHeader className="pb-3">
+            <Skeleton className="h-5 w-44" />
+            <Skeleton className="mt-1.5 h-3 w-96 max-w-full" />
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-5">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="space-y-1.5 rounded-md border bg-card px-4 py-3">
+                  <Skeleton className="h-3 w-20" />
+                  <Skeleton className="mt-1 h-7 w-16" />
+                  <Skeleton className="mt-1 h-3 w-24" />
+                </div>
+              ))}
+            </div>
+
+            {/* Latest session block */}
+            <div className="rounded-md border bg-muted/30 p-4">
+              <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+                <div className="space-y-1.5">
+                  <Skeleton className="h-3 w-24" />
+                  <Skeleton className="h-4 w-48" />
+                </div>
+                <div className="space-y-1 text-right">
+                  <Skeleton className="ml-auto h-7 w-16" />
+                  <Skeleton className="ml-auto h-3 w-16" />
+                </div>
+              </div>
+              <Skeleton className="h-1.5 w-full rounded-full" />
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <Skeleton key={i} className="h-3 w-20" />
+                ))}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ── Sessions Card ────────────────────────────────────────── */}
+        <Card>
+          <CardHeader className="pb-3">
+            <Skeleton className="h-5 w-24" />
+            <Skeleton className="mt-1.5 h-3 w-44" />
+          </CardHeader>
+          <CardContent className="p-0">
+            {/* Table header row */}
+            <div className="grid grid-cols-[1.4fr_1.2fr_repeat(5,1fr)] gap-4 border-b px-4 py-3">
+              {Array.from({ length: 7 }).map((_, i) => (
+                <Skeleton
+                  key={i}
+                  className={`h-3 ${i < 2 ? 'w-16' : 'w-12 ml-auto'}`}
+                />
+              ))}
+            </div>
+            {/* Sample rows */}
+            {Array.from({ length: 3 }).map((_, r) => (
+              <div
+                key={r}
+                className="grid grid-cols-[1.4fr_1.2fr_repeat(5,1fr)] items-center gap-4 border-b px-4 py-4 last:border-b-0"
+              >
+                <Skeleton className="h-4 w-28" />
+                <Skeleton className="h-4 w-32" />
+                <Skeleton className="ml-auto h-4 w-6" />
+                <Skeleton className="ml-auto h-4 w-6" />
+                <Skeleton className="ml-auto h-4 w-6" />
+                <Skeleton className="ml-auto h-4 w-6" />
+                <Skeleton className="ml-auto h-4 w-12" />
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+
+        {/* ── Enrolled Students Card ───────────────────────────────── */}
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="space-y-1.5">
+                <Skeleton className="h-5 w-40" />
+                <Skeleton className="h-3 w-72" />
+              </div>
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-8 w-44 rounded-md" />
+                <Skeleton className="h-8 w-32 rounded-md" />
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <Skeleton className="h-10 w-full max-w-md rounded-md" />
+            <div className="mt-4 space-y-0">
+              {/* Table header */}
+              <div className="grid grid-cols-[1.4fr_1fr_1fr_0.7fr_40px] gap-4 border-b py-3">
+                <Skeleton className="h-3 w-24" />
+                <Skeleton className="h-3 w-20" />
+                <Skeleton className="h-3 w-28" />
+                <Skeleton className="h-3 w-16" />
+                <span />
+              </div>
+              {/* Rows */}
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="grid grid-cols-[1.4fr_1fr_1fr_0.7fr_40px] items-center gap-4 border-b py-4 last:border-b-0"
+                >
+                  <Skeleton className="h-4 w-40" />
+                  <Skeleton className="h-4 w-24" />
+                  <Skeleton className="h-5 w-24 rounded-full" />
+                  <Skeleton className="h-5 w-16 rounded-full" />
+                  <Skeleton className="ml-auto h-7 w-7 rounded-md" />
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       </div>
     )
   }
@@ -914,7 +1106,7 @@ export default function ScheduleDetailPage() {
               isLoading={studentsLoading}
               searchPlaceholder="Search by name, student ID, status..."
               globalFilter={studentSearch}
-              onGlobalFilterChange={(v) => startStudentSearchTransition(() => setStudentSearch(v))}
+              onGlobalFilterChange={setStudentSearch}
               globalFilterFn={() => true}
               onRowClick={(row) => navigate(`/users/${row.id}`, { state: { role: 'student' } })}
             />
@@ -992,7 +1184,7 @@ export default function ScheduleDetailPage() {
           <div className="max-h-[300px] overflow-y-auto space-y-1">
             {filteredEnrollableStudents.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
-                {enrollSearch ? 'No matching students found' : 'All students are already enrolled'}
+                {debouncedEnrollSearch ? 'No matching students found' : 'All students are already enrolled'}
               </p>
             ) : (
               filteredEnrollableStudents.slice(0, 50).map((s) => {

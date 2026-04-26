@@ -1,4 +1,4 @@
-import { useMemo, useState, useTransition } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
 import { Eye } from 'lucide-react'
@@ -7,6 +7,15 @@ import { DataTable } from '@/components/data-tables'
 import { Button } from '@/components/ui/button'
 import { CropKindPill } from '@/components/shared/status-pills'
 import { Input } from '@/components/ui/input'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useRecognitionAccessAudit } from '@/hooks/use-queries'
 import type { AccessAuditEntry, AccessAuditFilters } from '@/types'
@@ -52,7 +61,6 @@ export default function RecognitionAccessAuditPage() {
   const items = useMemo(() => data?.items ?? [], [data])
 
   const [searchQuery, setSearchQuery] = useState('')
-  const [, startSearchTransition] = useTransition()
 
   const filteredItems = useMemo(() => {
     if (!searchQuery.trim()) return items
@@ -115,8 +123,15 @@ export default function RecognitionAccessAuditPage() {
               )}
             </span>
             {row.original.student_id && (
+              // `student_id` here is actually the user's UUID (the
+              // backend's recognition/access tables store user UUIDs in
+              // that column). The `/students/:studentId` route expects
+              // the human student ID like "21-A-02177", so route through
+              // `/users/:id` which accepts UUIDs and renders the same
+              // student detail page when `user.role === 'student'`.
               <Link
-                to={`/students/${row.original.student_id}`}
+                to={`/users/${row.original.student_id}`}
+                state={{ role: 'student' }}
                 className="text-[11px] text-muted-foreground hover:underline"
               >
                 view student
@@ -149,6 +164,104 @@ export default function RecognitionAccessAuditPage() {
     ],
     [],
   )
+
+  if (isLoading) {
+    // Mirror the loaded layout (header + filter card + table + pagination)
+    // so the cut-over to real data doesn't shift the page.
+    return (
+      <div className="space-y-6">
+        {/* Page header */}
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-7 w-72" />
+            <Skeleton className="h-4 w-[26rem] max-w-full" />
+          </div>
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-4 w-4 rounded-sm" />
+            <Skeleton className="h-3 w-24" />
+          </div>
+        </div>
+
+        {/* Filter panel */}
+        <div className="flex flex-wrap items-end gap-3 rounded-md border bg-muted/30 p-4">
+          <div className="flex flex-col gap-1">
+            <Skeleton className="h-3 w-20" />
+            <Skeleton className="h-9 w-64 rounded-md" />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Skeleton className="h-3 w-20" />
+            <Skeleton className="h-9 w-64 rounded-md" />
+          </div>
+          <Skeleton className="h-9 w-20 rounded-md" />
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between gap-4 py-4">
+            <Skeleton className="h-9 w-full max-w-sm rounded-md" />
+          </div>
+
+          <div className="rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Viewed</TableHead>
+                  <TableHead>Viewer</TableHead>
+                  <TableHead>Crop</TableHead>
+                  <TableHead>Subject</TableHead>
+                  <TableHead>Event</TableHead>
+                  <TableHead>IP</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <TableRow key={`access-skel-${String(i)}`}>
+                    <TableCell>
+                      <Skeleton className="h-3 w-24" />
+                    </TableCell>
+                    <TableCell>
+                      <div className="space-y-1.5">
+                        <Skeleton className="h-4 w-32" />
+                        <Skeleton className="h-3 w-20" />
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-5 w-16 rounded-full" />
+                    </TableCell>
+                    <TableCell>
+                      <div className="space-y-1.5">
+                        <Skeleton className="h-4 w-36" />
+                        <Skeleton className="h-3 w-20" />
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-3 w-20" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-3 w-24" />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          <div className="flex items-center justify-between px-2 py-4">
+            <Skeleton className="h-4 w-44" />
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-8 w-[70px] rounded-md" />
+              </div>
+              <div className="flex items-center gap-1">
+                <Skeleton className="h-8 w-8 rounded-md" />
+                <Skeleton className="h-8 w-8 rounded-md" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">
@@ -202,7 +315,7 @@ export default function RecognitionAccessAuditPage() {
         isLoading={isLoading}
         searchPlaceholder="Search by viewer, subject, event, IP…"
         globalFilter={searchQuery}
-        onGlobalFilterChange={(v) => startSearchTransition(() => setSearchQuery(v))}
+        onGlobalFilterChange={setSearchQuery}
         globalFilterFn={() => true}
       />
 

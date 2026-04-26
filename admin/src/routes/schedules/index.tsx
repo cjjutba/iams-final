@@ -59,6 +59,15 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { useSchedules, useCreateSchedule, useUpdateSchedule, useDeleteSchedule, useUsers, useRooms } from '@/hooks/use-queries'
 import type { ScheduleResponse, ScheduleRuntimeStatus } from '@/types'
 import { tokenMatches, joinHaystack, formatTime12h, DAY_NAMES_MON_FIRST } from '@/lib/search'
@@ -561,19 +570,111 @@ export default function SchedulesPage() {
     },
   ]
 
+  if (isLoading) {
+    // Mirror the loaded layout (header + toolbar + table + pagination) so
+    // the cut-over to real data doesn't shift the page. Each skeleton
+    // block is sized to match its eventual counterpart's width, height,
+    // and rhythm. Used only on first fetch — `isPending` (filter
+    // transitions) keeps the toolbar interactive and shows the
+    // DataTable's own row-level skeleton instead.
+    return (
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-7 w-56" />
+            <Skeleton className="h-4 w-32" />
+          </div>
+          <Skeleton className="h-9 w-40 rounded-md" />
+        </div>
+
+        <div>
+          {/* Toolbar */}
+          <div className="flex items-center justify-between gap-4 py-4">
+            <Skeleton className="h-9 w-full max-w-sm rounded-md" />
+            <div className="flex items-center gap-2">
+              <Skeleton className="h-9 w-[140px] rounded-md" />
+              <Skeleton className="h-9 w-[130px] rounded-md" />
+            </div>
+          </div>
+
+          {/* Table — render real header so column proportions match. */}
+          <div className="rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Subject</TableHead>
+                  <TableHead>Faculty</TableHead>
+                  <TableHead>Room</TableHead>
+                  <TableHead>Day</TableHead>
+                  <TableHead>Time</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="w-[60px]" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <TableRow key={`schedules-skel-${String(i)}`}>
+                    <TableCell>
+                      <div className="space-y-1.5">
+                        <Skeleton className="h-4 w-28" />
+                        <Skeleton className="h-3 w-48" />
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-32" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-16" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-20" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-32" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-6 w-24 rounded-full" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="ml-auto h-8 w-8 rounded-md" />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* Pagination */}
+          <div className="flex items-center justify-between px-2 py-4">
+            <Skeleton className="h-4 w-44" />
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-8 w-[70px] rounded-md" />
+              </div>
+              <div className="flex items-center gap-1">
+                <Skeleton className="h-8 w-8 rounded-md" />
+                <Skeleton className="h-8 w-8 rounded-md" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Schedule Management</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {isLoading
-              ? 'Loading...'
-              : hasFilters
-                ? `${filtered.length} of ${schedules.length} schedules`
-                : `${schedules.length} schedule${schedules.length !== 1 ? 's' : ''}`}
+            {hasFilters
+              ? `${filtered.length} of ${schedules.length} schedules`
+              : `${schedules.length} schedule${schedules.length !== 1 ? 's' : ''}`}
           </p>
-          {!isLoading && filterDescription && (
+          {filterDescription && (
             <p className="text-xs text-muted-foreground mt-0.5">
               Showing {filterDescription}
             </p>
@@ -594,7 +695,7 @@ export default function SchedulesPage() {
         // input's controlled state; the noop globalFilterFn ensures
         // TanStack does not re-filter the rows we already pre-filtered.
         globalFilter={searchQuery}
-        onGlobalFilterChange={(v) => startTransition(() => persistedSetSearchQuery(v))}
+        onGlobalFilterChange={persistedSetSearchQuery}
         globalFilterFn={() => true}
         searchPlaceholder="Search by subject, faculty, room, day, time, status..."
         toolbar={

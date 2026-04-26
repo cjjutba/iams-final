@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useTransition } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useBreadcrumbStore } from '@/stores/breadcrumb.store'
@@ -64,6 +64,14 @@ import {
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import {
   useRoom,
   useSchedules,
@@ -270,7 +278,6 @@ export default function RoomDetailPage() {
   const [dayFilter, setDayFilter] = useState<Set<number>>(new Set())
   const [facultyFilter, setFacultyFilter] = useState<string>('all')
   const [scheduleSearch, setScheduleSearch] = useState('')
-  const [, startScheduleSearchTransition] = useTransition()
 
   // Distinct faculty list for the dropdown — sorted by full name. Built
   // from the room's schedules so we never offer a faculty option that
@@ -421,10 +428,162 @@ export default function RoomDetailPage() {
   ]
 
   if (isLoading) {
+    // Mirror the loaded layout (Back → Header → Utilization → Profile →
+    // Schedules in this Room) so the cut-over to real data doesn't shift
+    // the page. Each block is sized to match its eventual counterpart's
+    // width, height, and rhythm.
     return (
       <div className="space-y-6">
-        <Skeleton className="h-8 w-32" />
-        <Skeleton className="h-64 w-full" />
+        {/* Back to Rooms */}
+        <Skeleton className="h-9 w-32 rounded-md" />
+
+        {/* ── Header card (room name + meta + 2 badges + actions) ───── */}
+        <Card>
+          <CardHeader>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0 space-y-2">
+                <Skeleton className="h-7 w-48" />
+                <Skeleton className="h-4 w-64" />
+                <div className="flex flex-wrap items-center gap-2">
+                  <Skeleton className="h-5 w-16 rounded-full" />
+                  <Skeleton className="h-6 w-24 rounded-full" />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-9 w-20 rounded-md" />
+                <Skeleton className="h-9 w-9 rounded-md" />
+              </div>
+            </div>
+          </CardHeader>
+        </Card>
+
+        {/* ── Utilization — 4 OverviewStat cards ────────────────────── */}
+        <Card>
+          <CardHeader className="pb-3">
+            <Skeleton className="h-5 w-40" />
+            <Skeleton className="mt-1.5 h-3 w-72" />
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="space-y-1.5 rounded-md border bg-card px-4 py-3"
+                >
+                  <Skeleton className="h-3 w-20" />
+                  <Skeleton className="mt-1 h-7 w-14" />
+                  <Skeleton className="mt-1 h-3 w-24" />
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ── Profile — 3 MetaItems + camera endpoint full-width row ── */}
+        <Card>
+          <CardHeader className="pb-3">
+            <Skeleton className="h-5 w-20" />
+          </CardHeader>
+          <Separator />
+          <CardContent className="pt-6">
+            <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="space-y-1.5">
+                  <Skeleton className="h-3 w-20" />
+                  <Skeleton className="h-4 w-32" />
+                </div>
+              ))}
+              {/* Camera endpoint — spans all 3 columns at lg, with a
+                  CopyableEndpoint chip + helper paragraph below. */}
+              <div className="space-y-1.5 sm:col-span-2 lg:col-span-3">
+                <Skeleton className="h-3 w-32" />
+                <Skeleton className="h-7 w-72 max-w-full rounded-md" />
+                <Skeleton className="mt-1 h-3 w-[28rem] max-w-full" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ── Schedules in this Room — header + day chips + table ─────── */}
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="space-y-1.5">
+                <Skeleton className="h-5 w-52" />
+                <Skeleton className="h-3 w-56" />
+              </div>
+              <Skeleton className="h-8 w-56 rounded-md" />
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* Day-of-week chip row */}
+            <div className="flex flex-wrap items-center gap-2">
+              <Skeleton className="h-3 w-8" />
+              {Array.from({ length: 7 }).map((_, i) => (
+                <Skeleton key={i} className="h-6 w-12 rounded-full" />
+              ))}
+            </div>
+
+            {/* DataTable toolbar (search) */}
+            <div className="flex items-center justify-between gap-4 py-4">
+              <Skeleton className="h-9 w-full max-w-sm rounded-md" />
+            </div>
+
+            {/* Table */}
+            <div className="rounded-lg border border-border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Subject</TableHead>
+                    <TableHead>Faculty</TableHead>
+                    <TableHead>Day</TableHead>
+                    <TableHead>Time</TableHead>
+                    <TableHead>Runtime</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <TableRow key={`rooms-sched-skel-${String(i)}`}>
+                      <TableCell>
+                        <div className="space-y-1.5">
+                          <Skeleton className="h-3 w-16" />
+                          <Skeleton className="h-4 w-44" />
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className="h-4 w-32" />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className="h-4 w-16" />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className="h-4 w-32" />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className="h-5 w-20 rounded-full" />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+
+            {/* Pagination */}
+            <div className="flex items-center justify-between px-2 py-4">
+              <Skeleton className="h-4 w-44" />
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <Skeleton className="h-4 w-24" />
+                  <Skeleton className="h-8 w-[70px] rounded-md" />
+                </div>
+                <div className="flex items-center gap-1">
+                  <Skeleton className="h-8 w-8 rounded-md" />
+                  <Skeleton className="h-8 w-8 rounded-md" />
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     )
   }
@@ -724,9 +883,7 @@ export default function RoomDetailPage() {
             data={filteredRoomSchedules}
             searchPlaceholder="Search by subject, faculty, day, time, status..."
             globalFilter={scheduleSearch}
-            onGlobalFilterChange={(v) =>
-              startScheduleSearchTransition(() => setScheduleSearch(v))
-            }
+            onGlobalFilterChange={setScheduleSearch}
             globalFilterFn={() => true}
             onRowClick={(row) => navigate(`/schedules/${row.id}`)}
           />

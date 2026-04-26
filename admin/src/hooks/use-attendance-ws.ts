@@ -8,6 +8,28 @@ import type { RecognitionEvent } from '@/types'
 // and android/app/src/main/java/com/iams/app/data/api/AttendanceWebSocketClient.kt
 // for the mobile consumer (currently; removed in Phase 9 of this plan).
 
+/**
+ * Reasons the backend emits for the most recent recognition decision on
+ * a track. Mirrors ``RealtimeTracker._classify_commit_reason`` server-
+ * side. Kept as a string-union (not a strict enum) so the frontend
+ * doesn't crash when a future backend introduces a new value.
+ */
+export type RecognitionDecisionReason =
+  | 'matched'
+  | 'below_threshold'
+  | 'below_phone_only_threshold'
+  | 'ambiguous_margin'
+  | 'swap_blocked'
+  | 'mutex_demoted'
+  | 'no_faiss_hit'
+  | 'orphaned_user_id'
+  | 'kps_implausible'
+  | 'quality_gated'
+  | 'reverify_not_due'
+  | 'no_embedding_budget'
+  | 'warming_up'
+  | 'no_search_this_frame'
+
 export interface TrackInfo {
   track_id: number
   bbox: [number, number, number, number] // normalized [x1, y1, x2, y2] in 0-1
@@ -34,6 +56,40 @@ export interface TrackInfo {
    */
   liveness_state?: 'real' | 'spoof' | 'unknown'
   liveness_score?: number
+  /**
+   * Recognition diagnostics (added 2026-04-26). Surfaced by the backend's
+   * RealtimeTracker for the admin Track Detail panel — operator-facing
+   * "why is this Unknown?" debugging without dozzle. All fields optional
+   * so older backends remain forward-compatible.
+   *
+   * - top1_*           : highest-similarity FAISS candidate this frame
+   * - top2_*           : runner-up; relevant for the margin-gate decision
+   * - decision_reason  : enum-ish string, see RecognitionDecisionReason
+   * - effective_threshold : the actual sim cutoff (incl. phone-only bonus)
+   * - decision_searched : true when the most recent decision touched FAISS
+   *                       (false → display the previous values; track
+   *                       wasn't searched this frame)
+   * - swap_blocked     : the per-track vote-streak gate held the incumbent
+   * - mutex_demoted    : frame-mutex / cross-batch dedup routed top-1 elsewhere
+   * - best_score_seen  : lifetime peak similarity for this track
+   * - unknown_attempts : consecutive UNKNOWN_CONFIRM misses (UI: "3/5 misses")
+   * - frames_seen      : ByteTrack lifetime; distinguishes brand-new tracks
+   *                      from old tracks stuck in unknown
+   */
+  top1_user_id?: string | null
+  top1_score?: number
+  top1_name?: string | null
+  top2_user_id?: string | null
+  top2_score?: number
+  top2_name?: string | null
+  decision_reason?: RecognitionDecisionReason | string
+  effective_threshold?: number
+  decision_searched?: boolean
+  swap_blocked?: boolean
+  mutex_demoted?: boolean
+  best_score_seen?: number
+  unknown_attempts?: number
+  frames_seen?: number
 }
 
 export interface FrameUpdateMessage {

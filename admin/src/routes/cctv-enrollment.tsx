@@ -31,6 +31,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { WhepPlayer } from '@/components/live-feed/WhepPlayer'
 import { usePageTitle } from '@/hooks/use-page-title'
@@ -277,9 +278,101 @@ export default function CctvEnrollmentPage() {
 
   // ── Render ─────────────────────────────────────────────────
   if (statusQuery.isLoading) {
+    // Mirror the loaded layout (header + room selection card + tabs +
+    // two-pane grid) so the cut-over to real data doesn't shift the page.
     return (
-      <div className="flex h-[60vh] items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      <div className="flex flex-col gap-6 pb-6">
+        {/* Header */}
+        <div className="flex items-start justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-7 w-56" />
+            <Skeleton className="h-4 w-[28rem] max-w-full" />
+            <Skeleton className="h-4 w-80 max-w-full" />
+          </div>
+          <Skeleton className="h-9 w-28 rounded-md" />
+        </div>
+
+        {/* Room selection + global stats card */}
+        <Card>
+          <CardContent className="flex flex-wrap items-end gap-4">
+            <div className="flex flex-col gap-1">
+              <Skeleton className="h-3 w-12" />
+              <Skeleton className="h-9 w-44 rounded-md" />
+            </div>
+            <div className="ml-auto flex items-center gap-3">
+              <Skeleton className="h-3 w-24" />
+              <Skeleton className="h-3 w-2" />
+              <Skeleton className="h-3 w-24" />
+              <Skeleton className="h-3 w-2" />
+              <Skeleton className="h-3 w-44" />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Tabs */}
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center gap-1">
+            <Skeleton className="h-9 w-36 rounded-md" />
+            <Skeleton className="h-9 w-32 rounded-md" />
+          </div>
+
+          {/* Two-pane scan layout */}
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[20rem_1fr]">
+            {/* Queue panel */}
+            <Card className="overflow-hidden py-0">
+              <CardHeader className="border-b py-4">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="mt-1 h-3 w-48" />
+              </CardHeader>
+              <div className="divide-y">
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <div
+                    key={`cctv-q-skel-${String(i)}`}
+                    className="flex items-center justify-between gap-3 px-4 py-3"
+                  >
+                    <div className="flex min-w-0 flex-col gap-1">
+                      <Skeleton className="h-4 w-32" />
+                      <Skeleton className="h-3 w-20" />
+                    </div>
+                    <Skeleton className="h-5 w-20 shrink-0 rounded-full" />
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            {/* Work panel */}
+            <Card>
+              <CardHeader>
+                <Skeleton className="h-5 w-44" />
+                <Skeleton className="mt-1.5 h-3 w-72" />
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* WHEP video frame area */}
+                <div className="relative aspect-video w-full overflow-hidden rounded-md bg-gradient-to-br from-zinc-900 via-zinc-950 to-black">
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <Skeleton className="h-12 w-12 rounded-full" />
+                  </div>
+                </div>
+                {/* Action buttons */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <Skeleton className="h-9 w-32 rounded-md" />
+                  <Skeleton className="h-9 w-32 rounded-md" />
+                  <Skeleton className="ml-auto h-9 w-28 rounded-md" />
+                </div>
+                {/* Face grid placeholder */}
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="space-y-2">
+                      <Skeleton className="aspect-square w-full rounded-md" />
+                      <Skeleton className="h-3 w-20" />
+                      <Skeleton className="h-3 w-16" />
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
       </div>
     )
   }

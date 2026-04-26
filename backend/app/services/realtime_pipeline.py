@@ -50,6 +50,7 @@ class SessionPipeline:
         grabber: FrameGrabber,
         db_factory,
         room_id: str | None = None,
+        backrow_grabber: FrameGrabber | None = None,
     ) -> None:
         self.schedule_id = schedule_id
         self.room_id = room_id
@@ -63,6 +64,25 @@ class SessionPipeline:
         self._last_summary: float = 0.0
         self._frame_count: int = 0
         self._frame_sequence: int = 0
+
+        # Distant-face plan 2026-04-26 Phase 2 — secondary back-row loop.
+        # When ``backrow_grabber`` is provided, ``start()`` instantiates a
+        # parallel ``RealtimeTracker`` that processes the cropped sibling
+        # stream (e.g. ``eb226-back``) at a slower cadence. Its
+        # detections feed the same ``self._presence`` service so a
+        # student detected via either camera marks attendance once.
+        # Coordinate spaces differ between the two streams — only
+        # presence + auto-enrol consume the back-row tracker's output;
+        # the WS overlay broadcast is wide-stream-only.
+        self._backrow_grabber: FrameGrabber | None = backrow_grabber
+        self._backrow_tracker: RealtimeTracker | None = None
+        self._backrow_task: asyncio.Task | None = None
+        # Asyncio lock guarding the shared ``TrackPresenceService`` so the
+        # main + back-row loops can't both rebind the DB session and
+        # mutate per-user state in the same scheduler tick. Cheap; the
+        # loops run on different cadences so contention is rare.
+        self._presence_lock: asyncio.Lock = asyncio.Lock()
+        self._backrow_frame_count: int = 0
 
         # Cached schedule metadata for notification context
         self._faculty_id: str | None = None
@@ -278,6 +298,38 @@ class SessionPipeline:
                 liveness_model=liveness_model,
             )
 
+            # Distant-face plan 2026-04-26 Phase 2 — instantiate the
+            # back-row tracker too when a back-row grabber was wired in
+            # at construction time. Reuses the same ML backend (sidecar
+            # or in-process), the same FAISS index, the same
+            # name_map / phone-only set, and the same ``self._presence``
+            # — its only purpose is to add detections from the cropped
+            # camera view into presence accounting.
+            #
+            # Tagged with a distinct ``camera_id`` so any evidence /
+            # auto-enrol output can be filtered server-side; the cropped
+            # view is a different visual context and downstream auditing
+            # benefits from telling the two apart.
+            if self._backrow_grabber is not None:
+                self._backrow_tracker = RealtimeTracker(
+                    insightface_model=insightface_model,
+                    faiss_manager=faiss_manager,
+                    enrolled_user_ids=self._presence.enrolled_ids,
+                    name_map=full_name_map,
+                    schedule_id=self.schedule_id,
+                    camera_id=(
+                        f"{camera_handle}-back" if camera_handle else "backrow"
+                    ),
+                    phone_only_user_ids=phone_only_user_ids,
+                    liveness_model=liveness_model,
+                )
+                logger.info(
+                    "SessionPipeline %s: back-row tracker attached "
+                    "(camera_id=%s)",
+                    self.schedule_id[:8],
+                    self._backrow_tracker._camera_id,
+                )
+
             self._last_flush = time.monotonic()
             self._last_summary = time.monotonic()
 
@@ -289,6 +341,16 @@ class SessionPipeline:
         self._task = asyncio.create_task(
             self._run_loop(), name=f"pipeline-{self.schedule_id[:8]}"
         )
+
+        # Distant-face plan 2026-04-26 Phase 2 — auxiliary loop for the
+        # cropped back-row stream. Started AFTER the main task so the
+        # main pipeline's bookkeeping is fully initialised by the time
+        # the back-row loop tries to grab the shared presence lock.
+        if self._backrow_tracker is not None:
+            self._backrow_task = asyncio.create_task(
+                self._run_backrow_loop(),
+                name=f"pipeline-backrow-{self.schedule_id[:8]}",
+            )
 
         # Register in the global session manager so API endpoints see
         # session_active=True for this schedule.
@@ -307,23 +369,37 @@ class SessionPipeline:
         """Stop the pipeline and return session summary."""
         self._stop_event.set()
 
-        if self._task is not None:
+        # Wait for the main task and (if present) the back-row task to
+        # exit. Both honour ``self._stop_event`` so a clean shutdown
+        # takes one frame interval. Cancel after timeout to avoid
+        # hangs from a wedged grabber.
+        for _name, _t in (("main", self._task), ("backrow", self._backrow_task)):
+            if _t is None:
+                continue
             try:
-                await asyncio.wait_for(self._task, timeout=5.0)
+                await asyncio.wait_for(_t, timeout=5.0)
             except (TimeoutError, asyncio.CancelledError):
-                self._task.cancel()
+                _t.cancel()
+                logger.debug(
+                    "Pipeline %s: cancelled stuck %s task on stop",
+                    self.schedule_id[:8],
+                    _name,
+                )
 
         summary: dict = {}
         if self._presence is not None:
-            db = self._db_factory()
-            try:
-                self._presence.rebind_db(db)
-                summary = self._presence.end_session()
-            finally:
-                db.close()
+            async with self._presence_lock:
+                db = self._db_factory()
+                try:
+                    self._presence.rebind_db(db)
+                    summary = self._presence.end_session()
+                finally:
+                    db.close()
 
         if self._tracker is not None:
             self._tracker.reset()
+        if self._backrow_tracker is not None:
+            self._backrow_tracker.reset()
 
         session_manager.unregister_session(self.schedule_id)
 
@@ -651,13 +727,18 @@ class SessionPipeline:
                                 self._emit_recognition_miss(t)
 
                         # Update presence state — use short-lived DB session for
-                        # any event-driven writes (check-in, early leave)
-                        db = self._db_factory()
-                        try:
-                            self._presence.rebind_db(db)
-                            events = self._presence.process_track_frame(track_frame, time.monotonic())
-                        finally:
-                            db.close()
+                        # any event-driven writes (check-in, early leave).
+                        # Lock acquisition serialises against the back-row
+                        # auxiliary loop (Phase 2) so the two never both
+                        # rebind_db at once. Cheap; the back-row loop runs
+                        # at ~0.5 Hz so contention is rare.
+                        async with self._presence_lock:
+                            db = self._db_factory()
+                            try:
+                                self._presence.rebind_db(db)
+                                events = self._presence.process_track_frame(track_frame, time.monotonic())
+                            finally:
+                                db.close()
 
                         # Handle events (check-in notifications, early leave alerts)
                         if events:
@@ -687,12 +768,13 @@ class SessionPipeline:
                 now = time.monotonic()
                 if (now - self._last_flush) >= settings.PRESENCE_FLUSH_INTERVAL:
                     try:
-                        db = self._db_factory()
-                        try:
-                            self._presence.rebind_db(db)
-                            self._presence.flush_presence_logs()
-                        finally:
-                            db.close()
+                        async with self._presence_lock:
+                            db = self._db_factory()
+                            try:
+                                self._presence.rebind_db(db)
+                                self._presence.flush_presence_logs()
+                            finally:
+                                db.close()
                     except Exception:
                         logger.exception("Pipeline %s: error flushing presence", self.schedule_id[:8])
                     self._last_flush = now
@@ -742,6 +824,120 @@ class SessionPipeline:
         except Exception:
             logger.exception("Pipeline %s crashed", self.schedule_id[:8])
 
+    async def _run_backrow_loop(self) -> None:
+        """Auxiliary loop for the cropped back-row stream.
+
+        Distant-face plan 2026-04-26 Phase 2.
+
+        Runs at a deliberately slow cadence (~0.5 fps — once every 2 s)
+        because the back-row stream's job is only to catch students that
+        the wide-shot tracker missed. Higher rates would compete with
+        the main loop for sidecar capacity without meaningfully
+        improving back-row recall (the SCAN_INTERVAL_SECONDS=60 presence
+        cadence is 30× slower than this loop already).
+
+        Output policy:
+          * Detections feed ``self._presence.process_track_frame()`` so
+            user-id-keyed attendance accumulates from either camera.
+          * NO WS frame_update broadcast — the admin live page renders
+            wide-stream coordinates only. Showing back-row bboxes there
+            would be visually wrong (different field of view).
+          * NO live-display crops — same reason.
+          * Recognition events / RECOGNITION_MATCH activity emits are
+            also suppressed; the wide-stream pipeline owns those, and
+            the back-row tracker re-detecting the same student would
+            duplicate the audit log.
+
+        Failures are swallowed (logged at DEBUG) so a flaky cropped
+        publisher never breaks the main pipeline. The grabber's own
+        reconnect-on-stale path handles publisher restarts.
+        """
+        if self._backrow_grabber is None or self._backrow_tracker is None:
+            return
+
+        # Slow cadence: 0.5 fps. Keep this conservative — doubling it
+        # roughly doubles the back-row sidecar load.
+        backrow_interval = 2.0
+        loop = asyncio.get_event_loop()
+
+        try:
+            while not self._stop_event.is_set():
+                loop_start = time.monotonic()
+
+                try:
+                    grabbed = self._backrow_grabber.grab_with_pts()
+                    frame = None if grabbed is None else grabbed[0]
+                    if frame is None:
+                        # Fall through to sleep — the back-row stream's
+                        # publisher may not be ready yet (cam-relay
+                        # starts cropped streams ~3 s after main).
+                        pass
+                    else:
+                        track_frame = await loop.run_in_executor(
+                            None,
+                            self._backrow_tracker.process,
+                            frame,
+                            None,  # no rtp_pts — back-row stream is re-encoded
+                            None,  # no captured_at_ms — latency probe is wide-only
+                        )
+                        self._backrow_frame_count += 1
+
+                        # Feed presence service. Locked against the main
+                        # loop's process_track_frame so the two never
+                        # both rebind_db simultaneously.
+                        async with self._presence_lock:
+                            db = self._db_factory()
+                            try:
+                                self._presence.rebind_db(db)
+                                events = self._presence.process_track_frame(
+                                    track_frame, time.monotonic()
+                                )
+                            finally:
+                                db.close()
+
+                        # If the back-row tracker happens to fire a
+                        # check_in / early_leave / return event, broadcast
+                        # it on the same WS channel as the main loop
+                        # (the admin overlay only listens for events,
+                        # not the bbox stream, on those payloads — they
+                        # render the same on the main view regardless of
+                        # which camera spotted the student).
+                        for event in events:
+                            await self._handle_event(event)
+
+                        if self._backrow_frame_count % 30 == 0:
+                            logger.info(
+                                "Pipeline %s back-row: %d frames, "
+                                "%d tracks this frame, %.1fms processing",
+                                self.schedule_id[:8],
+                                self._backrow_frame_count,
+                                len(track_frame.tracks),
+                                track_frame.processing_ms,
+                            )
+
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.debug(
+                        "Pipeline %s back-row: error processing frame",
+                        self.schedule_id[:8],
+                        exc_info=True,
+                    )
+
+                elapsed = time.monotonic() - loop_start
+                sleep_time = max(0.0, backrow_interval - elapsed)
+                if sleep_time > 0:
+                    await asyncio.sleep(sleep_time)
+
+        except asyncio.CancelledError:
+            logger.info(
+                "Pipeline %s back-row loop cancelled", self.schedule_id[:8]
+            )
+        except Exception:
+            logger.exception(
+                "Pipeline %s back-row loop crashed", self.schedule_id[:8]
+            )
+
     async def _broadcast_frame_update(self, track_frame) -> None:
         """Send frame_update message to WebSocket clients."""
         self._frame_sequence += 1
@@ -771,6 +967,26 @@ class SessionPipeline:
                     "liveness_state": t.liveness_state,
                     "liveness_score": round(float(t.liveness_score), 3),
                     "is_active": True,  # All broadcast tracks are currently active
+                    # ── Recognition diagnostics (added 2026-04-26) ──
+                    # Surfaced verbatim from RealtimeTracker._diagnostic_fields
+                    # so the admin Track Detail panel can show top-1 / top-2
+                    # / decision_reason / effective threshold without an
+                    # operator having to grep dozzle. All optional — older
+                    # clients that ignore them keep working.
+                    "top1_user_id": t.top1_user_id,
+                    "top1_score": round(float(t.top1_score), 4),
+                    "top1_name": t.top1_name,
+                    "top2_user_id": t.top2_user_id,
+                    "top2_score": round(float(t.top2_score), 4),
+                    "top2_name": t.top2_name,
+                    "decision_reason": t.decision_reason,
+                    "effective_threshold": round(float(t.effective_threshold), 4),
+                    "decision_searched": t.decision_searched,
+                    "swap_blocked": t.swap_blocked,
+                    "mutex_demoted": t.mutex_demoted,
+                    "best_score_seen": round(float(t.best_score_seen), 4),
+                    "unknown_attempts": int(t.unknown_attempts),
+                    "frames_seen": int(t.frames_seen),
                 }
                 for t in track_frame.tracks
             ]

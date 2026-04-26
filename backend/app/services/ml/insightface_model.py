@@ -506,6 +506,88 @@ class InsightFaceModel:
             )
         return out
 
+    def detect_tiled(
+        self,
+        frame: np.ndarray,
+        tiles: list,
+        *,
+        include_coarse: bool = True,
+        ios_thresh: float = 0.5,
+    ) -> list[dict]:
+        """Run SCRFD on N tiles in-process and merge with IOS-NMM.
+
+        Distant-face plan 2026-04-26 Phase 3 — in-process counterpart
+        to ``RemoteInsightFaceModel.detect_tiled``. Mirrors the sidecar
+        endpoint's algorithm (letterbox each tile to ``self._det_size``,
+        SCRFD per tile, remap, merge with IOS-NMM) so the realtime
+        tracker can call this method whether the active backend is
+        the sidecar or the in-process CPU model.
+
+        Args:
+            frame: BGR ndarray, full source frame.
+            tiles: list of ``TileRect`` instances.
+            include_coarse: Run an extra full-frame SCRFD pass and
+                include its detections in the merge.
+            ios_thresh: IOS threshold for greedy_nmm_ios.
+
+        Returns:
+            List of dicts with ``bbox`` / ``det_score`` / ``kps`` in
+            original-frame pixel coordinates.
+        """
+        if not tiles:
+            return self.detect(frame)
+        if self.app is None or self.app.det_model is None:
+            return []
+
+        # Lazy import to avoid pulling tile_detection symbols into
+        # paths that don't use them (registration, calibration).
+        from app.services.ml.tile_detection import (
+            greedy_nmm_ios,
+            letterbox_to_square,
+            remap_detection,
+        )
+
+        target_size = int(self._det_size[0])
+        all_dets: list[dict] = []
+
+        if include_coarse:
+            try:
+                all_dets.extend(self.detect(frame))
+            except Exception:
+                logger.exception("coarse detect inside detect_tiled failed")
+
+        for tile in tiles:
+            try:
+                tile_img = frame[tile.y0:tile.y1, tile.x0:tile.x1]
+                if tile_img.size == 0:
+                    continue
+                padded, scale, pad_x, pad_y = letterbox_to_square(
+                    tile_img, target_size=target_size
+                )
+                local_dets = self.detect(padded)
+                for det in local_dets:
+                    bbox_global, kps_global = remap_detection(
+                        det["bbox"],
+                        det.get("kps"),
+                        tile,
+                        scale,
+                        pad_x,
+                        pad_y,
+                    )
+                    all_dets.append(
+                        {
+                            "bbox": bbox_global,
+                            "det_score": float(det["det_score"]),
+                            "kps": kps_global,
+                        }
+                    )
+            except Exception:
+                logger.exception(
+                    "tile detection failed for %r — skipping", tile
+                )
+
+        return greedy_nmm_ios(all_dets, ios_threshold=ios_thresh)
+
     def embed_from_kps(
         self,
         frame: np.ndarray,
@@ -638,6 +720,22 @@ class InsightFaceModel:
 
         input_size = int(rec_model.input_size[0])
         aligned_crops: list[np.ndarray] = []
+        # Distant-face plan 2026-04-26 Phase 4c — when a face is tiny
+        # (back-row or distant), the default INTER_LINEAR resampler in
+        # face_align.norm_crop's warpAffine smears already-scarce pixel
+        # detail. INTER_CUBIC preserves a measurable amount of edge
+        # information at sub-millisecond cost. We estimate the face
+        # span from the 5-pt landmark spread (close enough to bbox
+        # width for the threshold decision) and switch to INTER_CUBIC
+        # only when below ARCFACE_TINY_CROP_PX. Larger faces stay on
+        # INTER_LINEAR — there's no quality benefit and we'd just
+        # burn CPU on them.
+        cubic_enabled = bool(
+            getattr(settings, "ARCFACE_CUBIC_UPSAMPLE_ENABLED", False)
+        )
+        tiny_threshold_px = int(
+            getattr(settings, "ARCFACE_TINY_CROP_PX", 64)
+        )
         for kps in kps_list:
             kps_arr = np.asarray(kps, dtype=np.float32)
             if kps_arr.shape != (5, 2):
@@ -652,9 +750,33 @@ class InsightFaceModel:
                     np.zeros((input_size, input_size, 3), dtype=np.uint8)
                 )
                 continue
-            aligned = face_align.norm_crop(
-                frame, landmark=kps_arr, image_size=input_size
-            )
+            use_cubic = False
+            if cubic_enabled:
+                kps_x_span = float(kps_arr[:, 0].max() - kps_arr[:, 0].min())
+                kps_y_span = float(kps_arr[:, 1].max() - kps_arr[:, 1].min())
+                # Use the larger axis as a face-size proxy — typical
+                # human-facing kps span ~50-60 % of the face's longer
+                # dimension. Threshold ARCFACE_TINY_CROP_PX is in face-
+                # pixel units, so a kps span of ~half the threshold
+                # corresponds to a small face overall.
+                if max(kps_x_span, kps_y_span) < (tiny_threshold_px * 0.6):
+                    use_cubic = True
+            if use_cubic:
+                # Inline the face_align.norm_crop affine + warpAffine so
+                # we can pass the cv2.INTER_CUBIC flag — upstream's
+                # implementation doesn't expose interpolation as an arg.
+                M = face_align.estimate_norm(kps_arr, input_size, mode="arcface")
+                aligned = cv2.warpAffine(
+                    frame,
+                    M,
+                    (input_size, input_size),
+                    flags=cv2.INTER_CUBIC,
+                    borderValue=0.0,
+                )
+            else:
+                aligned = face_align.norm_crop(
+                    frame, landmark=kps_arr, image_size=input_size
+                )
             aligned_crops.append(aligned)
 
         # Single batched ONNX session.run via insightface's get_feat. When

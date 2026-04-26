@@ -323,6 +323,188 @@ async def detect(request: Request) -> JSONResponse:
     )
 
 
+@app.post("/detect_tiled")
+async def detect_tiled(request: Request) -> JSONResponse:
+    """Run SCRFD on N tiles of a frame, merge with IOS-NMM, return globals.
+
+    Distant-face plan 2026-04-26 Phase 3.
+
+    Body: JSON with shape::
+
+        {
+          "jpeg_b64": "<base64 jpeg>",
+          "tiles": [{"x0":0,"y0":0,"x1":640,"y1":1080}, ...],
+          "include_coarse": true,
+          "ios_thresh": 0.5
+        }
+
+    The gateway pre-computes tile rectangles using
+    ``app.services.ml.tile_detection.compute_tile_rects`` and
+    ``compute_motion_mask`` so motion-gating decisions stay on the
+    gateway side (where they have full per-camera state context).
+    The sidecar's job is purely: SCRFD-on-each-tile + merge.
+
+    Returns the merged detection list in *original-frame* pixel space,
+    same shape as ``/detect``'s response. Down-stream callers
+    (``RealtimeTracker``) cannot tell whether the detections came
+    from a single full-frame pass or N tiles + merge.
+
+    Returns 503 when the model isn't ready, 400 on bad input. Errors
+    inside per-tile inference are caught and the offending tile is
+    skipped so a single bad tile doesn't kill the frame.
+    """
+    if _model is None or _model.app is None:
+        raise HTTPException(status_code=503, detail="model not ready")
+
+    body = await request.json()
+    jpeg_b64 = body.get("jpeg_b64")
+    tiles_in = body.get("tiles")
+    if not jpeg_b64 or not isinstance(tiles_in, list):
+        raise HTTPException(
+            status_code=400,
+            detail="jpeg_b64 + tiles required",
+        )
+    include_coarse = bool(body.get("include_coarse", True))
+    ios_thresh = float(body.get("ios_thresh", 0.5))
+    if not (0.0 < ios_thresh <= 1.0):
+        raise HTTPException(
+            status_code=400,
+            detail=f"ios_thresh must be in (0, 1]; got {ios_thresh}",
+        )
+
+    import base64
+
+    try:
+        jpeg = base64.b64decode(jpeg_b64)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"bad jpeg_b64: {exc}") from exc
+    frame = _decode_jpeg(jpeg)
+    frame_h, frame_w = frame.shape[:2]
+
+    # Lazy import to avoid pulling tile_detection (and OpenCV BG-sub
+    # symbols) into the sidecar process startup path. The sidecar
+    # already has cv2 + numpy resident, so import cost is just the
+    # Python-level module load.
+    from app.services.ml.tile_detection import (  # noqa: E402
+        TileRect,
+        greedy_nmm_ios,
+        letterbox_to_square,
+        remap_detection,
+    )
+
+    # Validate tile shapes up-front. Bad input fails fast before we
+    # spend SCRFD time on it.
+    tiles: list[TileRect] = []
+    for entry in tiles_in:
+        try:
+            tile = TileRect(
+                x0=int(entry["x0"]),
+                y0=int(entry["y0"]),
+                x1=int(entry["x1"]),
+                y1=int(entry["y1"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"bad tile rect {entry!r}: {exc}",
+            ) from exc
+        # Clamp to frame bounds — defensive, gateway should already
+        # have produced inside-the-frame rectangles.
+        if (
+            tile.x0 < 0
+            or tile.y0 < 0
+            or tile.x1 > frame_w
+            or tile.y1 > frame_h
+            or tile.x1 <= tile.x0
+            or tile.y1 <= tile.y0
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"tile {tile!r} out of frame bounds "
+                    f"({frame_w}×{frame_h})"
+                ),
+            )
+        tiles.append(tile)
+
+    # The sidecar's SCRFD is bound at the static export's det_size.
+    # Pull that off the loaded model so we letterbox each tile to the
+    # exact same shape the ANE-bound graph expects.
+    target_size = int(_model._det_size[0])
+
+    detections_global: list[dict] = []
+    timing_ms: dict[str, float] = {"per_tile": [], "coarse": 0.0, "merge": 0.0}
+
+    # Optional coarse global pass — guarantees no regression on
+    # close-up faces whose bbox spans a tile seam.
+    if include_coarse:
+        t_coarse = time.perf_counter()
+        try:
+            coarse_dets = _model.detect(frame)
+            detections_global.extend(coarse_dets)
+        except Exception:
+            logger.exception("coarse detect inside /detect_tiled failed")
+        timing_ms["coarse"] = (time.perf_counter() - t_coarse) * 1000.0
+
+    for tile in tiles:
+        t0 = time.perf_counter()
+        try:
+            tile_img = frame[tile.y0:tile.y1, tile.x0:tile.x1]
+            if tile_img.size == 0:
+                continue
+            padded, scale, pad_x, pad_y = letterbox_to_square(
+                tile_img, target_size=target_size
+            )
+            local_dets = _model.detect(padded)
+            for det in local_dets:
+                bbox_global, kps_global = remap_detection(
+                    det["bbox"],
+                    det.get("kps"),
+                    tile,
+                    scale,
+                    pad_x,
+                    pad_y,
+                )
+                detections_global.append(
+                    {
+                        "bbox": bbox_global,
+                        "det_score": float(det["det_score"]),
+                        "kps": kps_global,
+                    }
+                )
+        except Exception:
+            logger.exception(
+                "tile detection failed for %r — skipping tile", tile
+            )
+        finally:
+            timing_ms["per_tile"].append(
+                round((time.perf_counter() - t0) * 1000.0, 2)
+            )
+
+    t_merge = time.perf_counter()
+    merged = greedy_nmm_ios(detections_global, ios_threshold=ios_thresh)
+    timing_ms["merge"] = (time.perf_counter() - t_merge) * 1000.0
+
+    return JSONResponse(
+        content={
+            "detections": [
+                {
+                    "bbox": d["bbox"].tolist(),
+                    "det_score": d["det_score"],
+                    "kps": (
+                        d["kps"].tolist() if d.get("kps") is not None else None
+                    ),
+                }
+                for d in merged
+            ],
+            "tile_count": len(tiles),
+            "coarse_included": include_coarse,
+            "ios_thresh": ios_thresh,
+            "timing_ms": timing_ms,
+        }
+    )
+
+
 @app.post("/embed")
 async def embed(request: Request) -> JSONResponse:
     """Run ArcFace on N faces in one frame, returning N L2-normalised embeddings.

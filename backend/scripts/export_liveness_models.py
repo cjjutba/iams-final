@@ -72,9 +72,14 @@ UPSTREAM_REPO_URL = os.environ.get(
 # newer pinned commit is preferred.
 UPSTREAM_REPO_COMMIT = os.environ.get("LIVENESS_UPSTREAM_COMMIT", "main")
 
-DEFAULT_INSIGHTFACE_HOME = Path(
-    os.environ.get("INSIGHTFACE_HOME", "")
-) or (Path.home() / ".insightface")
+# Resolve INSIGHTFACE_HOME the same way ``LivenessModel._resolve_models_root``
+# does — env var wins when set, otherwise fall back to ``~/.insightface``.
+# Note: ``Path("") or fallback`` is buggy — ``Path("")`` is truthy under
+# Python's default object truthiness rules and short-circuits the ``or``,
+# leaving the script writing to ``./models/minifasnet`` from cwd. Explicit
+# string check avoids that footgun.
+_HOME_ENV = os.environ.get("INSIGHTFACE_HOME", "").strip()
+DEFAULT_INSIGHTFACE_HOME = Path(_HOME_ENV) if _HOME_ENV else (Path.home() / ".insightface")
 OUT_PACK_NAME = os.environ.get("LIVENESS_PACK_NAME", "minifasnet")
 
 # The two checkpoints we ship by default. Each entry maps:
@@ -230,10 +235,30 @@ def _export_one(
 
     cls = classes[spec.model_class]
     # MiniFASNet constructor signature in upstream: (keep_dict, embedding_size,
-    # conv6_kernel, drop_p, num_classes, img_channel). Defaults work for the
-    # 80x80 deploy variants we care about — only num_classes is non-default.
-    logger.info("Instantiating %s(num_classes=%d)", spec.model_class, spec.num_classes)
-    model = cls(num_classes=spec.num_classes, img_channel=3)
+    # conv6_kernel, drop_p, num_classes, img_channel). conv6_kernel is the
+    # spatial size of the depthwise final pooling conv and MUST match the
+    # value the .pth was trained with — upstream computes it from the
+    # input resolution as ``((H+15)//16, (W+15)//16)`` (see
+    # ``src/utility.py::get_kernel`` in Silent-Face-Anti-Spoofing). For
+    # the 80x80 deploy variants this is (5, 5); leaving the default (7, 7)
+    # raises a ``size mismatch for conv_6_dw.conv.weight`` on load.
+    conv6_kernel = (
+        (spec.input_size + 15) // 16,
+        (spec.input_size + 15) // 16,
+    )
+    logger.info(
+        "Instantiating %s(num_classes=%d, conv6_kernel=%s) for %dx%d input",
+        spec.model_class,
+        spec.num_classes,
+        conv6_kernel,
+        spec.input_size,
+        spec.input_size,
+    )
+    model = cls(
+        num_classes=spec.num_classes,
+        img_channel=3,
+        conv6_kernel=conv6_kernel,
+    )
     state = torch.load(str(pth_path), map_location="cpu", weights_only=True) if hasattr(torch, "load") else None
     if state is None:
         # Older torch without weights_only kwarg
@@ -245,6 +270,15 @@ def _export_one(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("Exporting %s -> %s", spec.pth_filename, onnx_path)
+    # Force the legacy TorchScript-based exporter (``dynamo=False``). The
+    # new dynamo-based exporter (default in torch >= 2.6) writes weights
+    # to a sidecar ``<name>.onnx.data`` file via the ONNX external-data
+    # format, which ORT then refuses to load when InferenceSession is
+    # constructed with a path argument and the external file lookup
+    # collides with its initializer path-validation. The legacy exporter
+    # produces a single self-contained .onnx file (~250 KB graph + ~1.7 MB
+    # weights = ~2 MB total — well under the 2 GB protobuf limit), which
+    # is what the sidecar's LivenessModel.load() expects.
     torch.onnx.export(
         model,
         dummy,
@@ -258,6 +292,7 @@ def _export_one(
         # delegate to the Apple Neural Engine. The sidecar chunks
         # batches at the recognition path's max_batch when N > 1.
         dynamic_axes=None,
+        dynamo=False,
     )
 
     # Round-trip verify: load the ONNX in ORT and run a single noise frame.
