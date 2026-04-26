@@ -5,6 +5,11 @@
 *.keystore
 keystore.properties
 admin/public/iams.apk
+admin/public/iams-student.apk
+admin/public/iams-faculty.apk
+deploy/static/iams.apk
+deploy/static/iams-student.apk
+deploy/static/iams-faculty.apk
 
 # Python
 __pycache__/

@@ -1,8 +1,10 @@
-name: Build & Release APK
+name: Build & Release APKs
 
-# Builds the Android app and publishes a signed APK as a GitHub Release on every
-# push to main. The Vercel landing page rewrites /iams.apk to the latest release
-# asset (see admin/vercel.json), so users always download the freshest build.
+# Builds the two Android apps from the 2026-04-22 two-app split
+# (:app-student and :app-faculty) and publishes both signed APKs as a single
+# GitHub Release on every push to main. The Vercel landing page rewrites
+# /iams-student.apk and /iams-faculty.apk to the latest release assets
+# (see admin/vercel.json), so users always download the freshest builds.
 #
 # Requires four repository secrets (Settings → Secrets and variables → Actions):
 #   - SIGNING_KEYSTORE_BASE64   base64-encoded contents of the .jks keystore
@@ -34,9 +36,9 @@ permissions:
 
 jobs:
   build:
-    name: Build APK
+    name: Build APKs
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - name: Checkout (full history for version count)
         uses: actions/checkout@v4
@@ -104,7 +106,7 @@ jobs:
           fi
           echo "IAMS_KEYSTORE_PATH=${RUNNER_TEMP}/release.keystore" >> "$GITHUB_ENV"
 
-      - name: Build signed release APK
+      - name: Build signed release APKs (student + faculty)
         working-directory: android
         env:
           IAMS_KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
@@ -112,37 +114,46 @@ jobs:
           IAMS_KEY_PASSWORD:      ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
           chmod +x gradlew
-          ./gradlew :app:assembleRelease \
+          ./gradlew :app-student:assembleRelease :app-faculty:assembleRelease \
             -PversionCode=${{ steps.version.outputs.versionCode }} \
             -PversionName=${{ steps.version.outputs.versionName }} \
             --no-daemon --stacktrace
 
-      - name: Stage APK as iams.apk
+      - name: Stage APKs as iams-student.apk + iams-faculty.apk
         run: |
           mkdir -p release
-          SRC="android/app/build/outputs/apk/release/app-release.apk"
-          if [ ! -f "$SRC" ]; then
-            echo "::error::Expected APK not found at $SRC"
-            ls -la android/app/build/outputs/apk/release/ || true
-            exit 1
-          fi
-          cp "$SRC" release/iams.apk
-          ls -lh release/iams.apk
-          SIZE=$(stat -c%s release/iams.apk)
-          echo "  size = ${SIZE} bytes ($((SIZE / 1024 / 1024)) MiB)"
+          STUDENT_SRC="android/app-student/build/outputs/apk/release/app-student-release.apk"
+          FACULTY_SRC="android/app-faculty/build/outputs/apk/release/app-faculty-release.apk"
+          for f in "$STUDENT_SRC" "$FACULTY_SRC"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::Expected APK not found at $f"
+              ls -la "$(dirname "$f")" || true
+              exit 1
+            fi
+          done
+          cp "$STUDENT_SRC" release/iams-student.apk
+          cp "$FACULTY_SRC" release/iams-faculty.apk
+          ls -lh release/
+          for f in release/iams-student.apk release/iams-faculty.apk; do
+            SIZE=$(stat -c%s "$f")
+            echo "  $(basename "$f") = ${SIZE} bytes ($((SIZE / 1024 / 1024)) MiB)"
+          done
 
-      - name: Verify APK signature
+      - name: Verify APK signatures
         run: |
           BUILD_TOOLS="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1)"
-          "$BUILD_TOOLS/apksigner" verify --verbose release/iams.apk
+          "$BUILD_TOOLS/apksigner" verify --verbose release/iams-student.apk
+          "$BUILD_TOOLS/apksigner" verify --verbose release/iams-faculty.apk
 
-      - name: Upload APK as workflow artifact
-        # Lets PR reviewers download and test the candidate APK from the run
+      - name: Upload APKs as workflow artifacts
+        # Lets PR reviewers download and test the candidate APKs from the run
         # summary page before merging.
         uses: actions/upload-artifact@v4
         with:
-          name: iams-apk-${{ steps.version.outputs.versionName }}
-          path: release/iams.apk
+          name: iams-apks-${{ steps.version.outputs.versionName }}
+          path: |
+            release/iams-student.apk
+            release/iams-faculty.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -157,15 +168,23 @@ jobs:
           body: |
             Automated build from commit `${{ steps.version.outputs.sha }}`.
 
-            **Install:** download `iams.apk` and sideload on Android 8.0+ (arm64-v8a only).
+            **Install:** download `iams-student.apk` (on-campus IAMS-Net) or
+            `iams-faculty.apk` (works anywhere with internet) and sideload on
+            Android 8.0+ (arm64-v8a only). Both APKs install side-by-side
+            (`com.iams.app.student` + `com.iams.app.faculty`).
 
-            Backend endpoint baked in: `http://167.71.217.44`
+            Backend endpoints:
+            - Student APK → `http://<MAC_IP>` on IAMS-Net
+            - Faculty APK → `http://167.71.217.44` (always VPS)
 
             ---
-            *This release was built and signed by GitHub Actions. The Vercel landing
-            page (`iams-thesis.vercel.app`) always serves the latest release via the
-            `/iams.apk` rewrite — no manual deploy required.*
-          files: release/iams.apk
+            *This release was built and signed by GitHub Actions. The Vercel
+            landing page (`iams-thesis.vercel.app`) always serves the latest
+            release via the `/iams-student.apk` and `/iams-faculty.apk`
+            rewrites — no manual deploy required.*
+          files: |
+            release/iams-student.apk
+            release/iams-faculty.apk
           fail_on_unmatched_files: true
           make_latest: 'true'
         env:

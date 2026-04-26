@@ -1,6 +1,5 @@
 package com.iams.app.ui.student
 
-import com.iams.app.ui.components.NotificationBellButton
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -90,7 +89,6 @@ fun StudentHomeScreen(
     viewModel: StudentHomeViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val notifUnreadCount by viewModel.notificationService.unreadCount.collectAsState()
     val connectionHealth by viewModel.connectionHealth.collectAsState()
     val spacing = IAMSThemeTokens.spacing
     val toastState = LocalToastState.current
@@ -195,10 +193,6 @@ fun StudentHomeScreen(
                         fontWeight = FontWeight.Bold,
                         color = Primary,
                         modifier = Modifier.weight(1f)
-                    )
-                    NotificationBellButton(
-                        notificationService = viewModel.notificationService,
-                        onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) },
                     )
                 }
 

@@ -70,6 +70,33 @@ data class FaceStatusResponse(
     @SerializedName("registered") val faceRegistered: Boolean
 )
 
+// One angle in a registration. `imageUrl` is a server path like
+// `/api/v1/face/registrations/<user_id>/images/<angle_label>`. The student
+// app prepends BACKEND_HOST + port (Retrofit's baseUrl is `/api/v1/` so
+// when feeding the URL into Coil we need the absolute origin). Null for
+// angles whose embedding row never had image bytes persisted (older
+// registrations from before image-storage was added).
+data class FaceAngleMetadata(
+    val id: String,
+    @SerializedName("angle_label") val angleLabel: String,
+    @SerializedName("quality_score") val qualityScore: Float? = null,
+    @SerializedName("created_at") val createdAt: String? = null,
+    @SerializedName("image_url") val imageUrl: String? = null,
+)
+
+// Returned by GET /face/registrations/{user_id}. `available=false` is the
+// "no active registration" state (200 OK, not a 404). When non-null the
+// `angles` list contains every persisted angle including CCTV-captured
+// crops; the student profile picks the `center` angle (or first available)
+// for the round avatar.
+data class FaceRegistrationDetailResponse(
+    @SerializedName("user_id") val userId: String,
+    val available: Boolean,
+    @SerializedName("registered_at") val registeredAt: String? = null,
+    @SerializedName("embedding_dim") val embeddingDim: Int? = null,
+    val angles: List<FaceAngleMetadata>? = null,
+)
+
 // === Schedule ===
 data class ScheduleResponse(
     val id: String,
@@ -304,18 +331,10 @@ data class SubjectBreakdown(
 )
 
 // === Notifications ===
-data class NotificationResponse(
-    val id: String,
-    @SerializedName("user_id") val userId: String = "",
-    val type: String,
-    val title: String,
-    val message: String,
-    val read: Boolean,
-    @SerializedName("read_at") val readAt: String? = null,
-    @SerializedName("reference_id") val referenceId: String? = null,
-    @SerializedName("reference_type") val referenceType: String? = null,
-    @SerializedName("created_at") val createdAt: String = "",
-)
+// ``NotificationResponse`` and the preference DTOs were removed in the
+// 2026-04-26 cleanup — the student APK no longer surfaces in-app
+// notifications. Only the unread-count response remains, used by
+// ``NotificationService`` for an in-memory counter that no UI displays.
 
 data class UnreadCountResponse(
     @SerializedName("unread_count") val unreadCount: Int
@@ -380,28 +399,13 @@ data class LiveStudentStatus(
     @SerializedName("presence_score") val presenceScore: Float? = null,
 )
 
-// === Notification Preferences ===
-data class NotificationPreferenceResponse(
-    @SerializedName("attendance_confirmation") val attendanceConfirmation: Boolean = true,
-    @SerializedName("early_leave_alerts") val earlyLeaveAlerts: Boolean = true,
-    @SerializedName("anomaly_alerts") val anomalyAlerts: Boolean = true,
-    @SerializedName("low_attendance_warning") val lowAttendanceWarning: Boolean = true,
-    @SerializedName("daily_digest") val dailyDigest: Boolean = false,
-    @SerializedName("weekly_digest") val weeklyDigest: Boolean = true,
-    @SerializedName("email_enabled") val emailEnabled: Boolean = false,
-)
-
-data class NotificationPreferenceUpdateRequest(
-    @SerializedName("attendance_confirmation") val attendanceConfirmation: Boolean? = null,
-    @SerializedName("early_leave_alerts") val earlyLeaveAlerts: Boolean? = null,
-    @SerializedName("anomaly_alerts") val anomalyAlerts: Boolean? = null,
-    @SerializedName("low_attendance_warning") val lowAttendanceWarning: Boolean? = null,
-    @SerializedName("daily_digest") val dailyDigest: Boolean? = null,
-    @SerializedName("weekly_digest") val weeklyDigest: Boolean? = null,
-    @SerializedName("email_enabled") val emailEnabled: Boolean? = null,
-)
-
 // === Real-time Notification Event (from WebSocket /ws/alerts/{user_id}) ===
+// Still used by ``NotificationWebSocketClient`` to parse server pushes
+// of ``type: "notification"``. The student APK doesn't display these
+// (no bell, no notifications screen as of 2026-04-26 cleanup), but the
+// WS client keeps decoding them so non-notification events on the same
+// channel (attendance state changes, presence updates) continue to
+// flow through the same socket.
 data class NotificationEvent(
     val type: String,
     @SerializedName("toast_type") val toastType: String,

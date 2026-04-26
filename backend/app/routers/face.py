@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.config import logger, settings
 from app.database import get_db
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.repositories.schedule_repository import ScheduleRepository
 from app.repositories.face_repository import FaceRepository
 from app.schemas.face import (
@@ -222,19 +222,29 @@ async def get_face_status(current_user: User = Depends(get_current_user), db: Se
 )
 async def get_registration_detail(
     user_id: str,
-    _admin: User = Depends(get_current_admin),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    **Admin-only: Registration Detail for Face-Comparison Sheet**
+    **Registration Detail for Face-Comparison Sheet (admin) or Profile Photo (self)**
 
-    Returns per-angle embedding metadata for a student's active face
-    registration. Used by the admin live-feed page to populate the
-    side-by-side comparison sheet.
+    Returns per-angle embedding metadata for a user's active face
+    registration. Two callers:
+      - Admin live-feed sheet (any user_id) — full per-angle metadata.
+      - Student profile screen (own user_id only) — uses the same shape to
+        derive a profile photo URL for `AsyncImage`.
+
+    Authorisation: admin can fetch any user; non-admins (students) can only
+    fetch their own row. Cross-user fetches by non-admins return 403.
 
     In Phase 1 every `image_url` is null (images not persisted yet).
     Phase 2 populates it for angles whose `image_storage_key` is set.
     """
+    if str(current_user.id) != user_id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="forbidden",
+        )
     face_repo = FaceRepository(db)
     registration = face_repo.get_by_user(user_id)
 
@@ -286,14 +296,22 @@ async def get_registration_detail(
 async def get_registration_image(
     user_id: str,
     angle_label: str,
-    current_user: User = Depends(get_current_admin),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    **Admin-only: Registration Image Bytes**
+    **Registration Image Bytes (admin or self)**
 
-    Returns the stored JPEG for a specific registration angle. Used by the
-    admin live-feed face-comparison sheet to render `<img>` tags.
+    Returns the stored JPEG for a specific registration angle. Two callers:
+      - Admin live-feed sheet (any user_id) — renders the side-by-side
+        comparison `<img>` tags.
+      - Student profile screen (own user_id only) — renders the profile
+        photo `AsyncImage`.
+
+    Authorisation: admin can fetch any user; non-admins can only fetch
+    their own image. Cross-user fetches by non-admins return 403. The
+    only audit log entry is the admin one — student self-fetches are not
+    audited (would be noise; the student is just viewing their own face).
 
     - 404 if there is no active registration or no embedding row for the
       given angle.
@@ -301,6 +319,13 @@ async def get_registration_image(
       (distinct from 404 — useful signal for backfill / storage drift).
     - Cache-Control is 5 min, `private` — files never change once written.
     """
+    is_admin = current_user.role == UserRole.ADMIN
+    if str(current_user.id) != user_id and not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="forbidden",
+        )
+
     from app.utils.face_image_storage import _is_allowed_angle_label
 
     if not _is_allowed_angle_label(angle_label):
@@ -332,19 +357,22 @@ async def get_registration_image(
             status_code=status.HTTP_410_GONE, detail="image_missing_on_disk"
         )
 
-    # Audit the byte fetch (not the index call — would flood audit on a poll).
-    try:
-        log_audit(
-            db,
-            admin_id=current_user.id,
-            action="face.registered_images.view",
-            target_type="user",
-            target_id=user_id,
-            details=f"angle={angle_label}",
-        )
-    except Exception:
-        # Audit failures should not break the read.
-        logger.warning("log_audit failed for face.registered_images.view", exc_info=True)
+    # Audit the admin byte fetch (not the index call — would flood audit on a
+    # poll). Student self-fetches are NOT audited; a student viewing their own
+    # face is normal traffic, not a privileged read.
+    if is_admin:
+        try:
+            log_audit(
+                db,
+                admin_id=current_user.id,
+                action="face.registered_images.view",
+                target_type="user",
+                target_id=user_id,
+                details=f"angle={angle_label}",
+            )
+        except Exception:
+            # Audit failures should not break the read.
+            logger.warning("log_audit failed for face.registered_images.view", exc_info=True)
 
     return FileResponse(
         path=str(path),
@@ -835,8 +863,6 @@ async def deregister_face(user_id: str, current_user: User = Depends(get_current
 
     Requires authentication.
     """
-    from app.models.user import UserRole
-
     # Students can only deregister their own face
     if current_user.role == UserRole.STUDENT and str(current_user.id) != user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Students can only deregister their own face")

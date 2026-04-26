@@ -59,7 +59,6 @@ import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
-import com.iams.app.ui.components.NotificationBellButton
 import com.iams.app.ui.components.SkeletonBox
 import com.iams.app.ui.navigation.Routes
 import com.iams.app.ui.theme.TextPrimary
@@ -126,15 +125,7 @@ fun StudentHistoryScreen(
                 .fillMaxSize()
                 .background(Background)
         ) {
-            IAMSHeader(
-                title = "History",
-                trailing = {
-                    NotificationBellButton(
-                        notificationService = viewModel.notificationService,
-                        onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) },
-                    )
-                },
-            )
+            IAMSHeader(title = "History")
 
             Box(
                 modifier = Modifier
@@ -178,15 +169,7 @@ fun StudentHistoryScreen(
             .fillMaxSize()
             .background(Background)
     ) {
-        IAMSHeader(
-                title = "History",
-                trailing = {
-                    NotificationBellButton(
-                        notificationService = viewModel.notificationService,
-                        onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) },
-                    )
-                },
-            )
+        IAMSHeader(title = "History")
 
         // Filters container
         Column(

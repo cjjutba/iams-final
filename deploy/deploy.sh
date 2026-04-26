@@ -148,17 +148,73 @@ if [ "${MODE}" = "vps" ]; then
         docker compose -f docker-compose.vps.yml ps
 REMOTE
 
-    echo "[4/5] Seeding VPS postgres (faculty + schedules + rooms)..."
+    echo "[4/6] Seeding VPS postgres (faculty + schedules + rooms)..."
     ssh "${VPS_USER}@${VPS_IP}" \
         'docker exec iams-api-gateway-vps python -m scripts.seed_vps_minimal' || {
         echo "  WARNING: seed failed. Run manually later via:" >&2
         echo "    ssh root@${VPS_IP} 'docker exec iams-api-gateway-vps python -m scripts.seed_vps_minimal'" >&2
     }
 
-    echo "[5/5] Verifying..."
+    # Pull the latest signed APKs from GitHub releases onto the VPS so nginx
+    # (deploy/nginx.vps.conf) can serve /iams-student.apk + /iams-faculty.apk
+    # out of /static. The Build & Release APKs workflow publishes both
+    # assets on every push to main; this step just mirrors the latest
+    # release into /opt/iams/deploy/static/. Bind-mounted into the nginx
+    # container at /static, so no nginx restart is needed — new file is
+    # picked up on the next request.
+    echo "[5/6] Pulling latest APKs from GitHub releases onto VPS..."
+    ssh "${VPS_USER}@${VPS_IP}" 'bash -s' <<'REMOTE'
+        set -e
+        STATIC_DIR=/opt/iams/deploy/static
+        REPO_URL="https://github.com/cjjutba/iams-final/releases/latest/download"
+        mkdir -p "${STATIC_DIR}"
+
+        downloaded_any=0
+        for apk in iams-student.apk iams-faculty.apk; do
+            echo "  → ${apk}"
+            tmp="${STATIC_DIR}/${apk}.tmp"
+            if curl -fLsS --retry 3 --retry-delay 2 -o "${tmp}" "${REPO_URL}/${apk}"; then
+                # Sanity: APK files start with "PK" (zip magic). If the GitHub
+                # CDN ever returns an HTML 404 page with a 200 wrapper, the
+                # download would silently succeed but be unservable.
+                if head -c 2 "${tmp}" | grep -q "^PK"; then
+                    mv "${tmp}" "${STATIC_DIR}/${apk}"
+                    ls -lh "${STATIC_DIR}/${apk}"
+                    downloaded_any=1
+                else
+                    echo "    WARNING: ${apk} did not look like a valid APK (no PK header)."
+                    rm -f "${tmp}"
+                fi
+            else
+                echo "    WARNING: failed to download ${apk} from ${REPO_URL}"
+                echo "    The Build & Release APKs workflow may not have published it yet."
+                rm -f "${tmp}"
+            fi
+        done
+
+        # Maintain a legacy /iams.apk → faculty APK alias on disk so the
+        # relay-mode nginx (which still references /static/iams.apk) keeps
+        # working without config churn.
+        if [ -f "${STATIC_DIR}/iams-faculty.apk" ]; then
+            cp -f "${STATIC_DIR}/iams-faculty.apk" "${STATIC_DIR}/iams.apk"
+        fi
+
+        if [ "${downloaded_any}" = "1" ]; then
+            echo "  APK sync complete."
+        else
+            echo "  WARNING: no APKs downloaded — landing-page Download buttons"
+            echo "           will 404 until the Build & Release APKs workflow"
+            echo "           publishes a release with iams-student.apk +"
+            echo "           iams-faculty.apk attached."
+        fi
+REMOTE
+
+    echo "[6/6] Verifying..."
     sleep 2
     HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "http://${VPS_IP}/api/v1/health" || echo "000")
     FACE_GONE=$(curl -s -o /dev/null -w "%{http_code}" "http://${VPS_IP}/api/v1/face/register" || echo "000")
+    STUDENT_APK=$(curl -s -o /dev/null -w "%{http_code}" "http://${VPS_IP}/iams-student.apk" || echo "000")
+    FACULTY_APK=$(curl -s -o /dev/null -w "%{http_code}" "http://${VPS_IP}/iams-faculty.apk" || echo "000")
 
     echo ""
     echo "=========================================="
@@ -172,10 +228,17 @@ REMOTE
     echo "  Health:          http://${VPS_IP}/api/v1/health              (expect 200)"
     echo "  Faculty login:   POST http://${VPS_IP}/api/v1/auth/login     (expect 200 + JWT)"
     echo "  Face endpoint:   http://${VPS_IP}/api/v1/face/register       (got ${FACE_GONE}, expect 404 — route disabled)"
-    echo "  Faculty APK:     http://${VPS_IP}/iams-faculty.apk"
+    echo "  Student APK:     http://${VPS_IP}/iams-student.apk           (got ${STUDENT_APK}, expect 200)"
+    echo "  Faculty APK:     http://${VPS_IP}/iams-faculty.apk           (got ${FACULTY_APK}, expect 200)"
     echo "  Public WHEP:     http://${VPS_IP}:8889/<stream>/whep"
     echo "  Logs:            http://${VPS_IP}:9999                        (Dozzle)"
     echo ""
+    if [ "${STUDENT_APK}" != "200" ] || [ "${FACULTY_APK}" != "200" ]; then
+        echo "  NOTE: APK URL(s) did not return 200. If the Build & Release APKs"
+        echo "        workflow has not published a release yet, push to main and"
+        echo "        wait for the GitHub Action to finish, then re-run this deploy."
+        echo ""
+    fi
     echo "  Next: ensure the on-prem Mac is running ./scripts/onprem-up.sh"
     echo "        so its mediamtx pushes to rtsp://${VPS_IP}:8554/<streamKey>."
     echo ""

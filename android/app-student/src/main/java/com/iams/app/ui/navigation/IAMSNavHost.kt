@@ -50,7 +50,6 @@ import com.iams.app.ui.student.StudentAttendanceDetailScreen
 import com.iams.app.ui.student.StudentEditProfileScreen
 import com.iams.app.ui.student.StudentHistoryScreen
 import com.iams.app.ui.student.StudentHomeScreen
-import com.iams.app.ui.student.StudentNotificationsScreen
 import com.iams.app.ui.student.StudentProfileScreen
 import com.iams.app.ui.student.StudentScheduleScreen
 
@@ -243,10 +242,6 @@ fun IAMSNavHost() {
 
                     composable(Routes.STUDENT_EDIT_PROFILE) {
                         StudentEditProfileScreen(navController = navController)
-                    }
-
-                    composable(Routes.STUDENT_NOTIFICATIONS) {
-                        StudentNotificationsScreen(navController = navController)
                     }
 
                     composable(

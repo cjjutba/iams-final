@@ -44,7 +44,6 @@ object Routes {
     const val STUDENT_ATTENDANCE_DETAIL = "student/attendance-detail/{attendanceId}/{scheduleId}/{date}"
     const val STUDENT_ANALYTICS = "student/analytics"
     const val STUDENT_EDIT_PROFILE = "student/edit-profile"
-    const val STUDENT_NOTIFICATIONS = "student/notifications"
     const val STUDENT_FACE_REGISTER = "student/face-register/{mode}"
 
     // Faculty routes removed — the faculty app lives in :app-faculty

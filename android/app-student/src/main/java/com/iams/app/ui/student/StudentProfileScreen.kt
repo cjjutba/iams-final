@@ -44,11 +44,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.content.Intent
+import androidx.compose.ui.draw.scale
+import coil.compose.AsyncImagePainter
+import coil.compose.SubcomposeAsyncImage
+import coil.compose.SubcomposeAsyncImageContent
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.iams.app.MainActivity
@@ -57,7 +62,6 @@ import com.iams.app.ui.components.IAMSButtonSize
 import com.iams.app.ui.components.IAMSButtonVariant
 import com.iams.app.ui.components.IAMSCard
 import com.iams.app.ui.components.IAMSHeader
-import com.iams.app.ui.components.NotificationBellButton
 import com.iams.app.ui.components.SkeletonBox
 import com.iams.app.ui.components.LocalToastState
 import com.iams.app.ui.components.ToastType
@@ -130,15 +134,7 @@ fun StudentProfileScreen(
             .fillMaxSize()
             .background(Background)
     ) {
-        IAMSHeader(
-            title = "Profile",
-            trailing = {
-                NotificationBellButton(
-                    notificationService = viewModel.notificationService,
-                    onClick = { navController.navigate(Routes.STUDENT_NOTIFICATIONS) },
-                )
-            },
-        )
+        IAMSHeader(title = "Profile")
 
         when {
             uiState.isLoading && uiState.user == null -> {
@@ -259,7 +255,12 @@ fun StudentProfileScreen(
                     ) {
                         // ── Profile header ──
 
-                        // Avatar circle with initials
+                        // Avatar — registered face photo when available, falls
+                        // back to a circle with the user's initials when the
+                        // student hasn't registered yet, the registration lacks
+                        // image bytes, or the photo fetch fails. The "Christian
+                        // Jutba | 21-A-02177" page in the admin portal renders
+                        // the same image; this screen mirrors it for parity.
                         val firstName = uiState.user?.firstName ?: ""
                         val lastName = uiState.user?.lastName ?: ""
                         val initials = buildString {
@@ -267,20 +268,11 @@ fun StudentProfileScreen(
                             if (lastName.isNotEmpty()) append(lastName.first().uppercaseChar())
                         }
 
-                        Box(
-                            modifier = Modifier
-                                .size(layout.avatarXl)
-                                .clip(CircleShape)
-                                .background(Secondary),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = initials,
-                                fontSize = 24.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = TextSecondary
-                            )
-                        }
+                        ProfileAvatar(
+                            photoUrl = uiState.profilePhotoUrl,
+                            initials = initials,
+                            size = layout.avatarXl,
+                        )
 
                         Spacer(modifier = Modifier.height(spacing.lg))
 
@@ -393,6 +385,62 @@ fun StudentProfileScreen(
 }
 
 // ── Sub-components ──
+
+/**
+ * Round avatar that prefers the student's registered face photo, falls back
+ * to an initials circle on miss / load failure / null URL.
+ *
+ * The image is mirrored horizontally on display because phone selfies are
+ * stored un-mirrored to match ArcFace's training-time convention. Without
+ * this flip, the human-perceived "left side of my face" would land on the
+ * right side of the avatar — same flip the admin portal applies (see
+ * StudentAvatar in admin/src/routes/users/student-record-detail.tsx).
+ */
+@Composable
+private fun ProfileAvatar(
+    photoUrl: String?,
+    initials: String,
+    size: androidx.compose.ui.unit.Dp,
+) {
+    val initialsBox: @Composable () -> Unit = {
+        Box(
+            modifier = Modifier
+                .size(size)
+                .clip(CircleShape)
+                .background(Secondary),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = initials,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = TextSecondary,
+            )
+        }
+    }
+
+    if (photoUrl.isNullOrBlank()) {
+        initialsBox()
+        return
+    }
+
+    SubcomposeAsyncImage(
+        model = photoUrl,
+        contentDescription = "Profile photo",
+        contentScale = ContentScale.Crop,
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .scale(scaleX = -1f, scaleY = 1f),
+    ) {
+        when (painter.state) {
+            is AsyncImagePainter.State.Loading,
+            is AsyncImagePainter.State.Empty -> initialsBox()
+            is AsyncImagePainter.State.Error -> initialsBox()
+            is AsyncImagePainter.State.Success -> SubcomposeAsyncImageContent()
+        }
+    }
+}
 
 @Composable
 private fun InfoRow(label: String, value: String) {

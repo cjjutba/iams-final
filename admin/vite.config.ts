@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
+import { existsSync } from 'fs'
 
 export default defineConfig({
   base: '/',
@@ -56,6 +57,33 @@ export default defineConfig({
         target: 'http://localhost:8889',
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/whep/, ''),
+      },
+      // APK downloads from the landing page. Two-tier resolution:
+      //   1. If admin/public/iams-{student,faculty}.apk exists (built locally
+      //      via scripts/build-local-apks.sh), the bypass returns the same
+      //      URL → next() falls through to Vite's public-dir middleware,
+      //      which serves the local debug APK as-is.
+      //   2. Otherwise the proxy forwards to the VPS at 167.71.217.44 so the
+      //      Download buttons still work without a local build.
+      // Production (Vercel) skips this entirely — admin/vercel.json rewrites
+      // the same paths to GitHub release assets.
+      '/iams-student.apk': {
+        target: 'http://167.71.217.44',
+        changeOrigin: true,
+        bypass: (req) => {
+          if (existsSync(path.resolve(__dirname, 'public/iams-student.apk'))) {
+            return req.url
+          }
+        },
+      },
+      '/iams-faculty.apk': {
+        target: 'http://167.71.217.44',
+        changeOrigin: true,
+        bypass: (req) => {
+          if (existsSync(path.resolve(__dirname, 'public/iams-faculty.apk'))) {
+            return req.url
+          }
+        },
       },
     },
   },

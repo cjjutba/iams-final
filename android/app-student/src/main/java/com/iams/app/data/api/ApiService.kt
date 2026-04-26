@@ -47,6 +47,14 @@ interface ApiService {
     @GET("face/status")
     suspend fun getFaceStatus(): Response<FaceStatusResponse>
 
+    // Per-angle registration metadata. Backend allows admin (any user) or
+    // self (own user_id only); cross-user fetches by non-admin students 403.
+    // Used by StudentProfileViewModel to derive the profile photo URL.
+    @GET("face/registrations/{userId}")
+    suspend fun getFaceRegistration(
+        @Path("userId") userId: String,
+    ): Response<FaceRegistrationDetailResponse>
+
     // Schedules
     @GET("schedules")
     suspend fun getSchedules(): Response<List<ScheduleResponse>>
@@ -145,24 +153,14 @@ interface ApiService {
     @GET("analytics/student/subjects")
     suspend fun getStudentSubjects(): Response<List<SubjectBreakdown>>
 
-    // Notifications
-    @GET("notifications")
-    suspend fun getNotifications(): Response<List<NotificationResponse>>
-
-    @PATCH("notifications/{id}/read")
-    suspend fun markNotificationRead(@Path("id") id: String): Response<NotificationResponse>
-
+    // Notifications — only the unread-count endpoint remains. The
+    // student APK no longer surfaces in-app notifications (bell + page
+    // were removed in 2026-04-26 cleanup); this single call stays
+    // because ``NotificationService`` still tracks an in-memory unread
+    // count for the WebSocket reconnect-snapshot path. No screen
+    // displays it.
     @GET("notifications/unread-count")
     suspend fun getUnreadCount(): Response<UnreadCountResponse>
-
-    @POST("notifications/read-all")
-    suspend fun markAllNotificationsRead(): Response<MessageResponse>
-
-    @DELETE("notifications/{id}")
-    suspend fun deleteNotification(@Path("id") id: String): Response<MessageResponse>
-
-    @DELETE("notifications/")
-    suspend fun deleteAllNotifications(): Response<MessageResponse>
 
     // Profile
     @PATCH("auth/profile")
@@ -177,15 +175,6 @@ interface ApiService {
     suspend fun getLiveAttendanceFull(
         @Path("scheduleId") scheduleId: String
     ): Response<LiveAttendanceFullResponse>
-
-    // Notification Preferences
-    @GET("notifications/preferences")
-    suspend fun getNotificationPreferences(): Response<NotificationPreferenceResponse>
-
-    @PATCH("notifications/preferences")
-    suspend fun updateNotificationPreferences(
-        @Body request: NotificationPreferenceUpdateRequest
-    ): Response<NotificationPreferenceResponse>
 
     // Faculty Analytics
     @GET("analytics/class/{scheduleId}/overview")
