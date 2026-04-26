@@ -3,6 +3,7 @@ import type {
   ScheduleResponse,
   ScheduleCreate,
   ScheduleUpdate,
+  ScheduleConfigUpdate,
   ScheduleSessionSummary,
   StudentEnrollmentsPage,
 } from '@/types'
@@ -22,6 +23,8 @@ export const schedulesService = {
     api.post<ScheduleResponse>('/schedules/', data).then(r => r.data),
   update: (id: string, data: ScheduleUpdate) =>
     api.patch<ScheduleResponse>(`/schedules/${id}`, data).then(r => r.data),
+  updateConfig: (id: string, data: ScheduleConfigUpdate) =>
+    api.patch<ScheduleResponse>(`/schedules/${id}/config`, data).then(r => r.data),
   delete: (id: string) =>
     api.delete(`/schedules/${id}`).then(r => r.data),
   enrollStudent: (scheduleId: string, studentUserId: string) =>

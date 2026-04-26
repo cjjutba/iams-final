@@ -23,10 +23,15 @@ from app.repositories.face_repository import FaceRepository
 from app.schemas.face import (
     CameraDiagnosticFace,
     CameraDiagnosticResponse,
+    CctvEnrollPreviewRequest,
+    CctvEnrollPreviewResponse,
     CctvEnrollRequest,
     CctvEnrollResponse,
+    CctvEnrollmentRoomOption,
     CctvEnrollmentStatusEntry,
     CctvEnrollmentStatusResponse,
+    CctvIdentifyRequest,
+    CctvIdentifyResponse,
     EdgeProcessRequest,
     EdgeProcessResponse,
     EdgeProcessResponseData,
@@ -43,7 +48,7 @@ from app.schemas.face import (
     MatchedUser,
     QualityScoreResponse,
 )
-from app.services.face_service import FaceService
+from app.services.face_service import FaceService, _resolve_room
 from app.services.ml.face_quality import assess_quality, compute_blur_score, compute_brightness
 from app.services.ml.insightface_model import insightface_model
 from app.services.presence_service import PresenceService
@@ -58,6 +63,32 @@ async def verify_edge_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
     """Validate the API key sent by edge devices (Raspberry Pi)."""
     if x_api_key != settings.EDGE_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+def _lookup_room_grabber(request: Request, db: Session, room_identifier: str):
+    """Resolve ``room_identifier`` and return the always-on FrameGrabber
+    for that room if one exists in ``app.state.frame_grabbers``.
+
+    Returns ``None`` (and logs at debug) on any miss or lookup failure.
+    The downstream service spins up a dedicated grabber when this is
+    None, so the worst case is double the ffmpeg load — never a failure.
+    """
+    try:
+        room = _resolve_room(db, room_identifier)
+        if room is None:
+            return None
+        grabbers = getattr(request.app.state, "frame_grabbers", None) or {}
+        room_id_str = str(room.id)
+        if room_id_str in grabbers:
+            logger.info(
+                "cctv_enroll: reusing always-on FrameGrabber for room %s (%s)",
+                room.name,
+                room_id_str,
+            )
+            return grabbers[room_id_str]
+    except Exception:
+        logger.debug("cctv_enroll: grabber reuse lookup failed", exc_info=True)
+    return None
 
 
 @router.post("/register", response_model=FaceRegisterResponse, status_code=status.HTTP_201_CREATED)
@@ -895,32 +926,7 @@ async def cctv_enroll_user(
     # state (preloaded at boot — see backend/app/main.py). Falling back to
     # a dedicated grabber works but spawns a second ffmpeg subprocess and
     # competes with the always-on grabber for the publisher's frames.
-    provided_grabber = None
-    try:
-        room_id_str: str | None = None
-        # body.room_code_or_id may be either a Room.code or Room.id
-        from app.models.room import Room
-        try:
-            import uuid as _u
-            r = db.query(Room).filter(Room.id == _u.UUID(body.room_code_or_id)).first()
-        except (ValueError, AttributeError):
-            r = None
-        if r is None:
-            r = db.query(Room).filter(Room.code == body.room_code_or_id).first()
-        if r is not None:
-            room_id_str = str(r.id)
-
-        grabbers = getattr(request.app.state, "frame_grabbers", None) or {}
-        if room_id_str and room_id_str in grabbers:
-            provided_grabber = grabbers[room_id_str]
-            logger.info(
-                "cctv_enroll: reusing always-on FrameGrabber for room %s", room_id_str
-            )
-    except Exception:
-        # Defensive — if anything goes wrong with the reuse path, fall
-        # through to spinning a dedicated grabber inside the service.
-        logger.debug("cctv_enroll: grabber reuse lookup failed", exc_info=True)
-        provided_grabber = None
+    provided_grabber = _lookup_room_grabber(request, db, body.room_code_or_id)
 
     try:
         result = await face_service.cctv_enroll(
@@ -966,30 +972,37 @@ async def cctv_enrollment_status(
     """**Admin-only: report which students have not yet been CCTV-enrolled.**
 
     Returns one row per student with an active face registration, listing
-    how many ``cctv_*`` embeddings they have on file. Students with zero
-    are shown as ``phone_only=True``; the realtime tracker applies a
-    stricter recognition threshold for these users so misidentifications
-    in the cross-domain noise band become "Detecting…" overlays rather
-    than wrong-name commits.
+    how many ``cctv_*`` embeddings they have on file, **broken down by
+    room** so the bulk-enrollment admin page can filter "missing CCTV
+    captures for EB227" in one round-trip.
 
-    Drives the admin live-feed banner that prompts the operator to run
-    ``cctv_enroll`` for any flagged student before relying on automatic
-    attendance for them.
+    A student with ``cctv_count == 0`` (across every room) is shown as
+    ``phone_only=True``; the realtime tracker applies a stricter
+    recognition threshold for these users so misidentifications in the
+    cross-domain noise band become "Detecting…" overlays rather than
+    wrong-name commits.
+
+    ``per_room`` maps each room's canonical key (``room.stream_key``,
+    lowercased — falls back to lowercased ``name`` for legacy rooms) to
+    the integer count of CCTV embeddings labelled for that room.
+    Pre-Phase-2 ``cctv_<idx>`` rows (no room context) are summarised
+    separately as ``cctv_legacy``.
     """
     from app.models.face_embedding import FaceEmbedding
     from app.models.face_registration import FaceRegistration
     from app.models.room import Room
-    from sqlalchemy import func
+    from app.utils.cctv_label import normalize_room_key, parse_cctv_label
 
+    # Pull every (user, label) pair in a single query; aggregate in
+    # Python so the per-room breakdown doesn't need to materialise a
+    # different SQL CASE per room (the room set is small but variable).
     rows = (
         db.query(
             FaceRegistration.user_id,
             User.first_name,
             User.last_name,
             User.student_id,
-            func.count(FaceEmbedding.id).filter(
-                FaceEmbedding.angle_label.like("cctv_%")
-            ).label("cctv_count"),
+            FaceEmbedding.angle_label,
         )
         .join(User, FaceRegistration.user_id == User.id)
         .outerjoin(
@@ -997,46 +1010,83 @@ async def cctv_enrollment_status(
             FaceEmbedding.registration_id == FaceRegistration.id,
         )
         .filter(FaceRegistration.is_active)
-        .group_by(
-            FaceRegistration.user_id,
-            User.first_name,
-            User.last_name,
-            User.student_id,
-        )
-        .order_by(func.count(FaceEmbedding.id).filter(
-            FaceEmbedding.angle_label.like("cctv_%")
-        ).asc(), User.first_name.asc())
         .all()
     )
 
+    # Bucket per user
+    per_user: dict[str, dict] = {}
+    for user_id, first, last, student_id, angle_label in rows:
+        uid = str(user_id)
+        bucket = per_user.setdefault(
+            uid,
+            {
+                "first": first or "",
+                "last": last or "",
+                "student_id": student_id,
+                "per_room": {},  # room_key -> int
+                "legacy": 0,
+                "total_cctv": 0,
+            },
+        )
+        if not angle_label:
+            continue
+        room_key, idx = parse_cctv_label(angle_label)
+        if idx is None:
+            # Not a CCTV label (phone angle / sim_*) — ignore for this report.
+            continue
+        bucket["total_cctv"] += 1
+        if room_key is None:
+            bucket["legacy"] += 1
+        else:
+            bucket["per_room"][room_key] = bucket["per_room"].get(room_key, 0) + 1
+
+    # Build response entries, sorted by phone-only first, then total CCTV
+    # count ascending, then name — the bulk-enrol UI consumes the natural
+    # queue order without needing a client-side sort.
     entries: list[CctvEnrollmentStatusEntry] = []
     phone_only_count = 0
-    for user_id, first, last, student_id, cctv_count in rows:
-        cnt = int(cctv_count or 0)
-        is_phone_only = cnt == 0
+    for uid, b in per_user.items():
+        is_phone_only = b["total_cctv"] == 0
         if is_phone_only:
             phone_only_count += 1
-        entries.append(CctvEnrollmentStatusEntry(
-            user_id=str(user_id),
-            student_id=student_id,
-            full_name=f"{first} {last}".strip(),
-            cctv_count=cnt,
-            phone_only=is_phone_only,
-        ))
+        entries.append(
+            CctvEnrollmentStatusEntry(
+                user_id=uid,
+                student_id=b["student_id"],
+                full_name=f"{b['first']} {b['last']}".strip(),
+                cctv_count=b["total_cctv"],
+                phone_only=is_phone_only,
+                per_room=b["per_room"],
+                cctv_legacy=b["legacy"],
+            )
+        )
+    entries.sort(
+        key=lambda e: (not e.phone_only, e.cctv_count, e.full_name.lower())
+    )
 
-    # Room.stream_key is the canonical room identifier the realtime
-    # tracker uses (it's also what's encoded into the new
-    # ``cctv_<room>_<idx>`` labels). Fall back to Room.name for any
-    # legacy room rows whose stream_key wasn't set.
-    rooms = [
-        (r.stream_key or r.name).lower()
-        for r in db.query(Room).order_by(Room.name).all()
-        if (r.stream_key or r.name)
-    ]
+    # Room metadata: canonical stream_key for label-matching plus the
+    # human-facing name and capability flag for the dropdown.
+    room_options: list[CctvEnrollmentRoomOption] = []
+    rooms_legacy: list[str] = []
+    for r in db.query(Room).order_by(Room.name).all():
+        sk = (r.stream_key or r.name or "").strip()
+        if not sk:
+            continue
+        normalised = normalize_room_key(sk) or sk.lower()
+        rooms_legacy.append(normalised)
+        room_options.append(
+            CctvEnrollmentRoomOption(
+                id=str(r.id),
+                name=r.name,
+                stream_key=normalised,
+                has_camera=bool(r.camera_endpoint),
+            )
+        )
 
     return CctvEnrollmentStatusResponse(
         students=entries,
-        rooms=rooms,
+        rooms=rooms_legacy,
+        room_options=room_options,
         threshold=settings.RECOGNITION_THRESHOLD,
         phone_only_threshold=(
             settings.RECOGNITION_THRESHOLD
@@ -1045,6 +1095,104 @@ async def cctv_enrollment_status(
         phone_only_count=phone_only_count,
         total_registered=len(entries),
     )
+
+
+@router.post(
+    "/cctv-identify",
+    response_model=CctvIdentifyResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def cctv_identify(
+    body: CctvIdentifyRequest,
+    request: Request,
+    _admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """**Admin-only: scan one frame and identify every face in it.**
+
+    Camera-first scan workflow for the bulk-enrollment admin page. The
+    operator hits "Scan Classroom", we grab a frame, detect every
+    face, cross-identify each against every enrolled student, and
+    return the lot. The UI then renders one card per face with the
+    identified student's name + per-room CCTV-capture status + a
+    direct "Enroll for [Room]" button.
+
+    Compared to ``cctv-enroll/{user_id}/preview`` (which is target-
+    student-first), this endpoint is target-AGNOSTIC: no ``user_id``,
+    no queue selection step. Faster for classroom-scale enrollment
+    where 5-50 students are visible at once.
+
+    No FAISS mutation. Reuses the always-on FrameGrabber when present.
+    """
+    import asyncio
+
+    face_service = FaceService(db)
+    provided_grabber = _lookup_room_grabber(request, db, body.room)
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None,
+        lambda: face_service.cctv_identify(
+            room_identifier=body.room,
+            min_face_size_px=body.min_face_size_px,
+            min_det_score=body.min_det_score,
+            min_identify_sim=body.min_identify_sim,
+            provided_grabber=provided_grabber,
+        ),
+    )
+
+    return CctvIdentifyResponse(**result)
+
+
+@router.post(
+    "/cctv-enroll/{user_id}/preview",
+    response_model=CctvEnrollPreviewResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def cctv_enroll_preview(
+    user_id: str,
+    body: CctvEnrollPreviewRequest,
+    request: Request,
+    _admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """**Admin-only: single-frame preview before committing a CCTV enrolment.**
+
+    Returns one captured face crop + its cosine similarity to the
+    student's existing phone embedding so the operator can confirm
+    visually that the right student is in front of the camera before
+    issuing the real ``POST /api/v1/face/cctv-enroll/{user_id}`` call.
+
+    No FAISS mutation, no DB write, no disk artifact — safe to call
+    repeatedly while the operator iterates on student framing. Returns
+    HTTP 200 with ``ok=False`` for soft failures (no face / multi face /
+    too small) so the UI can render the failure message inline without
+    catching exceptions.
+
+    Reuses the always-on FrameGrabber for the room when one exists; falls
+    back to spinning up a dedicated grabber if not.
+    """
+    import asyncio
+
+    face_service = FaceService(db)
+    provided_grabber = _lookup_room_grabber(request, db, body.room)
+
+    # The preview is sync (it grabs frames from a thread-safe FrameGrabber
+    # and runs ML inference directly). Hop to a worker thread so we don't
+    # block the event loop for the ~1 s capture + inference round-trip.
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None,
+        lambda: face_service.cctv_enroll_preview(
+            user_id=user_id,
+            room_identifier=body.room,
+            min_face_size_px=body.min_face_size_px,
+            min_det_score=body.min_det_score,
+            provided_grabber=provided_grabber,
+        ),
+    )
+
+    return CctvEnrollPreviewResponse(**result)
 
 
 @router.get("/camera-diagnostic", response_model=CameraDiagnosticResponse)

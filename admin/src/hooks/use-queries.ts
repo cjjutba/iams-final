@@ -10,7 +10,7 @@ import { faceService } from '@/services/face.service'
 import { recognitionsService } from '@/services/recognitions.service'
 import { activityService } from '@/services/activity.service'
 import { presenceService } from '@/services/presence.service'
-import type { AdminCreateUser, CreateStudentRecord, UpdateStudentRecord, UserRole, UserUpdate, ScheduleCreate, ScheduleUpdate, RoomCreate, RoomUpdate, NotificationPreferenceUpdate, RecognitionListFilters, ActivityListFilters, AccessAuditFilters, StudentEnrollmentsPage } from '@/types'
+import type { AdminCreateUser, CreateStudentRecord, UpdateStudentRecord, UserRole, UserUpdate, ScheduleCreate, ScheduleUpdate, ScheduleConfigUpdate, RoomCreate, RoomUpdate, NotificationPreferenceUpdate, RecognitionListFilters, ActivityListFilters, AccessAuditFilters, StudentEnrollmentsPage } from '@/types'
 
 // ── Query keys ──────────────────────────────────────────────
 
@@ -252,6 +252,23 @@ export function useUpdateSchedule() {
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: ScheduleUpdate }) => schedulesService.update(id, data),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: queryKeys.schedules.all }) },
+  })
+}
+
+// Distinct from useUpdateSchedule because the backend's /config endpoint
+// is the only path that also propagates the change to a running session
+// pipeline (see backend/app/routers/schedules.py:update_schedule_config).
+// A regular PATCH would persist but not affect an active session until
+// it ends + restarts.
+export function useUpdateScheduleConfig() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: ScheduleConfigUpdate }) =>
+      schedulesService.updateConfig(id, data),
+    onSuccess: (_data, variables) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.schedules.detail(variables.id) })
+      void qc.invalidateQueries({ queryKey: queryKeys.schedules.all })
+    },
   })
 }
 

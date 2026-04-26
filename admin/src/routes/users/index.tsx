@@ -4,10 +4,8 @@ import { usePageTitle } from '@/hooks/use-page-title'
 import { type ColumnDef } from '@tanstack/react-table'
 import { safeFormat } from '@/lib/utils'
 import {
-  CheckCircle2,
   Loader2,
   MoreHorizontal,
-  XCircle,
   Eye,
   UserX,
   UserCheck,
@@ -16,8 +14,12 @@ import {
 import { toast } from 'sonner'
 
 import { DataTable } from '@/components/data-tables'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  ActiveStatusPill,
+  EmailVerifiedPill,
+  UserRolePill,
+} from '@/components/shared/status-pills'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -64,12 +66,6 @@ function buildUserHaystack(u: UserResponse): string {
     u.email_verified ? 'Verified' : 'Unverified',
     ...isoDateHaystackParts(u.created_at),
   ])
-}
-
-const roleBadgeVariant: Record<UserRole, 'default' | 'secondary' | 'outline'> = {
-  student: 'default',
-  faculty: 'secondary',
-  admin: 'outline',
 }
 
 function ActionsCell({ user }: { user: UserResponse }) {
@@ -260,11 +256,7 @@ export default function UsersPage() {
     {
       accessorKey: 'role',
       header: 'Role',
-      cell: ({ row }) => (
-        <Badge variant={roleBadgeVariant[row.original.role]} className="capitalize">
-          {row.original.role}
-        </Badge>
-      ),
+      cell: ({ row }) => <UserRolePill role={row.original.role} />,
     },
     {
       accessorKey: 'student_id',
@@ -278,22 +270,12 @@ export default function UsersPage() {
     {
       accessorKey: 'is_active',
       header: 'Status',
-      cell: ({ row }) =>
-        row.original.is_active ? (
-          <Badge variant="default">Active</Badge>
-        ) : (
-          <Badge variant="destructive">Inactive</Badge>
-        ),
+      cell: ({ row }) => <ActiveStatusPill active={row.original.is_active} />,
     },
     {
       accessorKey: 'email_verified',
-      header: 'Email Verified',
-      cell: ({ row }) =>
-        row.original.email_verified ? (
-          <CheckCircle2 className="h-4 w-4 text-green-600" />
-        ) : (
-          <XCircle className="h-4 w-4 text-red-500" />
-        ),
+      header: 'Email',
+      cell: ({ row }) => <EmailVerifiedPill verified={row.original.email_verified} />,
     },
     {
       accessorKey: 'created_at',

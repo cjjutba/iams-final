@@ -80,7 +80,7 @@ export default function AnalyticsPage() {
         <Link to="/analytics/at-risk">
           <Card className="hover:border-primary/50 transition-colors cursor-pointer">
             <CardHeader className="flex flex-row items-center gap-3">
-              <UserX className="h-8 w-8 text-red-500" />
+              <UserX className="h-8 w-8 text-red-600 dark:text-red-400" />
               <div className="flex-1">
                 <CardTitle className="text-lg">At-Risk Students</CardTitle>
                 <CardDescription>

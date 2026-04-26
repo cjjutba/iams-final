@@ -344,6 +344,156 @@ class SessionPipeline:
                 self.schedule_id[:8],
             )
 
+    async def swap_camera(self, new_grabber: FrameGrabber, new_room_id: str) -> None:
+        """Hot-swap the FrameGrabber + room without ending the session.
+
+        Used when an admin changes a schedule's room_id mid-session (the
+        active session needs to keep reading from the NEW room's camera,
+        not the old one — without this, the run loop keeps decoding the
+        old grabber and the WS overlay broadcasts bboxes in the old
+        camera's coordinate space onto the new camera's video, producing
+        the misaligned-overlay bug seen on 2026-04-26).
+
+        What's preserved:
+          * ``self._presence`` and the underlying ``TrackPresenceService`` —
+            accumulated ``total_present_seconds`` per student, attendance
+            records, early-leave timeout state. The session continues from
+            the operator's POV.
+          * ``self._faculty_id``, ``self._subject_code``, ``self._subject_name``
+            — schedule metadata is unchanged.
+          * Schedule auto-managed window snapshot — same schedule, same
+            self-stop boundary.
+
+        What's reset:
+          * Tracker state (ByteTrack IDs, identity cache, evidence-throttle
+            ledger). Track IDs from the OLD camera's coordinate space are
+            meaningless in the new camera.
+          * Phone-only user_ids set — recomputed against the NEW room key
+            so cross-domain CCTV-embedding gating reflects which students
+            have captures in this specific room (per-room awareness from
+            the 2026-04-26 phase 2 work in ``start()``).
+          * Pipeline-level dedup ledgers keyed on track_id
+            (``_unknown_emitted``, ``_recognized_captured``,
+            ``_last_live_display_broadcast``) — track IDs are about to
+            re-issue from 1.
+          * Frame-staleness watchdog — the new camera gets a fresh 30 s
+            grace before any "frame_stale" notification fires.
+
+        The grabber assignment is a single CPython attribute write, so
+        the run loop's ``self._grabber.grab_with_pts()`` will atomically
+        pick up the new grabber on its next iteration. A brief 1-2 frame
+        glitch (boxes drawn in old coordinate space onto a new-camera
+        frame) is possible but self-corrects within ~200 ms because the
+        tracker reset clears all carried-over track state immediately
+        after the swap.
+        """
+        if not self.is_running:
+            logger.warning(
+                "swap_camera called on stopped pipeline %s — ignoring",
+                self.schedule_id[:8],
+            )
+            return
+
+        old_room_id = self.room_id
+        logger.info(
+            "SessionPipeline %s: swapping camera room %s -> %s",
+            self.schedule_id[:8],
+            old_room_id,
+            new_room_id,
+        )
+
+        # Resolve the new room's camera handle (stream_key or name) for
+        # the tracker's evidence/recognition broadcasts. Also recompute
+        # phone-only user_ids against the new room since cross-domain
+        # CCTV embeddings are stored per-room.
+        from app.models.face_embedding import FaceEmbedding
+        from app.models.face_registration import FaceRegistration
+        from app.models.room import Room
+        from app.models.user import User
+        from app.utils.cctv_label import normalize_room_key, parse_cctv_label
+
+        new_camera_handle: str | None = None
+        new_phone_only: set[str] = set()
+        db = self._db_factory()
+        try:
+            room = db.query(Room).filter(Room.id == new_room_id).first()
+            if room:
+                new_camera_handle = room.stream_key or room.name
+
+            if self._presence is not None and self._presence.enrolled_ids:
+                this_room_key = normalize_room_key(new_camera_handle) or "unknown"
+                rows = (
+                    db.query(
+                        FaceRegistration.user_id,
+                        FaceEmbedding.angle_label,
+                    )
+                    .join(User, FaceRegistration.user_id == User.id)
+                    .outerjoin(
+                        FaceEmbedding,
+                        FaceEmbedding.registration_id == FaceRegistration.id,
+                    )
+                    .filter(FaceRegistration.is_active)
+                    .filter(
+                        FaceRegistration.user_id.in_(
+                            list(self._presence.enrolled_ids)
+                        )
+                    )
+                    .all()
+                )
+                has_room_cctv: dict[str, bool] = {}
+                for user_id, label in rows:
+                    uid = str(user_id)
+                    if uid not in has_room_cctv:
+                        has_room_cctv[uid] = False
+                    if not label:
+                        continue
+                    emb_room, emb_idx = parse_cctv_label(label)
+                    if emb_idx is None:
+                        continue
+                    if emb_room == this_room_key or emb_room is None:
+                        has_room_cctv[uid] = True
+                for uid, has_cctv in has_room_cctv.items():
+                    if not has_cctv:
+                        new_phone_only.add(uid)
+        finally:
+            db.close()
+
+        # Reset tracker state BEFORE the grabber swap so that any
+        # in-flight executor-bound process() call returning right after
+        # the swap clears its way out cleanly. Worst case: one frame
+        # arrives mid-swap and produces empty tracks for one tick.
+        if self._tracker is not None:
+            self._tracker.reset()
+            self._tracker._camera_id = new_camera_handle or "unknown"
+            self._tracker._phone_only = new_phone_only
+
+        # Atomic reference swap — no lock needed, the run loop reads
+        # ``self._grabber`` once per iteration.
+        self._grabber = new_grabber
+        self.room_id = new_room_id
+
+        # Pipeline-level dedup ledgers keyed on track_id reset (track
+        # IDs about to re-issue from 1).
+        self._unknown_emitted.clear()
+        self._recognized_captured.clear()
+        self._last_live_display_broadcast.clear()
+
+        # Frame-staleness watchdog: give the new camera a fresh 30 s
+        # grace window. The new grabber may not have a frame ready on
+        # its very first read; without this, an unlucky swap could
+        # immediately fire "frame_stale" against the new room.
+        self._last_frame_at = time.monotonic()
+        self._stale_warned = False
+
+        logger.info(
+            "SessionPipeline %s: camera swap complete — reading from %s "
+            "(camera_handle=%s, phone_only=%d)",
+            self.schedule_id[:8],
+            new_room_id,
+            new_camera_handle,
+            len(new_phone_only),
+        )
+
     def _should_self_stop(self) -> bool:
         """Belt-and-braces guard: should this pipeline halt because its
         schedule window has passed?

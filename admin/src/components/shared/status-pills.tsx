@@ -209,3 +209,120 @@ export function CameraConfiguredPill({ configured }: { configured: boolean }) {
     <span className={`${BASE} ${TONE.muted}`}>Not configured</span>
   )
 }
+
+/**
+ * Attendance-rate band pill. Three thresholds:
+ *   >= 85  emerald  (healthy)
+ *   70-84  amber    (warning)
+ *   < 70   red      (concerning)
+ *
+ * Same thresholds the per-record presence-score color uses, so the
+ * dashboard's per-session rate and the attendance page's per-row score
+ * agree at a glance.
+ */
+export function AttendanceRatePill({ rate }: { rate: number }) {
+  const tone: Tone = rate >= 85 ? 'emerald' : rate >= 70 ? 'amber' : 'red'
+  return (
+    <span className={`${BASE} ${TONE[tone]}`}>
+      <span className="tabular-nums">{rate.toFixed(0)}%</span>
+    </span>
+  )
+}
+
+/**
+ * At-risk classification pill. Backend emits `risk_level` as one of:
+ *   critical / high  — red
+ *   moderate         — amber
+ *   low              — emerald
+ * Anything else falls through to muted so a new tier added server-side
+ * doesn't crash the page.
+ */
+export function RiskLevelPill({ level }: { level: string }) {
+  const norm = level.toLowerCase()
+  let tone: Tone = 'muted'
+  if (norm === 'critical' || norm === 'high') tone = 'red'
+  else if (norm === 'moderate' || norm === 'medium') tone = 'amber'
+  else if (norm === 'low') tone = 'emerald'
+  return (
+    <span className={`${BASE} ${TONE[tone]} capitalize`}>
+      {level.replace(/_/g, ' ')}
+    </span>
+  )
+}
+
+/**
+ * Recognition outcome pill — used in the historical recognitions list and
+ * (via the same colors) the live RecognitionPanel. Three outcomes:
+ *   matched + ambiguous     amber  (the recognition was made but with
+ *                                   competing candidates close to threshold)
+ *   matched                 emerald (clean match)
+ *   miss                    muted  (no match)
+ */
+export function RecognitionOutcomePill({
+  matched,
+  ambiguous,
+}: {
+  matched: boolean
+  ambiguous: boolean
+}) {
+  if (ambiguous) return <span className={`${BASE} ${TONE.amber}`}>Ambiguous</span>
+  if (matched) return <span className={`${BASE} ${TONE.emerald}`}>Match</span>
+  return <span className={`${BASE} ${TONE.muted}`}>Miss</span>
+}
+
+/** Crop-kind pill for the recognition access audit table. */
+export function CropKindPill({ kind }: { kind: 'live' | 'registered' }) {
+  return kind === 'live' ? (
+    <span className={`${BASE} ${TONE.blue}`}>Live</span>
+  ) : (
+    <span className={`${BASE} ${TONE.emerald}`}>Registered</span>
+  )
+}
+
+/**
+ * Returned-after-early-leave pill. The early-leaves table uses this to
+ * indicate whether the student who triggered the alert came back into
+ * the room before the session ended.
+ *   returned   → emerald, optional time string ("returned 5:38 PM")
+ *   notified   → blue, info-only
+ *   neither    → muted em-dash equivalent
+ */
+export function ReturnedPill({
+  returned,
+  returnedAt,
+}: {
+  returned: boolean
+  returnedAt?: string | null
+}) {
+  if (!returned) return <span className="text-sm text-muted-foreground">No</span>
+  return (
+    <span className={`${BASE} ${TONE.emerald}`}>
+      {returnedAt ? returnedAt : 'Yes'}
+    </span>
+  )
+}
+
+/** Notified pill for the early-leaves table. */
+export function NotifiedPill({ notified }: { notified: boolean }) {
+  if (!notified) return <span className="text-sm text-muted-foreground">No</span>
+  return <span className={`${BASE} ${TONE.blue}`}>Notified</span>
+}
+
+/** Generic count pill — emerald when count exceeds threshold, muted otherwise. */
+export function ConsecutiveMissesPill({ count }: { count: number }) {
+  // Red when ≥ 3 (the early-leave detection threshold per the project's
+  // 3-consecutive-miss rule); amber for 1-2; muted for 0.
+  const tone: Tone = count >= 3 ? 'red' : count > 0 ? 'amber' : 'muted'
+  return (
+    <span className={`${BASE} ${TONE[tone]} tabular-nums`}>
+      {count}
+    </span>
+  )
+}
+
+/** User role badge — neutral outline pill, role text in lowercase title-case. */
+export function UserRolePill({ role }: { role: string }) {
+  return (
+    <span className={`${BASE} ${TONE.muted} capitalize`}>{role}</span>
+  )
+}

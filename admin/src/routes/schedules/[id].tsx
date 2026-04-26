@@ -92,6 +92,7 @@ import {
   useUnenrollStudent,
   useDeregisterFace,
 } from '@/hooks/use-queries'
+import { EarlyLeaveTimeoutControl } from '@/components/schedules/early-leave-timeout-control'
 import type { ScheduleRuntimeStatus } from '@/types'
 import { usersService } from '@/services/users.service'
 import { tokenMatches, joinHaystack } from '@/lib/search'
@@ -726,6 +727,24 @@ export default function ScheduleDetailPage() {
               />
             )}
           </div>
+        </CardContent>
+      </Card>
+
+      {/* ── Attendance Settings ──────────────────────────────────────── */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Attendance Settings</CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Tuning that controls how this schedule's sessions detect early
+            leave. Saving applies immediately to a running session.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <EarlyLeaveTimeoutControl
+            scheduleId={schedule.id}
+            currentMinutes={schedule.early_leave_timeout_minutes ?? null}
+            helperText="Lower values flag early leaves faster but tolerate fewer brief gaps (bathroom break, phone). 5 min is a safe default for hour-long classes."
+          />
         </CardContent>
       </Card>
 

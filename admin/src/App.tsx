@@ -43,6 +43,7 @@ const RecognitionAccessAuditPage = lazy(() => import('@/routes/audit/recognition
 const ActivityPage = lazy(() => import('@/routes/activity/index'))
 const SettingsPage = lazy(() => import('@/routes/settings'))
 const NotificationsPage = lazy(() => import('@/routes/notifications'))
+const CctvEnrollmentPage = lazy(() => import('@/routes/cctv-enrollment'))
 
 function LoadingFallback() {
   return (
@@ -92,6 +93,7 @@ export default function App() {
               <Route path="recognitions" element={<RecognitionsPage />} />
               <Route path="audit/recognition-access" element={<RecognitionAccessAuditPage />} />
               <Route path="activity" element={<ActivityPage />} />
+              <Route path="cctv-enrollment" element={<CctvEnrollmentPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="notifications" element={<NotificationsPage />} />
             </Route>

@@ -650,6 +650,37 @@ On the VPS:
 - **`runOnReady` needs ffmpeg inside mediamtx.** The Alpine
   `bluenviron/mediamtx` image has no `sh` and no `ffmpeg`. The onprem
   compose uses the `-ffmpeg` variant for this reason.
+- **Admin Vite "504 Outdated Optimize Dep" + blank route.** Symptom: the
+  browser console shows `GET .../node_modules/.vite/deps/<pkg>.js?v=<hash>
+  net::ERR_ABORTED 504` and `Failed to fetch dynamically imported module`,
+  the route renders blank, and a hard reload doesn't help. The running
+  Vite dev server is serving a stale optimize-deps hash whose files are
+  gone from disk. **A browser refresh cannot fix this — Vite itself must
+  restart.** Ctrl+C the dev server, then `cd admin && npm run dev`.
+- **Admin `npm run dev` fails: `Cannot find module @rollup/rollup-darwin-arm64`.**
+  npm 11.9.0 on Node 25 has a bug with optional platform deps: it can
+  silently drop the darwin-arm64 native module (sometimes after `npm
+  rebuild`, which has been observed swapping it for linux-arm64 modules
+  on a Mac host). The clean-reinstall fix from the rollup error message
+  (`rm -rf node_modules package-lock.json && npm i`) works initially but
+  `npm rebuild` may break it again. **One-liner recovery without
+  reinstalling everything:**
+  ```bash
+  cd admin && npm install @rollup/rollup-darwin-arm64@4.60.2 --no-save --force
+  ```
+  Match the version to whatever is in `admin/node_modules/rollup/package.json`.
+  Verify with `ls admin/node_modules/@rollup/` — should show only
+  `rollup-darwin-arm64`, never any `rollup-linux-*` entries on a Mac.
+  Permanent fix would be downgrading to Node 22 LTS; until then keep this
+  recovery command handy.
+- **Admin `node_modules/.bin/` directory missing after `npm install`.** Same
+  Node 25 / npm 11.9.0 family of bugs occasionally skips creating the
+  `.bin/` symlink directory entirely, so `npm run dev` errors with `sh:
+  vite: command not found` even though `node_modules/vite/` exists. Fix:
+  `cd admin && npm rebuild`. Caveat: `npm rebuild` can simultaneously
+  break the rollup native module (see above), so verify
+  `ls node_modules/@rollup/` after rebuilding and re-run the rollup
+  one-liner if the linux modules reappeared.
 
 ---
 

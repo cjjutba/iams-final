@@ -95,7 +95,14 @@ export function OverlayClickTargets({ tracks, videoElement, videoSize }: Props) 
           key={box.trackId}
           type="button"
           aria-label={`Inspect ${box.name ?? 'unrecognized face'} (track ${box.trackId})`}
-          onClick={() => select(box.trackId, box.userId)}
+          onClick={(e) => {
+            // Blur before opening so Radix Dialog's aria-hide-outside doesn't
+            // mark an ancestor (.sidebar-wrapper) as aria-hidden while this
+            // button still retains focus — that combination trips the
+            // accessibility warning logged at devtools:console.
+            e.currentTarget.blur()
+            select(box.trackId, box.userId)
+          }}
           className="pointer-events-auto absolute cursor-pointer rounded bg-transparent outline-none ring-0 transition focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-0"
           style={{
             left: `${box.left}px`,

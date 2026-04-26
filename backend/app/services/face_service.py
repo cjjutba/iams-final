@@ -30,6 +30,58 @@ from app.utils.exceptions import FaceRecognitionError, ValidationError
 from app.utils.face_image_storage import FaceImageStorage
 
 
+def _resolve_room(db: Session, room_identifier: str):
+    """Resolve a room by UUID, ``stream_key``, or ``name``.
+
+    Returns the Room ORM object or ``None`` if no match. Centralised so
+    the cctv_enroll path, the cctv_enroll_preview path, and the router's
+    grabber-reuse lookup all interpret the operator-supplied identifier
+    the same way.
+
+    Lookup precedence:
+      1. UUID (if the string parses as one)
+      2. ``stream_key`` matched case-insensitively (so ``EB226`` matches
+         the canonical ``eb226`` value)
+      3. ``name`` matched case-insensitively (so ``eb226`` matches the
+         canonical ``EB226`` value too)
+    """
+    import uuid as _uuid
+
+    from sqlalchemy import func
+
+    from app.models.room import Room
+
+    # 1. UUID
+    try:
+        as_uuid = _uuid.UUID(room_identifier)
+        room = db.query(Room).filter(Room.id == as_uuid).first()
+        if room is not None:
+            return room
+    except (ValueError, AttributeError):
+        pass
+
+    needle = (room_identifier or "").strip()
+    if not needle:
+        return None
+
+    # 2. stream_key (case-insensitive)
+    room = (
+        db.query(Room)
+        .filter(func.lower(Room.stream_key) == needle.lower())
+        .first()
+    )
+    if room is not None:
+        return room
+
+    # 3. name (case-insensitive)
+    room = (
+        db.query(Room)
+        .filter(func.lower(Room.name) == needle.lower())
+        .first()
+    )
+    return room
+
+
 class FaceService:
     """Service for face registration and recognition operations"""
 
@@ -714,9 +766,6 @@ class FaceService:
         """
         # Lazy import — keeps face_service.py importable in test contexts
         # where the FrameGrabber's ffmpeg dependency isn't available.
-        import uuid as _uuid
-
-        from app.models.room import Room
         from app.services.frame_grabber import FrameGrabber
 
         # 1. Validate preconditions
@@ -735,18 +784,19 @@ class FaceService:
                 "Run phone registration first; CCTV enrolment only augments."
             )
 
-        # Resolve room by code OR id
-        room: Room | None = None
-        try:
-            room = self.db.query(Room).filter(Room.id == _uuid.UUID(room_code_or_id)).first()
-        except (ValueError, AttributeError):
-            pass
-        if room is None:
-            room = self.db.query(Room).filter(Room.code == room_code_or_id).first()
+        # Resolve room by id OR stream_key OR name. The Room model has no
+        # ``code`` column (legacy callers used ``code``; the canonical room
+        # identifier in this codebase is ``stream_key``, with ``name`` as
+        # the human-facing label). Accept all three so the bulk-enrollment
+        # UI, the legacy CLI script (which passes ``EB226`` style names),
+        # and direct UUID callers all work.
+        room = _resolve_room(self.db, room_code_or_id)
         if room is None:
             raise ValidationError(f"Room not found: {room_code_or_id}")
         if not room.camera_endpoint:
-            raise ValidationError(f"Room {room.code} has no camera_endpoint configured")
+            raise ValidationError(
+                f"Room {room.name} has no camera_endpoint configured"
+            )
 
         # 2. Resolve grabber — reuse provided one or spin a fresh one
         grabber = provided_grabber
@@ -767,8 +817,26 @@ class FaceService:
             time.sleep(2.0)  # let ffmpeg deliver the first frames
 
         # 3. Capture loop
+        #
+        # Multi-face strategy: when more than one face is in frame
+        # (the realistic classroom case), pick the one whose embedding
+        # best matches the target user's existing phone embedding. This
+        # works because every student in the bulk-enrollment queue has
+        # already registered a phone-domain reference — strangers in
+        # the same frame land in different regions of the embedding
+        # space and score noticeably lower against the target's phone
+        # vector.
+        #
+        # A per-frame floor (``per_frame_min_sim``) prevents committing
+        # a frame where even the best match looks like a stranger; the
+        # final batch-level mean check (Step 6) is a second safety net.
+        per_frame_min_sim = 0.20  # below this even the "best" face is suspect
+        existing_phone_emb = np.frombuffer(
+            registration.embedding_vector, dtype=np.float32
+        )
+
         cap_attempt_cap = max_attempts or (num_captures * 6)
-        captures: list[dict] = []  # {emb, crop_bytes, det_score, bbox}
+        captures: list[dict] = []  # {emb, crop_bytes, det_score, bbox, sim_to_phone}
         attempts = 0
         skipped_reasons: dict[str, int] = {}
 
@@ -800,25 +868,42 @@ class FaceService:
                     skipped_reasons["no_face"] = skipped_reasons.get("no_face", 0) + 1
                     time.sleep(capture_interval / 2)
                     continue
-                if len(usable) > 1:
-                    # Operator must run enrolment with only ONE student in
-                    # frame — otherwise we don't know which face goes to
-                    # this user_id.
-                    skipped_reasons["multi_face"] = skipped_reasons.get("multi_face", 0) + 1
-                    time.sleep(capture_interval / 2)
-                    continue
 
-                det = usable[0]
-                # 4. Embed via SCRFD-aligned crop (matches recognition path)
-                try:
-                    embedding = self.facenet.embed_from_kps(frame, det["kps"])
-                except Exception as exc:
-                    logger.warning("cctv_enroll: embed_from_kps failed: %s", exc)
+                # Embed every usable face and pick the one closest to
+                # the target user's phone embedding. In a classroom we
+                # expect 5-50 faces; picking the best is O(n) which is
+                # fine — embedding inference dominates the cost.
+                best = None  # (det, embedding, sim)
+                for det in usable:
+                    try:
+                        emb = self.facenet.embed_from_kps(frame, det["kps"])
+                    except Exception:
+                        continue
+                    sim = float(emb @ existing_phone_emb)
+                    if best is None or sim > best[2]:
+                        best = (det, emb, sim)
+
+                if best is None:
                     skipped_reasons["embed_fail"] = skipped_reasons.get("embed_fail", 0) + 1
                     time.sleep(capture_interval / 2)
                     continue
 
-                # 5. Crop the face for storage (with margin for context)
+                det, embedding, best_sim = best
+                if best_sim < per_frame_min_sim:
+                    # Best face in frame doesn't even plausibly match the
+                    # target — skip rather than commit a wrong-person
+                    # capture. Common when the operator clicked the
+                    # wrong student in the queue or the target student
+                    # isn't actually in the room yet.
+                    skipped_reasons["low_sim"] = skipped_reasons.get("low_sim", 0) + 1
+                    logger.info(
+                        "cctv_enroll: best face sim=%.3f < %.2f (%d face(s) in frame); skipping",
+                        best_sim, per_frame_min_sim, len(usable),
+                    )
+                    time.sleep(capture_interval / 2)
+                    continue
+
+                # Crop the chosen face for storage (with margin for context)
                 bx1, by1, bx2, by2 = (int(v) for v in det["bbox"])
                 fh, fw = frame.shape[:2]
                 margin = int(min(bx2 - bx1, by2 - by1) * 0.25)
@@ -836,11 +921,15 @@ class FaceService:
                     "crop_bytes": crop_bytes,
                     "det_score": float(det["det_score"]),
                     "bbox": [int(bx1), int(by1), int(bx2 - bx1), int(by2 - by1)],
+                    "sim_to_phone": best_sim,
                 })
                 logger.info(
-                    "cctv_enroll: capture %d/%d (det=%.2f, size=%dx%d)",
+                    "cctv_enroll: capture %d/%d (det=%.2f size=%dx%d sim=%.3f"
+                    "%s)",
                     len(captures), num_captures,
                     float(det["det_score"]), int(bx2 - bx1), int(by2 - by1),
+                    best_sim,
+                    f" picked best of {len(usable)}" if len(usable) > 1 else "",
                 )
                 time.sleep(capture_interval)
         finally:
@@ -852,15 +941,16 @@ class FaceService:
             raise ValidationError(
                 f"No usable CCTV captures collected after {attempts} attempts. "
                 f"Skipped: {skipped_reasons}. "
-                "Make sure exactly one student is in frame and the camera framing is reasonable."
+                "Make sure the target student is in frame and the camera framing "
+                "is reasonable. The capture loop auto-picks the best matching "
+                "face when multiple students are visible."
             )
 
-        # 6. Sanity check: how do these new embeddings score against the
-        #    user's existing phone embeddings? If sims are uniformly low,
-        #    the operator probably enrolled the wrong person.
-        existing_phone_emb = np.frombuffer(
-            registration.embedding_vector, dtype=np.float32
-        )
+        # 6. Batch-level sanity check: even with the per-frame
+        # per_frame_min_sim floor above, a streak of 5 borderline-but-
+        # not-target captures could still slip through. Re-score the
+        # committed embeddings against the user's phone vector and
+        # refuse the whole batch if the mean doesn't clear 0.20.
         new_embs = np.stack([c["embedding"] for c in captures])
         sims_to_phone = (new_embs @ existing_phone_emb).tolist()
         mean_sim = float(np.mean(sims_to_phone))
@@ -966,6 +1056,639 @@ class FaceService:
                 for fid, lbl, cap in zip(faiss_ids, labels, captures)
             ],
         }
+
+    def _load_all_phone_embeddings(self) -> tuple[np.ndarray | None, list[dict]]:
+        """Load every active phone embedding into a (N, 512) matrix +
+        a parallel list of ``{user_id, full_name, student_id}``.
+
+        Used by ``cctv_enroll_preview`` to cross-identify a face
+        against every enrolled student so the UI can suggest a switch
+        when the operator picked the wrong student in the queue.
+
+        Vectors are L2-normalised at registration time, so a plain
+        ``matrix @ query`` yields cosine similarities directly. One
+        query per preview keeps it cheap; for hot paths we'd cache,
+        but the operator-driven preview cadence (1 per click, ~once
+        every few seconds at most) doesn't justify the cache
+        invalidation work.
+        """
+        from app.models.face_registration import FaceRegistration
+        from app.models.user import User
+
+        rows = (
+            self.db.query(
+                FaceRegistration.user_id,
+                FaceRegistration.embedding_vector,
+                User.first_name,
+                User.last_name,
+                User.student_id,
+            )
+            .join(User, User.id == FaceRegistration.user_id)
+            .filter(FaceRegistration.is_active.is_(True))
+            .all()
+        )
+        if not rows:
+            return None, []
+        embs: list[np.ndarray] = []
+        meta: list[dict] = []
+        for user_id, blob, first, last, student_id in rows:
+            try:
+                vec = np.frombuffer(blob, dtype=np.float32)
+                if vec.shape != (512,):
+                    continue
+                embs.append(vec)
+                meta.append({
+                    "user_id": str(user_id),
+                    "full_name": f"{first or ''} {last or ''}".strip(),
+                    "student_id": student_id,
+                })
+            except Exception:
+                continue
+        if not embs:
+            return None, []
+        return np.stack(embs).astype(np.float32), meta
+
+    def cctv_enroll_preview(
+        self,
+        user_id: str,
+        room_identifier: str,
+        *,
+        min_face_size_px: int = 60,
+        min_det_score: float = 0.65,
+        provided_grabber=None,
+        max_grab_attempts: int = 5,
+    ) -> dict:  # noqa: PLR0911 — branchy single-frame helper, easier to read inline
+        # Replaces the older single-face design. Returning every detected
+        # face with its phone-sim is what makes the multi-student
+        # classroom case usable: the operator picks the right student in
+        # the queue, and the system auto-confirms the highest-sim face is
+        # the target.
+        """Single-frame, NON-COMMITTING preview for the bulk-enrollment UI.
+
+        Grabs one frame, detects every face, embeds each one, scores
+        each against the user's registered phone vector, and returns
+        all of them ranked. The UI surfaces every face so the operator
+        sees what the system saw and can confirm the auto-picked
+        ``is_best_match`` face is correct.
+
+        Designed for the realistic classroom case where many students
+        share the camera. The target student's face is identified by
+        having the highest cosine similarity to their own phone
+        embedding — strangers in the frame score noticeably lower
+        because their identity vectors live elsewhere in the embedding
+        space.
+
+        This method writes nothing — no FAISS mutation, no DB row, no
+        disk artifact.
+
+        Args:
+            user_id: Target student UUID. Must already have an active
+                phone registration so the sim comparison has something
+                to score against.
+            room_identifier: UUID, ``stream_key``, or ``name`` — same
+                lookup contract as ``cctv_enroll``.
+            min_face_size_px / min_det_score: Quality gates. A face
+                that doesn't pass these is dropped before sim scoring,
+                so the UI never sees noise from far-background faces.
+            provided_grabber: Optional pre-warmed FrameGrabber from
+                ``app.state.frame_grabbers[room_id]``.
+            max_grab_attempts: Hard cap on grab retries inside this one
+                preview.
+
+        Returns:
+            Dict shaped like ``CctvEnrollPreviewResponse``: ``ok``,
+            ``message``, ``face_count``, ``faces`` (list of per-face
+            dicts with ``crop_b64``, ``det_score``, ``bbox``,
+            ``self_similarity_to_phone``, ``is_best_match``),
+            ``best_self_similarity_to_phone``, ``frame_size``.
+        """
+        import base64
+        import time
+
+        from app.services.frame_grabber import FrameGrabber
+
+        # 1. Validate preconditions
+        registration = self.face_repo.get_by_user(user_id)
+        if registration is None:
+            return {
+                "ok": False,
+                "message": (
+                    "Student has no active phone registration. Run phone "
+                    "registration first; CCTV enrolment only augments."
+                ),
+                "face_count": 0,
+                "faces": [],
+            }
+
+        # 2. Resolve room
+        room = _resolve_room(self.db, room_identifier)
+        if room is None:
+            return {
+                "ok": False,
+                "message": f"Room not found: {room_identifier}",
+                "face_count": 0,
+                "faces": [],
+            }
+        if not room.camera_endpoint:
+            return {
+                "ok": False,
+                "message": f"Room {room.name} has no camera_endpoint configured.",
+                "face_count": 0,
+                "faces": [],
+            }
+
+        # 3. Resolve grabber — reuse provided one or spin a fresh one
+        grabber = provided_grabber
+        owns_grabber = False
+        if grabber is None:
+            logger.info(
+                "cctv_enroll_preview: spinning up dedicated FrameGrabber for room %s",
+                room.name,
+            )
+            grabber = FrameGrabber(
+                rtsp_url=room.camera_endpoint,
+                fps=settings.FRAME_GRABBER_FPS,
+                width=settings.FRAME_GRABBER_WIDTH,
+                height=settings.FRAME_GRABBER_HEIGHT,
+            )
+            owns_grabber = True
+            time.sleep(2.0)
+
+        try:
+            # 4. Grab one usable frame
+            frame = None
+            for _ in range(max_grab_attempts):
+                f = grabber.grab()
+                if f is not None:
+                    frame = f
+                    break
+                time.sleep(0.3)
+
+            if frame is None:
+                return {
+                    "ok": False,
+                    "message": "No frame received from camera. Check the stream and try again.",
+                    "face_count": 0,
+                    "faces": [],
+                }
+
+            fh, fw = frame.shape[:2]
+
+            # 5. Detect every face
+            try:
+                dets = self.facenet.detect(frame)
+            except Exception as exc:
+                logger.warning("cctv_enroll_preview: detect failed: %s", exc)
+                return {
+                    "ok": False,
+                    "message": f"Face detection failed: {exc}",
+                    "face_count": 0,
+                    "faces": [],
+                    "frame_size": [int(fw), int(fh)],
+                }
+
+            usable = []
+            for det in dets:
+                if det.get("kps") is None:
+                    continue
+                bx1, by1, bx2, by2 = det["bbox"]
+                bw = float(bx2 - bx1)
+                bh = float(by2 - by1)
+                if min(bw, bh) < min_face_size_px:
+                    continue
+                if float(det["det_score"]) < min_det_score:
+                    continue
+                usable.append(det)
+
+            if not usable:
+                if dets:
+                    msg = (
+                        f"{len(dets)} face(s) detected, but none passed "
+                        f"quality gates (min size {min_face_size_px}px, min "
+                        f"det {min_det_score}). Move the target student "
+                        "closer or improve lighting."
+                    )
+                else:
+                    msg = (
+                        "No face in frame. Have the target student stand "
+                        "in view of the camera."
+                    )
+                return {
+                    "ok": False,
+                    "message": msg,
+                    "face_count": 0,
+                    "faces": [],
+                    "frame_size": [int(fw), int(fh)],
+                }
+
+            # 6. Embed each usable face and score against the user's
+            # existing phone embedding. Faces whose embedding fails
+            # are dropped silently; we'd rather show fewer reliable
+            # candidates than crash on a single alignment hiccup.
+            phone_emb = np.frombuffer(
+                registration.embedding_vector, dtype=np.float32
+            )
+
+            # Build a (N, 512) matrix of EVERY enrolled student's phone
+            # embedding for cross-identification. This lets us tell the
+            # operator "this face is actually [Other Student]" when the
+            # auto-selected face matches the selected target poorly. One
+            # query per preview is cheap (one row per student).
+            all_phone_embs, all_phone_meta = self._load_all_phone_embeddings()
+
+            scored: list[dict] = []
+            for det in usable:
+                try:
+                    embedding = self.facenet.embed_from_kps(
+                        frame, det["kps"]
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "cctv_enroll_preview: embed_from_kps failed: %s", exc
+                    )
+                    continue
+                sim = float(embedding @ phone_emb)
+                # Cross-identify against the global phone-embedding
+                # matrix. Argmax tells us which enrolled student this
+                # face looks most like; the score is the cosine sim.
+                best_match: dict | None = None
+                if all_phone_embs is not None and all_phone_embs.shape[0] > 0:
+                    sims_all = all_phone_embs @ embedding
+                    best_idx = int(np.argmax(sims_all))
+                    best_match = {
+                        **all_phone_meta[best_idx],
+                        "sim": float(sims_all[best_idx]),
+                    }
+                scored.append({"det": det, "sim": sim, "best_match": best_match})
+
+            if not scored:
+                return {
+                    "ok": False,
+                    "message": (
+                        "Detected faces but could not embed any of them. "
+                        "Try again — this is usually a transient camera issue."
+                    ),
+                    "face_count": len(usable),
+                    "faces": [],
+                    "frame_size": [int(fw), int(fh)],
+                }
+
+            # 7. Rank by sim_to_phone and tag the best match
+            scored.sort(key=lambda x: x["sim"], reverse=True)
+            best_sim = scored[0]["sim"]
+
+            # 8. Build per-face response (with margin-padded crop for UI)
+            face_payloads: list[dict] = []
+            for idx, item in enumerate(scored):
+                det = item["det"]
+                sim = item["sim"]
+                bm = item["best_match"]
+                bx1, by1, bx2, by2 = (int(v) for v in det["bbox"])
+                margin = int(min(bx2 - bx1, by2 - by1) * 0.25)
+                cx1 = max(0, bx1 - margin)
+                cy1 = max(0, by1 - margin)
+                cx2 = min(fw, bx2 + margin)
+                cy2 = min(fh, by2 + margin)
+                crop_bgr = frame[cy1:cy2, cx1:cx2]
+                ok_enc, jpg = cv2.imencode(
+                    ".jpg", crop_bgr, [cv2.IMWRITE_JPEG_QUALITY, 88]
+                )
+                if not ok_enc:
+                    continue
+                face_payloads.append({
+                    "crop_b64": base64.b64encode(jpg.tobytes()).decode("ascii"),
+                    "det_score": float(det["det_score"]),
+                    "bbox": [int(bx1), int(by1), int(bx2 - bx1), int(by2 - by1)],
+                    "self_similarity_to_phone": sim,
+                    "is_best_match": idx == 0,
+                    "best_match_user_id": bm["user_id"] if bm else None,
+                    "best_match_full_name": bm["full_name"] if bm else None,
+                    "best_match_student_id": bm["student_id"] if bm else None,
+                    "best_match_sim": bm["sim"] if bm else None,
+                })
+
+            # 9. Compose user-facing message based on best-sim band
+            face_count = len(face_payloads)
+            if best_sim >= 0.50:
+                msg = (
+                    f"Best match (sim {best_sim * 100:.0f}%) looks correct."
+                    + (
+                        f" {face_count - 1} other face(s) in frame ignored."
+                        if face_count > 1
+                        else ""
+                    )
+                )
+            elif best_sim >= 0.30:
+                msg = (
+                    f"Plausible best match (sim {best_sim * 100:.0f}%). Verify "
+                    "visually before committing — try better framing if the sim "
+                    "stays low."
+                )
+            else:
+                msg = (
+                    f"WARNING: best face in frame only matches at sim "
+                    f"{best_sim * 100:.0f}%. The target student may not be "
+                    "visible — confirm they are in frame before committing."
+                )
+
+            return {
+                "ok": True,
+                "message": msg,
+                "face_count": face_count,
+                "faces": face_payloads,
+                "best_self_similarity_to_phone": best_sim,
+                "frame_size": [int(fw), int(fh)],
+            }
+        finally:
+            if owns_grabber:
+                with contextlib.suppress(Exception):
+                    grabber.stop()
+
+    def cctv_identify(
+        self,
+        room_identifier: str,
+        *,
+        min_face_size_px: int = 60,
+        min_det_score: float = 0.65,
+        min_identify_sim: float = 0.40,
+        provided_grabber=None,
+        max_grab_attempts: int = 5,
+    ) -> dict:
+        """Camera-first scan: identify every face in one frame.
+
+        Unlike ``cctv_enroll_preview`` (which is target-student-first),
+        this method takes no ``user_id`` — it just asks "who is in
+        front of the camera right now?". For each detected face, runs
+        cross-identification against every enrolled student's phone
+        embedding and labels the face with that student's name +
+        per-room CCTV-capture counts.
+
+        Use case: classroom-scale bulk enrollment, where the operator
+        opens the page, hits "Scan Frame", and gets a tagged photo of
+        the whole room. Each face card has an "Enroll for [Room]"
+        button that runs the existing enroll endpoint targeted at the
+        identified student. No queue selection step required.
+
+        Returns dict shaped like ``CctvIdentifyResponse``.
+        """
+        import base64
+        import time
+
+        from app.services.frame_grabber import FrameGrabber
+        from app.utils.cctv_label import normalize_room_key, parse_cctv_label
+
+        # 1. Resolve room
+        room = _resolve_room(self.db, room_identifier)
+        if room is None:
+            return {
+                "ok": False,
+                "message": f"Room not found: {room_identifier}",
+                "face_count": 0,
+                "identified_count": 0,
+                "faces": [],
+            }
+        if not room.camera_endpoint:
+            return {
+                "ok": False,
+                "message": f"Room {room.name} has no camera_endpoint configured.",
+                "face_count": 0,
+                "identified_count": 0,
+                "faces": [],
+            }
+
+        room_key_for_room = normalize_room_key(room.stream_key or room.name) or "unknown"
+
+        # 2. Grabber
+        grabber = provided_grabber
+        owns_grabber = False
+        if grabber is None:
+            logger.info(
+                "cctv_identify: spinning up dedicated FrameGrabber for room %s",
+                room.name,
+            )
+            grabber = FrameGrabber(
+                rtsp_url=room.camera_endpoint,
+                fps=settings.FRAME_GRABBER_FPS,
+                width=settings.FRAME_GRABBER_WIDTH,
+                height=settings.FRAME_GRABBER_HEIGHT,
+            )
+            owns_grabber = True
+            time.sleep(2.0)
+
+        try:
+            # 3. Grab one usable frame
+            frame = None
+            for _ in range(max_grab_attempts):
+                f = grabber.grab()
+                if f is not None:
+                    frame = f
+                    break
+                time.sleep(0.3)
+
+            if frame is None:
+                return {
+                    "ok": False,
+                    "message": "No frame received from camera. Check the stream and try again.",
+                    "face_count": 0,
+                    "identified_count": 0,
+                    "faces": [],
+                }
+
+            fh, fw = frame.shape[:2]
+
+            # 4. Detect faces
+            try:
+                dets = self.facenet.detect(frame)
+            except Exception as exc:
+                logger.warning("cctv_identify: detect failed: %s", exc)
+                return {
+                    "ok": False,
+                    "message": f"Face detection failed: {exc}",
+                    "face_count": 0,
+                    "identified_count": 0,
+                    "faces": [],
+                    "frame_size": [int(fw), int(fh)],
+                }
+
+            usable = []
+            for det in dets:
+                if det.get("kps") is None:
+                    continue
+                bx1, by1, bx2, by2 = det["bbox"]
+                bw = float(bx2 - bx1)
+                bh = float(by2 - by1)
+                if min(bw, bh) < min_face_size_px:
+                    continue
+                if float(det["det_score"]) < min_det_score:
+                    continue
+                usable.append(det)
+
+            if not usable:
+                if dets:
+                    msg = (
+                        f"{len(dets)} face(s) detected, none passed quality "
+                        f"gates (min size {min_face_size_px}px, min det "
+                        f"{min_det_score})."
+                    )
+                else:
+                    msg = "No faces detected in frame."
+                return {
+                    "ok": False,
+                    "message": msg,
+                    "face_count": 0,
+                    "identified_count": 0,
+                    "faces": [],
+                    "frame_size": [int(fw), int(fh)],
+                }
+
+            # 5. Build the global phone-embedding matrix once
+            all_phone_embs, all_phone_meta = self._load_all_phone_embeddings()
+
+            # 6. Pre-compute per-(user, room) CCTV capture counts so we
+            # can flag "already enrolled in this room" without hitting
+            # the DB once per face. Cheap: one query that scans the
+            # cctv_* angle_label rows.
+            per_user_per_room = self._cctv_counts_per_user_per_room()
+
+            # 7. Identify each face
+            face_payloads: list[dict] = []
+            identified_count = 0
+            for det in usable:
+                try:
+                    embedding = self.facenet.embed_from_kps(frame, det["kps"])
+                except Exception as exc:
+                    logger.debug("cctv_identify: embed_from_kps failed: %s", exc)
+                    continue
+
+                bx1, by1, bx2, by2 = (int(v) for v in det["bbox"])
+                margin = int(min(bx2 - bx1, by2 - by1) * 0.25)
+                cx1 = max(0, bx1 - margin)
+                cy1 = max(0, by1 - margin)
+                cx2 = min(fw, bx2 + margin)
+                cy2 = min(fh, by2 + margin)
+                crop_bgr = frame[cy1:cy2, cx1:cx2]
+                ok_enc, jpg = cv2.imencode(
+                    ".jpg", crop_bgr, [cv2.IMWRITE_JPEG_QUALITY, 88]
+                )
+                if not ok_enc:
+                    continue
+
+                # Cross-identify against the global phone-embedding matrix
+                identified_user_id: str | None = None
+                identified_full_name: str | None = None
+                identified_student_id: str | None = None
+                identified_sim: float | None = None
+                per_room: dict[str, int] = {}
+                already_enrolled = False
+
+                if all_phone_embs is not None and all_phone_embs.shape[0] > 0:
+                    sims_all = all_phone_embs @ embedding
+                    best_idx = int(np.argmax(sims_all))
+                    best_sim = float(sims_all[best_idx])
+                    if best_sim >= min_identify_sim:
+                        meta = all_phone_meta[best_idx]
+                        identified_user_id = meta["user_id"]
+                        identified_full_name = meta["full_name"]
+                        identified_student_id = meta["student_id"]
+                        identified_sim = best_sim
+                        per_room = per_user_per_room.get(
+                            identified_user_id, {}
+                        )
+                        # Currently we only flag binary "has any
+                        # captures in this room" — the operator can
+                        # always re-enroll if they want more, the
+                        # backend caps at 10 per room internally.
+                        already_enrolled = (
+                            per_room.get(room_key_for_room, 0) > 0
+                        )
+                        identified_count += 1
+
+                face_payloads.append({
+                    "crop_b64": base64.b64encode(jpg.tobytes()).decode("ascii"),
+                    "det_score": float(det["det_score"]),
+                    "bbox": [int(bx1), int(by1), int(bx2 - bx1), int(by2 - by1)],
+                    "identified_user_id": identified_user_id,
+                    "identified_full_name": identified_full_name,
+                    "identified_student_id": identified_student_id,
+                    "identified_sim": identified_sim,
+                    "per_room": per_room,
+                    "already_enrolled_in_room": already_enrolled,
+                })
+
+            # Sort by det_score desc so the most confident detections
+            # land at the top of the UI grid.
+            face_payloads.sort(key=lambda f: f["det_score"], reverse=True)
+
+            face_count = len(face_payloads)
+            unknown_count = face_count - identified_count
+            if face_count == 0:
+                msg = "No usable faces in frame."
+            elif identified_count == 0:
+                msg = (
+                    f"Detected {face_count} face(s) but none matched any "
+                    f"enrolled student above sim {min_identify_sim:.0%}. "
+                    "Either nobody enrolled is in frame, or framing/lighting "
+                    "is hurting recognition."
+                )
+            else:
+                msg = (
+                    f"Identified {identified_count} of {face_count} face(s)."
+                    + (
+                        f" {unknown_count} unknown."
+                        if unknown_count > 0
+                        else ""
+                    )
+                )
+
+            return {
+                "ok": face_count > 0,
+                "message": msg,
+                "face_count": face_count,
+                "identified_count": identified_count,
+                "faces": face_payloads,
+                "frame_size": [int(fw), int(fh)],
+            }
+        finally:
+            if owns_grabber:
+                with contextlib.suppress(Exception):
+                    grabber.stop()
+
+    def _cctv_counts_per_user_per_room(self) -> dict[str, dict[str, int]]:
+        """Return ``{user_id: {room_key: count, ...}, ...}`` for all
+        ``cctv_*`` embeddings in the DB.
+
+        Used by ``cctv_identify`` to attach per-room CCTV-capture
+        counts to each identified face so the UI can render
+        "EB227: ✓ 5" or "EB227: ✗ 0" badges without an extra
+        per-face round-trip.
+        """
+        from app.models.face_embedding import FaceEmbedding
+        from app.models.face_registration import FaceRegistration
+        from app.utils.cctv_label import parse_cctv_label
+
+        rows = (
+            self.db.query(
+                FaceRegistration.user_id,
+                FaceEmbedding.angle_label,
+            )
+            .join(
+                FaceEmbedding,
+                FaceEmbedding.registration_id == FaceRegistration.id,
+            )
+            .filter(FaceRegistration.is_active.is_(True))
+            .filter(FaceEmbedding.angle_label.like("cctv_%"))
+            .all()
+        )
+        out: dict[str, dict[str, int]] = {}
+        for user_id, label in rows:
+            room_key, idx = parse_cctv_label(label)
+            if idx is None:
+                continue
+            uid = str(user_id)
+            bucket = out.setdefault(uid, {})
+            key = room_key or "_legacy"
+            bucket[key] = bucket.get(key, 0) + 1
+        return out
 
     async def reregister_face(self, user_id: str, images: list[UploadFile]) -> tuple[int, str]:
         """

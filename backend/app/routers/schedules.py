@@ -27,7 +27,11 @@ from app.schemas.schedule import (
     SessionSummary,
 )
 from app.services import session_manager
-from app.services.notification_service import notify, notify_schedule_participants
+from app.services.notification_service import (
+    notify,
+    notify_admins,
+    notify_schedule_participants,
+)
 from app.utils.dependencies import get_current_user, require_role
 
 router = APIRouter()
@@ -492,6 +496,7 @@ async def create_schedule(
 async def update_schedule(
     schedule_id: str,
     update_data: ScheduleUpdate,
+    http_request: Request,
     current_user: User = Depends(require_role(UserRole.ADMIN)),
     db: Session = Depends(get_db),
 ):
@@ -524,6 +529,172 @@ async def update_schedule(
     schedule = schedule_repo.update(schedule_id, update_dict)
 
     logger.info(f"Schedule updated: {schedule_id} by admin {current_user.email}")
+
+    # ---------------------------------------------------------------
+    # Room-swap handling for active sessions.
+    #
+    # When room_id changes mid-session, the running SessionPipeline is
+    # still attached to the OLD room's FrameGrabber — the WS broadcasts
+    # bboxes in the old camera's coordinate space onto the new camera's
+    # video, producing the misaligned-overlay bug seen on 2026-04-26.
+    # We hot-swap the pipeline's grabber + reset tracker state so the
+    # next frame comes from the NEW camera. Presence accumulation and
+    # attendance records are preserved (the session continues from the
+    # operator's POV).
+    #
+    # If the new room has no `camera_endpoint`, we end the session
+    # cleanly + emit a warn notification so the operator knows ML
+    # tracking stopped (silently keeping the old camera on a "moved"
+    # schedule is the worst UX).
+    # ---------------------------------------------------------------
+    room_changed = (
+        "room_id" in update_dict
+        and old_room_id is not None
+        and old_room_id != schedule.room_id
+    )
+    if room_changed:
+        pipelines = getattr(http_request.app.state, "session_pipelines", None)
+        pipeline = pipelines.get(schedule_id) if pipelines else None
+        if pipeline is not None and pipeline.is_running:
+            from app.models.room import Room
+
+            new_room = db.query(Room).filter(Room.id == schedule.room_id).first()
+            new_room_name = new_room.name if new_room else "TBD"
+            new_camera = new_room.camera_endpoint if new_room else None
+
+            if not new_camera:
+                # New room has no camera — end the session, can't track.
+                try:
+                    await pipeline.stop()
+                except Exception:
+                    logger.exception(
+                        "[room-swap] pipeline.stop() failed for %s",
+                        schedule_id,
+                    )
+                if pipelines is not None:
+                    pipelines.pop(schedule_id, None)
+
+                # Best-effort end of the legacy presence-service session
+                # so was_session_ended_today() reflects reality and the
+                # SessionStatusPill flips to "ended" cleanly.
+                try:
+                    from app.services.presence_service import PresenceService
+
+                    presence_svc = PresenceService(db)
+                    if schedule_id in presence_svc.active_sessions:
+                        await presence_svc.end_session(schedule_id)
+                except Exception:
+                    logger.exception(
+                        "[room-swap] presence_svc.end_session failed for %s",
+                        schedule_id,
+                    )
+
+                try:
+                    await notify_admins(
+                        db,
+                        title=f"Session ended: {schedule.subject_code}",
+                        message=(
+                            f"The room was changed to {new_room_name} which "
+                            f"has no camera configured. The active session "
+                            f"was ended; presence tracking stopped."
+                        ),
+                        notification_type="session_ended_no_camera",
+                        severity="warn",
+                        preference_key=None,
+                        send_email=False,
+                        dedup_window_seconds=0,
+                        reference_id=str(schedule.id),
+                        reference_type="schedule",
+                        toast_type="warning",
+                    )
+                except Exception:
+                    logger.exception(
+                        "[room-swap] notify_admins(session_ended_no_camera) failed"
+                    )
+            else:
+                # Hot-swap: get-or-create FrameGrabber for new room,
+                # then ask the pipeline to swap onto it.
+                grabbers = getattr(
+                    http_request.app.state, "frame_grabbers", None
+                )
+                new_grabber = (
+                    grabbers.get(str(schedule.room_id)) if grabbers else None
+                )
+                if new_grabber is None:
+                    try:
+                        from app.services.frame_grabber import FrameGrabber
+
+                        new_grabber = FrameGrabber(new_camera, dedup_repeats=True)
+                        if grabbers is not None:
+                            grabbers[str(schedule.room_id)] = new_grabber
+                        logger.info(
+                            "[room-swap] Created on-demand FrameGrabber "
+                            "for room %s",
+                            schedule.room_id,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "[room-swap] Failed to create FrameGrabber "
+                            "for room %s — leaving pipeline on old "
+                            "camera. Operator should retry.",
+                            schedule.room_id,
+                        )
+                        new_grabber = None
+
+                if new_grabber is not None:
+                    try:
+                        await pipeline.swap_camera(
+                            new_grabber, str(schedule.room_id)
+                        )
+                        logger.info(
+                            "[room-swap] Pipeline %s swapped %s -> %s",
+                            schedule_id,
+                            old_room_name or old_room_id,
+                            new_room_name,
+                        )
+
+                        # System Activity audit row — visible in the
+                        # admin activity timeline so operators can
+                        # correlate "boxes shifted at 17:54" with
+                        # "admin changed the room at 17:54".
+                        try:
+                            from app.services.activity_service import (
+                                EventSeverity,
+                                EventType,
+                                emit_system_event,
+                            )
+
+                            emit_system_event(
+                                db,
+                                event_type=EventType.PIPELINE_CAMERA_SWAPPED,
+                                summary=(
+                                    f"Camera swapped for {schedule.subject_code}: "
+                                    f"{old_room_name or 'unknown'} -> {new_room_name}"
+                                ),
+                                severity=EventSeverity.INFO,
+                                schedule_id=str(schedule.id),
+                                room_id=str(schedule.room_id),
+                                payload={
+                                    "subject_code": schedule.subject_code,
+                                    "old_room_id": str(old_room_id),
+                                    "old_room_name": old_room_name,
+                                    "new_room_id": str(schedule.room_id),
+                                    "new_room_name": new_room_name,
+                                    "actor_email": current_user.email,
+                                },
+                                autocommit=True,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "[room-swap] PIPELINE_CAMERA_SWAPPED emit failed",
+                                exc_info=True,
+                            )
+                    except Exception:
+                        logger.exception(
+                            "[room-swap] swap_camera failed for %s — "
+                            "the pipeline may still be on the old camera",
+                            schedule_id,
+                        )
 
     try:
         from app.utils.audit import log_audit

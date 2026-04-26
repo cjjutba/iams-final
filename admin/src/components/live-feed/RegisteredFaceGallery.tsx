@@ -90,8 +90,13 @@ function AngleTile({
 
   const hasImageUrl = Boolean(angle.image_url)
 
+  // Compact tile layout: image fills the square, a small colored dot in the
+  // top-right corner conveys quality at a glance (full breakdown on hover).
+  // Below the tile, just the angle label — centered, uppercase, truncated.
+  // The previous layout tried to fit `LABEL ● Excellent` on a single ~50px
+  // row and the words collided across adjacent tiles.
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex min-w-0 flex-col gap-1.5">
       <button
         type="button"
         onClick={() => {
@@ -137,6 +142,39 @@ function AngleTile({
           <EyeOff className="h-4 w-4 opacity-30" aria-hidden />
         )}
 
+        {/* Quality indicator — a small colored dot in the top-right corner.
+            Full quality bucket name and raw Laplacian-variance number are
+            available in the tooltip. Ringed so it stays visible on both
+            light placeholders and revealed photos. */}
+        <TooltipProvider delayDuration={200}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                className="absolute right-1 top-1 z-10 inline-flex cursor-help"
+                aria-label={`Quality ${QUALITY_BUCKET_LABEL[bucket]}`}
+              >
+                <span
+                  className={`h-2 w-2 rounded-full ring-2 ring-background/90 ${QUALITY_BUCKET_DOT[bucket]}`}
+                  aria-hidden
+                />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-[260px] text-xs">
+              <p className="font-medium">
+                Capture quality:{' '}
+                <span className="capitalize">{QUALITY_BUCKET_LABEL[bucket]}</span>
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                Laplacian variance at capture (raw {rawQuality}). Higher =
+                sharper. Anything in the Good or Excellent band gives ArcFace a
+                stable embedding. If a student fails to be recognised and all
+                angles show Low or Fair, the registration is the weak link —
+                re-register in better lighting.
+              </p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+
         {/* Hover overlay — only shown when there's something to toggle. */}
         {hasImageUrl && (
           <span
@@ -151,40 +189,18 @@ function AngleTile({
           </span>
         )}
       </button>
-      <div className="flex items-center justify-between gap-1 px-0.5 text-[10px]">
-        <span className="font-medium uppercase tracking-wider text-foreground/80">
+      <div className="flex min-w-0 flex-col items-center gap-0.5 px-0.5 text-center">
+        <span
+          className="block w-full truncate text-[10px] font-medium uppercase tracking-wider text-foreground/80"
+          title={label}
+        >
           {label}
         </span>
-        <TooltipProvider delayDuration={200}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span
-                className="inline-flex cursor-help items-center gap-1 text-muted-foreground/80 transition-colors hover:text-foreground"
-                aria-label={`Quality ${QUALITY_BUCKET_LABEL[bucket]}`}
-              >
-                <span
-                  className={`h-1.5 w-1.5 rounded-full ${QUALITY_BUCKET_DOT[bucket]}`}
-                  aria-hidden
-                />
-                {showDiagnostics ? (
-                  <span className="font-mono tabular-nums">{rawQuality}</span>
-                ) : (
-                  <span className="capitalize">{QUALITY_BUCKET_LABEL[bucket]}</span>
-                )}
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="max-w-[260px] text-xs">
-              <p className="font-medium">Capture quality</p>
-              <p className="mt-1 text-muted-foreground">
-                Laplacian variance at capture (raw {rawQuality}). Higher =
-                sharper. Anything in the Good or Excellent band gives ArcFace a
-                stable embedding. If a student fails to be recognised and all
-                angles show Low or Fair, the registration is the weak link —
-                re-register in better lighting.
-              </p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        {showDiagnostics && (
+          <span className="block w-full truncate font-mono text-[9.5px] tabular-nums text-muted-foreground/80">
+            {rawQuality}
+          </span>
+        )}
       </div>
     </div>
   )

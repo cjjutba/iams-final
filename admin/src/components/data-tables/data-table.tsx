@@ -10,10 +10,11 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table"
-import { ArrowDownIcon, ArrowUpDownIcon, ArrowUpIcon } from "lucide-react"
+import { ArrowDownIcon, ArrowUpDownIcon, ArrowUpIcon, SearchX } from "lucide-react"
 import { useState } from "react"
 
 import { Skeleton } from "@/components/ui/skeleton"
+import { EmptyState } from "@/components/shared/empty-state"
 import {
   Table,
   TableBody,
@@ -192,11 +193,13 @@ export function DataTable<TData, TValue>({
               ))
             ) : (
               <TableRow>
-                <TableCell
-                  colSpan={columns.length}
-                  className="h-24 text-center text-muted-foreground"
-                >
-                  No results found.
+                <TableCell colSpan={columns.length} className="p-0">
+                  <EmptyState
+                    icon={SearchX}
+                    title="No results found"
+                    description="Try a different search or clear the filters."
+                    size="compact"
+                  />
                 </TableCell>
               </TableRow>
             )}

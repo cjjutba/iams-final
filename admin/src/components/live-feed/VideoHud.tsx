@@ -10,6 +10,14 @@ interface VideoHudProps {
   onClearSamples: () => void
   fallbackActive: boolean
   fallbackKey?: string
+  /**
+   * Where the diagnostics popover portals to. Default behaviour (no value)
+   * portals to `document.body`, which is correct for the inline page. In
+   * fullscreen, only the fullscreened element + descendants are rendered,
+   * so callers must pass the fullscreen container ref's current value to
+   * keep the popover visible and interactive.
+   */
+  portalContainer?: HTMLElement | null
 }
 
 /**
@@ -26,6 +34,7 @@ export function VideoHud({
   onClearSamples,
   fallbackActive,
   fallbackKey,
+  portalContainer,
 }: VideoHudProps) {
   if (!latestFrame && !fallbackActive) return null
 
@@ -68,7 +77,12 @@ export function VideoHud({
             </button>
           </PopoverTrigger>
 
-          <PopoverContent align="end" className="w-80 space-y-3 text-xs">
+          <PopoverContent
+            align="end"
+            className="w-80 space-y-3 text-xs"
+            container={portalContainer ?? undefined}
+            collisionBoundary={portalContainer ?? undefined}
+          >
             <div>
               <div className="mb-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                 Per-stage timing (ms)

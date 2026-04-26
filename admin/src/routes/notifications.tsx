@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, ChevronLeft, ChevronRight, Inbox, Loader2, Trash2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Inbox, Loader2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { usePageTitle } from '@/hooks/use-page-title'
@@ -27,6 +27,7 @@ import { cn } from '@/lib/utils'
 import { notificationsService } from '@/services/notifications.service'
 import { useNotificationStore } from '@/stores/notification.store'
 import { NotificationRow } from '@/components/notifications/notification-row'
+import { EmptyState } from '@/components/shared/empty-state'
 import type { Notification, NotificationSeverity } from '@/types'
 
 const ALL_SEVERITIES: NotificationSeverity[] = [
@@ -316,10 +317,7 @@ export default function NotificationsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-            <Bell className="h-5 w-5 text-muted-foreground" />
-            Notifications
-          </h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Notifications</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             All system notifications and alerts.
           </p>
@@ -518,17 +516,22 @@ export default function NotificationsPage() {
                 <span className="text-sm">Loading notifications...</span>
               </div>
             ) : filtered.length === 0 ? (
-              <div className="flex h-64 flex-col items-center justify-center gap-2 text-center">
-                <Inbox className="h-10 w-10 text-muted-foreground/50" />
-                <p className="text-sm font-medium text-muted-foreground">
-                  {hasFilters ? 'No notifications match your filters' : 'No notifications yet'}
-                </p>
-                {hasFilters && (
-                  <Button variant="ghost" size="sm" onClick={resetFilters}>
-                    Clear filters
-                  </Button>
-                )}
-              </div>
+              <EmptyState
+                icon={Inbox}
+                title={hasFilters ? 'No notifications match your filters' : 'No notifications yet'}
+                description={
+                  hasFilters
+                    ? 'Loosen the category or severity filter, or clear them entirely.'
+                    : "You'll see new alerts here as the system emits them."
+                }
+                action={
+                  hasFilters ? (
+                    <Button variant="outline" size="sm" onClick={resetFilters}>
+                      Clear filters
+                    </Button>
+                  ) : undefined
+                }
+              />
             ) : (
               <div>
                 {filtered.map((notification) => (

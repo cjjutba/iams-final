@@ -1,13 +1,13 @@
 import { useMemo, useState, useTransition } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
-import { Download, ScanSearch } from 'lucide-react'
+import { Download } from 'lucide-react'
 
 import { formatTimestamp, formatFullDatetime } from '@/lib/format-time'
 
 import { DataTable } from '@/components/data-tables'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { RecognitionOutcomePill } from '@/components/shared/status-pills'
 import { Input } from '@/components/ui/input'
 import {
   Select,
@@ -150,15 +150,12 @@ export default function RecognitionsPage() {
       {
         accessorKey: 'matched',
         header: 'Outcome',
-        cell: ({ row }) => {
-          if (row.original.is_ambiguous)
-            return <Badge variant="outline">Ambiguous</Badge>
-          return row.original.matched ? (
-            <Badge variant="default">Match</Badge>
-          ) : (
-            <Badge variant="secondary">Miss</Badge>
-          )
-        },
+        cell: ({ row }) => (
+          <RecognitionOutcomePill
+            matched={row.original.matched}
+            ambiguous={row.original.is_ambiguous}
+          />
+        ),
       },
       {
         accessorKey: 'similarity',
@@ -197,10 +194,7 @@ export default function RecognitionsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-            <ScanSearch className="h-5 w-5 text-muted-foreground" />
-            Recognition Audit
-          </h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Recognition Audit</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Every FAISS decision logged by the realtime pipeline.
           </p>

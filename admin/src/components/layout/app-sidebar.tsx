@@ -10,6 +10,7 @@ import {
   BarChart3,
   DoorOpen,
   ScanSearch,
+  ScanFace,
   Activity,
   Shield,
   Settings,
@@ -66,6 +67,11 @@ const navGroups = [
   {
     label: 'System',
     items: [
+      {
+        title: 'CCTV Enrollment',
+        icon: ScanFace,
+        href: '/cctv-enrollment',
+      },
       {
         title: 'Recognition Access',
         icon: Shield,

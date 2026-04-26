@@ -21,6 +21,7 @@ import {
   Pause,
   Play,
   PlayCircle,
+  Replace,
   ScanFace,
   Settings as SettingsIcon,
   ShieldCheck,
@@ -153,6 +154,7 @@ const eventTypeIcon: Record<string, LucideIcon> = {
   SESSION_ENDED_MANUAL: StopCircle,
   PIPELINE_STARTED: PlayCircle,
   PIPELINE_STOPPED: StopCircle,
+  PIPELINE_CAMERA_SWAPPED: Replace,
   // recognition
   RECOGNITION_MATCH: UserCheck,
   RECOGNITION_MISS: ScanFace,
@@ -373,10 +375,7 @@ export default function ActivityPage() {
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-            <Activity className="h-5 w-5 text-muted-foreground" />
-            System Activity
-          </h1>
+          <h1 className="text-2xl font-semibold tracking-tight">System Activity</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Live tail + historical search of every event the system emits.
             Thesis-grade evidence; admin-only.

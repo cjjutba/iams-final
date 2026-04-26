@@ -98,6 +98,13 @@ class CctvEnrollmentStatusEntry(BaseModel):
     operator should run ``scripts.cctv_enroll`` (or ``POST /api/v1/face/
     cctv-enroll/{user_id}``) for each affected user × room pair to lift
     them out of phone-only state.
+
+    ``per_room`` maps the canonical room key (``room.stream_key``,
+    lowercase) to the number of CCTV embeddings that user already has
+    captured in that room. ``cctv_legacy`` is the count of pre-Phase-2
+    room-agnostic ``cctv_<idx>`` rows; legacy captures contribute to
+    the global ``cctv_count`` but do not satisfy any specific room's
+    enrolment for the bulk-enrollment UI's "missing in EB227" filter.
     """
 
     user_id: str
@@ -105,25 +112,180 @@ class CctvEnrollmentStatusEntry(BaseModel):
     full_name: str
     cctv_count: int
     phone_only: bool
+    per_room: dict[str, int] = {}
+    cctv_legacy: int = 0
+
+
+class CctvEnrollmentRoomOption(BaseModel):
+    """A room exposed by the bulk-enrollment UI as a target.
+
+    ``stream_key`` is the canonical key used to label new CCTV
+    embeddings (``cctv_<stream_key>_<idx>``) and to address the WHEP
+    stream from the admin live-feed player. Falls back to the lowercased
+    ``name`` for legacy rooms whose ``stream_key`` was never populated.
+    """
+
+    id: str
+    name: str
+    stream_key: str
+    has_camera: bool
 
 
 class CctvEnrollmentStatusResponse(BaseModel):
     """Aggregate CCTV enrolment posture across all students with active
     face registrations.
 
-    ``rooms`` enumerates known rooms so the admin UI can render a
-    "needs cctv_enroll in EB226 / EB227" matrix. CCTV embeddings are
-    not currently labelled with a room (the angle_label is ``cctv_<idx>``
-    rather than ``cctv_<room>_<idx>``) so room-specific status is not
-    surfaced here — see the per-user enrolment runs.
+    ``rooms`` (legacy) enumerates known room stream-keys for backward
+    compatibility with the live-feed banner that already consumes this
+    endpoint. ``room_options`` is the structured form used by the new
+    bulk-enrollment admin page so it can render the room dropdown
+    without a second round-trip to /api/v1/rooms.
     """
 
     students: list[CctvEnrollmentStatusEntry]
     rooms: list[str]
+    room_options: list[CctvEnrollmentRoomOption] = []
     threshold: float
     phone_only_threshold: float
     phone_only_count: int
     total_registered: int
+
+
+class CctvEnrollPreviewRequest(BaseModel):
+    """Single-frame preview before committing a 5-capture batch.
+
+    Lets the bulk-enrollment UI confirm visually that the right student
+    is in front of the camera (and that the face is being detected with
+    reasonable confidence) before the operator pulls the trigger on a
+    full ``cctv_enroll``.
+    """
+
+    room: str = Field(
+        ...,
+        description=(
+            "Room identifier — accepts UUID, ``stream_key`` (e.g. ``eb226``), "
+            "or ``name`` (e.g. ``EB226``). Resolved server-side."
+        ),
+    )
+    min_face_size_px: int = 60
+    min_det_score: float = 0.65
+
+
+class CctvEnrollPreviewFace(BaseModel):
+    """One detected face from a preview frame.
+
+    Multi-face frames are handled by ranking every face by cosine
+    similarity to the target user's registered phone embedding; the
+    UI surfaces all of them so the operator can verify the system
+    picked the right one.
+
+    The ``best_match_*`` fields are the result of cross-identifying
+    this face against EVERY enrolled student's phone embedding (not
+    just the selected target). When the auto-selected face's
+    ``best_match_user_id`` differs from the user the operator is
+    enrolling, the UI surfaces a "Did you mean to enroll [Name]?"
+    suggestion so the operator can switch with one click instead of
+    enrolling the wrong person silently.
+    """
+
+    crop_b64: str  # JPEG, base64-encoded, no data URI prefix
+    det_score: float
+    bbox: list[int]  # [x, y, w, h] in source frame coords
+    self_similarity_to_phone: float  # cosine sim vs registered phone embedding
+    is_best_match: bool  # True if this face is the highest-sim face in the frame
+    # Cross-identification: which enrolled student does THIS face look
+    # most like, regardless of the selected target? None when no
+    # enrolled students have phone embeddings (test/empty DB).
+    best_match_user_id: str | None = None
+    best_match_full_name: str | None = None
+    best_match_student_id: str | None = None
+    best_match_sim: float | None = None
+
+
+class CctvIdentifyRequest(BaseModel):
+    """Bulk identify-everyone-in-frame request.
+
+    No ``user_id`` — this is the camera-first workflow: grab a frame,
+    detect every face, identify each against every enrolled student,
+    return the lot. The admin UI uses this for the "Scan Classroom"
+    tab where the operator can click Enroll directly on each visible
+    student that still needs CCTV captures, instead of picking one
+    student at a time from a queue.
+    """
+
+    room: str = Field(
+        ...,
+        description=(
+            "Room identifier — accepts UUID, ``stream_key`` (e.g. ``eb226``), "
+            "or ``name`` (e.g. ``EB226``). Resolved server-side."
+        ),
+    )
+    min_face_size_px: int = 60
+    min_det_score: float = 0.65
+    # Confidence floor for surfacing an identification. Faces with a
+    # best cross-ID sim below this are returned as "Unknown" so the
+    # UI doesn't suggest an enrollment for a stranger or a misdetect.
+    min_identify_sim: float = 0.40
+
+
+class CctvIdentifiedFace(BaseModel):
+    """One face from a Scan-Classroom request, with cross-ID metadata."""
+
+    crop_b64: str  # JPEG, base64-encoded, no data URI prefix
+    det_score: float
+    bbox: list[int]  # [x, y, w, h] in source frame coords
+    # Identification (None when no enrolled student is a confident match)
+    identified_user_id: str | None = None
+    identified_full_name: str | None = None
+    identified_student_id: str | None = None
+    identified_sim: float | None = None
+    # Per-room CCTV capture counts for the identified student. Keyed by
+    # room.stream_key (lowercased). Empty if face is unidentified.
+    per_room: dict[str, int] = {}
+    # True iff the identified student already has the per-room cap of
+    # CCTV captures for the requested room. The UI uses this to gray
+    # out the Enroll button so an operator can't double-enroll.
+    already_enrolled_in_room: bool = False
+
+
+class CctvIdentifyResponse(BaseModel):
+    """All faces from one camera scan, ranked by det_score (largest first).
+
+    ``identified_count`` is how many faces had a confident cross-ID
+    above ``min_identify_sim``; the remainder are "Unknown" and don't
+    have user metadata attached.
+    """
+
+    ok: bool
+    message: str
+    face_count: int
+    identified_count: int
+    faces: list[CctvIdentifiedFace] = []
+    frame_size: list[int] | None = None  # [width, height] of the source frame
+
+
+class CctvEnrollPreviewResponse(BaseModel):
+    """All detected faces from one preview frame, ranked by similarity
+    to the selected student.
+
+    Designed for the realistic classroom case where multiple students
+    share the camera. The capture loop auto-picks the highest-sim face
+    each frame, so the operator just has to make sure the right student
+    is in the picture — they don't have to clear the room.
+
+    ``ok=False`` means no face passed the gates at all; the UI surfaces
+    ``message`` so the operator knows to adjust framing / lighting /
+    student position before retrying.
+    """
+
+    ok: bool
+    message: str
+    face_count: int
+    faces: list[CctvEnrollPreviewFace] = []
+    frame_size: list[int] | None = None  # [width, height] of the source frame
+    # The highest-sim face's score, exposed at top level for quick gating
+    # in the UI without iterating ``faces``. None when face_count == 0.
+    best_self_similarity_to_phone: float | None = None
 
 
 # ===== Admin Face Comparison (Live-Feed Detail Sheet) =====

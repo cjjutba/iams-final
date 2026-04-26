@@ -168,6 +168,12 @@ export const METHODOLOGY: Record<string, MethodologyEntry> = {
       'Mirror of PIPELINE_STARTED — fired when the session lifecycle scheduler tears down a SessionPipeline because the schedule\'s end_time has passed.',
     ],
   },
+  PIPELINE_CAMERA_SWAPPED: {
+    title: 'When this fires',
+    body: [
+      'An admin changed the schedule\'s assigned room while a session was running. The active SessionPipeline hot-swaps onto the new room\'s FrameGrabber: presence accumulation and attendance records are preserved, but tracker state (ByteTrack IDs, identity cache) is reset because coordinate space changed.',
+    ],
+  },
 }
 
 /**

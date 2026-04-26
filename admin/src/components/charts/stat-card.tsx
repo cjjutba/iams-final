@@ -18,7 +18,13 @@ export function StatCard({ title, value, description, icon: Icon, trend }: StatC
       <div className="text-2xl font-semibold tracking-tight">{value}</div>
       {description && <p className="text-xs text-muted-foreground">{description}</p>}
       {trend && (
-        <p className={`text-xs ${trend.value >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+        <p
+          className={`text-xs ${
+            trend.value >= 0
+              ? 'text-emerald-600 dark:text-emerald-400'
+              : 'text-red-600 dark:text-red-400'
+          }`}
+        >
           {trend.value >= 0 ? '+' : ''}{trend.value}% {trend.label}
         </p>
       )}

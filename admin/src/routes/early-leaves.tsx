@@ -7,7 +7,6 @@ import { CalendarIcon } from 'lucide-react'
 import { usePageTitle } from '@/hooks/use-page-title'
 
 import { DataTable } from '@/components/data-tables'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Calendar } from '@/components/ui/calendar'
 import {
@@ -18,6 +17,11 @@ import {
 import { useEarlyLeaves } from '@/hooks/use-queries'
 import type { EarlyLeaveAlert } from '@/types'
 import { tokenMatches, joinHaystack, isoDateHaystackParts } from '@/lib/search'
+import {
+  ConsecutiveMissesPill,
+  NotifiedPill,
+  ReturnedPill,
+} from '@/components/shared/status-pills'
 
 function buildEarlyLeaveHaystack(a: EarlyLeaveAlert): string {
   return joinHaystack([
@@ -44,7 +48,7 @@ const columns: ColumnDef<EarlyLeaveAlert>[] = [
       <div>
         <div className="font-medium">{row.original.student_name}</div>
         {row.original.student_student_id && (
-          <div className="text-sm text-muted-foreground font-mono">{row.original.student_student_id}</div>
+          <div className="font-mono text-xs text-muted-foreground">{row.original.student_student_id}</div>
         )}
       </div>
     ),
@@ -54,8 +58,8 @@ const columns: ColumnDef<EarlyLeaveAlert>[] = [
     header: 'Subject',
     cell: ({ row }) => (
       <div>
-        <div className="text-sm font-medium">{row.original.subject_code}</div>
-        <div className="text-sm text-muted-foreground">{row.original.subject_name}</div>
+        <div className="font-mono text-xs text-muted-foreground">{row.original.subject_code}</div>
+        <div className="text-sm">{row.original.subject_name}</div>
       </div>
     ),
   },
@@ -66,44 +70,45 @@ const columns: ColumnDef<EarlyLeaveAlert>[] = [
   },
   {
     accessorKey: 'detected_at',
-    header: 'Detected At',
-    cell: ({ row }) => <span className="text-sm">{safeFormat(row.original.detected_at, 'h:mm a')}</span>,
+    header: 'Detected',
+    cell: ({ row }) => (
+      <span className="text-sm tabular-nums text-muted-foreground">
+        {safeFormat(row.original.detected_at, 'h:mm a')}
+      </span>
+    ),
   },
   {
     accessorKey: 'last_seen_at',
     header: 'Last Seen',
-    cell: ({ row }) => <span className="text-sm">{safeFormat(row.original.last_seen_at, 'h:mm a')}</span>,
+    cell: ({ row }) => (
+      <span className="text-sm tabular-nums text-muted-foreground">
+        {safeFormat(row.original.last_seen_at, 'h:mm a')}
+      </span>
+    ),
   },
   {
     accessorKey: 'consecutive_misses',
     header: 'Misses',
-    cell: ({ row }) => (
-      <Badge variant={row.original.consecutive_misses >= 3 ? 'destructive' : 'secondary'}>
-        {row.original.consecutive_misses}
-      </Badge>
-    ),
+    cell: ({ row }) => <ConsecutiveMissesPill count={row.original.consecutive_misses} />,
   },
   {
     accessorKey: 'notified',
     header: 'Notified',
-    cell: ({ row }) =>
-      row.original.notified ? (
-        <Badge variant="default">Yes</Badge>
-      ) : (
-        <span className="text-sm text-muted-foreground">No</span>
-      ),
+    cell: ({ row }) => <NotifiedPill notified={row.original.notified} />,
   },
   {
     accessorKey: 'returned',
     header: 'Returned',
-    cell: ({ row }) =>
-      row.original.returned ? (
-        <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
-          {row.original.returned_at ? safeFormat(row.original.returned_at, 'h:mm a') : 'Yes'}
-        </Badge>
-      ) : (
-        <span className="text-sm text-muted-foreground">No</span>
-      ),
+    cell: ({ row }) => (
+      <ReturnedPill
+        returned={row.original.returned}
+        returnedAt={
+          row.original.returned_at
+            ? safeFormat(row.original.returned_at, 'h:mm a')
+            : undefined
+        }
+      />
+    ),
   },
   {
     accessorKey: 'absence_duration_seconds',
@@ -113,7 +118,11 @@ const columns: ColumnDef<EarlyLeaveAlert>[] = [
       if (!seconds) return <span className="text-sm text-muted-foreground">—</span>
       const mins = Math.floor(seconds / 60)
       const secs = seconds % 60
-      return <span className="text-sm">{mins > 0 ? `${mins}m ${secs}s` : `${secs}s`}</span>
+      return (
+        <span className="text-sm tabular-nums text-muted-foreground">
+          {mins > 0 ? `${mins}m ${secs}s` : `${secs}s`}
+        </span>
+      )
     },
   },
 ]
@@ -131,17 +140,19 @@ export default function EarlyLeavesPage() {
   const [isPending, startTransition] = useTransition()
 
   const filtered = useMemo(() => {
-    let result = alerts
+    let result: EarlyLeaveAlert[] = alerts
     if (startDate) {
       const start = format(startDate, 'yyyy-MM-dd')
-      result = result.filter((a) => a.date >= start)
+      result = result.filter((a: EarlyLeaveAlert) => a.date >= start)
     }
     if (endDate) {
       const end = format(endDate, 'yyyy-MM-dd')
-      result = result.filter((a) => a.date <= end)
+      result = result.filter((a: EarlyLeaveAlert) => a.date <= end)
     }
     if (searchQuery.trim()) {
-      result = result.filter((a) => tokenMatches(buildEarlyLeaveHaystack(a), searchQuery))
+      result = result.filter((a: EarlyLeaveAlert) =>
+        tokenMatches(buildEarlyLeaveHaystack(a), searchQuery),
+      )
     }
     return result
   }, [alerts, startDate, endDate, searchQuery])

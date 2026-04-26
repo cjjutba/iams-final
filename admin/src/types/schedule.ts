@@ -65,6 +65,12 @@ export interface ScheduleResponse {
   academic_year: string
   target_course: string | null
   target_year_level: number | null
+  // Per-schedule override for the early-leave detection threshold (1-15 min).
+  // null means "use the system default" (currently 5 min, set in
+  // backend `EARLY_LEAVE_TIMEOUT`). Settable via PATCH /schedules/{id}/config,
+  // which is the only endpoint that propagates the change to a running
+  // SessionPipeline mid-session.
+  early_leave_timeout_minutes: number | null
   faculty_id: string
   room_id: string
   is_active: boolean
@@ -114,7 +120,15 @@ export interface ScheduleUpdate {
   academic_year?: string
   target_course?: string
   target_year_level?: number
+  early_leave_timeout_minutes?: number | null
   faculty_id?: string
   room_id?: string
   is_active?: boolean
+}
+
+// Request body for `PATCH /schedules/{id}/config`. Distinct from
+// ScheduleUpdate because the /config endpoint is the only path that also
+// applies the change to a running SessionPipeline (not just persists it).
+export interface ScheduleConfigUpdate {
+  early_leave_timeout_minutes: number
 }

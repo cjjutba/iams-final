@@ -47,13 +47,25 @@ _ALLOWED_ANGLE_LABELS: frozenset[str] = frozenset(
 # scripts/cctv_enroll.py + POST /api/v1/face/cctv-enroll endpoint. These
 # augment the phone-captured angles with embeddings drawn from the actual
 # CCTV image domain so recognition can close the phone→CCTV cross-domain
-# gap. Pattern is `cctv_<positive_int>` — index is per-user and assigned
-# by the service when persisting to face_embeddings.
-_CCTV_LABEL_RE = re.compile(r"^cctv_\d+$")
+# gap.
+#
+# Two formats are accepted (see app/utils/cctv_label.py for the canonical
+# parser):
+#   - Legacy:  ``cctv_<idx>``               (pre-Phase-2, no room context)
+#   - Modern:  ``cctv_<room_key>_<idx>``    (Phase-2+, room-scoped — the
+#                                            room slug is alphanumeric +
+#                                            hyphen, e.g. ``cctv_eb226_3``)
+#
+# Index is per-user (and per-room for the modern form), assigned by the
+# service when persisting to face_embeddings.
+_CCTV_LABEL_RE = re.compile(
+    r"^cctv_(?:\d+|[A-Za-z0-9-]+(?:_[A-Za-z0-9-]+)*_\d+)$"
+)
 
 
 def _is_allowed_angle_label(angle_label: str) -> bool:
-    """True if angle_label is either a phone-captured angle or a CCTV index."""
+    """True if angle_label is either a phone-captured angle or a CCTV
+    crop (legacy ``cctv_<idx>`` OR modern ``cctv_<room>_<idx>``)."""
     return angle_label in _ALLOWED_ANGLE_LABELS or bool(_CCTV_LABEL_RE.match(angle_label))
 
 _REGISTRATIONS_SUBDIR = "registrations"

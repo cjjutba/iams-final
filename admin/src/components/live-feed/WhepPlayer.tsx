@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react'
-import { AlertCircle, Loader2 } from 'lucide-react'
+import { AlertCircle, Loader2, VideoOff, Cctv } from 'lucide-react'
 
 /**
  * Per-decoded-frame metadata fanned out by ``onVideoFrame`` subscribers.
@@ -414,19 +414,66 @@ export const WhepPlayer = forwardRef<WhepPlayerHandle, WhepPlayerProps>(function
       />
 
       {status === 'connecting' && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-white">
-          <Loader2 className="h-8 w-8 animate-spin" />
-          <span className="text-sm">
-            Connecting to {streamKey.replace(/-sub$/, '').toUpperCase()} camera…
-          </span>
+        <div className="absolute inset-0 overflow-hidden bg-gradient-to-br from-zinc-900 via-zinc-950 to-black">
+          {/* Skeleton bbox placeholders — mimic where future detection
+              overlays will land so the camera frame doesn't feel empty
+              while ICE/SDP negotiation is in flight. */}
+          <div
+            className="absolute left-[14%] top-[28%] h-[34%] w-[14%] rounded-md border border-white/10 bg-white/[0.04] animate-pulse"
+            style={{ animationDelay: '0ms' }}
+            aria-hidden
+          />
+          <div
+            className="absolute left-[42%] top-[34%] h-[30%] w-[12%] rounded-md border border-white/10 bg-white/[0.04] animate-pulse"
+            style={{ animationDelay: '180ms' }}
+            aria-hidden
+          />
+          <div
+            className="absolute right-[18%] top-[30%] h-[32%] w-[13%] rounded-md border border-white/10 bg-white/[0.04] animate-pulse"
+            style={{ animationDelay: '360ms' }}
+            aria-hidden
+          />
+
+          {/* Skeleton HUD chip placeholder — matches the live FPS/MS/track
+              chip dimensions so the layout doesn't shift when video starts. */}
+          <div className="pointer-events-none absolute right-3 top-3 h-7 w-36 rounded-md border border-white/10 bg-white/[0.06] animate-pulse" />
+
+          {/* Center status block */}
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
+            <div className="relative">
+              <span className="absolute inset-0 animate-ping rounded-full bg-white/[0.08]" aria-hidden />
+              <div className="relative flex h-14 w-14 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] backdrop-blur-sm">
+                <Cctv className="h-7 w-7 text-white/75" aria-hidden />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <div className="text-sm font-medium text-white">
+                Connecting to {streamKey.replace(/-sub$/, '').toUpperCase()} camera
+              </div>
+              <div className="inline-flex items-center gap-1.5 text-xs text-white/55">
+                <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+                <span>Negotiating WebRTC stream…</span>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
       {status === 'error' && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-white">
-          <AlertCircle className="h-8 w-8 text-destructive" />
-          <span className="text-sm font-medium">Stream unavailable</span>
-          <span className="text-xs text-white/70 max-w-md text-center px-4">{errorMsg}</span>
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-gradient-to-br from-zinc-900 via-zinc-950 to-black px-6 text-center">
+          <div className="flex h-14 w-14 items-center justify-center rounded-full border border-destructive/30 bg-destructive/10">
+            <VideoOff className="h-7 w-7 text-destructive" aria-hidden />
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm font-semibold text-white">Stream unavailable</div>
+            <div className="mx-auto max-w-md text-xs text-white/60">
+              {errorMsg}
+            </div>
+          </div>
+          <div className="mt-1 inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-[11px] text-white/50">
+            <AlertCircle className="h-3 w-3" aria-hidden />
+            <span>Check that the camera relay is publishing</span>
+          </div>
         </div>
       )}
     </div>

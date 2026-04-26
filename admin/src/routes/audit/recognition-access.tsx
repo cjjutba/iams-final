@@ -1,11 +1,11 @@
 import { useMemo, useState, useTransition } from 'react'
 import { Link } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
-import { Eye, Shield } from 'lucide-react'
+import { Eye } from 'lucide-react'
 
 import { DataTable } from '@/components/data-tables'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { CropKindPill } from '@/components/shared/status-pills'
 import { Input } from '@/components/ui/input'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useRecognitionAccessAudit } from '@/hooks/use-queries'
@@ -102,12 +102,7 @@ export default function RecognitionAccessAuditPage() {
       {
         accessorKey: 'crop_kind',
         header: 'Crop',
-        cell: ({ row }) =>
-          row.original.crop_kind === 'live' ? (
-            <Badge variant="default">Live</Badge>
-          ) : (
-            <Badge variant="secondary">Registered</Badge>
-          ),
+        cell: ({ row }) => <CropKindPill kind={row.original.crop_kind} />,
       },
       {
         accessorKey: 'student_name',
@@ -159,10 +154,7 @@ export default function RecognitionAccessAuditPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-            <Shield className="h-5 w-5 text-muted-foreground" />
-            Recognition Access Audit
-          </h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Recognition Access Audit</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Every admin request for a recognition-evidence crop. Retained for 3 years.
           </p>

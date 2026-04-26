@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Loader2, Play, Square, Video } from 'lucide-react'
+import { ArrowLeft, Loader2, Play, Square, Timer, Video } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { WhepPlayer, type WhepPlayerHandle, type PlayerStatus } from '@/components/live-feed/WhepPlayer'
@@ -9,8 +9,10 @@ import { AttendancePanel } from '@/components/live-feed/AttendancePanel'
 import { RecognitionPanel } from '@/components/live-feed/RecognitionPanel'
 import { OverlayClickTargets } from '@/components/live-feed/OverlayClickTargets'
 import { TrackDetailSheet } from '@/components/live-feed/TrackDetailSheet'
+import { TrackDetailMiniPanel } from '@/components/live-feed/TrackDetailMiniPanel'
 import { SessionStatusPill } from '@/components/live-feed/SessionStatusPill'
 import { VideoHud } from '@/components/live-feed/VideoHud'
+import { VideoFullscreenButton } from '@/components/live-feed/VideoFullscreenButton'
 import { useAttendanceWs } from '@/hooks/use-attendance-ws'
 import { useFrameAligner } from '@/hooks/use-frame-aligner'
 import { useSchedule, useRoom, useSessionStartEligibility } from '@/hooks/use-queries'
@@ -22,7 +24,9 @@ import api from '@/services/api'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
+import { EarlyLeaveTimeoutControl } from '@/components/schedules/early-leave-timeout-control'
 
 /**
  * Derive the mediamtx stream key from a room's camera_endpoint.
@@ -176,6 +180,13 @@ export default function ScheduleLivePage() {
   } = useAttendanceWs(scheduleId)
 
   const playerRef = useRef<WhepPlayerHandle>(null)
+  const videoContainerRef = useRef<HTMLDivElement>(null)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  useEffect(() => {
+    const sync = () => setIsFullscreen(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', sync)
+    return () => document.removeEventListener('fullscreenchange', sync)
+  }, [])
   const [videoSize, setVideoSize] = useState<{ width: number; height: number } | null>(null)
   const [activeStream, setActiveStream] = useState<{ key: string; isFallback: boolean } | null>(null)
   const [playerStatus, setPlayerStatus] = useState<PlayerStatus>('idle')
@@ -214,6 +225,7 @@ export default function ScheduleLivePage() {
 
   const [sessionLoading, setSessionLoading] = useState(false)
   const [sessionActive, setSessionActive] = useState<boolean | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   // Server-side eligibility snapshot (refetched every 30s; manual refetch
   // after a failed Start to pick up ALREADY_RAN_TODAY transitions).
@@ -352,12 +364,124 @@ export default function ScheduleLivePage() {
   }
 
   if (schedLoading || roomLoading) {
+    // Mirror the loaded layout (header → video card → attendance + recognition
+    // panels) so the cut-over to real data doesn't shift the page. Each
+    // skeleton block is sized to match its eventual counterpart.
     return (
-      <div className="flex flex-col gap-4 p-6">
-        <Skeleton className="h-8 w-64" />
-        <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
-          <Skeleton className="aspect-video w-full" />
-          <Skeleton className="h-[500px] w-full" />
+      <div className="flex flex-col gap-4 p-4 md:p-6">
+        {/* Header */}
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex min-w-0 items-start gap-2">
+            <Skeleton className="-ml-2 mt-0.5 h-8 w-8 shrink-0 rounded-md" />
+            <div className="min-w-0 space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Skeleton className="h-6 w-72" />
+                <Skeleton className="h-5 w-16 rounded-full" />
+              </div>
+              <Skeleton className="h-4 w-48" />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-9 w-9 rounded-md" />
+            <Skeleton className="h-9 w-32 rounded-md" />
+          </div>
+        </div>
+
+        {/* Video + Right rail */}
+        <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
+          {/* Video card skeleton — match aspect-video ratio + corner HUD chip */}
+          <Card className="overflow-hidden">
+            <CardContent className="p-0">
+              <div className="relative aspect-video w-full overflow-hidden bg-gradient-to-br from-zinc-900 via-zinc-950 to-black">
+                <div
+                  className="absolute left-[14%] top-[28%] h-[34%] w-[14%] rounded-md border border-white/10 bg-white/[0.04] animate-pulse"
+                  aria-hidden
+                />
+                <div
+                  className="absolute left-[42%] top-[34%] h-[30%] w-[12%] rounded-md border border-white/10 bg-white/[0.04] animate-pulse"
+                  style={{ animationDelay: '180ms' }}
+                  aria-hidden
+                />
+                <div
+                  className="absolute right-[18%] top-[30%] h-[32%] w-[13%] rounded-md border border-white/10 bg-white/[0.04] animate-pulse"
+                  style={{ animationDelay: '360ms' }}
+                  aria-hidden
+                />
+                <div className="absolute right-3 top-3 h-7 w-36 rounded-md border border-white/10 bg-white/[0.06] animate-pulse" />
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
+                  <Loader2 className="h-7 w-7 animate-spin text-white/60" />
+                  <span className="text-xs text-white/55">Loading schedule…</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Right rail skeleton — attendance card + recognition panel */}
+          <div className="flex flex-col gap-4 lg:min-h-[500px]">
+            <Card className="flex flex-col">
+              <div className="space-y-3 p-4 pb-3">
+                <div className="flex items-center justify-between">
+                  <Skeleton className="h-5 w-24" />
+                  <Skeleton className="h-2 w-2 rounded-full" />
+                </div>
+                <Skeleton className="h-4 w-40" />
+                <Skeleton className="h-1.5 w-full rounded-full" />
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <Skeleton key={i} className="h-3 w-16" />
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-4 px-4 py-3">
+                {Array.from({ length: 3 }).map((_, group) => (
+                  <div key={group} className="space-y-2">
+                    <Skeleton className="h-3 w-20" />
+                    {Array.from({ length: 2 }).map((_, row) => (
+                      <div key={row} className="flex items-center gap-3 px-2 py-2">
+                        <div className="min-w-0 flex-1 space-y-1.5">
+                          <Skeleton className="h-3.5 w-32" />
+                          <Skeleton className="h-2.5 w-20" />
+                        </div>
+                        <Skeleton className="h-5 w-16 shrink-0 rounded-full" />
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            <Card className="flex h-[420px] flex-col">
+              <div className="space-y-2 p-4 pb-3">
+                <div className="flex items-center justify-between">
+                  <Skeleton className="h-5 w-36" />
+                  <Skeleton className="h-3 w-12" />
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Skeleton className="h-7 w-20 rounded-md" />
+                  <Skeleton className="h-7 w-28 rounded-md" />
+                  <Skeleton className="ml-auto h-3 w-32" />
+                </div>
+              </div>
+              <div className="flex-1 space-y-2 overflow-hidden px-4 py-2">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="flex gap-3 py-2">
+                    <Skeleton className="h-12 w-12 shrink-0 rounded-md" />
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <Skeleton className="h-3 w-24" />
+                        <Skeleton className="h-4 w-12 rounded-full" />
+                      </div>
+                      <Skeleton className="h-1.5 w-full rounded-full" />
+                      <div className="flex items-center justify-between">
+                        <Skeleton className="h-2.5 w-20" />
+                        <Skeleton className="h-2.5 w-24" />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
         </div>
       </div>
     )
@@ -412,6 +536,38 @@ export default function ScheduleLivePage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <Popover open={settingsOpen} onOpenChange={setSettingsOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon"
+                title="Attendance settings"
+                aria-label="Attendance settings"
+                className="h-9 w-9"
+              >
+                <Timer className="h-4 w-4" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-80">
+              <div className="mb-3 flex items-start gap-2">
+                <Timer className="mt-0.5 h-4 w-4 text-muted-foreground" />
+                <div className="space-y-0.5">
+                  <div className="text-sm font-medium">Early-leave threshold</div>
+                  <p className="text-xs text-muted-foreground">
+                    {sessionActive === true
+                      ? 'Saving applies live to this running session.'
+                      : 'Saved value will be used the next time this schedule runs.'}
+                  </p>
+                </div>
+              </div>
+              <EarlyLeaveTimeoutControl
+                scheduleId={schedule.id}
+                currentMinutes={schedule.early_leave_timeout_minutes ?? null}
+                inline
+                onSaved={() => setSettingsOpen(false)}
+              />
+            </PopoverContent>
+          </Popover>
           {sessionActive === true ? (
             <Button
               variant="outline"
@@ -448,7 +604,10 @@ export default function ScheduleLivePage() {
       <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
         <Card className="overflow-hidden">
           <CardContent className="p-0">
-            <div className="relative aspect-video w-full bg-black">
+            <div
+              ref={videoContainerRef}
+              className={`group relative w-full bg-black ${isFullscreen ? 'h-screen' : 'aspect-video'}`}
+            >
               <WhepPlayer
                 ref={playerRef}
                 streamKey={displayStreamKey ?? streamKey}
@@ -480,7 +639,19 @@ export default function ScheduleLivePage() {
                 onClearSamples={clearLatencySamples}
                 fallbackActive={activeStream?.isFallback ?? false}
                 fallbackKey={activeStream?.key}
+                portalContainer={isFullscreen ? videoContainerRef.current : null}
               />
+              <VideoFullscreenButton targetRef={videoContainerRef} />
+              {isFullscreen && (
+                <TrackDetailMiniPanel
+                  latestFrame={latestFrame}
+                  latestSummary={latestSummary}
+                  isConnected={isConnected}
+                  scheduleId={scheduleId ?? ''}
+                  recognitionEvents={recognitionEvents}
+                  liveCrops={liveCrops}
+                />
+              )}
             </div>
           </CardContent>
         </Card>
@@ -500,14 +671,16 @@ export default function ScheduleLivePage() {
         </div>
       </div>
 
-      <TrackDetailSheet
-        latestFrame={latestFrame}
-        latestSummary={latestSummary}
-        isConnected={isConnected}
-        scheduleId={scheduleId ?? ''}
-        recognitionEvents={recognitionEvents}
-        liveCrops={liveCrops}
-      />
+      {!isFullscreen && (
+        <TrackDetailSheet
+          latestFrame={latestFrame}
+          latestSummary={latestSummary}
+          isConnected={isConnected}
+          scheduleId={scheduleId ?? ''}
+          recognitionEvents={recognitionEvents}
+          liveCrops={liveCrops}
+        />
+      )}
     </div>
   )
 }
