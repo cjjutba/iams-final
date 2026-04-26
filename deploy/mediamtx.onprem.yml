@@ -102,12 +102,21 @@ writeQueueSize: 128
 #
 # Matching order:
 #   1. The regex `~^.+-sub$` catches the admin-only sub streams and keeps
-#      them LOCAL — no runOnReady, so they never hit the VPS. The admin
-#      portal's WhepPlayer consumes these directly.
-#   2. `all_others` catches everything else (the main streams) and mirrors
-#      them to the VPS for the Faculty APK.
+#      them LOCAL — never hit the VPS. The admin portal's WhepPlayer
+#      consumes these directly.
+#   2. `all_others` catches everything else (the main streams). These are
+#      kept LOCAL too — used by the api-gateway's FrameGrabber for ML +
+#      the admin portal's WHEP player.
+#
+# RPi → VPS direct push (2026-04-26): Mac no longer mirrors local streams
+# to the VPS via runOnReady. The two on-prem RPi relays push their
+# respective camera streams DIRECTLY to rtsp://167.71.217.44:8554/<key>,
+# and the Faculty APK reads VPS WHEP from there. Removing the Mac's
+# runOnReady push is what stops the publisher-flapping race condition
+# (`overridePublisher: yes` on both ends meant Mac+RPi kept booting each
+# other off, surfacing as "Broken pipe" in the RPi's relay log).
 paths:
-  # Admin-only low-bitrate streams. No VPS push. No re-encode.
+  # Admin-only low-bitrate streams. No re-encode.
   "~^.+-sub$":
     overridePublisher: yes
 
@@ -115,34 +124,10 @@ paths:
   # `eb226-back`, `eb227-back`, … published by scripts/iams-cam-relay.sh's
   # `run_cropped_stream` loops. These exist purely to feed the api-gateway's
   # back-row FrameGrabbers so SCRFD sees ~2× the pixel density on far faces.
-  # They never need to leave the Mac — the faculty APK consumes only the
-  # main streams, and the admin live page can already see the same room
-  # via the main `<key>` and `-sub` paths. Keeping these LOCAL avoids
-  # WAN bandwidth for a stream nobody outside IAMS-Net will ever read.
   "~^.+-back$":
     overridePublisher: yes
 
   all_others:
     # Allow publisher reconnection without waiting for old session timeout
-    # — important when the RPi relay restarts (power cycle, network blip).
+    # — important when the host ffmpeg supervisor restarts.
     overridePublisher: yes
-
-    # On publisher-ready, spawn ffmpeg that pulls the local path and pushes
-    # to the same path name on the VPS. `-c copy` = no re-encode; zero CPU.
-    # $MTX_PATH is expanded by mediamtx to the current path name.
-    #
-    # runOnReadyRestart: yes auto-restarts the ffmpeg if it exits (common
-    # case: VPS mediamtx TCP reset, school network blip). No manual babysitting.
-    #
-    # Why push outbound instead of VPS pulling? MikroTik / school NAT blocks
-    # inbound to the LAN; outbound always works. See lessons 2026-04-21:
-    # "NAT-aware streaming — always push LAN → cloud, never pull".
-    #
-    # NOTE (2026-04-22): the bluenviron/mediamtx Alpine image has no `sh` —
-    # wrapping in `sh -c "..."` crashes every 5 s with "exec: sh: executable
-    # file not found in $PATH". mediamtx's runOnReady just exec's the
-    # command directly, so we drop the shell wrapper and put all args in
-    # a single line. Env-var expansion ($MTX_PATH) is handled by mediamtx
-    # itself before exec.
-    runOnReady: ffmpeg -hide_banner -loglevel warning -fflags nobuffer -flags low_delay -rtsp_transport tcp -i rtsp://localhost:8554/$MTX_PATH -c copy -an -f rtsp -rtsp_transport tcp -rw_timeout 15000000 rtsp://167.71.217.44:8554/$MTX_PATH
-    runOnReadyRestart: yes

@@ -41,6 +41,7 @@ from app.routers import (
     rooms,
     schedules,
     settings_router,
+    sync as sync_router,
     users,
     websocket,
 )
@@ -303,6 +304,40 @@ async def lifespan(app: FastAPI):
                 # state can't leak through. Idempotent: safe to call with
                 # None when no liveness model was previously bound.
                 set_liveness_model(None)
+
+                # Surface the degraded state to the operator's bell when
+                # the operator INTENDED liveness to run (LIVENESS_ENABLED
+                # is true) but the binding failed. Silent boot of a
+                # critical security feature is exactly the failure mode
+                # this notification exists to prevent. Dedup window of
+                # 1 hour so a flaky sidecar that recovers + drops doesn't
+                # spam the bell.
+                if settings.LIVENESS_ENABLED:
+                    try:
+                        await health_notifier.emit_one_shot(
+                            title="Liveness gating disabled at boot",
+                            message=(
+                                "LIVENESS_ENABLED=true but the MiniFASNet "
+                                "backend could not be bound (sidecar absent "
+                                "or pack not exported). Spoof detection is "
+                                "OFF this run. Run `python -m "
+                                "scripts.export_liveness_models` and "
+                                "restart the api-gateway to recover."
+                            ),
+                            notification_type="liveness_unavailable",
+                            severity="warn",
+                            preference_key="security_alerts",
+                            send_email=True,
+                            reference_id="liveness_unavailable",
+                            reference_type="ml",
+                            dedup_window_seconds=3600,
+                            toast_type="warning",
+                        )
+                    except Exception:
+                        logger.warning(
+                            "liveness_unavailable notify failed",
+                            exc_info=True,
+                        )
 
             logger.info("Face recognition system initialized")
         except Exception as e:
@@ -827,6 +862,9 @@ async def lifespan(app: FastAPI):
                     # Send session-start notifications (fire-and-forget)
                     try:
                         from app.services.notification_service import notify as _notify
+                        from app.services.notification_service import (
+                            notify_admins as _notify_admins,
+                        )
                         from app.services.notification_service import notify_many as _notify_many
 
                         db = SessionLocal()
@@ -859,6 +897,22 @@ async def lifespan(app: FastAPI):
                                     reference_type="schedule",
                                     dedup_window_seconds=300,
                                 )
+                            # Admin fan-out — same dedup window as faculty
+                            # so repeated lifecycle ticks don't double-notify.
+                            await _notify_admins(
+                                db,
+                                title=f"Session started: {subject_code}",
+                                message=(
+                                    f"Auto-started {subject_code} in room "
+                                    f"{room_id} ({len(student_ids)} enrolled)."
+                                ),
+                                notification_type="session_auto_started",
+                                severity="info",
+                                toast_type="info",
+                                reference_id=str(sid),
+                                reference_type="schedule",
+                                dedup_window_seconds=300,
+                            )
                         finally:
                             db.close()
                     except Exception:
@@ -938,6 +992,9 @@ async def lifespan(app: FastAPI):
                     # Send session-end notifications (fire-and-forget)
                     try:
                         from app.services.notification_service import notify as _notify
+                        from app.services.notification_service import (
+                            notify_admins as _notify_admins,
+                        )
                         from app.services.notification_service import notify_many as _notify_many
 
                         db = SessionLocal()
@@ -960,6 +1017,22 @@ async def lifespan(app: FastAPI):
                                     "session_end",
                                     toast_type="info",
                                 )
+                            # Admin fan-out so the operator sees the full
+                            # lifecycle on the bell, not just the start.
+                            await _notify_admins(
+                                db,
+                                title=f"Session ended: {subject_code}",
+                                message=(
+                                    f"Auto-ended {subject_code} in room "
+                                    f"{room_id}."
+                                ),
+                                notification_type="session_auto_ended",
+                                severity="info",
+                                toast_type="info",
+                                reference_id=str(sid),
+                                reference_type="schedule",
+                                dedup_window_seconds=300,
+                            )
                         finally:
                             db.close()
                     except Exception:
@@ -1120,12 +1193,34 @@ async def lifespan(app: FastAPI):
 
         # ── Notification background jobs ──────────────────────────
         from app.services.notification_jobs import (
-            run_anomaly_detection,
-            run_daily_digest,
-            run_daily_health_summary,
-            run_low_attendance_check,
-            run_notification_cleanup,
-            run_weekly_digest,
+            run_anomaly_detection as _raw_run_anomaly_detection,
+            run_daily_digest as _raw_run_daily_digest,
+            run_daily_health_summary as _raw_run_daily_health_summary,
+            run_low_attendance_check as _raw_run_low_attendance_check,
+            run_notification_cleanup as _raw_run_notification_cleanup,
+            run_weekly_digest as _raw_run_weekly_digest,
+            with_failure_notification,
+        )
+
+        # Wrap every cron job so an unhandled exception emits a
+        # ``scheduled_job_failed`` admin notification (severity=error,
+        # email enabled, 1-hour dedup keyed on job name) instead of
+        # disappearing into the api-gateway log. Discovered during the
+        # 2026-04-26 notification audit — silent job failures could
+        # cause a digest to miss for days before anyone noticed.
+        run_daily_digest = with_failure_notification("daily_digest")(_raw_run_daily_digest)
+        run_daily_health_summary = with_failure_notification("daily_health_summary")(
+            _raw_run_daily_health_summary
+        )
+        run_weekly_digest = with_failure_notification("weekly_digest")(_raw_run_weekly_digest)
+        run_low_attendance_check = with_failure_notification("low_attendance_check")(
+            _raw_run_low_attendance_check
+        )
+        run_anomaly_detection = with_failure_notification("anomaly_detection")(
+            _raw_run_anomaly_detection
+        )
+        run_notification_cleanup = with_failure_notification("notification_cleanup")(
+            _raw_run_notification_cleanup
         )
 
         scheduler.add_job(
@@ -1205,6 +1300,39 @@ async def lifespan(app: FastAPI):
             coalesce=True,
         )
 
+        # ── Mac → VPS sync (one-way snapshot push) ──────────────────
+        # Registers the on-prem APScheduler job that pushes faculty + admin
+        # users + rooms + schedules + faculty_records to the VPS receiver
+        # every VPS_SYNC_INTERVAL_SECONDS. Only the on-prem profile runs
+        # this — the VPS profile has ENABLE_BACKGROUND_JOBS=false anyway,
+        # but the inner gate on ENABLE_VPS_SYNC means a misconfigured
+        # third deployment won't accidentally try to push to itself.
+        if settings.ENABLE_VPS_SYNC:
+            from app.services.vps_sync_jobs import (
+                run_vps_sync as _raw_run_vps_sync,
+            )
+
+            run_vps_sync = with_failure_notification("vps_sync")(_raw_run_vps_sync)
+
+            scheduler.add_job(
+                run_vps_sync,
+                "interval",
+                seconds=settings.VPS_SYNC_INTERVAL_SECONDS,
+                id="vps_sync",
+                replace_existing=True,
+                max_instances=1,
+                # The receiver applies the whole snapshot in one tx; if
+                # we miss a tick because the previous one is still running
+                # (slow VPS), coalesce so we don't queue up.
+                misfire_grace_time=120,
+                coalesce=True,
+            )
+            logger.info(
+                "VPS sync job scheduled (every %d s) — target=%s",
+                settings.VPS_SYNC_INTERVAL_SECONDS,
+                settings.VPS_SYNC_URL or "<unset — job will no-op>",
+            )
+
         # Recognition-evidence retention (Phase G). Dry-run by default — the
         # operator flips RECOGNITION_EVIDENCE_RETENTION_DRY_RUN=false after
         # one sweep has logged the expected delete set. Hard cap inside the
@@ -1213,7 +1341,13 @@ async def lifespan(app: FastAPI):
             settings.ENABLE_RECOGNITION_EVIDENCE
             and settings.ENABLE_RECOGNITION_EVIDENCE_RETENTION
         ):
-            from app.services.recognition_retention import run_recognition_retention
+            from app.services.recognition_retention import (
+                run_recognition_retention as _raw_run_recognition_retention,
+            )
+
+            run_recognition_retention = with_failure_notification(
+                "recognition_retention"
+            )(_raw_run_recognition_retention)
 
             scheduler.add_job(
                 run_recognition_retention,
@@ -1242,6 +1376,61 @@ async def lifespan(app: FastAPI):
         logger.info("Background jobs disabled (ENABLE_BACKGROUND_JOBS=false) — skipping APScheduler")
     except Exception as e:
         logger.error(f"Failed to initialize APScheduler: {e}")
+
+    # ── Boot-time admin notification ──────────────────────────────
+    # Sends a single "System online" bell ping to every active admin so
+    # the operator gets unambiguous confirmation that the api-gateway came
+    # up cleanly and which subsystems bound. Dedup window protects against
+    # rapid-fire restart loops. Skipped on the VPS thin profile (no
+    # notification routes / DB tables for it).
+    if settings.ENABLE_NOTIFICATION_ROUTES:
+        try:
+            from app.database import SessionLocal as _BootDB
+            from app.models.face_embedding import FaceEmbedding
+            from app.models.room import Room
+            from app.models.user import User, UserRole
+            from app.services.notification_service import notify_admins
+
+            _db = _BootDB()
+            try:
+                room_count = (
+                    _db.query(Room)
+                    .filter(Room.camera_endpoint.isnot(None))
+                    .filter(Room.camera_endpoint != "")
+                    .count()
+                )
+                enrolled_count = (
+                    _db.query(User)
+                    .filter(User.role == UserRole.STUDENT, User.is_active.is_(True))
+                    .count()
+                )
+                embedding_count = _db.query(FaceEmbedding).count()
+                ml_state = "via sidecar" if (
+                    settings.ENABLE_ML and settings.ML_SIDECAR_URL
+                ) else ("in-process" if settings.ENABLE_ML else "disabled")
+                liveness_state = "on" if settings.LIVENESS_ENABLED else "off"
+
+                await notify_admins(
+                    _db,
+                    title="System online",
+                    message=(
+                        f"IAMS backend started. {room_count} camera(s), "
+                        f"{enrolled_count} active student(s), "
+                        f"{embedding_count} face embedding(s). "
+                        f"ML: {ml_state}. Liveness: {liveness_state}."
+                    ),
+                    notification_type="system_boot",
+                    severity="info",
+                    toast_type="info",
+                    reference_id="system_boot",
+                    reference_type="system",
+                    # 5 min — restart loops within this window are silenced.
+                    dedup_window_seconds=300,
+                )
+            finally:
+                _db.close()
+        except Exception:
+            logger.warning("Boot-time admin notification failed (non-fatal)", exc_info=True)
 
     logger.info(f"{settings.APP_NAME} startup complete")
 
@@ -1574,6 +1763,16 @@ _flagged_routers: list[tuple[bool, str, object, str, str]] = [
         activity.router,
         f"{API_PREFIX}/activity",
         "System Activity",
+    ),
+    # Mac → VPS sync receiver. Enabled only on the VPS thin profile via
+    # ENABLE_SYNC_RECEIVER_ROUTES=true. The on-prem Mac never mounts this
+    # router — it is the SENDER, not a receiver.
+    (
+        settings.ENABLE_SYNC_RECEIVER_ROUTES,
+        "sync",
+        sync_router.router,
+        f"{API_PREFIX}/sync",
+        "Sync",
     ),
 ]
 

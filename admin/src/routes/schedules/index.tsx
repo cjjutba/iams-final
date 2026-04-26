@@ -175,19 +175,27 @@ interface ScheduleFormValues {
   target_year_level?: number
 }
 
-const scheduleFormSchema = z.object({
-  subject_code: z.string().min(1, 'Subject code is required').max(20, 'Max 20 characters'),
-  subject_name: z.string().min(1, 'Subject name is required'),
-  faculty_id: z.string().min(1, 'Faculty is required'),
-  room_id: z.string().min(1, 'Room is required'),
-  day_of_week: z.number().min(0).max(6),
-  start_time: z.string().min(1, 'Start time is required'),
-  end_time: z.string().min(1, 'End time is required'),
-  semester: z.string().min(1, 'Semester is required'),
-  academic_year: z.string().min(1, 'Academic year is required'),
-  target_course: z.string().optional(),
-  target_year_level: z.number().optional(),
-})
+const scheduleFormSchema = z
+  .object({
+    subject_code: z.string().min(1, 'Subject code is required').max(20, 'Max 20 characters'),
+    subject_name: z.string().min(1, 'Subject name is required'),
+    faculty_id: z.string().min(1, 'Faculty is required'),
+    room_id: z.string().min(1, 'Room is required'),
+    day_of_week: z.number().min(0).max(6),
+    start_time: z.string().min(1, 'Start time is required'),
+    end_time: z.string().min(1, 'End time is required'),
+    semester: z.string().min(1, 'Semester is required'),
+    academic_year: z.string().min(1, 'Academic year is required'),
+    target_course: z.string().optional(),
+    target_year_level: z.number().optional(),
+  })
+  // String compare on "HH:MM" 24-hour values is correctness-equivalent to
+  // numeric compare and avoids round-tripping through Date (which would
+  // implicitly involve the browser timezone — see PHT note in the form).
+  .refine((v) => !v.start_time || !v.end_time || v.start_time < v.end_time, {
+    message: 'End time must be after start time',
+    path: ['end_time'],
+  })
 
 function formatTime(time: string): string {
   return formatTime12h(time)
@@ -747,10 +755,22 @@ export default function SchedulesPage() {
             <DialogDescription>
               {editingSchedule
                 ? 'Update the schedule details below.'
-                : 'Fill in the details to create a new schedule.'}
+                : 'Fill in the details to create a new schedule.'}{' '}
+              Fields marked with <span className="text-destructive">*</span> are required.
             </DialogDescription>
           </DialogHeader>
           <Form {...form}>
+            {/*
+              Time handling note: the <input type="time"> elements below
+              return literal "HH:MM" wall-clock strings (24-hour) with NO
+              timezone conversion. The backend container runs in
+              Asia/Manila (TZ env in deploy/docker-compose.onprem.yml) and
+              persists start_time/end_time as bare `time` columns, so the
+              value an admin types here IS the Philippine wall-clock time
+              the session-lifecycle scheduler will compare against. Do not
+              wrap these values in `new Date(...)` before submit — that
+              would round-trip through UTC and corrupt the saved time.
+            */}
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2">
                 <FormField
@@ -758,7 +778,9 @@ export default function SchedulesPage() {
                   name="subject_code"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Subject Code</FormLabel>
+                      <FormLabel>
+                        Subject Code <span className="text-destructive">*</span>
+                      </FormLabel>
                       <FormControl>
                         <Input placeholder="e.g. CS 101" {...field} />
                       </FormControl>
@@ -771,7 +793,9 @@ export default function SchedulesPage() {
                   name="subject_name"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Subject Name</FormLabel>
+                      <FormLabel>
+                        Subject Name <span className="text-destructive">*</span>
+                      </FormLabel>
                       <FormControl>
                         <Input placeholder="e.g. Introduction to Computing" {...field} />
                       </FormControl>
@@ -787,7 +811,9 @@ export default function SchedulesPage() {
                   name="faculty_id"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Faculty</FormLabel>
+                      <FormLabel>
+                        Faculty <span className="text-destructive">*</span>
+                      </FormLabel>
                       <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger>
@@ -811,7 +837,9 @@ export default function SchedulesPage() {
                   name="room_id"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Room</FormLabel>
+                      <FormLabel>
+                        Room <span className="text-destructive">*</span>
+                      </FormLabel>
                       <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger>
@@ -832,60 +860,72 @@ export default function SchedulesPage() {
                 />
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-3">
-                <FormField
-                  control={form.control}
-                  name="day_of_week"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Day</FormLabel>
-                      <Select
-                        onValueChange={(val) => field.onChange(parseInt(val, 10))}
-                        value={String(field.value)}
-                      >
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  Times are entered in <span className="font-medium">Philippine Time (PHT, UTC+8)</span>.
+                  The value you type is saved exactly — no timezone conversion is applied.
+                </p>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <FormField
+                    control={form.control}
+                    name="day_of_week"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>
+                          Day <span className="text-destructive">*</span>
+                        </FormLabel>
+                        <Select
+                          onValueChange={(val) => field.onChange(parseInt(val, 10))}
+                          value={String(field.value)}
+                        >
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select day" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {DAY_NAMES.map((name, i) => (
+                              <SelectItem key={name} value={String(i)}>
+                                {name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="start_time"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>
+                          Start Time <span className="text-destructive">*</span>
+                        </FormLabel>
                         <FormControl>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select day" />
-                          </SelectTrigger>
+                          <Input type="time" {...field} />
                         </FormControl>
-                        <SelectContent>
-                          {DAY_NAMES.map((name, i) => (
-                            <SelectItem key={name} value={String(i)}>
-                              {name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="start_time"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Start Time</FormLabel>
-                      <FormControl>
-                        <Input type="time" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="end_time"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>End Time</FormLabel>
-                      <FormControl>
-                        <Input type="time" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="end_time"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>
+                          End Time <span className="text-destructive">*</span>
+                        </FormLabel>
+                        <FormControl>
+                          <Input type="time" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">
@@ -894,7 +934,9 @@ export default function SchedulesPage() {
                   name="semester"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Semester</FormLabel>
+                      <FormLabel>
+                        Semester <span className="text-destructive">*</span>
+                      </FormLabel>
                       <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger>
@@ -916,7 +958,9 @@ export default function SchedulesPage() {
                   name="academic_year"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Academic Year</FormLabel>
+                      <FormLabel>
+                        Academic Year <span className="text-destructive">*</span>
+                      </FormLabel>
                       <FormControl>
                         <Input placeholder="e.g. 2025-2026" {...field} />
                       </FormControl>

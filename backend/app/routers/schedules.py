@@ -774,6 +774,50 @@ async def update_schedule(
             "Failed to notify schedule participants of update"
         )
 
+    # Mirror the create-time conflict check so an UPDATE that introduces
+    # a faculty overlap also surfaces a warning. Informational — does
+    # NOT abort the update.
+    try:
+        if schedule.faculty_id and schedule.day_of_week is not None:
+            conflicts = (
+                db.query(Schedule)
+                .filter(
+                    Schedule.faculty_id == schedule.faculty_id,
+                    Schedule.day_of_week == schedule.day_of_week,
+                    Schedule.id != schedule.id,
+                    Schedule.is_active.is_(True),
+                    Schedule.start_time < schedule.end_time,
+                    Schedule.end_time > schedule.start_time,
+                )
+                .all()
+            )
+            if conflicts:
+                conflict_codes = ", ".join(c.subject_code for c in conflicts)
+                await notify(
+                    db,
+                    user_id=str(current_user.id),
+                    title="Schedule conflict warning",
+                    message=(
+                        f"After update, faculty has {len(conflicts)} "
+                        f"schedule(s) overlapping this slot: {conflict_codes}."
+                    ),
+                    notification_type="schedule_conflict_warning",
+                    severity="warn",
+                    preference_key="schedule_conflict_alerts",
+                    send_email=False,
+                    # 5 min dedup keyed on the slot so repeated saves
+                    # don't pile up duplicate warnings.
+                    dedup_window_seconds=300,
+                    reference_id=(
+                        f"conflict:{schedule.faculty_id}:"
+                        f"{schedule.day_of_week}:{schedule.start_time}"
+                    ),
+                    reference_type="composite_key",
+                    toast_type="warning",
+                )
+    except Exception:
+        logger.exception("Failed to emit schedule conflict warning on update")
+
     return _serialize_schedule(schedule)
 
 

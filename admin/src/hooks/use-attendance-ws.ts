@@ -139,10 +139,45 @@ export interface AttendanceStatusEntry {
   check_in_time?: string | null
   early_leave_time?: string | null
   return_time?: string | null
+  /**
+   * Wall-clock ISO timestamp of the most recent face detection for this
+   * student in this session. Refreshed every frame the student is
+   * recognised; pinned at the moment they vanished if they go off-camera.
+   * `null` for students who have never been seen this session
+   * (status = 'absent'). Drives the AttendancePanel's inline missing-timer:
+   * `(serverNow - last_seen_at)` is the live "off-camera for Xs" value
+   * raced against `early_leave_threshold_seconds`.
+   */
+  last_seen_at?: string | null
+  /**
+   * For entries in the `early_leave_returned` bucket only: the student's
+   * pre-incident attendance status. Used by the admin row to render a
+   * quiet "was on time" / "was late" hint without dropping in a second
+   * pill. Returned students appear ONLY in the early_leave_returned
+   * bucket (no longer dup'd into present/late), so this field is the
+   * single source of truth for the original status.
+   */
+  underlying_status?: 'present' | 'late' | null
 }
 
 export interface AttendanceSummaryMessage {
   type: 'attendance_summary'
+  /**
+   * Backend wall-clock at emit (epoch ms). The admin live page computes a
+   * client-vs-server offset on each broadcast so the locally-ticking
+   * missing-timer counts up against the same clock that stamped
+   * `last_seen_at`, even if the admin browser's wall-clock is off.
+   * Optional for forward-compat with older backend builds that pre-date
+   * the missing-timer feature.
+   */
+  server_time_ms?: number
+  /**
+   * Per-schedule early-leave cutoff in seconds (the slider on the schedule
+   * detail page). Used by the missing-timer as the progress-bar race
+   * target — at 100% the backend flips the student into the early_leave
+   * bucket on the next pipeline tick. Optional for forward-compat.
+   */
+  early_leave_threshold_seconds?: number
   present_count: number
   late_count: number
   absent_count: number

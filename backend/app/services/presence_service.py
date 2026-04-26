@@ -304,7 +304,9 @@ class PresenceService:
         if user:
             return {
                 "user_id": student_id,
-                "name": user.first_name,
+                # Full name (first + last) so notifications, activity events,
+                # and broadcasts disambiguate students who share a first name.
+                "name": f"{user.first_name} {user.last_name}".strip(),
                 "student_id": user.student_id,
             }
         return {"user_id": student_id, "name": "Unknown", "student_id": None}
@@ -1169,6 +1171,7 @@ class PresenceService:
 
         # Notify faculty + student of return (no email)
         from app.services.notification_service import notify as _notify
+        from app.services.notification_service import notify_admins as _notify_admins
 
         minutes = event.absence_duration_seconds // 60 if event.absence_duration_seconds else 0
         for uid in notify_user_ids:
@@ -1183,6 +1186,32 @@ class PresenceService:
                 reference_type="attendance",
             )
 
+        # Admin fan-out so the bell shows the resolution alongside the
+        # original early_leave alert. Dedup by attendance row prevents
+        # repeated re-detection from doubling the admin's count.
+        try:
+            await _notify_admins(
+                self.db,
+                title="Student returned",
+                message=(
+                    f"{student_info['name']} returned after {minutes}m absence "
+                    f"in {schedule_id[:8]}."
+                ),
+                notification_type="early_leave_return",
+                severity="info",
+                toast_type="info",
+                preference_key="early_leave_alerts",
+                reference_id=attendance_id,
+                reference_type="attendance",
+                dedup_window_seconds=300,
+            )
+        except Exception:
+            logger.warning(
+                "early_leave_return admin fan-out failed for attendance %s",
+                attendance_id,
+                exc_info=True,
+            )
+
     # ── notification helpers ─────────────────────────────────────
 
     async def _notify_check_in(
@@ -1194,17 +1223,29 @@ class PresenceService:
         subject_code: str,
         subject_name: str,
     ):
-        """Send check-in notification to the student."""
+        """Send check-in notification.
+
+        Always notifies the student. Late arrivals additionally fan out to
+        admins as a ``late_arrival`` (severity=warn) so the operator bell
+        surfaces tardiness without being flooded by every on-time check-in.
+        """
         from app.services.notification_service import notify as _notify
+        from app.services.notification_service import notify_admins as _notify_admins
+
+        is_late = (status or "").lower() == "late"
+        notif_type = "late_arrival" if is_late else "check_in"
+        toast = "warning" if is_late else "success"
+        severity = "warn" if is_late else "info"
 
         await _notify(
             self.db,
             student_id,
             "Attendance Confirmed",
             f"You are marked {status} for {subject_code}.",
-            "check_in",
+            notif_type,
             preference_key="attendance_confirmation",
-            toast_type="success",
+            toast_type=toast,
+            severity=severity,
             send_email=True,
             email_template="check_in",
             email_context={
@@ -1215,6 +1256,33 @@ class PresenceService:
                 "check_in_time": check_in_time.strftime("%I:%M %p"),
             },
         )
+
+        # Admin fan-out for LATE only — present check-ins would flood the
+        # bell at session start. Per-(schedule, student) dedup window
+        # prevents the same student's repeated re-verifies firing twice.
+        if is_late:
+            try:
+                await _notify_admins(
+                    self.db,
+                    title=f"Late arrival: {subject_code}",
+                    message=(
+                        f"{student_name} marked LATE at "
+                        f"{check_in_time.strftime('%I:%M %p')}."
+                    ),
+                    notification_type="late_arrival",
+                    severity="warn",
+                    toast_type="warning",
+                    preference_key="anomaly_alerts",
+                    reference_id=f"{student_id}:{subject_code}",
+                    reference_type="attendance",
+                    dedup_window_seconds=600,
+                )
+            except Exception:
+                logger.warning(
+                    "late_arrival admin fan-out failed for student %s",
+                    student_id,
+                    exc_info=True,
+                )
 
     async def _notify_early_leave(
         self,
@@ -1274,6 +1342,37 @@ class PresenceService:
             reference_id=attendance_id,
             reference_type="early_leave",
         )
+
+        # Admin fan-out so the operator bell surfaces every early-leave,
+        # not just faculty + student. Same preference key so admins who
+        # opt out of early-leave alerts also opt out of these.
+        try:
+            from app.services.notification_service import notify_admins as _notify_admins
+
+            await _notify_admins(
+                self.db,
+                title=f"Early leave: {subject_code}",
+                message=(
+                    f"{student_name} appears to have left {subject_code} "
+                    f"early ({consecutive_misses} consecutive misses)."
+                ),
+                notification_type="early_leave",
+                severity="warn",
+                toast_type="warning",
+                preference_key="early_leave_alerts",
+                reference_id=attendance_id,
+                reference_type="early_leave",
+                # Dedup window matches the typical re-detect cadence so a
+                # repeated flag for the same attendance row doesn't double
+                # the admin's count.
+                dedup_window_seconds=300,
+            )
+        except Exception:
+            logger.warning(
+                "early_leave admin fan-out failed for attendance %s",
+                attendance_id,
+                exc_info=True,
+            )
 
     # ── presence score ───────────────────────────────────────────
 

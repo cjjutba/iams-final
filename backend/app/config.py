@@ -873,6 +873,56 @@ class Settings(BaseSettings):
     ENABLE_ACTIVITY_ROUTES: bool = True  # /api/v1/activity/* — unified event timeline
 
     # ───────────────────────────────────────────────────────────────────────
+    # Mac → VPS sync (one-way, periodic).
+    #
+    # The on-prem Mac is the source of truth for faculty + admin user rows,
+    # rooms, schedules, and faculty_records. The VPS holds a read-only mirror
+    # of those four tables so the faculty Android APK can authenticate
+    # off-campus and list its owner's schedules.
+    #
+    # Two flags split the responsibility cleanly:
+    #
+    #   - ENABLE_VPS_SYNC (Mac, default false) registers an APScheduler job
+    #     that POSTs the full state of the four tables to the VPS receiver
+    #     every VPS_SYNC_INTERVAL_SECONDS. Auth via ``X-Sync-Secret`` header
+    #     comparing against VPS_SYNC_SECRET. The job is a no-op tick when
+    #     VPS_SYNC_URL or VPS_SYNC_SECRET is empty so a partially-configured
+    #     deployment doesn't error every interval.
+    #
+    #   - ENABLE_SYNC_RECEIVER_ROUTES (VPS, default false) mounts
+    #     ``POST /api/v1/sync/upsert`` which validates the secret and applies
+    #     the payload inside one transaction (upsert by PK, then delete rows
+    #     not in the incoming set, FK-safe ordering). Strictly one-way — any
+    #     row created directly on the VPS that isn't in the next push is
+    #     deleted. That is the safety property of the design, not a bug.
+    #
+    # See the "Mac → VPS sync + backups" section in CLAUDE.md.
+    # ───────────────────────────────────────────────────────────────────────
+    ENABLE_VPS_SYNC: bool = False  # Mac side — default off so dev stacks don't try to sync
+    ENABLE_SYNC_RECEIVER_ROUTES: bool = False  # VPS side — mounts /api/v1/sync/*
+
+    # Where the Mac POSTs the sync payload. Set to the VPS' public URL on
+    # the on-prem profile. Empty = sender no-ops (operator hasn't wired it
+    # yet).
+    VPS_SYNC_URL: str = ""
+
+    # Shared secret. MUST be identical on both Mac (.env.onprem) and VPS
+    # (.env.vps / docker-compose.vps.yml env). Stored per-operator in
+    # scripts/.env.local. Empty = sender no-ops + receiver returns 503.
+    VPS_SYNC_SECRET: str = ""
+
+    # Sender cadence. 5 min is more than enough — the four sync'd tables
+    # change ~once per term in practice; the only "frequent" change is
+    # creating a new faculty/schedule mid-term, and 5 min lag on that is
+    # invisible.
+    VPS_SYNC_INTERVAL_SECONDS: int = 300
+
+    # Per-request HTTP timeout. The full payload is small (a few dozen rows
+    # × four tables ≈ <500 KB) so a generous 30 s tolerates a slow link
+    # without false-positive failure notifications.
+    VPS_SYNC_TIMEOUT_SECONDS: float = 30.0
+
+    # ───────────────────────────────────────────────────────────────────────
     # Recognition Evidence (docs/plans/2026-04-22-recognition-evidence)
     #
     # Every FAISS decision on the realtime pipeline is captured as a row in

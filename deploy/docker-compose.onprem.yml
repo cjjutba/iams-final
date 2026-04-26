@@ -175,6 +175,10 @@ services:
       # so the user-edited secret file is no longer mutated at boot.
       - ADMIN_URL=http://${HOST_IP:-localhost}
       - CORS_ORIGINS=["http://${HOST_IP:-localhost}","http://localhost","http://iams-server.local"]
+      # Mac → VPS sync. Secret sourced from scripts/.env.local at compose
+      # time (same flow as POSTGRES_PASSWORD). Empty fallback keeps the
+      # job no-op-ing on a fresh clone before the operator generates one.
+      - VPS_SYNC_SECRET=${VPS_SYNC_SECRET:-}
     volumes:
       # Production-style: NO source-code mount. Image is baked.
       # Only persistent state volumes.

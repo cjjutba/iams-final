@@ -114,6 +114,14 @@ class SessionPipeline:
         # index). Keyed on track_id only because there's no user association.
         self._unknown_emitted: set[int] = set()
 
+        # Spoof-attempt admin notification bookkeeping — once per track that
+        # the liveness debounce flips to suppressed (``liveness_state ==
+        # "spoof"``). Same one-shot semantics as ``_unknown_emitted``: we
+        # don't want a sustained spoof verdict to fan out a notification
+        # every frame, but we do want the operator to know it happened.
+        # Cleared on tracker reset / camera swap.
+        self._spoof_emitted: set[int] = set()
+
         # Per-(user_id, track_id) monotonic timestamp of last
         # `live_crop_update` WS broadcast. Independent of
         # `_recognized_captured` (audit-trail one-shot per track) and of
@@ -551,6 +559,7 @@ class SessionPipeline:
         # Pipeline-level dedup ledgers keyed on track_id reset (track
         # IDs about to re-issue from 1).
         self._unknown_emitted.clear()
+        self._spoof_emitted.clear()
         self._recognized_captured.clear()
         self._last_live_display_broadcast.clear()
 
@@ -725,6 +734,18 @@ class SessionPipeline:
                             ):
                                 self._unknown_emitted.add(t.track_id)
                                 self._emit_recognition_miss(t)
+                            # Spoof-attempt one-shot. The tracker's K-of-N
+                            # debounce only flips ``liveness_state`` to
+                            # ``"spoof"`` after ``LIVENESS_SPOOF_CONSECUTIVE``
+                            # consecutive spoof verdicts, so this fires only
+                            # on confirmed presentation attacks — never on a
+                            # single noisy frame.
+                            if (
+                                getattr(t, "liveness_state", "unknown") == "spoof"
+                                and t.track_id not in self._spoof_emitted
+                            ):
+                                self._spoof_emitted.add(t.track_id)
+                                self._emit_spoof_attempt(t)
 
                         # Update presence state — use short-lived DB session for
                         # any event-driven writes (check-in, early leave).
@@ -1377,7 +1398,18 @@ class SessionPipeline:
             tracker_id = int(track.track_id)
             schedule_id = self.schedule_id
             room_label = self._subject_code or self.room_id or schedule_id[:8]
-            ref_id = f"unknown:{schedule_id}:{tracker_id}"
+            # Dedup is keyed on (schedule_id, room) — NOT (schedule_id,
+            # tracker_id) — because ByteTrack churns tracker IDs
+            # constantly (a single seated person can rotate through 10+
+            # tracker IDs in a session as detection drops + re-acquires).
+            # Per-tracker dedup never bit and the bell flooded with
+            # dozens of "unknown person" alerts per session. Room-level
+            # dedup with a 1-hour window means admins get at most one
+            # alert per room per hour, which is both informative and
+            # not overwhelming. The full per-tracker timeline still
+            # lives in the System Activity feed
+            # (RECOGNITION_MISS events), so no signal is lost.
+            ref_id = f"unknown:{schedule_id}:{self.room_id or 'na'}"
 
             with SessionLocal() as db:
                 # Faculty-only notification — bypass
@@ -1398,7 +1430,9 @@ class SessionPipeline:
                             severity="warn",
                             preference_key="security_alerts",
                             send_email=False,
-                            dedup_window_seconds=600,
+                            # 1 hour: one alert per room per hour for
+                            # the assigned faculty.
+                            dedup_window_seconds=3600,
                             reference_id=ref_id,
                             reference_type="recognition_event",
                             toast_type="warning",
@@ -1414,14 +1448,21 @@ class SessionPipeline:
                         db,
                         title=f"Unknown person in {room_label}",
                         message=(
-                            f"Unrecognized face detected in {room_label} "
-                            f"(tracker {tracker_id}). Manual review may be needed."
+                            f"At least one unrecognized face was detected in "
+                            f"{room_label} during this session. The full "
+                            f"timeline is available in System Activity → "
+                            f"Recognition Miss events."
                         ),
                         notification_type="unknown_person_detected",
                         severity="warn",
                         preference_key="security_alerts",
-                        send_email=True,
-                        dedup_window_seconds=600,
+                        # Email off — was producing one mail per tracker
+                        # ID before the dedup fix and would still be
+                        # noisy even at one-per-room-per-hour. Admins
+                        # who want this in email can rely on the
+                        # daily_health_summary digest.
+                        send_email=False,
+                        dedup_window_seconds=3600,
                         reference_id=ref_id,
                         reference_type="recognition_event",
                         toast_type="warning",
@@ -1434,6 +1475,143 @@ class SessionPipeline:
         except Exception:
             logger.debug(
                 "unknown_person_detected: notification fan-out failed",
+                exc_info=True,
+            )
+
+    def _emit_spoof_attempt(self, track) -> None:
+        """Emit a System Activity SPOOF_ATTEMPT event + admin notification.
+
+        Fired once per track that the liveness debounce has flipped to
+        ``liveness_state="spoof"``. Cardinality gated by
+        ``self._spoof_emitted``. Schedules an async fan-out so DB +
+        notify_admins work doesn't block the next frame.
+        """
+        try:
+            from app.services.activity_service import (
+                EventSeverity,
+                EventType,
+                emit_recognition_transition,
+            )
+
+            db = self._db_factory()
+            try:
+                user_id = str(track.user_id) if getattr(track, "user_id", None) else None
+                emit_recognition_transition(
+                    db,
+                    # Reuse RECOGNITION_MISS as the activity-feed bucket if
+                    # there's no dedicated SPOOF_ATTEMPT enum yet — the
+                    # payload makes the kind explicit. Falls back gracefully
+                    # if the enum value is added later.
+                    event_type=getattr(
+                        EventType, "SPOOF_ATTEMPT", EventType.RECOGNITION_MISS
+                    ),
+                    summary=(
+                        f"Spoof attempt detected: track={track.track_id}"
+                        + (f" user={user_id[:8]}" if user_id else "")
+                    ),
+                    schedule_id=self.schedule_id,
+                    camera_id=self.room_id,
+                    student_id=user_id,
+                    severity=EventSeverity.WARN,
+                    payload={
+                        "track_id": int(track.track_id),
+                        "subject_code": self._subject_code,
+                        "liveness_score": float(getattr(track, "liveness_score", 0.0)),
+                        "kind": "spoof_attempt",
+                    },
+                    autocommit=True,
+                )
+            finally:
+                db.close()
+        except Exception:
+            logger.debug("SPOOF_ATTEMPT activity emit failed", exc_info=True)
+
+        try:
+            asyncio.create_task(self._notify_spoof_attempt(track))
+        except Exception:
+            logger.debug(
+                "spoof_attempt: failed to schedule notification task",
+                exc_info=True,
+            )
+
+    async def _notify_spoof_attempt(self, track) -> None:
+        """Async fan-out of the spoof_attempt_detected notification.
+
+        Notifies admins (with email) + the assigned faculty (in-app only).
+        Students are intentionally excluded — leaking that someone tried to
+        impersonate a student would compromise the security signal.
+
+        Dedup window of 10 minutes is keyed on (schedule_id, tracker_id).
+        Failures are swallowed.
+        """
+        try:
+            from app.database import SessionLocal
+            from app.services.notification_service import notify, notify_admins
+
+            tracker_id = int(track.track_id)
+            schedule_id = self.schedule_id
+            room_label = self._subject_code or self.room_id or schedule_id[:8]
+            ref_id = f"spoof:{schedule_id}:{tracker_id}"
+            score = float(getattr(track, "liveness_score", 0.0))
+            user_label = ""
+            if getattr(track, "name", None):
+                user_label = f" (claimed identity: {track.name})"
+
+            with SessionLocal() as db:
+                if self._faculty_id:
+                    try:
+                        await notify(
+                            db,
+                            self._faculty_id,
+                            f"Spoof attempt in {room_label}",
+                            (
+                                f"A face appeared to be a presentation attack "
+                                f"(phone screen / printed photo) in "
+                                f"{room_label}{user_label}. "
+                                f"Recognition has been suppressed for that track."
+                            ),
+                            "spoof_attempt_detected",
+                            severity="error",
+                            preference_key="security_alerts",
+                            send_email=False,
+                            dedup_window_seconds=600,
+                            reference_id=ref_id,
+                            reference_type="recognition_event",
+                            toast_type="error",
+                        )
+                    except Exception:
+                        logger.debug(
+                            "spoof_attempt: faculty notify failed",
+                            exc_info=True,
+                        )
+
+                try:
+                    await notify_admins(
+                        db,
+                        title=f"Spoof attempt in {room_label}",
+                        message=(
+                            f"Liveness check flagged a presentation attack "
+                            f"in {room_label}{user_label} "
+                            f"(score={score:.2f}, tracker {tracker_id}). "
+                            f"Recognition suppressed; manual review recommended."
+                        ),
+                        notification_type="spoof_attempt_detected",
+                        severity="error",
+                        preference_key="security_alerts",
+                        send_email=True,
+                        dedup_window_seconds=600,
+                        reference_id=ref_id,
+                        reference_type="recognition_event",
+                        toast_type="error",
+                    )
+                except Exception:
+                    logger.debug(
+                        "spoof_attempt: admin notify failed",
+                        exc_info=True,
+                    )
+        except Exception:
+            logger.debug(
+                "spoof_attempt: notification fan-out failed",
                 exc_info=True,
             )
 
@@ -1509,8 +1687,14 @@ class SessionPipeline:
         except Exception:
             logger.debug("Event broadcast failed: %s", event_type, exc_info=True)
 
-        # Send in-app / email notifications (fire-and-forget, never breaks pipeline)
-        await self._send_event_notifications(event)
+        # In-app + email notifications are emitted from the lower-level
+        # state machine (``presence_service._notify_check_in``,
+        # ``_notify_early_leave``, ``_handle_early_leave_return``) which
+        # runs INSIDE ``presence.process_track_frame`` before this handler
+        # ever sees the event. We deliberately do NOT re-emit here — doing
+        # both produced duplicate bell entries and double emails on every
+        # check-in. (Bug discovered during the 2026-04-26 notification
+        # audit.)
 
     async def _broadcast_student_attendance_event(
         self,
@@ -1595,198 +1779,12 @@ class SessionPipeline:
                 exc_info=True,
             )
 
-    async def _send_event_notifications(self, event: dict) -> None:
-        """Send in-app and email notifications for pipeline events.
-
-        Opens a short-lived DB session, calls notification_service.notify(),
-        and always closes the session. Failures are logged but never propagated
-        so the pipeline keeps running.
-        """
-        event_type = event.get("event")
-        if not event_type:
-            return
-
-        db = self._db_factory()
-        try:
-            from app.services.notification_service import notify as _notify
-
-            subject_code = self._subject_code or "class"
-
-            if event_type == "check_in":
-                student_id = event.get("student_id")
-                if student_id:
-                    await _notify(
-                        db,
-                        student_id,
-                        "Attendance Confirmed",
-                        f"You are marked {event.get('status', 'present')} for {subject_code}.",
-                        "check_in",
-                        preference_key="attendance_confirmation",
-                        toast_type="success",
-                        send_email=True,
-                        email_template="check_in",
-                        email_context={
-                            "student_name": event.get("student_name", ""),
-                            "subject_code": subject_code,
-                            "subject_name": self._subject_name or "",
-                            "status": event.get("status", "present"),
-                            "check_in_time": event.get("check_in_time", ""),
-                        },
-                    )
-
-                # Phase-5: late arrival distinction. track_presence_service
-                # already encodes the late-vs-present decision into
-                # ``event["status"]`` (computed against
-                # ``settings.GRACE_PERIOD_MINUTES`` past schedule.start_time).
-                # When the status is "late" we layer an additional
-                # ``late_arrival`` notification on top of the existing
-                # ``check_in`` confirmation so students + faculty see the
-                # distinction in the bell + activity feed. Email is left off
-                # — the check_in email above already carries the same
-                # information; this is purely an in-app surface.
-                status_value = str(event.get("status") or "").lower()
-                if status_value == "late":
-                    student_name = event.get("student_name") or "A student"
-                    attendance_id = event.get("attendance_id")
-                    ref_id = (
-                        str(attendance_id)
-                        if attendance_id
-                        else f"late:{self.schedule_id}:{student_id}"
-                    )
-
-                    if student_id:
-                        try:
-                            await _notify(
-                                db,
-                                student_id,
-                                "Late arrival recorded",
-                                f"You arrived late to {subject_code}. Attendance was marked as LATE.",
-                                "late_arrival",
-                                severity="warn",
-                                preference_key="attendance_confirmation",
-                                send_email=False,
-                                dedup_window_seconds=0,
-                                reference_id=ref_id,
-                                reference_type="attendance",
-                                toast_type="warning",
-                            )
-                        except Exception:
-                            logger.debug(
-                                "late_arrival: student notify failed",
-                                exc_info=True,
-                            )
-
-                    if self._faculty_id:
-                        try:
-                            await _notify(
-                                db,
-                                self._faculty_id,
-                                "Student arrived late",
-                                f"{student_name} arrived late to {subject_code}.",
-                                "late_arrival",
-                                severity="info",
-                                preference_key="attendance_confirmation",
-                                send_email=False,
-                                dedup_window_seconds=0,
-                                reference_id=ref_id,
-                                reference_type="attendance",
-                                toast_type="info",
-                            )
-                        except Exception:
-                            logger.debug(
-                                "late_arrival: faculty notify failed",
-                                exc_info=True,
-                            )
-
-            elif event_type == "early_leave":
-                student_id = event.get("student_id")
-                student_name = event.get("student_name", "A student")
-                attendance_id = event.get("attendance_id")
-                absent_seconds = event.get("absent_seconds", 0)
-                consecutive_misses = max(1, int(absent_seconds / settings.SCAN_INTERVAL_SECONDS))
-
-                # Faculty notification
-                if self._faculty_id:
-                    await _notify(
-                        db,
-                        self._faculty_id,
-                        "Early Leave Detected",
-                        f"{student_name} left {subject_code} early.",
-                        "early_leave",
-                        preference_key="early_leave_alerts",
-                        toast_type="warning",
-                        send_email=True,
-                        email_template="early_leave",
-                        email_context={
-                            "student_name": student_name,
-                            "subject_code": subject_code,
-                            "consecutive_misses": consecutive_misses,
-                            "last_seen_at": event.get("check_in_time", "N/A"),
-                            "severity": "auto_detected",
-                        },
-                        reference_id=attendance_id,
-                        reference_type="early_leave",
-                        # Dedup per (user, attendance row): guards against
-                        # transient pipeline re-detections firing the alert twice.
-                        dedup_window_seconds=300,
-                    )
-
-                # Student notification
-                if student_id:
-                    await _notify(
-                        db,
-                        student_id,
-                        "Early Leave Recorded",
-                        f"You were marked as early leave from {subject_code}.",
-                        "early_leave",
-                        preference_key="early_leave_alerts",
-                        toast_type="warning",
-                        send_email=True,
-                        email_template="early_leave",
-                        email_context={
-                            "student_name": student_name,
-                            "subject_code": subject_code,
-                            "consecutive_misses": consecutive_misses,
-                            "last_seen_at": event.get("check_in_time", "N/A"),
-                            "severity": "auto_detected",
-                        },
-                        reference_id=attendance_id,
-                        reference_type="early_leave",
-                        dedup_window_seconds=300,
-                    )
-
-            elif event_type == "early_leave_return":
-                student_id = event.get("student_id")
-                student_name = event.get("student_name", "A student")
-
-                # Faculty notification (no email — low urgency)
-                if self._faculty_id:
-                    await _notify(
-                        db,
-                        self._faculty_id,
-                        "Student Returned",
-                        f"{student_name} has returned to {subject_code}.",
-                        "early_leave_return",
-                        toast_type="info",
-                    )
-
-                # Student notification (no email)
-                if student_id:
-                    await _notify(
-                        db,
-                        student_id,
-                        "Return Noted",
-                        f"Your return to {subject_code} has been recorded.",
-                        "early_leave_return",
-                        toast_type="info",
-                    )
-
-        except Exception:
-            logger.warning(
-                "Failed to send event notifications for %s (schedule %s)",
-                event_type,
-                self.schedule_id[:8],
-                exc_info=True,
-            )
-        finally:
-            db.close()
+    # NOTE: ``_send_event_notifications`` was removed during the
+    # 2026-04-26 notification audit. The lower-level
+    # ``presence_service._notify_check_in`` /
+    # ``_notify_early_leave`` / ``_handle_early_leave_return``
+    # already emit the same notifications inside
+    # ``presence.process_track_frame`` (called from the run loop just
+    # before ``_handle_event``), so calling them again here produced a
+    # duplicate bell entry and a duplicate email per check-in. The
+    # presence-service path is the single source of truth.

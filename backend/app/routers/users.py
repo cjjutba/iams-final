@@ -106,6 +106,47 @@ async def admin_create_user(
     except Exception:
         logger.exception("Failed to notify new user of account creation")
 
+    # Peer-admin audit fan-out — every new admin / faculty creation
+    # surfaces in the existing admins' bells so privileged-account churn
+    # is auditable. Excludes the creator (current_user) to avoid self-
+    # notify chatter; honours the ``audit_alerts`` preference (default
+    # off in small teams). We deliberately leave students OUT of this
+    # fan-out — they're created in bulk and would flood the bell.
+    try:
+        role_value = (
+            user.role.value if hasattr(user.role, "value") else str(user.role)
+        )
+        if role_value in ("admin", "faculty"):
+            from app.services.notification_service import notify_admins
+
+            full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+            display_name = full_name or user.email
+            label = "admin" if role_value == "admin" else "faculty"
+            await notify_admins(
+                db,
+                title=f"New {label} provisioned: {display_name}",
+                message=(
+                    f"{current_user.email} created a new {label} account for "
+                    f"{display_name} ({user.email})."
+                ),
+                notification_type="admin_user_provisioned",
+                severity=("warn" if role_value == "admin" else "info"),
+                preference_key="audit_alerts",
+                send_email=False,
+                exclude_user_id=current_user.id,
+                reference_id=str(user.id),
+                reference_type="user",
+                # 5 min dedup so a click-storm during onboarding doesn't
+                # spam every existing admin.
+                dedup_window_seconds=300,
+                toast_type="info",
+            )
+    except Exception:
+        logger.warning(
+            "admin_user_provisioned peer-admin notify failed",
+            exc_info=True,
+        )
+
     return UserResponse.model_validate(user)
 
 

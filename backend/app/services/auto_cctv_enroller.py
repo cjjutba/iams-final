@@ -66,6 +66,7 @@ contract PLUS the swap-safe gate are satisfied.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time
@@ -611,6 +612,18 @@ class AutoCctvEnroller:
                     reason,
                     len(captures),
                 )
+                # Admin-bell signal — the swap-safe gate is the structural
+                # defence against identity-swap incidents, so a failure is
+                # exactly the kind of event an operator wants to know
+                # about even though no DB rows were committed. Dedup
+                # window of 1 hour keyed on (user, room) keeps a
+                # mis-tracking storm from flooding the bell.
+                self._notify_swap_safe_failure(
+                    user_id=user_id,
+                    room_key=room_key,
+                    reason=reason,
+                    n_captures=len(captures),
+                )
                 return
 
             # ── Sliding-window: pick eviction victims if at cap ────────
@@ -625,9 +638,13 @@ class AutoCctvEnroller:
             existing_combined = existing_room_rows + legacy_rows
 
             victims = []
-            cap = settings.AUTO_CCTV_ENROLL_LIFETIME_CAP
+            # NOTE: do not name this `cap` — the existing per-capture loops
+            # below use `cap` as the loop variable (`for fid, cap, label in ...`),
+            # which would shadow this binding by the time the COMMITTED log
+            # line tries to format it back in.
+            lifetime_cap = settings.AUTO_CCTV_ENROLL_LIFETIME_CAP
             current_count = len(existing_room_rows)  # only room-scoped count toward cap
-            replacement_mode = current_count >= cap
+            replacement_mode = current_count >= lifetime_cap
 
             if replacement_mode:
                 if not settings.AUTO_CCTV_ENROLL_REPLACEMENT_ENABLED:
@@ -809,9 +826,25 @@ class AutoCctvEnroller:
                     float(np.mean([c["quality"] for c in captures])),
                     len(victims),
                     refreshed_count,
-                    cap,
+                    lifetime_cap,
                     state.replacements_today,
                     settings.AUTO_CCTV_ENROLL_DAILY_REPLACEMENT_LIMIT,
+                )
+
+                # Admin-bell signal so the operator can see the auto-enroller
+                # making progress without tailing the gateway log. Severity
+                # info (fill) or warn (replacement, since it's mutating the
+                # cluster). Dedup window of 5 min suppresses chatter when a
+                # student hits the gates rapidly in succession.
+                self._notify_commit(
+                    user_id=user_id,
+                    room_key=room_key,
+                    n_committed=len(captures),
+                    n_evicted=len(victims),
+                    replacement_mode=replacement_mode,
+                    mean_sim=mean_sim,
+                    new_total=refreshed_count,
+                    lifetime_cap=lifetime_cap,
                 )
             except Exception:
                 db.rollback()
@@ -828,6 +861,140 @@ class AutoCctvEnroller:
                 )
         finally:
             db.close()
+
+    # ── Admin-bell helpers ────────────────────────────────────────────
+    # Both helpers run from the auto-cctv-enroll worker thread, so they
+    # cannot await directly. They schedule a one-shot coroutine on the
+    # FastAPI event loop captured at startup. Failures swallowed — these
+    # are operational signals, not load-bearing.
+
+    @staticmethod
+    def _get_main_loop():
+        """Resolve the FastAPI app's asyncio loop (stashed at lifespan start).
+
+        Returns the loop or None if unavailable (e.g. unit tests).
+        """
+        try:
+            from app.main import app
+
+            return getattr(app.state, "loop", None)
+        except Exception:
+            return None
+
+    def _notify_commit(
+        self,
+        *,
+        user_id: str,
+        room_key: str,
+        n_committed: int,
+        n_evicted: int,
+        replacement_mode: bool,
+        mean_sim: float,
+        new_total: int,
+        lifetime_cap: int,
+    ) -> None:
+        loop = self._get_main_loop()
+        if loop is None or loop.is_closed():
+            return
+
+        async def _emit() -> None:
+            try:
+                from app.database import SessionLocal
+                from app.models.user import User
+                from app.services.notification_service import notify_admins
+
+                with SessionLocal() as db:
+                    user = db.query(User).filter(User.id == user_id).first()
+                    name = (user.full_name if user else None) or user_id[:8]
+                    mode = "replace" if replacement_mode else "fill"
+                    if replacement_mode:
+                        title = f"Auto-CCTV: refreshed {name} in {room_key}"
+                        msg = (
+                            f"{n_committed} new captures committed for {name} in "
+                            f"room {room_key}; {n_evicted} older captures evicted "
+                            f"(mean sim to phone={mean_sim:.2f}, total {new_total}/{lifetime_cap})."
+                        )
+                        severity = "info"
+                    else:
+                        title = f"Auto-CCTV: enrolled {name} in {room_key}"
+                        msg = (
+                            f"{n_committed} CCTV-domain captures added for {name} "
+                            f"in room {room_key} "
+                            f"(mean sim to phone={mean_sim:.2f}, total {new_total}/{lifetime_cap})."
+                        )
+                        severity = "info"
+                    await notify_admins(
+                        db,
+                        title=title,
+                        message=msg,
+                        notification_type="auto_cctv_enroll_committed",
+                        severity=severity,
+                        toast_type="info",
+                        preference_key="ml_health_alerts",
+                        reference_id=f"{user_id}:{room_key}:{mode}",
+                        reference_type="face_embedding",
+                        # 5 min — back-to-back commits for the same user
+                        # in the same room don't fan out duplicates.
+                        dedup_window_seconds=300,
+                    )
+            except Exception:
+                logger.debug("auto-cctv commit notify failed", exc_info=True)
+
+        try:
+            asyncio.run_coroutine_threadsafe(_emit(), loop)
+        except Exception:
+            logger.debug("auto-cctv commit notify schedule failed", exc_info=True)
+
+    def _notify_swap_safe_failure(
+        self,
+        *,
+        user_id: str,
+        room_key: str,
+        reason: str,
+        n_captures: int,
+    ) -> None:
+        loop = self._get_main_loop()
+        if loop is None or loop.is_closed():
+            return
+
+        async def _emit() -> None:
+            try:
+                from app.database import SessionLocal
+                from app.models.user import User
+                from app.services.notification_service import notify_admins
+
+                with SessionLocal() as db:
+                    user = db.query(User).filter(User.id == user_id).first()
+                    name = (user.full_name if user else None) or user_id[:8]
+                    await notify_admins(
+                        db,
+                        title=f"Auto-CCTV swap-safe gate failed ({room_key})",
+                        message=(
+                            f"Discarded {n_captures} candidate captures for "
+                            f"{name} in room {room_key} — {reason}. "
+                            f"This is the structural defence against "
+                            f"identity-swap; investigate if it repeats."
+                        ),
+                        notification_type="auto_cctv_swap_safe_failed",
+                        severity="warn",
+                        toast_type="warning",
+                        preference_key="security_alerts",
+                        send_email=False,
+                        reference_id=f"{user_id}:{room_key}",
+                        reference_type="face_embedding",
+                        # 1 hour — sustained gate failures should fan out
+                        # at most once per hour per (user, room).
+                        dedup_window_seconds=3600,
+                    )
+            except Exception:
+                logger.debug("auto-cctv swap-safe notify failed", exc_info=True)
+
+        try:
+            asyncio.run_coroutine_threadsafe(_emit(), loop)
+        except Exception:
+            logger.debug(
+                "auto-cctv swap-safe notify schedule failed", exc_info=True
+            )
 
 
 # Module-level accessor — mirrors the pattern used by faiss_manager,

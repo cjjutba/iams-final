@@ -562,6 +562,194 @@ boots, not a sync target.
 
 ---
 
+## Mac → VPS sync + nightly backups
+
+Two separate background mechanisms keep the VPS current and protect
+on-prem state from machine failure. Both are fully automated; the
+operator runs each installer once and never touches them again.
+
+### One-way state sync (Mac → VPS, every 5 minutes)
+
+The on-prem api-gateway runs an APScheduler job
+([backend/app/services/vps_sync_jobs.py](backend/app/services/vps_sync_jobs.py))
+that POSTs the full state of four tables to the VPS receiver
+([backend/app/routers/sync.py](backend/app/routers/sync.py)):
+
+- `faculty_records`
+- `users` (filtered to `role IN (FACULTY, ADMIN)` — student PII never crosses)
+- `rooms`
+- `schedules`
+
+Every tick is a complete snapshot, not a delta. The receiver upserts by PK
+inside one transaction and deletes any row whose PK isn't in the incoming
+set (FK-safe ordering: schedules → rooms → users/faculty_records). This
+means:
+
+- **Add a faculty / schedule / room in the admin portal → it appears on the VPS within ≤5 min.** No manual deploy step.
+- **Edit a faculty's name in the admin portal → the VPS row updates within ≤5 min.**
+- **Delete a schedule on the Mac → the VPS row goes away within ≤5 min.**
+- **Strictly one-way.** If you ever `psql` into the VPS DB and INSERT a row directly, the next sync deletes it. This is the safety property of the design — there's only one source of truth — not a bug.
+
+A missed tick has zero impact on consistency: the next tick re-pushes
+the full snapshot. There is no outbox, no watermark, no event log.
+Polling-with-snapshot is the simplest correctness model.
+
+**Configuration**
+
+Both ends read `VPS_SYNC_SECRET` from env. The Mac sources it from
+`scripts/.env.local`; the VPS receives it via `deploy/deploy.sh` which
+forwards it to the remote `docker compose up` env (never written to a
+file on the VPS).
+
+| Variable | Mac (`.env.onprem`) | VPS (compose env) |
+|---|---|---|
+| `ENABLE_VPS_SYNC` | `true` | n/a |
+| `ENABLE_SYNC_RECEIVER_ROUTES` | n/a | `true` (in `docker-compose.vps.yml`) |
+| `VPS_SYNC_URL` | `http://167.71.217.44/api/v1/sync/upsert` | n/a |
+| `VPS_SYNC_SECRET` | sourced from `scripts/.env.local` | propagated by `deploy.sh` |
+| `VPS_SYNC_INTERVAL_SECONDS` | `300` (5 min) | n/a |
+| `VPS_SYNC_TIMEOUT_SECONDS` | `30` | n/a |
+
+**First-time setup**
+
+```bash
+# 1. Generate a strong secret
+python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+
+# 2. Paste into scripts/.env.local
+$EDITOR scripts/.env.local         # set VPS_SYNC_SECRET=<paste>
+
+# 3. Re-deploy VPS so the receiver picks up the secret
+bash deploy/deploy.sh vps
+
+# 4. Restart on-prem so the sender picks up the secret
+./scripts/onprem-down.sh
+./scripts/onprem-up.sh
+
+# 5. Smoke-test from the Mac
+curl -H "X-Sync-Secret: ${VPS_SYNC_SECRET}" \
+     http://167.71.217.44/api/v1/sync/health
+# → {"status":"ok","tables":{"faculty_records":3,"users_faculty_admin":4, ...}}
+```
+
+**Watching it work**
+
+```bash
+# On the Mac, tail the api-gateway log:
+docker logs -f iams-api-gateway-onprem 2>&1 | grep vps_sync
+
+# Expected lines every 5 min:
+# [vps_sync] OK — pushed faculty_records=3 users=4 rooms=2 schedules=15 → ... [faculty_records=+3/-0, users=+4/-0, rooms=+2/-0, schedules=+15/-0]
+```
+
+If the VPS is unreachable for an hour, the operator gets a single
+deduped admin notification (severity=error, email enabled) via the
+existing `with_failure_notification("vps_sync")` wrapper. The next
+successful tick clears the failure state.
+
+**Failure modes + recovery**
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `[vps_sync] ENABLE_VPS_SYNC=true but VPS_SYNC_URL/SECRET not configured` every tick | Operator hasn't filled `scripts/.env.local` | Set `VPS_SYNC_SECRET` and `onprem-down.sh && onprem-up.sh` |
+| `[vps_sync] receiver responded 401: Invalid sync secret` | Mac and VPS have different secrets | Re-run `bash deploy/deploy.sh vps` from the same Mac that has the canonical `scripts/.env.local` |
+| `[vps_sync] receiver responded 503: Sync receiver not configured` | VPS api-gateway booted before `VPS_SYNC_SECRET` was in its env | Re-run `bash deploy/deploy.sh vps` |
+| `[vps_sync] receiver responded 400: Refusing to sync: payload contains zero users` | Mac DB has zero faculty/admin (very wrong) | Investigate `users` table on Mac before retrying |
+
+### Nightly encrypted backup (host-side launchd)
+
+`scripts/iams-backup.sh` runs every night at 03:00 local time via
+`com.iams.backup.plist` (installed once by `scripts/install-backup.sh`).
+It pipes a full `pg_dump` of the on-prem DB through `gzip -9` and
+`gpg --symmetric --cipher-algo AES256` straight to disk — plaintext
+never lands at rest. The encrypted blob is then `scp`'d to the VPS as a
+secondary off-machine copy.
+
+Why local + VPS, not B2/S3:
+
+- Zero new infrastructure. The VPS is already managed; SSH already works.
+- Different physical machine, different country/ISP from the Mac, so a
+  Mac-side disk / power / fire failure doesn't lose the dump.
+- End-to-end encryption: the VPS holds AES-256 ciphertext, never
+  plaintext student PII / face embeddings / attendance history. A VPS
+  compromise leaks nothing without the GPG passphrase.
+
+When you eventually want true off-site (B2/S3/Spaces), swap the `scp`
+block in `scripts/iams-backup.sh` for an `aws s3 cp` / `b2 upload-file`.
+Same script, same encryption.
+
+**First-time setup**
+
+```bash
+# 1. Pick a strong passphrase + SAVE IT IN A PASSWORD MANAGER
+python3 -c "import secrets; print(secrets.token_urlsafe(40))"
+# WITHOUT THIS PASSPHRASE THE BACKUPS ARE UNRECOVERABLE.
+
+# 2. Paste into scripts/.env.local
+$EDITOR scripts/.env.local        # set IAMS_BACKUP_GPG_PASSPHRASE=<paste>
+
+# 3. Make sure SSH-key auth works to the VPS for the operator user
+ssh root@167.71.217.44 "echo ok"  # should succeed without password
+
+# 4. Run a manual one-shot to verify the pipeline before scheduling
+./scripts/iams-backup.sh
+ls -lh ~/iams-backups/             # should show iams-<timestamp>.sql.gz.gpg
+ssh root@167.71.217.44 'ls -lh /var/backups/iams/'   # off-site copy
+
+# 5. Install the nightly launchd
+./scripts/install-backup.sh
+
+# 6. Verify it's loaded
+launchctl list | grep iams         # → com.iams.backup
+```
+
+**Operator workflows**
+
+| Action | Command |
+|---|---|
+| Run backup once now | `./scripts/iams-backup.sh` |
+| Watch the next scheduled run | `tail -f ~/Library/Logs/iams-backup.log` |
+| Change schedule (e.g. 04:30) | `IAMS_BACKUP_HOUR=4 IAMS_BACKUP_MINUTE=30 ./scripts/install-backup.sh` |
+| Change retention (default 14 days) | Set `IAMS_BACKUP_RETENTION_DAYS=N` in `scripts/.env.local` |
+| Remove the schedule | `./scripts/uninstall-backup.sh` |
+| List local dumps | `ls -lht ~/iams-backups/` |
+| List VPS dumps | `ssh root@167.71.217.44 'ls -lht /var/backups/iams/'` |
+
+**Restore (the part that matters when it matters)**
+
+```bash
+# 1. Bring the dump file local (from the Mac or from the VPS off-site copy)
+scp root@167.71.217.44:/var/backups/iams/iams-2026-04-26_030000.sql.gz.gpg .
+
+# 2. Decrypt + decompress + restore into a running iams-postgres-onprem
+gpg --decrypt iams-2026-04-26_030000.sql.gz.gpg \
+  | gunzip \
+  | docker exec -i iams-postgres-onprem psql -U iams iams
+
+# 3. After a fresh restore, restart api-gateway so FAISS reloads
+docker compose -f deploy/docker-compose.onprem.yml restart api-gateway
+```
+
+**Known caveats**
+
+- **The launchd agent only runs while the operator is logged in.** A
+  reboot followed by no login = no nightly backup. macOS calendar-
+  scheduled `LaunchAgents` (vs `LaunchDaemons`) is the path of least
+  resistance because `LaunchDaemons` requires a code-signed binary chain
+  for SSH key access. Acceptable tradeoff for thesis-stage usage.
+- **macOS sleep stalls the schedule.** If the Mac is asleep at 03:00,
+  launchd fires the missed run on the next wake. So a Mac that sleeps
+  every night still gets one backup per day, just at variable wall-clock
+  times.
+- **The first scheduled run is always at the next 03:00**, not on
+  install. Run the manual one-shot once during install to seed
+  `~/iams-backups/`.
+- **Don't lose the GPG passphrase.** If both the Mac dies AND the
+  password-manager backup of the passphrase is gone, the encrypted dumps
+  on the VPS are useless. The passphrase is the single point of recovery.
+
+---
+
 ## The big session-lifecycle auto-start/end
 
 `backend/app/main.py` runs `session_lifecycle_check` every 15 seconds. It:

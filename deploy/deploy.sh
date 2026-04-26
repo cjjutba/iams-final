@@ -107,7 +107,15 @@ if [ "${MODE}" = "vps" ]; then
         "${VPS_USER}@${VPS_IP}:${VPS_DIR}/backend/.env.vps"
 
     echo "[3/5] Switching VPS to vps-mode stack..."
-    ssh "${VPS_USER}@${VPS_IP}" << 'REMOTE'
+    # Propagate the operator's secrets (POSTGRES_PASSWORD + VPS_SYNC_SECRET)
+    # into the remote shell so docker compose's ${VPS_SYNC_SECRET:-} +
+    # ${POSTGRES_PASSWORD:-...} substitutions resolve. We deliberately do
+    # NOT write either secret into a file on the VPS — they only live in
+    # the api-gateway container's environment for the duration of the
+    # compose process group.
+    ssh "${VPS_USER}@${VPS_IP}" \
+        "POSTGRES_PASSWORD='${POSTGRES_PASSWORD:-}' VPS_SYNC_SECRET='${VPS_SYNC_SECRET:-}' bash -s" << 'REMOTE'
+        set -e
         cd /opt/iams/deploy
 
         # Firewall — same ports as relay plus nothing new (api is loopback,
@@ -131,6 +139,9 @@ if [ "${MODE}" = "vps" ]; then
         done
 
         echo "  Starting vps stack..."
+        # POSTGRES_PASSWORD + VPS_SYNC_SECRET are inherited from the
+        # outer ssh env; docker compose substitutes them into the
+        # api-gateway service's environment block.
         docker compose -f docker-compose.vps.yml up -d --build --remove-orphans
 
         sleep 5

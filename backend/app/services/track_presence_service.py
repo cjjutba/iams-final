@@ -177,7 +177,11 @@ class TrackPresenceService:
         for student in students:
             sid = str(student.id)
             self._enrolled_ids.add(sid)
-            name = student.first_name
+            # Full name (first + last) so the admin live-feed roster shows
+            # "Sean Myk Daniel Jacinto" instead of just "Sean" — operator
+            # asked for unambiguous identification when multiple students
+            # share a first name.
+            name = f"{student.first_name} {student.last_name}".strip()
             self._name_map[sid] = name
 
             # Get or create attendance record
@@ -283,7 +287,7 @@ class TrackPresenceService:
             else:
                 attendance_id = str(existing.id)
 
-            name = user.first_name
+            name = f"{user.first_name} {user.last_name}".strip()
             self._enrolled_ids.add(sid)
             self._name_map[sid] = name
             self._students[sid] = StudentPresenceState(
@@ -692,26 +696,70 @@ class TrackPresenceService:
         return summary
 
     def get_attendance_summary(self) -> dict:
-        """Build current attendance summary for WebSocket broadcast."""
+        """Build current attendance summary for WebSocket broadcast.
+
+        Per-entry timing fields drive the admin live page's inline missing-
+        timer: clients tick locally at 1 Hz against ``last_seen_at`` and race
+        the elapsed seconds against ``early_leave_threshold_seconds`` to
+        visualise students who have walked off-camera but haven't yet
+        crossed the early-leave cutoff.
+        """
         present = []
         absent = []
         late = []
         early_leave = []
         early_leave_returned = []
 
+        now_dt = datetime.now()
+
         for sid, state in self._students.items():
-            info = {"user_id": sid, "name": state.name}
+            # `last_seen_at` is the wall-clock timestamp of the most recent
+            # face detection. None means the student has never been seen
+            # this session (status=ABSENT). For early-leavers it pins the
+            # moment they vanished; for present/late visible students it
+            # refreshes every frame, so a stale value (>5s old) is the
+            # frontend's signal that the student is currently off-camera.
+            info = {
+                "user_id": sid,
+                "name": state.name,
+                "last_seen_at": state.last_seen_at.isoformat() if state.last_seen_at else None,
+                "check_in_time": state.check_in_time.isoformat() if state.check_in_time else None,
+            }
 
             if state.early_leave_flagged and not state.early_leave_returned:
-                # Still absent after early leave
-                early_leave.append(info)
+                # Pin the row's "left at" badge to last_seen_at — the
+                # check_out_time stored on the attendance record is the
+                # same value (see process_track_frame).
+                early_leave.append(
+                    {
+                        **info,
+                        "early_leave_time": info["last_seen_at"],
+                    }
+                )
             elif state.early_leave_flagged and state.early_leave_returned:
-                # Returned after early leave — show in original category AND early_leave_returned
-                early_leave_returned.append(info)
-                if state.status == AttendanceStatus.LATE:
-                    late.append(info)
-                elif state.status == AttendanceStatus.PRESENT:
-                    present.append(info)
+                # Currently visible after an early-leave incident. Belongs
+                # to the early_leave_returned bucket ONLY — no longer
+                # dup-appended to present/late, so the segmented bar and
+                # roster counts add up cleanly to total_enrolled without
+                # double-counting.
+                #
+                # `underlying_status` carries the original status so the
+                # admin row can render a quiet "was on time" / "was late"
+                # hint, preserving the incident context without needing
+                # a second pill on the row.
+                underlying = (
+                    "late"
+                    if state.status == AttendanceStatus.LATE
+                    else "present"
+                    if state.status == AttendanceStatus.PRESENT
+                    else None
+                )
+                early_leave_returned.append(
+                    {
+                        **info,
+                        "underlying_status": underlying,
+                    }
+                )
             elif state.status == AttendanceStatus.ABSENT:
                 absent.append(info)
             elif state.status == AttendanceStatus.LATE:
@@ -722,11 +770,29 @@ class TrackPresenceService:
         return {
             "type": "attendance_summary",
             "schedule_id": self.schedule_id,
-            "present_count": len(present) + len(late),
+            # Server wall-clock at emit, epoch ms. Frontend computes a
+            # client-vs-server offset on each broadcast so the missing
+            # timer counts up against the same clock that produced
+            # last_seen_at, even if the admin browser's wall-clock is off.
+            "server_time_ms": int(now_dt.timestamp() * 1000),
+            # Per-schedule early-leave cutoff (seconds). Frontend uses this
+            # as the race target for the inline progress bar — when the
+            # row's "missing for Xs" hits this number the backend will
+            # flip the student into the early_leave bucket on the next tick.
+            "early_leave_threshold_seconds": float(self._early_leave_timeout),
+            # Each bucket counts a student exactly once: on_time + late +
+            # early_leave_returned + early_leave + absent == total_enrolled.
+            # `present_count` was historically (on-time + late) AND included
+            # returned students dup'd into present/late — both roles are
+            # now retired. Use it as the on-time-only bucket count for
+            # the segmented bar; consumers that need an in-class total
+            # should sum present + late + early_leave_returned.
+            "present_count": len(present),
             "on_time_count": len(present),
             "late_count": len(late),
             "absent_count": len(absent),
             "early_leave_count": len(early_leave),
+            "early_leave_returned_count": len(early_leave_returned),
             "total_enrolled": len(self._students),
             "present": present,
             "absent": absent,

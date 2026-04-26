@@ -126,6 +126,15 @@ services:
       - ENABLE_EDGE_ROUTES=false
       - ENABLE_SETTINGS_ROUTES=false
       - ENABLE_WS_ROUTES=false
+      # Sync receiver — accepts faculty/schedule/room/faculty_record
+      # snapshots from the on-prem Mac. Required for the off-campus
+      # faculty APK to see schedule changes without manual re-deploys.
+      - ENABLE_SYNC_RECEIVER_ROUTES=true
+      # Shared secret for the X-Sync-Secret header. Propagated from the
+      # operator's local scripts/.env.local by deploy/deploy.sh — never
+      # baked into backend/.env.vps so the secret never sits at rest on
+      # the VPS filesystem.
+      - VPS_SYNC_SECRET=${VPS_SYNC_SECRET:-}
     ports:
       # Loopback-only; nginx proxies it from :80. Faculty APK hits nginx.
       - "127.0.0.1:8000:8000"

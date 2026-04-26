@@ -2,6 +2,7 @@ import { Suspense, useEffect } from 'react'
 import { Outlet } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useQueryClient } from '@tanstack/react-query'
 import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar'
 import { AppSidebar } from './app-sidebar'
 import { Header } from './header'
@@ -78,12 +79,37 @@ interface NotificationWsPayload {
   threshold?: number | string
 }
 
+// Notification types that warrant a Sonner toast on arrival.
+//
+// Rule of thumb: only toast for events the recipient actively triggered
+// (manual broadcast targeted at them, their own password change/reset).
+// Everything else — automatic session lifecycle, attendance check-ins,
+// camera/ML/security signals, scheduled digests, peer admin actions —
+// only updates the bell + badge. Toasting every async event was
+// deafening once 30+ emitters wired up.
+//
+// Backend remains the source of truth for the type tag; new event types
+// added in the future default to "no toast" until explicitly added here.
+//
+// NOTE: ``face_re_registration_required`` / ``face_registration_*`` are
+// emitted to the affected STUDENT only — admins never receive them, so
+// they have no business in this admin-portal allowlist. The student app
+// has its own toast policy.
+const FOREGROUND_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
+  // Manual admin broadcasts
+  'broadcast',
+  // Self-initiated auth events
+  'password_changed',
+  'password_reset_requested',
+])
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
 export function DashboardLayout() {
   const { fetchUnreadCount } = useNotificationStore()
+  const queryClient = useQueryClient()
 
   useEffect(() => { fetchUnreadCount() }, [fetchUnreadCount])
 
@@ -99,7 +125,6 @@ export function DashboardLayout() {
 
     const severity = (message.severity ?? 'info') as string
     const eventType = message.notification_type || ''
-    const variant = pickToastVariant(message.toast_type, severity)
 
     // Centralized: every notification event bumps the unread badge.
     // (Previously only 3 of 7 known event types did this — the bug
@@ -109,50 +134,28 @@ export function DashboardLayout() {
       useNotificationStore.getState().incrementCriticalCount()
     }
 
+    // Refresh the bell popover + Notifications page so the new row is
+    // visible without a full page refresh. Cheap (<200 ms) because the
+    // server-side list is paginated to 5 / 50.
+    queryClient.invalidateQueries({ queryKey: ['notifications'] })
+    queryClient.invalidateQueries({ queryKey: ['notification-stats'] })
+
+    // Toast policy: only foreground (user-initiated) events warrant a
+    // Sonner toast. Everything else (camera flap, session auto-lifecycle,
+    // check-in stream, security background signals, scheduled digests)
+    // updates the badge silently — toasting every async event was
+    // deafening once 30+ emitters wired up.
+    if (!FOREGROUND_NOTIFICATION_TYPES.has(eventType)) return
+
+    const variant = pickToastVariant(message.toast_type, severity)
+
     // Build a description: prefer the rich per-type wording when we
     // recognise the event, else fall back to the generic message body.
-    let description: string | undefined = message.message
-    let duration: number | undefined
-    switch (eventType) {
-      case 'early_leave':
-        description = message.student_name && message.subject_code
-          ? `${message.student_name} left ${message.subject_code} early`
-          : message.message
-        duration = 8000
-        break
-      case 'early_leave_return':
-        description = message.student_name
-          ? `${message.student_name} returned to class`
-          : message.message
-        break
-      case 'check_in':
-        description = message.subject_code
-          ? `${message.subject_code} — ${message.status ?? ''}`.trim()
-          : message.message
-        break
-      case 'session_start':
-      case 'session_end':
-        description = message.subject_code
-          ? `${message.subject_code} — ${message.subject_name ?? ''}`.trim()
-          : message.message
-        break
-      case 'low_attendance_warning':
-        description = message.subject_name
-          ? `${message.subject_name}: ${message.current_rate}% (threshold: ${message.threshold}%)`
-          : message.message
-        break
-      default:
-        description = message.message
-        break
-    }
+    const description: string | undefined = message.message
 
-    const title =
-      message.title ||
-      (eventType === 'check_in' && message.student_name
-        ? `${message.student_name} checked in`
-        : 'New Notification')
+    const title = message.title || 'New Notification'
 
-    showToast(variant, title, description, duration)
+    showToast(variant, title, description)
   })
 
   return (

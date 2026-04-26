@@ -81,7 +81,7 @@ ACADEMIC_YEAR = "2025-2026"
 # Only deliberate gap is 23:55 → 00:00 (5 min/day). Acceptable price for
 # clean lifecycle behaviour, and a useful test of the strict-session-gated
 # raw-video state on the live page.
-TEST_BLOCK_EARLY_LEAVE_TIMEOUT_MIN = 2  # 2 min continuous absence → EARLY_LEAVE
+TEST_BLOCK_EARLY_LEAVE_TIMEOUT_MIN = 5  # 5 min continuous absence → EARLY_LEAVE (matches system default)
 
 # (start_hour_label, start_time, end_time)
 TEST_BLOCK_WINDOWS: list[tuple[str, time, time]] = [
@@ -559,7 +559,7 @@ def _seed_schedules(db, faculty_map: dict[str, User], room_map: dict[str, Room])
         )
         total += test_total
         print(f"  Generated {test_total} IAMS test blocks for {room_name} "
-              f"({test_total // 7} blocks/day × 7 days, 2-min early-leave timeout)")
+              f"({test_total // 7} blocks/day × 7 days, 5-min early-leave timeout)")
 
     db.flush()
     return total
@@ -578,7 +578,7 @@ def _seed_test_blocks(
     a 5h block:
       - first 5 min of session = PRESENT window
       - 5 min – 5h             = LATE window
-      - 2 min continuous absence after check-in → EARLY_LEAVE
+      - 5 min continuous absence after check-in → EARLY_LEAVE
 
     Subject code format: ``{room_name}-{day_short}-{start_hhmm}``, e.g.
     ``EB226-MON-0000``. Sorts cleanly by room → day → block start hour in

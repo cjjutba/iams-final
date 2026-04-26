@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useAuthStore } from '@/stores/auth.store'
 import { ProtectedRoute } from '@/components/protected-route'
 import { DashboardLayout } from '@/components/layout/dashboard-layout'
+import { ScrollToTop } from '@/components/scroll-to-top'
 import { Toaster } from '@/components/ui/sonner'
 // Eager-import the two pages an admin hits immediately after a visit:
 // Login is the first paint for an unauthenticated user, and Dashboard is
@@ -64,6 +65,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <Toaster />
       <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+        <ScrollToTop />
         <Suspense fallback={<LoadingFallback />}>
           <Routes>
             <Route path="/" element={<LandingPage />} />

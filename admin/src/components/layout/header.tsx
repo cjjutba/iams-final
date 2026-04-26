@@ -107,14 +107,6 @@ export function Header() {
                   {unreadCount > 99 ? '99+' : unreadCount}
                 </Badge>
               )}
-              {hasCriticalUnread && (
-                <span
-                  aria-label={`${unreadCriticalCount} critical alert${unreadCriticalCount === 1 ? '' : 's'}`}
-                  className="pointer-events-none absolute -bottom-0.5 -right-0.5 inline-flex h-2 w-2 rounded-full bg-red-500 ring-2 ring-background"
-                >
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75" />
-                </span>
-              )}
               <span className="sr-only">Notifications</span>
             </Button>
           </PopoverTrigger>

@@ -883,6 +883,50 @@ async def deregister_face(user_id: str, current_user: User = Depends(get_current
         except Exception:
             logger.exception("Failed to notify student of face re-registration request")
 
+    # Audit fan-out: every face deletion (admin-driven OR student self-
+    # service) surfaces in peer admins' bells with audit_alerts opted in.
+    # This is a security-relevant data-mutation event — admins should be
+    # able to reconstruct who deleted what. Excludes the actor so the
+    # admin who clicked the button doesn't get a notification on top of
+    # their own UI confirmation toast.
+    try:
+        from app.services.notification_service import notify_admins
+
+        target_user = db.query(User).filter(User.id == user_id).first()
+        target_label = (
+            f"{target_user.first_name or ''} {target_user.last_name or ''}".strip()
+            if target_user
+            else user_id[:8]
+        ) or (target_user.email if target_user else user_id[:8])
+        actor_label = (
+            current_user.email
+            if str(current_user.id) != user_id
+            else f"{target_label} (self-service)"
+        )
+
+        await notify_admins(
+            db,
+            title=f"Face data deleted: {target_label}",
+            message=(
+                f"Face registration + embeddings deleted for {target_label}. "
+                f"Triggered by: {actor_label}."
+            ),
+            notification_type="face_data_deleted",
+            severity="warn",
+            preference_key="audit_alerts",
+            send_email=False,
+            exclude_user_id=current_user.id,
+            reference_id=str(user_id),
+            reference_type="face",
+            dedup_window_seconds=300,
+            toast_type="warning",
+        )
+    except Exception:
+        logger.warning(
+            "face_data_deleted audit notification failed",
+            exc_info=True,
+        )
+
     return {"success": True, "message": "Face deregistered successfully"}
 
 

@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { WhepPlayer, type WhepPlayerHandle, type PlayerStatus } from '@/components/live-feed/WhepPlayer'
 import { DetectionOverlay } from '@/components/live-feed/DetectionOverlay'
 import { AttendancePanel } from '@/components/live-feed/AttendancePanel'
-import { RecognitionPanel } from '@/components/live-feed/RecognitionPanel'
+import { RecognitionStrip } from '@/components/live-feed/RecognitionStrip'
 import { OverlayClickTargets } from '@/components/live-feed/OverlayClickTargets'
 import { TrackDetailSheet } from '@/components/live-feed/TrackDetailSheet'
 import { TrackDetailMiniPanel } from '@/components/live-feed/TrackDetailMiniPanel'
@@ -437,101 +437,106 @@ export default function ScheduleLivePage() {
           </div>
         </div>
 
-        {/* Video + Right rail */}
+        {/* Video + RecognitionStrip below | Attendance roster on right */}
         <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
-          {/* Video card skeleton — match aspect-video ratio + corner HUD chip */}
-          <Card className="overflow-hidden">
-            <CardContent className="p-0">
-              <div className="relative aspect-video w-full overflow-hidden bg-gradient-to-br from-zinc-900 via-zinc-950 to-black">
-                <div
-                  className="absolute left-[14%] top-[28%] h-[34%] w-[14%] rounded-md border border-white/10 bg-white/[0.04] animate-pulse"
-                  aria-hidden
-                />
-                <div
-                  className="absolute left-[42%] top-[34%] h-[30%] w-[12%] rounded-md border border-white/10 bg-white/[0.04] animate-pulse"
-                  style={{ animationDelay: '180ms' }}
-                  aria-hidden
-                />
-                <div
-                  className="absolute right-[18%] top-[30%] h-[32%] w-[13%] rounded-md border border-white/10 bg-white/[0.04] animate-pulse"
-                  style={{ animationDelay: '360ms' }}
-                  aria-hidden
-                />
-                <div className="absolute right-3 top-3 h-7 w-36 rounded-md border border-white/10 bg-white/[0.06] animate-pulse" />
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
-                  <Loader2 className="h-7 w-7 animate-spin text-white/60" />
-                  <span className="text-xs text-white/55">Loading schedule…</span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Right rail skeleton — attendance card + recognition panel */}
-          <div className="flex flex-col gap-4 lg:min-h-[500px]">
-            <Card className="flex flex-col">
-              <div className="space-y-3 p-4 pb-3">
-                <div className="flex items-center justify-between">
-                  <Skeleton className="h-5 w-24" />
-                  <Skeleton className="h-2 w-2 rounded-full" />
-                </div>
-                <Skeleton className="h-4 w-40" />
-                <Skeleton className="h-1.5 w-full rounded-full" />
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <Skeleton key={i} className="h-3 w-16" />
-                  ))}
-                </div>
-              </div>
-              <div className="space-y-4 px-4 py-3">
-                {Array.from({ length: 3 }).map((_, group) => (
-                  <div key={group} className="space-y-2">
-                    <Skeleton className="h-3 w-20" />
-                    {Array.from({ length: 2 }).map((_, row) => (
-                      <div key={row} className="flex items-center gap-3 px-2 py-2">
-                        <div className="min-w-0 flex-1 space-y-1.5">
-                          <Skeleton className="h-3.5 w-32" />
-                          <Skeleton className="h-2.5 w-20" />
-                        </div>
-                        <Skeleton className="h-5 w-16 shrink-0 rounded-full" />
-                      </div>
-                    ))}
+          {/* Left column: video card + recognition-strip skeleton stacked. */}
+          <div className="flex min-w-0 flex-col gap-4">
+            <Card className="overflow-hidden">
+              <CardContent className="p-0">
+                <div className="relative aspect-video w-full overflow-hidden bg-gradient-to-br from-zinc-900 via-zinc-950 to-black">
+                  <div
+                    className="absolute left-[14%] top-[28%] h-[34%] w-[14%] rounded-md border border-white/10 bg-white/[0.04] animate-pulse"
+                    aria-hidden
+                  />
+                  <div
+                    className="absolute left-[42%] top-[34%] h-[30%] w-[12%] rounded-md border border-white/10 bg-white/[0.04] animate-pulse"
+                    style={{ animationDelay: '180ms' }}
+                    aria-hidden
+                  />
+                  <div
+                    className="absolute right-[18%] top-[30%] h-[32%] w-[13%] rounded-md border border-white/10 bg-white/[0.04] animate-pulse"
+                    style={{ animationDelay: '360ms' }}
+                    aria-hidden
+                  />
+                  <div className="absolute right-3 top-3 h-7 w-36 rounded-md border border-white/10 bg-white/[0.06] animate-pulse" />
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
+                    <Loader2 className="h-7 w-7 animate-spin text-white/60" />
+                    <span className="text-xs text-white/55">Loading schedule…</span>
                   </div>
-                ))}
-              </div>
+                </div>
+              </CardContent>
             </Card>
 
-            <Card className="flex h-[420px] flex-col">
-              <div className="space-y-2 p-4 pb-3">
-                <div className="flex items-center justify-between">
-                  <Skeleton className="h-5 w-36" />
-                  <Skeleton className="h-3 w-12" />
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
+            {/* Recognition-strip skeleton — matches the live component's
+                horizontal-tile layout so the cut-over to real data
+                doesn't shift the page. */}
+            <Card className="flex flex-col gap-2 p-3">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-4 w-32" />
+                <Skeleton className="h-3 w-10" />
+                <div className="ml-auto flex items-center gap-2">
                   <Skeleton className="h-7 w-20 rounded-md" />
                   <Skeleton className="h-7 w-28 rounded-md" />
-                  <Skeleton className="ml-auto h-3 w-32" />
+                  <Skeleton className="h-7 w-32 rounded-md" />
                 </div>
               </div>
-              <div className="flex-1 space-y-2 overflow-hidden px-4 py-2">
-                {Array.from({ length: 4 }).map((_, i) => (
-                  <div key={i} className="flex gap-3 py-2">
-                    <Skeleton className="h-12 w-12 shrink-0 rounded-md" />
-                    <div className="min-w-0 flex-1 space-y-1.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <Skeleton className="h-3 w-24" />
-                        <Skeleton className="h-4 w-12 rounded-full" />
+              <div className="flex gap-2 overflow-hidden">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="flex w-[180px] shrink-0 flex-col gap-1.5 rounded-md border bg-card p-2"
+                  >
+                    <div className="flex items-start gap-2">
+                      <Skeleton className="h-11 w-11 shrink-0 rounded-md" />
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <Skeleton className="h-3 w-20" />
+                        <Skeleton className="h-3 w-12 rounded-full" />
                       </div>
-                      <Skeleton className="h-1.5 w-full rounded-full" />
-                      <div className="flex items-center justify-between">
-                        <Skeleton className="h-2.5 w-20" />
-                        <Skeleton className="h-2.5 w-24" />
-                      </div>
+                    </div>
+                    <Skeleton className="h-1.5 w-full rounded-full" />
+                    <div className="flex items-center justify-between">
+                      <Skeleton className="h-2 w-16" />
+                      <Skeleton className="h-2 w-8" />
                     </div>
                   </div>
                 ))}
               </div>
             </Card>
           </div>
+
+          {/* Right rail: attendance roster (claims full vertical space
+              now that recognition stream lives below the video). */}
+          <Card className="flex min-h-[500px] flex-col">
+            <div className="space-y-3 p-4 pb-3">
+              <div className="flex items-center justify-between">
+                <Skeleton className="h-5 w-24" />
+                <Skeleton className="h-2 w-2 rounded-full" />
+              </div>
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-1.5 w-full rounded-full" />
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <Skeleton key={i} className="h-3 w-16" />
+                ))}
+              </div>
+            </div>
+            <div className="space-y-4 px-4 py-3">
+              {Array.from({ length: 4 }).map((_, group) => (
+                <div key={group} className="space-y-2">
+                  <Skeleton className="h-3 w-20" />
+                  {Array.from({ length: 3 }).map((_, row) => (
+                    <div key={row} className="flex items-center gap-3 px-2 py-2">
+                      <div className="min-w-0 flex-1 space-y-1.5">
+                        <Skeleton className="h-3.5 w-40" />
+                        <Skeleton className="h-2.5 w-24" />
+                      </div>
+                      <Skeleton className="h-5 w-16 shrink-0 rounded-full" />
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </Card>
         </div>
       </div>
     )
@@ -650,74 +655,83 @@ export default function ScheduleLivePage() {
         </div>
       </div>
 
-      {/* Video + Overlay | Attendance Panel */}
+      {/* Layout: left column = video + recognition strip below; right rail = attendance roster.
+          Recognition stream moved out of the right rail so a long roster
+          can no longer push it off-screen — it's now always visible
+          directly under the video as a horizontal timeline. */}
       <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
-        <Card className="overflow-hidden">
-          <CardContent className="p-0">
-            <div
-              ref={videoContainerRef}
-              className={`group relative w-full bg-black ${isFullscreen ? 'h-screen' : 'aspect-video'}`}
-            >
-              <WhepPlayer
-                ref={playerRef}
-                streamKey={displayStreamKey ?? streamKey}
-                fallbackStreamKey={fallbackStreamKey ?? undefined}
-                className="h-full w-full"
-                onVideoSize={(w, h) => setVideoSize({ width: w, height: h })}
-                onActivePathChange={handleActivePathChange}
-                onStatusChange={handleStatusChange}
-              />
-              {overlaysVisible && (
-                <>
-                  <OverlayClickTargets
-                    tracks={overlayTracks}
-                    videoElement={playerRef.current?.videoElement ?? null}
-                    videoSize={videoSize}
-                  />
-                  <DetectionOverlay
-                    tracks={overlayTracks}
-                    videoElement={playerRef.current?.videoElement ?? null}
-                    videoSize={videoSize}
-                    selectedTrackId={selectedTrackId}
-                  />
-                </>
-              )}
-              <VideoHud
-                latestFrame={latestFrame}
-                latencyStats={latencyStats}
-                onDownloadCsv={downloadLatencyCsv}
-                onClearSamples={clearLatencySamples}
-                fallbackActive={activeStream?.isFallback ?? false}
-                fallbackKey={activeStream?.key}
-                portalContainer={isFullscreen ? videoContainerRef.current : null}
-              />
-              <VideoFullscreenButton targetRef={videoContainerRef} />
-              {isFullscreen && (
-                <TrackDetailMiniPanel
-                  latestFrame={latestFrame}
-                  latestSummary={latestSummary}
-                  isConnected={isConnected}
-                  scheduleId={scheduleId ?? ''}
-                  recognitionEvents={recognitionEvents}
-                  liveCrops={liveCrops}
+        <div className="flex min-w-0 flex-col gap-4">
+          <Card className="overflow-hidden">
+            <CardContent className="p-0">
+              <div
+                ref={videoContainerRef}
+                className={`group relative w-full bg-black ${isFullscreen ? 'h-screen' : 'aspect-video'}`}
+              >
+                <WhepPlayer
+                  ref={playerRef}
+                  streamKey={displayStreamKey ?? streamKey}
+                  fallbackStreamKey={fallbackStreamKey ?? undefined}
+                  className="h-full w-full"
+                  onVideoSize={(w, h) => setVideoSize({ width: w, height: h })}
+                  onActivePathChange={handleActivePathChange}
+                  onStatusChange={handleStatusChange}
                 />
-              )}
-            </div>
-          </CardContent>
-        </Card>
+                {overlaysVisible && (
+                  <>
+                    <OverlayClickTargets
+                      tracks={overlayTracks}
+                      videoElement={playerRef.current?.videoElement ?? null}
+                      videoSize={videoSize}
+                    />
+                    <DetectionOverlay
+                      tracks={overlayTracks}
+                      videoElement={playerRef.current?.videoElement ?? null}
+                      videoSize={videoSize}
+                      selectedTrackId={selectedTrackId}
+                    />
+                  </>
+                )}
+                <VideoHud
+                  latestFrame={latestFrame}
+                  latencyStats={latencyStats}
+                  onDownloadCsv={downloadLatencyCsv}
+                  onClearSamples={clearLatencySamples}
+                  fallbackActive={activeStream?.isFallback ?? false}
+                  fallbackKey={activeStream?.key}
+                  portalContainer={isFullscreen ? videoContainerRef.current : null}
+                />
+                <VideoFullscreenButton targetRef={videoContainerRef} />
+                {isFullscreen && (
+                  <TrackDetailMiniPanel
+                    latestFrame={latestFrame}
+                    latestSummary={latestSummary}
+                    isConnected={isConnected}
+                    scheduleId={scheduleId ?? ''}
+                    recognitionEvents={recognitionEvents}
+                    liveCrops={liveCrops}
+                  />
+                )}
+              </div>
+            </CardContent>
+          </Card>
 
-        <div className="flex flex-col gap-4 lg:min-h-[500px]">
+          {/* Horizontal recognition timeline directly under the video.
+              Hidden when the video is fullscreened — the mini panel
+              already covers that case. */}
+          {!isFullscreen && (
+            <RecognitionStrip
+              events={recognitionEvents}
+              scheduleId={scheduleId ?? ''}
+            />
+          )}
+        </div>
+
+        <div className="flex min-h-[500px] flex-col">
           <AttendancePanel
             summary={latestSummary}
             isConnected={isConnected}
             onSelect={(userId) => selectTrack(null, userId)}
           />
-          <div className="h-[420px]">
-            <RecognitionPanel
-              events={recognitionEvents}
-              scheduleId={scheduleId ?? ''}
-            />
-          </div>
         </div>
       </div>
 

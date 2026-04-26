@@ -7,6 +7,7 @@ open a session, do work in try/finally, always close.  Failures are logged
 but never propagated so the scheduler stays healthy.
 """
 
+import functools
 import logging
 from datetime import date, datetime, timedelta, timezone
 
@@ -22,6 +23,67 @@ def _utcnow() -> datetime:
     """Timezone-aware UTC now — used when comparing against
     ``notifications.created_at`` which is now a TIMESTAMPTZ column."""
     return datetime.now(timezone.utc)
+
+
+def with_failure_notification(job_name: str):
+    """Decorator: catch any exception from a scheduled job and emit a
+    ``scheduled_job_failed`` admin notification before swallowing.
+
+    Without this, an APScheduler job that throws is silently logged and
+    re-scheduled at its next cron tick — a digest could miss for days
+    before anyone noticed. With this, the operator's bell pings the
+    instant a job dies.
+
+    Dedup window of 1 hour keyed on the job name suppresses storms when
+    the same job fails on every tick (e.g. a broken cron of every-minute
+    granularity). Severity is ``error`` because a missed digest /
+    cleanup IS a real degradation, even if not user-visible.
+    """
+
+    def deco(fn):
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            try:
+                return await fn(*args, **kwargs)
+            except Exception as exc:
+                logger.exception("[%s] scheduled job failed", job_name)
+                try:
+                    from app.services.notification_service import notify_admins
+
+                    db = SessionLocal()
+                    try:
+                        await notify_admins(
+                            db,
+                            title=f"Scheduled job failed: {job_name}",
+                            message=(
+                                f"The {job_name} scheduled job raised an "
+                                f"exception: {type(exc).__name__}: {exc}. "
+                                f"Subsequent runs will be attempted on the "
+                                f"normal cron tick. Check api-gateway logs "
+                                f"for the traceback."
+                            ),
+                            notification_type="scheduled_job_failed",
+                            severity="error",
+                            preference_key="ml_health_alerts",
+                            send_email=True,
+                            reference_id=f"job:{job_name}",
+                            reference_type="scheduled_job",
+                            dedup_window_seconds=3600,
+                            toast_type="error",
+                        )
+                    finally:
+                        db.close()
+                except Exception:
+                    logger.exception(
+                        "[%s] failed to emit job-failure notification",
+                        job_name,
+                    )
+                # Never re-raise — APScheduler should keep ticking.
+                return None
+
+        return wrapper
+
+    return deco
 
 
 # =====================================================================

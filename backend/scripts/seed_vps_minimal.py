@@ -9,6 +9,10 @@ the data the faculty mobile app needs:
   - Admin user account (for occasional VPS-side admin debugging)
   - Rooms (rooms table — needed for stream_key lookup)
   - Real faculty schedules (schedules table — subset of SCHEDULE_DEFS)
+  - IAMS test blocks (5 blocks × 7 days × 2 rooms = 70 rows; same generator
+    the on-prem Mac uses, so the test faculty `faculty.eb226@gmail.com` and
+    `faculty.eb227@gmail.com` see classes in their faculty-app schedule
+    list at any time of day)
   - System settings (authoritative constants the faculty app reads)
 
 What is INTENTIONALLY NOT seeded on the VPS:
@@ -19,8 +23,6 @@ What is INTENTIONALLY NOT seeded on the VPS:
     only matters where attendance is recorded = on-prem Mac)
   - Attendance records, presence logs, early-leave events (monitoring is
     admin-portal-on-LAN only)
-  - Rolling 30-min test sessions (dev/thesis-only, 672 rows of no value
-    to the faculty app's "today's classes" list)
   - Notifications (notification router disabled on VPS)
 
 The seed reuses FACULTY_RECORDS / FACULTY_USERS / ROOM_DEFS / SCHEDULE_DEFS
@@ -53,7 +55,9 @@ from app.models import (
 )
 from app.utils.security import hash_password
 
-# Reuse the canonical data from the full seed so the two stay in sync.
+# Reuse the canonical data + helpers from the full seed so the two stay in
+# lockstep. _seed_test_blocks is the same generator the on-prem Mac uses for
+# the 70 EB226-*/EB227-* rows.
 from scripts.seed_data import (
     ACADEMIC_YEAR,
     FACULTY_RECORDS,
@@ -62,6 +66,8 @@ from scripts.seed_data import (
     SCHEDULE_DEFS,
     SEMESTER,
     SYSTEM_SETTINGS,
+    TEST_BLOCK_ROOMS,
+    _seed_test_blocks,
 )
 
 
@@ -199,12 +205,17 @@ def _seed_rooms(db) -> dict[str, Room]:
 
 
 def _seed_schedules(db, faculty_map: dict[str, User], room_map: dict[str, Room]) -> int:
-    """Seed REAL faculty schedules only — no rolling 30-min test sessions.
+    """Seed REAL faculty schedules + the 70 IAMS test blocks.
 
-    The VPS-side faculty app doesn't need the 672 rolling dev sessions;
-    faculty see their real Mon/Wed/Fri classes, tap one, watch it.
+    Mirrors the on-prem Mac's seed_data._seed_schedules() so the faculty
+    app sees identical "today's classes" / time-windowed lists regardless
+    of which backend it hits. The test blocks (subject codes
+    `EB226-MON-0000`, `EB227-WED-1500`, etc.) keep the rolling-window
+    auto-start/end lifecycle exercising on the VPS too — useful for
+    end-to-end live-stream demos that point the faculty APK at any time
+    of day and expect a session window to be open.
     """
-    print("\n[5/5] Creating schedules (real faculty only, no rolling test slots)...")
+    print("\n[5/5] Creating schedules (real faculty + IAMS test blocks)...")
     day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
     total = 0
@@ -232,6 +243,17 @@ def _seed_schedules(db, faculty_map: dict[str, User], room_map: dict[str, Room])
             print(f"  {subj_code:<10} Year {year_level} {day_names[day_idx]} "
                   f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')} "
                   f"in {room_name} [{fac_short}]")
+
+    # IAMS test blocks (5 ~5h windows × 7 days × 2 rooms = 70 rows).
+    # Reuses the canonical helper from seed_data so any change to the
+    # block layout (TEST_BLOCK_WINDOWS) propagates to both backends.
+    for room_name, faculty_email in TEST_BLOCK_ROOMS:
+        test_total = _seed_test_blocks(
+            db, faculty_map, room_map, room_name, faculty_email
+        )
+        total += test_total
+        print(f"  Generated {test_total} IAMS test blocks for {room_name} "
+              f"({test_total // 7} blocks/day × 7 days)")
 
     db.flush()
     return total
