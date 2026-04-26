@@ -874,17 +874,28 @@ class FaceService:
                 "Stopping to avoid poisoning the index. Verify the right student is in frame."
             )
 
-        # 7. Pick next cctv_<idx> labels
+        # 7. Pick next cctv_<room>_<idx> labels — counted PER ROOM so
+        # each room's index space is independent. Uses room.stream_key
+        # (or room.code if stream_key is empty) as the room key,
+        # normalised by ``cctv_label.normalize_room_key``. Legacy
+        # ``cctv_<idx>`` rows and other rooms' rows are ignored when
+        # computing the next index for this room.
+        from app.utils.cctv_label import build_cctv_label, normalize_room_key, parse_cctv_label
+
+        room_label_key = normalize_room_key(room.stream_key or room.name) or "unknown"
         existing_embs = self.face_repo.get_embeddings_by_registration(str(registration.id))
         existing_cctv_indices = []
         for emb in existing_embs:
-            if emb.angle_label and emb.angle_label.startswith("cctv_"):
-                try:
-                    existing_cctv_indices.append(int(emb.angle_label.split("_", 1)[1]))
-                except ValueError:
-                    pass
+            emb_room, emb_idx = parse_cctv_label(emb.angle_label)
+            if emb_idx is None:
+                continue
+            if emb_room == room_label_key:
+                existing_cctv_indices.append(emb_idx)
         next_idx = max(existing_cctv_indices, default=-1) + 1
-        labels = [f"cctv_{next_idx + i}" for i in range(len(captures))]
+        labels = [
+            build_cctv_label(room_label_key, next_idx + i)
+            for i in range(len(captures))
+        ]
 
         # 8. Add to FAISS in batch
         try:

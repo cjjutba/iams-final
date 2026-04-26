@@ -69,15 +69,25 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class _UserEnrollState:
-    """Per-user auto-enrolment state, in memory only.
+class _UserRoomEnrollState:
+    """Per-(user, room) auto-enrolment state, in memory only.
 
-    Persists across sessions on the same tracker instance. The lifetime
-    counter (``cctv_count``) is bootstrapped from the DB at startup so
-    auto-enrol stays one-shot across server restarts.
+    Persists across sessions on the same gateway process. The
+    ``cctv_count`` counter is bootstrapped from the DB at startup so
+    auto-enrol stays one-shot per (user, room) across server restarts.
+
+    Why per-room: CCTV embeddings captured from one camera (e.g. EB226)
+    don't always generalise to another camera (e.g. EB227) — different
+    lens, lighting, and seating angle produce different embedding
+    distributions. Tracking captures per (user, room) lets us hit the
+    lifetime cap independently in each room, so a student auto-enrolled
+    in EB226 still gets captured the first time they appear in EB227.
+    Replaces the single-namespace per-user counter (Phase 1, 2026-04-25)
+    that was causing students to show ``Unknown`` in their second
+    classroom because the auto-enroller refused further captures.
     """
 
-    cctv_count: int = 0  # face_embeddings rows with angle_label LIKE 'cctv_%'
+    cctv_count: int = 0  # face_embeddings rows with angle_label cctv_<room>_*
     buffer: deque = field(default_factory=lambda: deque(maxlen=10))  # (emb, crop, conf, ts)
     last_capture_at: float = 0.0
     first_capture_at: float = 0.0
@@ -91,6 +101,14 @@ class _UserEnrollState:
         self.first_capture_at = 0.0
         self.last_capture_at = 0.0
         self.consecutive_high_conf_frames = 0
+
+
+# Sentinel room key for legacy ``cctv_<idx>`` rows (no room context).
+# These contribute to the user's "has any cctv" status but do NOT
+# saturate any specific room's lifetime cap, so a user with five
+# legacy captures still triggers auto-enrol in every room they
+# subsequently appear in.
+_LEGACY_ROOM_KEY = "_legacy"
 
 
 class AutoCctvEnroller:
@@ -111,8 +129,13 @@ class AutoCctvEnroller:
         return cls._instance
 
     def _init_once(self) -> None:
-        self._users: dict[str, _UserEnrollState] = {}
-        self._users_lock = threading.RLock()
+        # Per-(user_id, room_key) state. The room key is the
+        # normalised room.stream_key (e.g. ``"eb226"``). State for the
+        # same user_id under different room_keys is tracked
+        # independently, so the lifetime cap fires per room rather
+        # than globally.
+        self._states: dict[tuple[str, str], _UserRoomEnrollState] = {}
+        self._states_lock = threading.RLock()
         # Single-threaded executor: serialises commits so two simultaneous
         # buffer-full events don't both try to grab DB transactions /
         # mutate FAISS at once.
@@ -120,46 +143,74 @@ class AutoCctvEnroller:
         self._initialised = False
 
     def bootstrap_from_db(self) -> None:
-        """Populate per-user cctv_count from the DB so auto-enrol stays
-        one-shot across server restarts.
+        """Populate per-(user, room) cctv_count from the DB so auto-enrol
+        stays one-shot per (user, room) across server restarts.
 
-        Cheap: one query that aggregates by user. Called once at gateway
-        startup from app.main lifespan; safe to call again later if you
-        want to refresh after a manual enrol.
+        Parses each ``face_embeddings.angle_label`` via
+        ``app.utils.cctv_label.parse_cctv_label``:
+          * ``cctv_<idx>``           — legacy, room-agnostic. Bucketed
+            under the ``_legacy`` sentinel; doesn't fill any specific
+            room's cap, so a user with only legacy captures still
+            triggers fresh per-room captures going forward.
+          * ``cctv_<room>_<idx>``    — modern, room-scoped. Bucketed
+            under that room.
+
+        Cheap: one query per gateway startup. Safe to call again later
+        if you want to refresh after a manual enrol.
         """
-        from sqlalchemy import func, text
-
         from app.database import SessionLocal
         from app.models.face_embedding import FaceEmbedding
         from app.models.face_registration import FaceRegistration
+        from app.utils.cctv_label import parse_cctv_label
 
         db = SessionLocal()
         try:
             rows = (
-                db.query(FaceRegistration.user_id, func.count(FaceEmbedding.id))
+                db.query(FaceRegistration.user_id, FaceEmbedding.angle_label)
                 .join(FaceEmbedding, FaceEmbedding.registration_id == FaceRegistration.id)
                 .filter(FaceEmbedding.angle_label.like("cctv_%"))
                 .filter(FaceRegistration.is_active.is_(True))
-                .group_by(FaceRegistration.user_id)
                 .all()
             )
-            with self._users_lock:
-                for user_id, count in rows:
-                    state = self._users.setdefault(str(user_id), _UserEnrollState())
-                    state.cctv_count = int(count)
+            counts: dict[tuple[str, str], int] = {}
+            for user_id, label in rows:
+                room_key, idx = parse_cctv_label(label)
+                if idx is None:
+                    continue
+                key = (str(user_id), room_key or _LEGACY_ROOM_KEY)
+                counts[key] = counts.get(key, 0) + 1
+            with self._states_lock:
+                for key, cnt in counts.items():
+                    state = self._states.setdefault(key, _UserRoomEnrollState())
+                    state.cctv_count = cnt
             self._initialised = True
             logger.info(
-                "AutoCctvEnroller bootstrap: %d user(s) already have cctv enrolment",
-                len(rows),
+                "AutoCctvEnroller bootstrap: %d (user, room) pair(s) already have "
+                "cctv enrolment (legacy and per-room rows combined)",
+                len(counts),
             )
         except Exception:
             logger.exception("AutoCctvEnroller bootstrap failed (will run uninitialised)")
         finally:
             db.close()
 
-    def _get_state(self, user_id: str) -> _UserEnrollState:
-        with self._users_lock:
-            return self._users.setdefault(user_id, _UserEnrollState())
+    def _get_state(self, user_id: str, room_key: str) -> _UserRoomEnrollState:
+        with self._states_lock:
+            return self._states.setdefault(
+                (user_id, room_key), _UserRoomEnrollState()
+            )
+
+    def _normalise_room(self, room_stream_key: str | None) -> str:
+        """Return the canonical room key used as the per-room state key.
+
+        Empty / None falls back to ``"unknown"`` so the offer still gets
+        rate-limited and capped — better to have *some* memory of "we
+        already captured for this user in this null-room context" than
+        to flood when room context is missing (e.g. CLI invocations).
+        """
+        from app.utils.cctv_label import normalize_room_key
+
+        return normalize_room_key(room_stream_key) or "unknown"
 
     def offer_capture(
         self,
@@ -184,8 +235,13 @@ class AutoCctvEnroller:
         if not user_id:
             return
 
-        # Quick check: lifetime cap reached?
-        state = self._get_state(user_id)
+        room_key = self._normalise_room(room_stream_key)
+
+        # Quick check: lifetime cap reached for THIS (user, room)?
+        # Legacy captures (room_key=_legacy) don't count toward this
+        # cap, so a user with only legacy rows still gets fresh
+        # captures in every concrete room they appear in.
+        state = self._get_state(user_id, room_key)
         if state.cctv_count >= settings.AUTO_CCTV_ENROLL_LIFETIME_CAP:
             return
         if state.commit_in_flight:
@@ -232,10 +288,11 @@ class AutoCctvEnroller:
             state.first_capture_at = now
 
         logger.info(
-            "auto-cctv: buffered capture %d/%d for user=%s conf=%.3f frames=%d",
+            "auto-cctv: buffered capture %d/%d for user=%s room=%s conf=%.3f frames=%d",
             len(state.buffer),
             settings.AUTO_CCTV_ENROLL_TARGET_CAPTURES,
             user_id[:8],
+            room_key,
             confidence,
             frames_seen,
         )
@@ -245,42 +302,48 @@ class AutoCctvEnroller:
             buffered = list(state.buffer)
             state.commit_in_flight = True
             state.reset_buffer()
-            self._executor.submit(self._commit_batch, user_id, buffered, room_stream_key)
+            self._executor.submit(
+                self._commit_batch, user_id, buffered, room_key
+            )
 
     def _commit_batch(
         self,
         user_id: str,
         captures: list[dict],
-        room_stream_key: str | None,
+        room_key: str,
     ) -> None:
         """Background commit. Must not raise into the executor."""
         try:
-            self._do_commit(user_id, captures, room_stream_key)
+            self._do_commit(user_id, captures, room_key)
         except Exception:
-            logger.exception("auto-cctv: commit failed for user=%s", user_id[:8])
+            logger.exception(
+                "auto-cctv: commit failed for user=%s room=%s",
+                user_id[:8],
+                room_key,
+            )
         finally:
-            state = self._get_state(user_id)
+            state = self._get_state(user_id, room_key)
             state.commit_in_flight = False
 
     def _do_commit(
         self,
         user_id: str,
         captures: list[dict],
-        room_stream_key: str | None,
+        room_key: str,
     ) -> None:
-        from sqlalchemy import update
-
         from app.database import SessionLocal
-        from app.models.face_embedding import FaceEmbedding
         from app.repositories.face_repository import FaceRepository
         from app.services.ml.faiss_manager import faiss_manager
+        from app.utils.cctv_label import build_cctv_label, parse_cctv_label
         from app.utils.face_image_storage import FaceImageStorage
 
         if settings.AUTO_CCTV_ENROLL_DRY_RUN:
             logger.info(
-                "auto-cctv DRY_RUN: would commit %d captures for user=%s (mean conf=%.3f)",
+                "auto-cctv DRY_RUN: would commit %d captures for user=%s room=%s "
+                "(mean conf=%.3f)",
                 len(captures),
                 user_id[:8],
+                room_key,
                 float(np.mean([c["confidence"] for c in captures])),
             )
             return
@@ -305,27 +368,33 @@ class AutoCctvEnroller:
             mean_sim = float(np.mean(sims_to_phone))
             if mean_sim < settings.AUTO_CCTV_ENROLL_MIN_SELF_SIM:
                 logger.warning(
-                    "auto-cctv: self-similarity gate failed for user=%s "
+                    "auto-cctv: self-similarity gate failed for user=%s room=%s "
                     "(mean=%.3f < %.3f); discarding %d captures",
                     user_id[:8],
+                    room_key,
                     mean_sim,
                     settings.AUTO_CCTV_ENROLL_MIN_SELF_SIM,
                     len(captures),
                 )
                 return
 
-            # Pick next cctv_<idx> labels (continues from any existing
-            # cctv_* rows for this user — manual + auto share the namespace).
+            # Pick next cctv_<room>_<idx> labels — counted PER ROOM so
+            # each room's index space is independent. Legacy
+            # ``cctv_<idx>`` rows and other rooms' rows are ignored
+            # when computing ``next_idx`` for this room.
             existing_embs = repo.get_embeddings_by_registration(str(registration.id))
-            existing_indices = []
+            existing_room_indices: list[int] = []
             for emb in existing_embs:
-                if emb.angle_label and emb.angle_label.startswith("cctv_"):
-                    try:
-                        existing_indices.append(int(emb.angle_label.split("_", 1)[1]))
-                    except ValueError:
-                        pass
-            next_idx = max(existing_indices, default=-1) + 1
-            labels = [f"cctv_{next_idx + i}" for i in range(len(captures))]
+                emb_room, emb_idx = parse_cctv_label(emb.angle_label)
+                if emb_idx is None:
+                    continue
+                if emb_room == room_key:
+                    existing_room_indices.append(emb_idx)
+            next_idx = max(existing_room_indices, default=-1) + 1
+            labels = [
+                build_cctv_label(room_key, next_idx + i)
+                for i in range(len(captures))
+            ]
 
             # Add to FAISS in batch
             try:
@@ -364,15 +433,16 @@ class AutoCctvEnroller:
 
                 faiss_manager.save()
 
-                # Update lifetime counter
-                state = self._get_state(user_id)
+                # Update per-(user, room) lifetime counter
+                state = self._get_state(user_id, room_key)
                 state.cctv_count += len(captures)
 
                 logger.info(
-                    "auto-cctv: COMMITTED %d captures for user=%s "
+                    "auto-cctv: COMMITTED %d captures for user=%s room=%s "
                     "(faiss_ids=%s mean_sim_to_phone=%.3f new_total=%d/%d)",
                     len(captures),
                     user_id[:8],
+                    room_key,
                     faiss_ids,
                     mean_sim,
                     state.cctv_count,
@@ -387,8 +457,9 @@ class AutoCctvEnroller:
                     except Exception:
                         pass
                 logger.exception(
-                    "auto-cctv: DB persist failed for user=%s; FAISS rolled back",
+                    "auto-cctv: DB persist failed for user=%s room=%s; FAISS rolled back",
                     user_id[:8],
+                    room_key,
                 )
         finally:
             db.close()

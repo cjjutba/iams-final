@@ -17,7 +17,6 @@ import {
 import { toast } from 'sonner'
 
 import { DataTable } from '@/components/data-tables'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -63,44 +62,17 @@ import {
 import { useSchedules, useCreateSchedule, useUpdateSchedule, useDeleteSchedule, useUsers, useRooms } from '@/hooks/use-queries'
 import type { ScheduleResponse, ScheduleRuntimeStatus } from '@/types'
 import { tokenMatches, joinHaystack, formatTime12h, DAY_NAMES_MON_FIRST } from '@/lib/search'
+import { RuntimeStatusPill } from '@/components/shared/status-pills'
 
-// Runtime status badge palette. The label is what gets rendered in the
-// Status column AND fed into the search haystack (so typing "live" or
-// "ended" filters correctly). Distinct visual weight per state:
-//   live      — solid green, demands attention (this is the "running now")
-//   upcoming  — secondary, signals "today, hasn't started yet"
-//   ended     — outline + muted, today's class is over
-//   scheduled — outline (most rows; deliberately understated)
-//   disabled  — destructive, archived schedules
-const RUNTIME_STATUS_META: Record<
-  ScheduleRuntimeStatus,
-  { label: string; className: string }
-> = {
-  live: {
-    label: 'Live',
-    // Solid emerald — overrides the default Badge variant background so
-    // a running session is unmistakable in a dark-theme list of dozens.
-    className:
-      'border-transparent bg-emerald-600 text-white hover:bg-emerald-600',
-  },
-  upcoming: {
-    label: 'Upcoming',
-    className:
-      'border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80',
-  },
-  ended: {
-    label: 'Ended',
-    className: 'border-border text-muted-foreground',
-  },
-  scheduled: {
-    label: 'Scheduled',
-    className: 'border-border text-muted-foreground',
-  },
-  disabled: {
-    label: 'Disabled',
-    className:
-      'border-transparent bg-destructive text-white hover:bg-destructive/90',
-  },
+// Runtime status labels — kept here only for the search haystack so
+// operators can type "live" / "upcoming" / "ended" and have it match. The
+// rendered pill comes from the shared `RuntimeStatusPill` component.
+const RUNTIME_STATUS_LABEL: Record<ScheduleRuntimeStatus, string> = {
+  live: 'Live',
+  upcoming: 'Upcoming',
+  ended: 'Ended today',
+  scheduled: 'Scheduled',
+  disabled: 'Disabled',
 }
 
 // Indexed Monday-first to match the backend's `day_of_week` convention
@@ -234,7 +206,7 @@ function buildScheduleHaystack(s: ScheduleResponse): string {
     // search vocabulary keeps working. The runtime_status label is added
     // alongside so operators can also search "live", "upcoming", etc.
     s.is_active ? 'Active' : 'Inactive',
-    RUNTIME_STATUS_META[s.runtime_status]?.label,
+    RUNTIME_STATUS_LABEL[s.runtime_status],
     s.semester,
     s.academic_year,
     s.target_course,
@@ -567,30 +539,13 @@ export default function SchedulesPage() {
         }
         return order[a.original.runtime_status] - order[b.original.runtime_status]
       },
-      cell: ({ row }) => {
-        const meta = RUNTIME_STATUS_META[row.original.runtime_status]
-        if (!meta) {
-          // Backend omitted runtime_status (shouldn't happen post-migration)
-          // — fall back to the legacy is_active rendering so the column
-          // doesn't disappear during a backend rollout window.
-          return row.original.is_active ? (
-            <Badge variant="outline">Active</Badge>
-          ) : (
-            <Badge variant="destructive">Inactive</Badge>
-          )
-        }
-        return (
-          <Badge variant="outline" className={meta.className}>
-            {row.original.runtime_status === 'live' && (
-              <span
-                className="mr-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-white"
-                aria-hidden
-              />
-            )}
-            {meta.label}
-          </Badge>
-        )
-      },
+      cell: ({ row }) => (
+        <RuntimeStatusPill
+          status={
+            (row.original.runtime_status as ScheduleRuntimeStatus) ?? 'scheduled'
+          }
+        />
+      ),
     },
     {
       id: 'actions',

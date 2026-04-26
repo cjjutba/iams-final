@@ -23,6 +23,17 @@ export interface TrackInfo {
   user_id: string | null
   status: 'recognized' | 'unknown' | 'detecting'
   recognition_state?: string
+  /**
+   * Passive liveness verdict from the backend's MiniFASNet layer (added
+   * 2026-04-25). Always emitted by the backend. "spoof" means the live
+   * overlay should render a presentation-attack badge regardless of
+   * recognition_state — the backend has already withheld the identity
+   * binding for the same reason. "unknown" means liveness wasn't
+   * checked on this track yet (or the model pack isn't loaded), so
+   * the overlay should fall through to the recognition_state defaults.
+   */
+  liveness_state?: 'real' | 'spoof' | 'unknown'
+  liveness_score?: number
 }
 
 export interface FrameUpdateMessage {

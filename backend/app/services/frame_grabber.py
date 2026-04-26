@@ -54,7 +54,17 @@ class FrameGrabber:
     Args:
         rtsp_url:      Full RTSP URL (e.g. ``rtsp://host:8554/cam1``).
         stale_timeout: Seconds after which a frame is considered stale.
-                       Triggers automatic reconnect.  Default 30 s.
+                       Triggers automatic reconnect.  Default 5 s.
+
+                       Was 30 s until the 2026-04-25 cam-relay flap on EB226.
+                       When the cam-relay's eb226 ffmpeg cycles (publisher
+                       drops out for ~3 s + mediamtx re-registration), a 30 s
+                       window left the gateway re-broadcasting the same
+                       stale frame thousands of times with its old
+                       ``captured_at_ms``, driving end-to-end p50 to ~5 s
+                       and p95 past 27 s. 5 s is well above normal RTSP
+                       jitter but recovers fast enough that brief publisher
+                       blips don't dominate the latency tail.
         width:         Output frame width (FFmpeg rescales). Default from settings.
         height:        Output frame height (FFmpeg rescales). Default from settings.
         fps:           FFmpeg output frame rate. Default from settings.
@@ -77,11 +87,12 @@ class FrameGrabber:
     def __init__(
         self,
         rtsp_url: str,
-        stale_timeout: float = 30.0,
+        stale_timeout: float = 5.0,
         width: int | None = None,
         height: int | None = None,
         fps: float | None = None,
         capture_rtp_pts: bool = True,
+        dedup_repeats: bool = False,
     ) -> None:
         self._url = rtsp_url
         self._stale_timeout = stale_timeout
@@ -94,6 +105,24 @@ class FrameGrabber:
         # Disable for unit tests that mock the FFmpeg binary — they don't
         # produce a showinfo stream so the PTS queue would stay empty.
         self._capture_rtp_pts = capture_rtp_pts
+
+        # When True, ``grab_with_pts()`` returns None for any consecutive call
+        # that would re-serve the same frame (i.e. the FFmpeg drain thread
+        # has not produced a fresh frame since the last grab). Critical for
+        # the realtime pipeline on cameras with intermittent H.264 corruption
+        # (observed 2026-04-25 on EB226): when FFmpeg stalls waiting for an
+        # I-frame after corrupt input, ``_drain_loop`` blocks on stdout and
+        # ``_latest_capture_ms`` freezes. Without dedup the pipeline keeps
+        # broadcasting that frozen timestamp; the admin-side end-to-end
+        # latency (``client_now - captured_at_ms``) grows linearly with the
+        # stall length, dragging p50 from ~50 ms to ~1 s. With dedup, the
+        # pipeline sees None during stalls (its ``_consecutive_none`` path
+        # already handles this gracefully) and the latency metric reflects
+        # only fresh frames. Off by default — single-shot callers (face
+        # registration, calibration scripts) want the latest cached frame
+        # regardless of freshness, and would mis-handle the new None path.
+        self._dedup_repeats = dedup_repeats
+        self._last_served_time: float = 0.0
 
         self._lock = threading.Lock()
         self._latest_frame: np.ndarray | None = None
@@ -176,9 +205,18 @@ class FrameGrabber:
                 self._latest_frame = None
                 self._latest_pts = None
                 self._latest_capture_ms = None
+                self._last_served_time = 0.0
                 self._reconnect()
                 return None
 
+            # Dedup: when FFmpeg has stalled (no fresh frame since the last
+            # grab), return None instead of re-serving the same frame with
+            # its frozen ``_latest_capture_ms``. See ``_dedup_repeats``
+            # docstring for the latency-pollution rationale.
+            if self._dedup_repeats and self._frame_time == self._last_served_time:
+                return None
+
+            self._last_served_time = self._frame_time
             return self._latest_frame, self._latest_pts, self._latest_capture_ms
 
     def is_alive(self) -> bool:

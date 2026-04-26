@@ -32,11 +32,13 @@ Boundary
 
 Endpoints
 ---------
-``GET  /health``   — readiness probe. 200 with model status + provider list.
-``POST /detect``   — input: JPEG bytes (multipart). Output: list of detections
-                     (bbox, score, kps).
-``POST /embed``    — input: JPEG bytes + kps. Output: 512-d L2-normalized
-                     ArcFace embedding.
+``GET  /health``    — readiness probe. 200 with model status + provider list.
+``POST /detect``    — input: JPEG bytes (multipart). Output: list of detections
+                      (bbox, score, kps).
+``POST /embed``     — input: JPEG bytes + kps. Output: 512-d L2-normalized
+                      ArcFace embedding.
+``POST /liveness``  — input: JPEG bytes + bboxes. Output: per-face liveness
+                      score (fused MiniFASNet, real-class softmax).
 
 Run locally
 -----------
@@ -86,6 +88,10 @@ os.environ.setdefault("ENABLE_RECOGNITION_EVIDENCE", "false")
 os.environ.setdefault("ENABLE_RECOGNITION_EVIDENCE_RETENTION", "false")
 
 from app.services.ml.insightface_model import InsightFaceModel  # noqa: E402
+from app.services.ml.liveness_model import (  # noqa: E402
+    LivenessModel,
+    LivenessModelUnavailable,
+)
 
 # ----------------------------------------------------------------------
 # Logging — separate channel from the gateway, written by the supervisor
@@ -104,6 +110,14 @@ logger = logging.getLogger("ml-sidecar")
 _model: InsightFaceModel | None = None
 _model_load_seconds: float = 0.0
 _provider_summary: list[dict] = []
+
+# Liveness is loaded lazily and may legitimately be missing — the operator
+# runs ``scripts.export_liveness_models`` to populate the on-disk pack.
+# When absent, ``/liveness`` returns 503 and the gateway treats the
+# absence as "skip liveness gating" instead of refusing to start.
+_liveness: LivenessModel | None = None
+_liveness_load_error: str | None = None
+_liveness_load_seconds: float = 0.0
 
 
 def _decode_jpeg(jpeg_bytes: bytes) -> np.ndarray:
@@ -141,8 +155,9 @@ def _summarise_providers(model: InsightFaceModel) -> list[dict]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: D401 — fastapi lifespan signature
-    """Load InsightFace at startup, run a JIT warmup pass."""
+    """Load InsightFace + liveness models at startup, run JIT warmup."""
     global _model, _model_load_seconds, _provider_summary
+    global _liveness, _liveness_load_error, _liveness_load_seconds
 
     logger.info("Loading InsightFace model on macOS-native runtime...")
     t0 = time.monotonic()
@@ -165,10 +180,40 @@ async def lifespan(app: FastAPI):  # noqa: D401 — fastapi lifespan signature
     except Exception:
         logger.exception("Sidecar warmup pass failed (non-fatal)")
 
+    # ── Liveness (MiniFASNet) ───────────────────────────────────────
+    # Loading is best-effort: a missing/incomplete on-disk pack is the
+    # signal the operator hasn't run scripts.export_liveness_models yet,
+    # not a fatal sidecar error. /liveness will return 503 and /health
+    # will report liveness_loaded=false so the gateway can degrade
+    # gracefully (skip liveness gating; recognition continues unchanged).
+    t1 = time.monotonic()
+    try:
+        liveness = LivenessModel()
+        liveness.load()
+        liveness.warmup()
+        _liveness = liveness
+        _liveness_load_seconds = time.monotonic() - t1
+        info = liveness.info
+        logger.info(
+            "Liveness pack loaded in %.1fs from %s — submodels=%s",
+            _liveness_load_seconds,
+            info.get("pack_dir"),
+            [sm["name"] for sm in info.get("submodels", [])],
+        )
+    except LivenessModelUnavailable as exc:
+        _liveness_load_error = str(exc)
+        logger.warning(
+            "Liveness pack not loaded — /liveness will return 503. Reason: %s",
+            exc,
+        )
+    except Exception as exc:
+        _liveness_load_error = f"unexpected error: {exc}"
+        logger.exception("Liveness pack load crashed unexpectedly")
+
     yield
 
-    # Nothing to drain on shutdown — InsightFace owns no Python-side state
-    # besides the loaded sessions.
+    # Nothing to drain on shutdown — InsightFace + Liveness own no Python-side
+    # state besides the loaded sessions.
     logger.info("ML sidecar shutdown complete")
 
 
@@ -204,6 +249,7 @@ async def health() -> JSONResponse:
                 "status": "loading",
                 "model_loaded": False,
                 "providers": [],
+                "liveness": _liveness_health_payload(),
             },
         )
     return JSONResponse(
@@ -214,8 +260,35 @@ async def health() -> JSONResponse:
             "providers": _provider_summary,
             "det_size": list(_model._det_size),
             "model_name": _model._model_name,
+            # Liveness is reported on the same /health response so the
+            # gateway needs only one round-trip to decide whether to
+            # bind the realtime model AND the liveness model.
+            "liveness": _liveness_health_payload(),
         }
     )
+
+
+def _liveness_health_payload() -> dict:
+    """Self-describing block embedded in /health for the liveness layer.
+
+    Loaded → returns the pack info (paths, providers, scales). Not loaded
+    → returns the unavailability reason so the operator can act without
+    tailing logs. Either way the field is always present so the gateway
+    can detect the absence reliably.
+    """
+    if _liveness is not None and _liveness.is_loaded:
+        info = _liveness.info
+        return {
+            "loaded": True,
+            "load_seconds": round(_liveness_load_seconds, 2),
+            "pack_dir": info.get("pack_dir"),
+            "submodels": info.get("submodels"),
+        }
+    return {
+        "loaded": False,
+        "load_seconds": 0.0,
+        "error": _liveness_load_error or "not loaded",
+    }
 
 
 @app.post("/detect")
@@ -306,6 +379,85 @@ async def embed(request: Request) -> JSONResponse:
             "embeddings": feats.tolist(),
             "embed_ms": round(elapsed_ms, 2),
             "count": int(feats.shape[0]),
+        }
+    )
+
+
+@app.post("/liveness")
+async def liveness(request: Request) -> JSONResponse:
+    """Run MiniFASNet-fused passive liveness on N face bboxes in one frame.
+
+    Body: JSON of the form
+    ``{"jpeg_b64": "<base64 jpeg>", "bboxes": [[x1,y1,x2,y2], ...]}``
+    where bboxes are pixel-space integers in the same coordinate system
+    as the JPEG. Order is preserved in the response.
+
+    Returns 503 when the on-disk pack is missing — operator runs
+    ``scripts.export_liveness_models`` to enable. The gateway treats 503
+    as "skip liveness gating this frame", not a hard error.
+    """
+    if _liveness is None or not _liveness.is_loaded:
+        raise HTTPException(
+            status_code=503,
+            detail=f"liveness not loaded: {_liveness_load_error or 'unknown'}",
+        )
+
+    body = await request.json()
+    jpeg_b64 = body.get("jpeg_b64")
+    bboxes_in = body.get("bboxes", [])
+    if not jpeg_b64 or not isinstance(bboxes_in, list):
+        raise HTTPException(
+            status_code=400,
+            detail="jpeg_b64 + bboxes required",
+        )
+
+    import base64
+
+    try:
+        jpeg = base64.b64decode(jpeg_b64)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"bad jpeg_b64: {exc}",
+        ) from exc
+    frame = _decode_jpeg(jpeg)
+
+    # Validate bboxes up-front; bad shapes should fail before we touch
+    # the model. Each bbox must be a 4-tuple of ints/floats — we coerce
+    # to int (pixel coords) inside LivenessModel._crop_for_submodel.
+    parsed: list[tuple[int, int, int, int]] = []
+    for entry in bboxes_in:
+        if not isinstance(entry, (list, tuple)) or len(entry) != 4:
+            raise HTTPException(
+                status_code=400,
+                detail=f"each bbox must be [x1,y1,x2,y2]; got {entry!r}",
+            )
+        try:
+            parsed.append(tuple(int(v) for v in entry))  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"bbox {entry!r} contains non-numeric values: {exc}",
+            ) from exc
+
+    t0 = time.perf_counter()
+    predictions = _liveness.predict_batch(frame, parsed)
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+    return JSONResponse(
+        content={
+            "predictions": [
+                {
+                    "score": round(p.score, 4),
+                    "label": p.label,
+                    "per_model_scores": {
+                        k: round(v, 4) for k, v in p.per_model_scores.items()
+                    },
+                }
+                for p in predictions
+            ],
+            "liveness_ms": round(elapsed_ms, 2),
+            "count": len(predictions),
         }
     )
 

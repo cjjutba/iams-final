@@ -18,6 +18,12 @@ Backends
     that uses ``CoreMLExecutionProvider`` to delegate to the Apple
     Neural Engine + Metal GPU.
 
+A separate selector pair (``set_liveness_model`` / ``get_liveness_model``)
+binds the MiniFASNet liveness backend. Liveness is *optional*: when the
+on-disk pack hasn't been generated, ``get_liveness_model()`` returns
+``None`` and the realtime tracker skips liveness gating entirely. This
+keeps the SCRFD/ArcFace path orthogonal to the liveness rollout.
+
 Failover
 --------
 If ``ML_SIDECAR_URL`` is set but the sidecar isn't reachable at gateway
@@ -55,7 +61,24 @@ class _RealtimeModel(Protocol):
     def embed_from_kps(self, frame: np.ndarray, kps: np.ndarray) -> np.ndarray: ...
 
 
+class _LivenessModel(Protocol):
+    """Structural type for the optional liveness backend.
+
+    ``LivenessModel`` (in-process; sidecar-only) and ``RemoteLivenessModel``
+    (HTTP proxy) both implement this. Returns of ``predict_batch`` are
+    intentionally untyped (list of dicts/dataclasses) — the realtime
+    tracker reads ``score`` and ``label`` keys and ignores the rest.
+    """
+
+    def predict_batch(
+        self,
+        frame: np.ndarray,
+        bboxes: list[tuple[int, int, int, int]],
+    ) -> list[dict]: ...
+
+
 _realtime_model: _RealtimeModel | None = None
+_liveness_model: _LivenessModel | None = None
 
 
 def set_realtime_model(model: _RealtimeModel) -> None:
@@ -84,3 +107,26 @@ def get_realtime_model() -> _RealtimeModel:
 
         return insightface_model
     return _realtime_model
+
+
+def set_liveness_model(model: _LivenessModel | None) -> None:
+    """Bind (or clear) the liveness backend. Called once during gateway
+    lifespan AFTER the realtime model is bound — liveness depends on
+    the same sidecar process. ``None`` explicitly clears the binding so
+    the tracker treats liveness as disabled."""
+    global _liveness_model
+    _liveness_model = model
+    logger.info(
+        "Liveness backend bound: %r",
+        model if model is not None else "<disabled>",
+    )
+
+
+def get_liveness_model() -> _LivenessModel | None:
+    """Return the currently-bound liveness backend, or None if liveness
+    isn't available in this process.
+
+    Returning None (instead of raising) is the explicit signal the
+    realtime tracker uses to skip liveness gating. Liveness is opt-in:
+    a missing pack must NEVER prevent recognition from working."""
+    return _liveness_model

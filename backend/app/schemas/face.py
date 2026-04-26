@@ -87,6 +87,45 @@ class CctvEnrollResponse(BaseModel):
     per_capture: list[CctvEnrollCapture]
 
 
+class CctvEnrollmentStatusEntry(BaseModel):
+    """Per-student CCTV enrolment posture for the admin gap report.
+
+    A student with ``cctv_count == 0`` is recognised entirely off
+    cross-domain phone embeddings — sim values land in the noise band
+    where two students can flip labels frame-to-frame. The realtime
+    tracker applies ``RECOGNITION_PHONE_ONLY_THRESHOLD_BONUS`` for
+    these users so the overlay refuses to commit a wrong name; the
+    operator should run ``scripts.cctv_enroll`` (or ``POST /api/v1/face/
+    cctv-enroll/{user_id}``) for each affected user × room pair to lift
+    them out of phone-only state.
+    """
+
+    user_id: str
+    student_id: str | None
+    full_name: str
+    cctv_count: int
+    phone_only: bool
+
+
+class CctvEnrollmentStatusResponse(BaseModel):
+    """Aggregate CCTV enrolment posture across all students with active
+    face registrations.
+
+    ``rooms`` enumerates known rooms so the admin UI can render a
+    "needs cctv_enroll in EB226 / EB227" matrix. CCTV embeddings are
+    not currently labelled with a room (the angle_label is ``cctv_<idx>``
+    rather than ``cctv_<room>_<idx>``) so room-specific status is not
+    surfaced here — see the per-user enrolment runs.
+    """
+
+    students: list[CctvEnrollmentStatusEntry]
+    rooms: list[str]
+    threshold: float
+    phone_only_threshold: float
+    phone_only_count: int
+    total_registered: int
+
+
 # ===== Admin Face Comparison (Live-Feed Detail Sheet) =====
 
 

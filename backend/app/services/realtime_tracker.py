@@ -119,6 +119,43 @@ class TrackIdentity:
     swap_candidate_best_conf: float = 0.0
     swap_candidate_first_seen_at: float = 0.0
 
+    # Rolling history of recently committed identity swaps. Each entry
+    # is (timestamp, new_user_id). Drives the oscillation suppressor in
+    # _derive_recognition_state — if more than OSCILLATION_FLIPS_THRESHOLD
+    # swaps span ≥ OSCILLATION_DISTINCT_USERS distinct users inside the
+    # last OSCILLATION_WINDOW_SECONDS, the broadcast for this track
+    # silences the displayed name (overlay shows "Detecting…") until
+    # the flapping cools off. Bounded at 16 to keep memory trivial; the
+    # window check trims older entries on the read side.
+    swap_history: deque = field(default_factory=lambda: deque(maxlen=16))
+    # When the suppressor fires this becomes the wall-clock-monotonic
+    # cutoff before which the broadcast keeps the silenced label, even
+    # if subsequent frames don't add to swap_history. Reset to 0.0 once
+    # the cooldown expires.
+    oscillation_uncertain_until: float = 0.0
+
+    # ──────────────────────────────────────────────────────────────────
+    # Liveness state (MiniFASNet — added 2026-04-25)
+    #
+    # Updated each time the track gets a fresh liveness probe (same
+    # cadence as ArcFace re-verify, gated by LIVENESS_RECHECK_INTERVAL_S).
+    # The _streak counters debounce the suppression decision so a single
+    # noisy frame doesn't flip the visible label.
+    #
+    # Default ``liveness_label="unknown"`` and ``liveness_score=1.0``: a
+    # brand-new track is NOT pre-emptively marked spoof; only an actual
+    # check (with verdict "spoof", repeated LIVENESS_SPOOF_CONSECUTIVE
+    # times) flips ``liveness_suppressed=True``. This keeps the tracker
+    # forward-compatible with sessions where the liveness pack isn't
+    # loaded — every track stays unknown→treated-as-real.
+    # ──────────────────────────────────────────────────────────────────
+    liveness_score: float = 1.0
+    liveness_label: str = "unknown"  # "real" | "spoof" | "unknown"
+    liveness_last_check: float = 0.0
+    liveness_spoof_streak: int = 0
+    liveness_real_streak: int = 0
+    liveness_suppressed: bool = False
+
 
 @dataclass(slots=True)
 class IdentityTombstone:
@@ -138,6 +175,62 @@ class IdentityTombstone:
     expired_at: float  # wall-clock epoch seconds
 
 
+@dataclass
+class _BatchDecision:
+    """Per-track tentative decision used by ``_recognize_batch``'s
+    multi-phase resolver.
+
+    Phase 1 (gather) populates everything from FAISS + hint rescue +
+    name resolution. Phase 2 (swap-gate) may revert ``user_id`` /
+    ``confidence`` back to the incumbent and set ``swap_blocked=True``.
+    Phase 3 (frame-mutex / Hungarian) may downgrade a colliding loser
+    to its top-2 fallback or null out ``user_id`` (track is shown as
+    "Detecting…" instead of getting a wrong-name green box). Phase 4
+    (commit) mutates identity state and submits evidence using the
+    final values.
+
+    Stored as mutable so each phase can rewrite without rebuilding the
+    list. This dataclass lives only inside the batch call — never
+    persisted to the identity cache.
+    """
+    identity: "TrackIdentity"
+    search_embedding: np.ndarray
+    live_crop: np.ndarray
+    det_score: float
+    bbox_px: list[int]
+
+    # Resolved by Phase 1 (FAISS + hint rescue + name resolution).
+    # Reflects the *final* committed identity for this frame after
+    # subsequent phases run; the original FAISS top-1 lives in
+    # ``top1_user_id`` for evidence + diagnostics.
+    user_id: str | None
+    confidence: float
+    is_ambiguous: bool
+    resolved_name: str | None
+
+    # Used by Phase 3 (frame-mutex Hungarian) to fall back when a
+    # track loses a collision. Top-2 must clear RECOGNITION_THRESHOLD
+    # for the resolver to consider it.
+    top1_user_id: str | None
+    top1_score: float
+    top2_user_id: str | None
+    top2_score: float
+
+    # True when Phase 2 (swap-gate) reverted a swap attempt because
+    # the streak threshold wasn't met. Phase 4 skips the IDENTITY SWAP
+    # log line in this case to avoid repeating "swap rejected" every
+    # frame the candidate sustains.
+    swap_blocked: bool = False
+    # True when Phase 3 (frame-mutex) downgraded this track to top-2
+    # or cleared its binding. Phase 4 logs the demotion.
+    mutex_demoted: bool = False
+    # True when this decision was synthesised by the periodic mean-
+    # embedding revalidation pass rather than a live frame. Phase 4
+    # skips the evidence-writer submit (the placeholder crop/bbox
+    # would write garbage rows) and the auto-CCTV enroller offer.
+    is_revalidation: bool = False
+
+
 @dataclass(frozen=True, slots=True)
 class TrackResult:
     """Single track in a processed frame."""
@@ -154,6 +247,13 @@ class TrackResult:
     # prevent a red "Unknown" from flashing before the backend is confident. Only
     # "unknown" commits to the red label.
     recognition_state: str = "warming_up"  # "recognized" | "warming_up" | "unknown"
+    # Independent liveness signal (MiniFASNet — added 2026-04-25). Orthogonal to
+    # ``recognition_state``: a face can be ``recognition_state="warming_up"``
+    # AND ``liveness_state="spoof"`` simultaneously — the overlay should render
+    # the spoof label in that case. ``"unknown"`` means liveness wasn't
+    # checked yet (or the pack isn't loaded — clients treat as real).
+    liveness_state: str = "unknown"  # "real" | "spoof" | "unknown"
+    liveness_score: float = 0.0  # Fused MiniFASNet "real" softmax (0-1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,11 +318,30 @@ class RealtimeTracker:
         name_map: dict[str, str] | None = None,
         schedule_id: str | None = None,
         camera_id: str | None = None,
+        phone_only_user_ids: set[str] | None = None,
+        liveness_model=None,
     ) -> None:
         self._insight = insightface_model
         self._faiss = faiss_manager
+        # Liveness is optional. ``None`` = liveness gating disabled (the
+        # tracker won't suppress recognitions on spoof verdicts and
+        # broadcasts liveness_state="unknown" for every track). When set,
+        # the model implements ``predict_batch(frame, bboxes) -> [dict]``
+        # — both the in-process LivenessModel and RemoteLivenessModel
+        # satisfy this. See app.services.ml.inference.set_liveness_model.
+        self._liveness = liveness_model
         self._enrolled = enrolled_user_ids or set()
         self._name_map = name_map or {}
+        # Set of user_ids whose face_embeddings include zero ``cctv_*``
+        # rows — i.e. the registration is phone-side only and embeddings
+        # for these users will land in the cross-domain noise band when
+        # matched against classroom CCTV crops. The match path applies
+        # ``RECOGNITION_PHONE_ONLY_THRESHOLD_BONUS`` to require a higher
+        # score before committing a recognition for these users. The
+        # set is snapshotted at session start; tracks newly enrolled
+        # via ``cctv_enroll`` mid-session fall back to the standard
+        # threshold only after the next session restart.
+        self._phone_only: set[str] = set(phone_only_user_ids or set())
         # Recognition-evidence tagging. Used by evidence_writer.submit() to
         # anchor every captured row to the right schedule + physical camera.
         # Optional so the tracker remains instantiable in isolated unit
@@ -336,6 +455,23 @@ class RealtimeTracker:
         self._frame_h, self._frame_w = frame.shape[:2]
         now = time.monotonic()
         self._frame_counter += 1
+
+        # Periodic mean-embedding re-validation. Runs every N frames
+        # (settings.REVALIDATION_INTERVAL_FRAMES) — one batched FAISS
+        # search across every currently-recognized track using the
+        # mean of that track's embedding buffer rather than a single
+        # noisy frame. Feeds results through the same swap-gate as a
+        # regular re-verify, so stability + correctness use the same
+        # rules. Cheap (~5 ms for 6 tracks) and runs before SCRFD so
+        # it doesn't compete with the per-frame budget cap.
+        if (
+            settings.REVALIDATION_INTERVAL_FRAMES > 0
+            and self._frame_counter % settings.REVALIDATION_INTERVAL_FRAMES == 0
+        ):
+            try:
+                self._periodic_revalidation(now)
+            except Exception:
+                logger.debug("periodic_revalidation failed", exc_info=True)
 
         # ------------------------------------------------------------------
         # 1. SCRFD detection only — no ArcFace / landmarks / genderage.
@@ -474,6 +610,11 @@ class RealtimeTracker:
         prepass_decisions: dict[int, dict] = {}
         pending_kps_list: list[np.ndarray] = []
         pending_track_ids: list[int] = []
+        # Parallel array of bboxes for the same set of tracks — fed to the
+        # liveness batch right after embed. Captured here (instead of being
+        # re-derived from track_id → identity) so the bbox seen by liveness
+        # is the SCRFD pixel-space bbox for THIS frame, not a stale cache.
+        pending_bboxes_list: list[tuple[int, int, int, int]] = []
         adaptive_reverify_interval = self._compute_adaptive_reverify_interval(tracked)
 
         # Per-frame budget caps. Reverify cap was already in place; the
@@ -527,6 +668,11 @@ class RealtimeTracker:
             if decision["needs_recognition"] and decision["quality_passed"] and kps is not None:
                 pending_kps_list.append(kps)
                 pending_track_ids.append(track_id)
+                # Bbox in frame pixel coords — same source the embed call
+                # uses, so liveness sees exactly what ArcFace sees.
+                pending_bboxes_list.append((
+                    int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]),
+                ))
 
         # ------------------------------------------------------------------
         # 3b. BATCH EMBED — one ArcFace forward pass for everyone who needs
@@ -566,6 +712,40 @@ class RealtimeTracker:
                             exc_info=True,
                         )
             t_embed_total_ms = (time.monotonic() - emb_t0) * 1000.0
+
+        # ------------------------------------------------------------------
+        # 3a-bis. BATCH LIVENESS — passive presentation-attack detection.
+        #
+        #     Runs on the same set of tracks the embed batch covered, so
+        #     liveness sees exactly the faces ArcFace is about to bind. We
+        #     piggy-back on the embed cadence rather than maintaining a
+        #     parallel "needs liveness now?" pre-pass — the worst case is
+        #     that a track gets liveness-checked more often than
+        #     LIVENESS_RECHECK_INTERVAL_S would strictly require, which is
+        #     conservative (more spoof protection, not less).
+        #
+        #     Per-track gating (LIVENESS_RECHECK_INTERVAL_S) further trims
+        #     the call to only the tracks that actually need a fresh check.
+        #     A new track is always checked. A suppressed track is also
+        #     always re-checked so it has a chance to recover.
+        #
+        #     Failure policy: any exception from the call (sidecar down,
+        #     network blip, missing pack) is logged once at debug level
+        #     and the loop proceeds — every track keeps its previous
+        #     liveness state. Recognition is NOT held up by a flaky
+        #     liveness layer; spoof gating reverts to "no gate this frame".
+        # ------------------------------------------------------------------
+        if (
+            self._liveness is not None
+            and settings.LIVENESS_ENABLED
+            and pending_track_ids
+        ):
+            self._run_liveness_batch(
+                frame=frame,
+                pending_track_ids=pending_track_ids,
+                pending_bboxes_list=pending_bboxes_list,
+                now=now,
+            )
 
         # ------------------------------------------------------------------
         # 3. Per-track state update + recognition decisions (using the
@@ -677,11 +857,13 @@ class RealtimeTracker:
                         if identity.frames_seen < MIN_EMIT_FRAMES:
                             continue
                         d_uid, d_name, d_conf, d_status, d_state = self._get_display_identity(track_id, now)
+                        l_state, l_score = self._liveness_fields(identity)
                         results.append(TrackResult(
                             track_id=track_id, bbox=norm_bbox, velocity=velocity,
                             user_id=d_uid, name=d_name, confidence=d_conf,
                             status=d_status, is_active=True,
                             recognition_state=d_state,
+                            liveness_state=l_state, liveness_score=l_score,
                         ))
                         continue
 
@@ -742,6 +924,17 @@ class RealtimeTracker:
                 except Exception:
                     det_score = 0.0
                 bbox_px = [int(x1p), int(y1p), int(x2p), int(y2p)]
+                # Liveness gate: a track currently flagged as a confirmed
+                # spoof (debounced via LIVENESS_SPOOF_CONSECUTIVE) is NOT
+                # asked for a FAISS recognition. The bbox still appears in
+                # the broadcast (operator sees the detection) but no
+                # identity is bound, so attendance + presence are not
+                # credited. The liveness layer will keep re-checking on
+                # subsequent frames; once it produces
+                # LIVENESS_REAL_RECOVERY_FRAMES consecutive "real"
+                # verdicts, suppression clears and recognition resumes.
+                if identity.liveness_suppressed:
+                    continue
                 pending_recognitions.append(
                     (identity, search_emb, live_crop_np, det_score, bbox_px)
                 )
@@ -787,6 +980,7 @@ class RealtimeTracker:
             # Apply identity hold: show held identity during hold window
             # so the frontend never sees recognized → unknown flicker
             d_uid, d_name, d_conf, d_status, d_state = self._get_display_identity(track_id, now)
+            l_state, l_score = self._liveness_fields(identity)
 
             results.append(
                 TrackResult(
@@ -799,6 +993,8 @@ class RealtimeTracker:
                     status=d_status,
                     is_active=True,
                     recognition_state=d_state,
+                    liveness_state=l_state,
+                    liveness_score=l_score,
                 )
             )
 
@@ -817,6 +1013,7 @@ class RealtimeTracker:
             d_uid, d_name, d_conf, d_status, d_state = self._get_display_identity(tid, now)
             if d_status != "recognized":
                 continue  # Only coast recognized (or held) tracks
+            l_state, l_score = self._liveness_fields(identity)
 
             results.append(
                 TrackResult(
@@ -829,6 +1026,8 @@ class RealtimeTracker:
                     status=d_status,
                     is_active=False,  # Not detected this frame, coasting
                     recognition_state=d_state,
+                    liveness_state=l_state,
+                    liveness_score=l_score,
                 )
             )
 
@@ -847,6 +1046,7 @@ class RealtimeTracker:
             for r in results:
                 if r.track_id in self._identity_cache:
                     d_uid, d_name, d_conf, d_status, d_state = self._get_display_identity(r.track_id, now)
+                    l_state, l_score = self._liveness_fields(self._identity_cache.get(r.track_id))
                     updated.append(TrackResult(
                         track_id=r.track_id,
                         bbox=r.bbox,
@@ -857,19 +1057,70 @@ class RealtimeTracker:
                         status=d_status,
                         is_active=r.is_active,
                         recognition_state=d_state,
+                        liveness_state=l_state,
+                        liveness_score=l_score,
                     ))
                 else:
                     updated.append(r)
             results = updated
 
-        # 7. Deduplicate by user_id — keep highest confidence per user
+        # 7. Cross-batch user_id mutual exclusion — defensive belt for the
+        # cases the in-batch frame-mutex (Phase 3 of _recognize_batch) can't
+        # see. Two scenarios reach this layer:
+        #   (a) one track is currently in the batch (re-verifying) and the
+        #       other is coasting on a cached binding — only the coasting
+        #       track is in `results` without having gone through the
+        #       Hungarian step.
+        #   (b) ``RECOGNITION_FRAME_MUTEX_ENABLED`` is False (operator
+        #       override) and the in-batch resolver is bypassed.
+        # Original behaviour was to *drop* the loser's track from
+        # ``results`` entirely, which made one of the two boxes vanish
+        # from the live overlay. We keep the box but null out the
+        # identity (overlay shows "Detecting…") so the operator still
+        # sees both faces tracked while attendance only counts one.
         seen_users: dict[str, int] = {}
         deduped_results: list[TrackResult] = []
         for r in results:
             if r.user_id and r.user_id in seen_users:
                 existing_idx = seen_users[r.user_id]
-                if r.confidence > deduped_results[existing_idx].confidence:
-                    deduped_results[existing_idx] = r
+                existing = deduped_results[existing_idx]
+                if r.confidence > existing.confidence:
+                    # Current row wins — demote the previous holder to
+                    # warming_up. We rebuild it as a frozen TrackResult
+                    # rather than mutating in place (TrackResult is
+                    # immutable by design). Liveness state stays with
+                    # the demoted track — its liveness verdict is
+                    # independent of which user_id won the dedup.
+                    deduped_results[existing_idx] = TrackResult(
+                        track_id=existing.track_id,
+                        bbox=existing.bbox,
+                        velocity=existing.velocity,
+                        user_id=None,
+                        name=None,
+                        confidence=0.0,
+                        status="pending",
+                        is_active=existing.is_active,
+                        recognition_state="warming_up",
+                        liveness_state=existing.liveness_state,
+                        liveness_score=existing.liveness_score,
+                    )
+                    seen_users[r.user_id] = len(deduped_results)
+                    deduped_results.append(r)
+                else:
+                    # Existing keeps the user; current row demotes.
+                    deduped_results.append(TrackResult(
+                        track_id=r.track_id,
+                        bbox=r.bbox,
+                        velocity=r.velocity,
+                        user_id=None,
+                        name=None,
+                        confidence=0.0,
+                        status="pending",
+                        is_active=r.is_active,
+                        recognition_state="warming_up",
+                        liveness_state=r.liveness_state,
+                        liveness_score=r.liveness_score,
+                    ))
                 continue
             if r.user_id:
                 seen_users[r.user_id] = len(deduped_results)
@@ -953,8 +1204,26 @@ class RealtimeTracker:
         :py:meth:`_derive_recognition_state`. A "held" track is always reported as
         ``recognition_state="recognized"`` so the phone keeps the green box during
         brief drift re-verification.
+
+        Oscillation suppressor: when this track has been flapping between
+        identities (see ``_maybe_arm_oscillation_suppressor``), we surface
+        ``recognition_state="warming_up"`` with no user_id/name until the
+        cooldown expires. The track's internal binding is preserved (so
+        attendance + presence keep updating) — we just refuse to commit to
+        either name on the visible overlay during the noisy window.
         """
         identity = self._identity_cache[track_id]
+        if (
+            identity.oscillation_uncertain_until > 0.0
+            and now < identity.oscillation_uncertain_until
+        ):
+            return (
+                None,
+                None,
+                identity.confidence,
+                "pending",
+                "warming_up",
+            )
         if (
             identity.recognition_status in ("pending", "unknown")
             and identity.held_user_id is not None
@@ -1040,6 +1309,172 @@ class RealtimeTracker:
         ):
             return "unknown"
         return "warming_up"
+
+    @staticmethod
+    def _liveness_fields(identity: TrackIdentity | None) -> tuple[str, float]:
+        """Map per-track liveness bookkeeping → (state, score) for the broadcast.
+
+        States:
+          * ``"spoof"`` — track is currently suppressed (debounce satisfied).
+            Overlay should render the bbox in spoof colours regardless of
+            ``recognition_state``. This is the gate the front-end keys off
+            of for the "Spoof detected" label.
+          * ``"real"`` — most recent verdict was real; track is not
+            suppressed. Overlay renders normally.
+          * ``"unknown"`` — never checked yet, or in the middle of debounce
+            (e.g. saw one spoof but not enough to flip suppression). We
+            don't expose mid-debounce verdicts to the client to avoid
+            "spoof flicker" — the streak counters are the smoothing.
+        """
+        if identity is None:
+            return ("unknown", 0.0)
+        if identity.liveness_suppressed:
+            return ("spoof", float(identity.liveness_score))
+        if identity.liveness_label == "real":
+            return ("real", float(identity.liveness_score))
+        return ("unknown", float(identity.liveness_score))
+
+    def _run_liveness_batch(
+        self,
+        *,
+        frame: np.ndarray,
+        pending_track_ids: list[int],
+        pending_bboxes_list: list[tuple[int, int, int, int]],
+        now: float,
+    ) -> None:
+        """Run a fused-MiniFASNet liveness probe on a subset of this frame's
+        tracks and update each ``TrackIdentity``'s spoof bookkeeping.
+
+        Side-effects only — returns nothing. The per-track flags are read by
+        ``_get_display_identity`` (for the broadcast) and by the recognition
+        gate (to suppress identity binding on spoof verdicts).
+
+        Selection:
+          * A track is checked iff it appears in ``pending_track_ids`` AND
+            (it has never been checked OR last check is older than
+            ``LIVENESS_RECHECK_INTERVAL_S`` OR it's currently suppressed —
+            we keep checking suppressed tracks so a real student briefly
+            misclassified can recover).
+          * The per-frame budget cap (``LIVENESS_MAX_PER_FRAME``) trims
+            the call list deterministically — first N tracks in the
+            pending order — so the liveness layer can't blow the per-frame
+            sidecar budget when 30+ students walk in at once.
+
+        Failure handling:
+          One try/except wraps the whole batch. A sidecar miss leaves
+          identity state untouched (no gate is applied this frame).
+        """
+        if self._liveness is None or not pending_track_ids:
+            return
+
+        recheck_interval = float(settings.LIVENESS_RECHECK_INTERVAL_S)
+        max_per_frame = max(1, int(settings.LIVENESS_MAX_PER_FRAME))
+
+        eligible_tids: list[int] = []
+        eligible_bboxes: list[tuple[int, int, int, int]] = []
+        for tid, bbox in zip(pending_track_ids, pending_bboxes_list):
+            identity = self._identity_cache.get(tid)
+            if identity is None:
+                # New track — check on first frame regardless of cadence
+                eligible_tids.append(tid)
+                eligible_bboxes.append(bbox)
+                continue
+            stale = (now - identity.liveness_last_check) >= recheck_interval
+            if stale or identity.liveness_suppressed or identity.liveness_label == "unknown":
+                eligible_tids.append(tid)
+                eligible_bboxes.append(bbox)
+            if len(eligible_tids) >= max_per_frame:
+                break
+        if not eligible_tids:
+            return
+
+        try:
+            preds = self._liveness.predict_batch(frame, eligible_bboxes)
+        except Exception as exc:
+            logger.debug("Liveness batch failed (n=%d): %s", len(eligible_tids), exc)
+            return
+
+        if len(preds) != len(eligible_tids):
+            logger.warning(
+                "Liveness predictions count mismatch: got %d, expected %d",
+                len(preds), len(eligible_tids),
+            )
+            return
+
+        threshold = float(settings.LIVENESS_REAL_THRESHOLD)
+        spoof_streak_required = max(1, int(settings.LIVENESS_SPOOF_CONSECUTIVE))
+        real_recovery_required = max(1, int(settings.LIVENESS_REAL_RECOVERY_FRAMES))
+
+        for tid, pred in zip(eligible_tids, preds):
+            identity = self._identity_cache.get(tid)
+            if identity is None:
+                # Track's TrackIdentity hasn't been created yet — happens
+                # when the very first frame for a track makes it through
+                # the embed batch but the per-track loop (where the
+                # identity is created) hasn't executed yet. Skip; the
+                # next liveness batch will catch it. Recognition can't
+                # commit on this frame anyway because the per-track loop
+                # also requires the embedding buffer to fill.
+                continue
+            score = (
+                float(pred.get("score", 0.0))
+                if isinstance(pred, dict)
+                else float(getattr(pred, "score", 0.0))
+            )
+            label = (
+                str(pred.get("label", "unknown"))
+                if isinstance(pred, dict)
+                else str(getattr(pred, "label", "unknown"))
+            )
+            self._apply_liveness_verdict(
+                identity=identity,
+                score=score,
+                label=label,
+                now=now,
+                threshold=threshold,
+                spoof_streak_required=spoof_streak_required,
+                real_recovery_required=real_recovery_required,
+            )
+
+    @staticmethod
+    def _apply_liveness_verdict(
+        *,
+        identity: TrackIdentity,
+        score: float,
+        label: str,
+        now: float,
+        threshold: float,
+        spoof_streak_required: int,
+        real_recovery_required: int,
+    ) -> None:
+        """Fold one liveness verdict into a TrackIdentity's debounced state.
+
+        Spoof flips suppression on after ``spoof_streak_required`` consecutive
+        spoof verdicts. Real flips suppression off after
+        ``real_recovery_required`` consecutive real verdicts. A single noise
+        event can never flip the broadcast — the streak counters are the
+        debounce.
+
+        Reset semantics: a real verdict clears ``liveness_spoof_streak``;
+        a spoof verdict clears ``liveness_real_streak``. So the counters
+        track "how many in a row of THIS class", not "how many seen ever".
+        """
+        identity.liveness_score = score
+        identity.liveness_label = label
+        identity.liveness_last_check = now
+        if label == "spoof" or score < threshold:
+            identity.liveness_spoof_streak += 1
+            identity.liveness_real_streak = 0
+            if identity.liveness_spoof_streak >= spoof_streak_required:
+                identity.liveness_suppressed = True
+        else:
+            identity.liveness_real_streak += 1
+            identity.liveness_spoof_streak = 0
+            if (
+                identity.liveness_suppressed
+                and identity.liveness_real_streak >= real_recovery_required
+            ):
+                identity.liveness_suppressed = False
 
     def _compute_adaptive_reverify_interval(self, tracked) -> float:
         """Scale REVERIFY_INTERVAL up when many tracks are present.
@@ -1255,48 +1690,93 @@ class RealtimeTracker:
         Stacks embeddings into [N, 512] for BLAS-parallelized search with
         a single lock acquisition instead of N individual searches.
 
-        For every decision (match and miss) a ``RecognitionEventDraft`` is
-        fire-and-forget submitted to the evidence writer — behind the
-        ``ENABLE_RECOGNITION_EVIDENCE`` flag, so VPS and dev setups don't
-        pay the cost.
+        Multi-phase resolver pipeline (added 2026-04-25 to close the
+        identity-swap class of bugs that surfaced during the live EB227
+        sessions where two near-threshold tracks would trade labels every
+        reverify):
+
+          Phase 1 — gather: compute one ``_BatchDecision`` per track from
+            the FAISS result + spatial-graveyard hint rescue + name lookup.
+            **No identity-cache mutation here.** Decisions are tentative.
+          Phase 2 — swap-gate: per-track vote-based filter. A FAISS result
+            naming a different user than the current binding only commits
+            when both the ``RECOGNITION_SWAP_MARGIN`` (cosine delta) and
+            ``RECOGNITION_SWAP_MIN_STREAK`` (consecutive frames) gates pass.
+            A blocked swap reverts ``decision.user_id`` to the incumbent so
+            the rest of the pipeline sees a stable target.
+          Phase 3 — frame-mutex: when two tracks in the same frame both
+            target the same ``user_id``, solve as a Hungarian bipartite
+            assignment over (track × {top-1, top-2}) so each user is bound
+            to at most one track. The loser falls back to its top-2 if
+            that clears threshold; otherwise its binding is cleared and
+            the overlay shows "Detecting…" rather than committing to a
+            wrong-name green box.
+          Phase 4 — commit: apply the resolved decision to the identity
+            cache, update swap history (drives the oscillation suppressor
+            in ``_derive_recognition_state``), and submit the recognition
+            event to the evidence writer.
+
+        Each phase is a separate helper so the flow stays auditable.
         """
-        # Stack embeddings for batch search
+        if not pending:
+            return
+
+        # ----- Phase 1: FAISS batch + tentative decisions -----
         stacked = np.stack([emb for _, emb, _, _, _ in pending]).astype(np.float32)
         batch_results = self._faiss.search_batch_with_margin(stacked)
+        decisions = self._gather_decisions(pending, batch_results, now)
 
+        # ----- Phase 2: per-track swap-gate (vote-based) -----
+        for d in decisions:
+            self._apply_swap_gate(d, now)
+
+        # ----- Phase 3: frame-level mutual exclusion (Hungarian) -----
+        if settings.RECOGNITION_FRAME_MUTEX_ENABLED:
+            self._resolve_frame_mutex(decisions)
+
+        # ----- Phase 4: mutate identity state + submit evidence -----
+        for d in decisions:
+            self._commit_decision(d, now)
+
+    def _gather_decisions(
+        self,
+        pending: list[tuple[TrackIdentity, np.ndarray, np.ndarray, float, list[int]]],
+        batch_results: list[dict],
+        now: float,
+    ) -> list[_BatchDecision]:
+        """Phase 1 — assemble one ``_BatchDecision`` per pending track.
+
+        Hint-rescue is applied here (it shapes the tentative ``user_id``)
+        but identity-state mutation is deferred to Phase 4. The only
+        identity field touched in this phase is ``best_score_seen``,
+        which is read-only for the rest of the pipeline so updating it
+        eagerly is safe.
+        """
+        decisions: list[_BatchDecision] = []
         for (identity, search_embedding, live_crop_np, det_score, bbox_px), result in zip(
             pending, batch_results
         ):
             user_id = result.get("user_id")
-            confidence = result.get("confidence", 0.0)
-            is_ambiguous = result.get("is_ambiguous", False)
+            confidence = float(result.get("confidence", 0.0))
+            is_ambiguous = bool(result.get("is_ambiguous", False))
             top1_user_id = result.get("top1_user_id")
             top1_score = float(result.get("top1_score", 0.0))
+            top2_user_id = result.get("top2_user_id")
+            top2_score = float(result.get("top2_score", 0.0))
 
-            # Track peak cosine across the entire life of this track, not just
-            # accepted matches. Feeds the _derive_recognition_state gate so faces
-            # that keep scoring near threshold stay "warming_up" instead of
-            # flipping to "unknown" the moment UNKNOWN_CONFIRM_ATTEMPTS is hit.
+            # Track the lifetime peak so the "warming_up" gate in
+            # _derive_recognition_state stays meaningful even when the
+            # current frame's score is low.
             if confidence > identity.best_score_seen:
-                identity.best_score_seen = float(confidence)
+                identity.best_score_seen = confidence
 
             # ----- Spatial+temporal identity hint rescue --------------
-            #
             # A new track that inherited a hint from the graveyard
-            # (someone recently recognised left this spot, came back) gets
-            # a relaxed FAISS commit threshold for ONLY that user. The
-            # safety guard is double:
-            #   (1) FAISS top-1 must equal the hint user — random FAISS
-            #       chatter for some other student doesn't trigger.
-            #   (2) Score must still clear the relaxed threshold
-            #       (RECOGNITION_THRESHOLD - GRAVEYARD_RELAXED_DELTA).
-            # If the wrong person walked into the same spot, their FAISS
-            # top-1 will be themselves (or no one) — never the hint user
-            # at the relaxed threshold — so this never produces a wrong
-            # accept. The hint expires after one application: either the
-            # rescue lands and the track becomes recognised normally, or
-            # we drop the hint after the first non-confirming top-1 so
-            # subsequent frames don't keep checking it.
+            # (someone recently recognised left this spot, came back)
+            # gets a relaxed commit threshold for ONLY that user_id.
+            # Same safety guard as before: top-1 must equal the hint
+            # user AND clear the relaxed threshold; otherwise the hint
+            # is silently discarded.
             if (
                 user_id is None
                 and identity.hint_user_id is not None
@@ -1319,14 +1799,9 @@ class RealtimeTracker:
                     user_id = top1_user_id
                     confidence = top1_score
                     is_ambiguous = False
-                    # Burn the hint so we don't keep spamming this rescue
-                    # log on every subsequent reverify of the same track.
                     identity.hint_user_id = None
                     identity.hint_user_name = None
                 else:
-                    # Top-1 came back as someone else (or below relaxed).
-                    # Drop the hint so the track doesn't keep checking
-                    # against a stale spatial guess.
                     if top1_user_id != identity.hint_user_id:
                         logger.debug(
                             "Track %d hint discarded: top1=%s != hint=%s",
@@ -1337,191 +1812,702 @@ class RealtimeTracker:
                         identity.hint_user_id = None
                         identity.hint_user_name = None
 
+            # Phone-only stricter threshold. A user with no ``cctv_*``
+            # embeddings is recognising entirely off cross-domain phone
+            # selfie data — its score distribution sits inside the
+            # noise band where two students can trade scores frame to
+            # frame. We refuse to commit until the score clears
+            # ``RECOGNITION_THRESHOLD + RECOGNITION_PHONE_ONLY_THRESHOLD_BONUS``,
+            # so the overlay shows "Detecting…" rather than a possibly-
+            # wrong name. The track keeps tracking spatially via
+            # ByteTrack — recognition just stays withheld until the
+            # student is CCTV-enrolled.
+            #
+            # Applied AFTER the standard ambiguity check so a user_id
+            # cleared by the FAISS-side margin gate cannot leak through.
+            # Applied to the standard match (user_id) only — the raw
+            # top1_user_id is left untouched so the graveyard hint
+            # rescue can still fire on its own relaxed-threshold path.
+            phone_only_bonus = settings.RECOGNITION_PHONE_ONLY_THRESHOLD_BONUS
+            if (
+                user_id is not None
+                and phone_only_bonus > 0.0
+                and user_id in self._phone_only
+            ):
+                strict_threshold = settings.RECOGNITION_THRESHOLD + phone_only_bonus
+                if confidence < strict_threshold:
+                    logger.info(
+                        "Track %d phone-only gate: %s sim=%.3f < strict=%.2f (raise via cctv_enroll)",
+                        identity.track_id,
+                        user_id[:8],
+                        confidence,
+                        strict_threshold,
+                    )
+                    user_id = None
+                    is_ambiguous = True  # Surface as a miss, not a match
+                    # confidence kept for diagnostics; not used downstream
+                    # for binding because user_id is now None.
+
+            # Resolve display name. A FAISS hit whose user_id no longer
+            # exists in the DB is a stale/orphaned vector — treat it as
+            # a miss so the track never displays a green box for a
+            # user_id we can't render.
+            resolved_name: str | None = None
+            if user_id is not None:
+                resolved_name = self._resolve_name(user_id)
+                if resolved_name is None:
+                    logger.warning(
+                        "Track %d FAISS hit user_id=%s not in DB (orphaned embedding?)",
+                        identity.track_id,
+                        user_id[:8],
+                    )
+                    user_id = None
+
             logger.debug(
-                "[TRACK-SCORE] track=%d user=%s confidence=%.4f ambiguous=%s status=%s",
+                "[TRACK-SCORE] track=%d user=%s confidence=%.4f ambiguous=%s",
                 identity.track_id,
                 user_id[:8] if user_id else "NONE",
                 confidence,
                 is_ambiguous,
-                "ACCEPT" if (user_id and not is_ambiguous) else "REJECT",
             )
 
-            # Guard: a FAISS hit whose user_id no longer exists in the DB is a stale
-            # embedding (e.g. orphaned adaptive vector after a user delete / reseed).
-            # Treat it exactly like a miss so the track is not marked 'recognized'
-            # and the client never shows a green box labelled 'Unknown'.
-            resolved_name = self._resolve_name(user_id) if user_id is not None else None
-            if user_id is not None and resolved_name is None:
-                logger.warning(
-                    "Track %d FAISS hit user_id=%s not in DB (orphaned embedding?)",
+            decisions.append(_BatchDecision(
+                identity=identity,
+                search_embedding=search_embedding,
+                live_crop=live_crop_np,
+                det_score=det_score,
+                bbox_px=bbox_px,
+                user_id=user_id,
+                confidence=confidence,
+                is_ambiguous=is_ambiguous,
+                resolved_name=resolved_name,
+                top1_user_id=top1_user_id,
+                top1_score=top1_score,
+                top2_user_id=top2_user_id,
+                top2_score=top2_score,
+            ))
+        return decisions
+
+    def _apply_swap_gate(self, d: _BatchDecision, now: float) -> None:
+        """Phase 2 — vote-based swap rejection for an incumbent track.
+
+        Only fires when the track is already ``recognized`` AND the
+        FAISS result names a *different* user. Otherwise the decision
+        is a confirmation (or a brand-new recognition) and passes through
+        untouched.
+
+        The streak counter advances when consecutive frames sustain the
+        candidate user; any frame where the incumbent comes back as
+        top-1 (or a third user appears, or the score dips below the
+        margin) clears the candidate. The swap commits only when the
+        streak reaches ``RECOGNITION_SWAP_MIN_STREAK``. While the streak
+        is below threshold, ``decision.user_id`` is rewritten back to
+        the incumbent so Phases 3 + 4 see a stable target.
+
+        This does NOT prevent recognition of a different user on a
+        ``pending``/``unknown`` track — those still take the FAISS top-1
+        immediately because there is no incumbent to protect.
+        """
+        identity = d.identity
+        prev_user_id = identity.user_id
+        is_potential_swap = (
+            d.user_id is not None
+            and prev_user_id is not None
+            and prev_user_id != d.user_id
+            and identity.recognition_status == "recognized"
+        )
+        if not is_potential_swap:
+            # No swap to gate. If the FAISS top-1 came back as the
+            # incumbent, clear any in-flight candidate so an old
+            # candidate doesn't survive across a sane re-confirmation.
+            if d.user_id == prev_user_id:
+                identity.swap_candidate_user_id = None
+                identity.swap_candidate_streak = 0
+                identity.swap_candidate_best_conf = 0.0
+            return
+
+        # Cosine-margin gate — must be meaningfully higher than the
+        # current binding before we even consider voting on the swap.
+        margin = settings.RECOGNITION_SWAP_MARGIN
+        if d.confidence < identity.confidence + margin:
+            # Below margin — keep incumbent and reset any in-flight
+            # candidate (the candidate streak only counts frames where
+            # the margin gate also passed).
+            if identity.swap_candidate_user_id is not None:
+                logger.debug(
+                    "Track %d swap below margin: cur=%s (%.3f) vs new=%s (%.3f) — candidate cleared",
                     identity.track_id,
-                    user_id[:8],
+                    identity.name,
+                    identity.confidence,
+                    d.resolved_name,
+                    d.confidence,
                 )
-                user_id = None
+            identity.swap_candidate_user_id = None
+            identity.swap_candidate_streak = 0
+            identity.swap_candidate_best_conf = 0.0
+            d.user_id = prev_user_id
+            d.confidence = identity.confidence
+            d.resolved_name = identity.name
+            d.swap_blocked = True
+            return
 
-            if user_id is not None and not is_ambiguous:
-                # Check if this is an IDENTITY SWAP (FAISS returned a different user)
-                prev_user_id = identity.user_id
-                is_swap = (
-                    prev_user_id is not None
-                    and prev_user_id != user_id
-                    and identity.recognition_status == "recognized"
-                )
+        # Margin gate passed — vote bookkeeping. Same candidate as last
+        # frame extends the streak; a different candidate starts over.
+        if identity.swap_candidate_user_id == d.user_id:
+            identity.swap_candidate_streak += 1
+            if d.confidence > identity.swap_candidate_best_conf:
+                identity.swap_candidate_best_conf = d.confidence
+        else:
+            identity.swap_candidate_user_id = d.user_id
+            identity.swap_candidate_streak = 1
+            identity.swap_candidate_best_conf = d.confidence
+            identity.swap_candidate_first_seen_at = now
 
-                if is_swap:
-                    # Only swap if new match is meaningfully better than current confidence.
-                    # This prevents oscillation between two similar-looking registered users.
-                    # Requires the new match to exceed current confidence by a margin.
-                    swap_margin = 0.05
-                    if confidence >= identity.confidence + swap_margin:
-                        logger.warning(
-                            "Track %d IDENTITY SWAP: %s (%.3f) -> %s (%.3f)",
-                            identity.track_id,
-                            identity.name,
-                            identity.confidence,
-                            resolved_name,
-                            confidence,
-                        )
-                        identity.user_id = user_id
-                        identity.confidence = confidence
-                        identity.name = resolved_name
-                        identity.anchor_embedding = search_embedding.copy()
-                        identity.drift_strike_count = 0
-                        # Clear held identity since the old one was wrong
-                        identity.held_user_id = None
-                        identity.held_name = None
-                    else:
-                        # Ambiguous swap attempt — keep current identity but log it
-                        logger.debug(
-                            "Track %d ambiguous swap rejected: current=%s (%.3f) vs new=%s (%.3f)",
-                            identity.track_id,
-                            identity.name,
-                            identity.confidence,
-                            resolved_name,
-                            confidence,
-                        )
+        # Long-stability streak scaling. Tracks that have been visible
+        # (and bound) for longer than ``RECOGNITION_LONG_STABILITY_FRAMES``
+        # raise the streak gate by a multiplier — a 30-min lecture's
+        # worth of evidence behind the existing binding shouldn't be
+        # overturned by ~0.5 s of contradiction. Tracks short of the
+        # stability mark use the standard streak, so first-recognition
+        # behaviour is unchanged.
+        min_streak = settings.RECOGNITION_SWAP_MIN_STREAK
+        stability_frames = settings.RECOGNITION_LONG_STABILITY_FRAMES
+        if (
+            stability_frames > 0
+            and identity.frames_seen >= stability_frames
+            and settings.RECOGNITION_LONG_STABILITY_STREAK_MULTIPLIER > 1
+        ):
+            min_streak = min_streak * settings.RECOGNITION_LONG_STABILITY_STREAK_MULTIPLIER
+        if identity.swap_candidate_streak >= min_streak:
+            # Streak satisfied — commit the swap by leaving d.user_id /
+            # d.confidence untouched. Reset bookkeeping so the next
+            # frame starts fresh.
+            logger.warning(
+                "Track %d IDENTITY SWAP committed after %d-frame streak: %s (%.3f) -> %s (%.3f)",
+                identity.track_id,
+                identity.swap_candidate_streak,
+                identity.name,
+                identity.confidence,
+                d.resolved_name,
+                d.confidence,
+            )
+            identity.swap_candidate_user_id = None
+            identity.swap_candidate_streak = 0
+            identity.swap_candidate_best_conf = 0.0
+            return
+
+        # Streak still below threshold — block the swap and keep the
+        # incumbent visible while the candidate accrues votes.
+        logger.debug(
+            "Track %d swap pending (streak %d/%d): cur=%s (%.3f) vs cand=%s (%.3f)",
+            identity.track_id,
+            identity.swap_candidate_streak,
+            min_streak,
+            identity.name,
+            identity.confidence,
+            d.resolved_name,
+            d.confidence,
+        )
+        d.user_id = prev_user_id
+        d.confidence = identity.confidence
+        d.resolved_name = identity.name
+        d.swap_blocked = True
+
+    def _resolve_frame_mutex(self, decisions: list[_BatchDecision]) -> None:
+        """Phase 3 — Hungarian bipartite assignment when two tracks in
+        the same frame both target the same ``user_id``.
+
+        Treats incumbents (tracks already ``recognized`` and re-confirming
+        their existing user_id) as locked: they claim their user up
+        front, and only challengers compete for what's left. This means
+        a long-stable track can never be displaced by a new track whose
+        FAISS result happens to score higher this frame — the new track
+        either gets its top-2 fallback or stays in warming_up.
+
+        For challengers, the cost matrix has rows = challenger tracks
+        and columns = (top-1 + top-2 candidate users) ∪ (slack columns
+        worth zero, one per row). Hungarian minimisation with cost =
+        -similarity picks the assignment that maximises total similarity
+        while respecting the one-user-per-track constraint.
+        """
+        if len(decisions) < 2:
+            return
+
+        # Build the incumbent set: tracks re-confirming their existing
+        # binding. Their user_id is locked off the auction.
+        incumbents: dict[str, _BatchDecision] = {}
+        challengers: list[_BatchDecision] = []
+        for d in decisions:
+            if (
+                d.user_id is not None
+                and d.identity.recognition_status == "recognized"
+                and d.identity.user_id == d.user_id
+            ):
+                # Two incumbents claiming the same user shouldn't
+                # happen (each user has at most one current binding by
+                # the dedup contract). If it does, keep the
+                # higher-confidence one as the incumbent and demote the
+                # other to a challenger so Hungarian can re-route it.
+                existing = incumbents.get(d.user_id)
+                if existing is None or d.confidence > existing.confidence:
+                    if existing is not None:
+                        challengers.append(existing)
+                    incumbents[d.user_id] = d
                 else:
-                    # Same user, confirming — update confidence and anchor
-                    identity.user_id = user_id
-                    identity.confidence = confidence
-                    identity.name = resolved_name
-                    identity.recognition_status = "recognized"
-                    identity.anchor_embedding = search_embedding.copy()
-                    identity.drift_strike_count = 0
-                    # Clear the warm-up counter — a successful match means any
-                    # past misses were noise, not evidence of a stranger.
-                    identity.unknown_attempts = 0
-                    if prev_user_id is None:
-                        logger.info(
-                            "Track %d recognized: %s (%.3f)",
-                            identity.track_id,
-                            identity.name,
-                            confidence,
-                        )
-                    # Adaptive enrollment — only after stable re-verification (prev_user_id == user_id).
-                    # Prevents poisoning FAISS from a single wrong first-recognition.
-                    # Requires:
-                    #   (1) recognized as same user on the previous decision (not first-time),
-                    #   (2) confidence >= ADAPTIVE_ENROLL_MIN_CONFIDENCE (default 0.70),
-                    #   (3) track alive for >= ADAPTIVE_ENROLL_STABLE_FRAMES frames
-                    #       (default 30 ≈ 1.5 s at 20 fps).
-                    # The stable-frames gate was hardcoded to 10 until the 2026-04-25
-                    # identity-swap incident — at 10 frames @ 5 fps backend (CPU-only),
-                    # a wrong lock-in could poison FAISS in ~2 s. Now env-tunable so
-                    # different deployments can dial this against their actual
-                    # PROCESSING_FPS without a rebuild.
-                    is_stable_reverify = (
-                        prev_user_id == user_id
-                        and identity.frames_seen >= settings.ADAPTIVE_ENROLL_STABLE_FRAMES
-                    )
-                    if (settings.ADAPTIVE_ENROLL_ENABLED
-                        and is_stable_reverify
-                        and confidence >= settings.ADAPTIVE_ENROLL_MIN_CONFIDENCE):
-                        self._try_adaptive_enroll(user_id, search_embedding, now)
+                    challengers.append(d)
+            elif d.user_id is not None:
+                challengers.append(d)
+            # If d.user_id is None (no FAISS hit / ambiguous / cleared
+            # by name resolution) the track has nothing to compete for.
 
-                    # Auto CCTV enrolment — opportunistic capture of real
-                    # CCTV embeddings during the student's first attended
-                    # sessions. The enroller has its own gates (lifetime
-                    # cap, sustained-stability, capture spacing); we just
-                    # offer every confident recognition and let it decide.
-                    # Cost on the realtime hot path is negligible (one
-                    # dict lookup + a few comparisons); commit happens on
-                    # a background executor when a buffer fills.
+        if not challengers:
+            return
+
+        # Detect whether challengers actually collide with anything.
+        # If every challenger's top-1 is unique AND not already held by
+        # an incumbent, no resolution is needed — they all keep their
+        # FAISS result.
+        challenger_users = [c.user_id for c in challengers]
+        collision_users = set()
+        seen: dict[str, int] = {}
+        for u in challenger_users:
+            if u in seen:
+                collision_users.add(u)
+            seen[u] = seen.get(u, 0) + 1
+        for c in challengers:
+            if c.user_id in incumbents:
+                collision_users.add(c.user_id)
+        if not collision_users:
+            return
+
+        # Build the candidate user set from challenger top-1 + top-2.
+        # Exclude users already locked by incumbents — challengers can
+        # never win those.
+        threshold = settings.RECOGNITION_THRESHOLD
+        cand_users: list[str] = []
+        for c in challengers:
+            if c.user_id and c.user_id not in incumbents and c.user_id not in cand_users:
+                cand_users.append(c.user_id)
+            if (
+                c.top2_user_id
+                and c.top2_user_id != c.user_id
+                and c.top2_user_id not in incumbents
+                and c.top2_user_id not in cand_users
+                and c.top2_score >= threshold
+            ):
+                cand_users.append(c.top2_user_id)
+
+        n = len(challengers)
+        m = len(cand_users)
+        # Square cost matrix: cols = candidates ∪ slack (one per row).
+        # Slack cost 0 means "no assignment" — preferred only when no
+        # real candidate has positive value (i.e. cost < 0).
+        BIG = 1e6
+        cost = np.full((n, n + m), BIG, dtype=np.float64)
+        for r, c in enumerate(challengers):
+            if c.user_id and c.user_id in cand_users:
+                col = cand_users.index(c.user_id)
+                cost[r][col] = -float(c.confidence)
+            if (
+                c.top2_user_id
+                and c.top2_user_id != c.user_id
+                and c.top2_user_id in cand_users
+                and c.top2_score >= threshold
+            ):
+                col = cand_users.index(c.top2_user_id)
+                cost[r][col] = -float(c.top2_score)
+            # Slack column for "stay in warming_up" — costs zero so any
+            # negative real assignment beats it.
+            cost[r][m + r] = 0.0
+
+        try:
+            row_ind, col_ind = linear_sum_assignment(cost)
+        except Exception:
+            logger.exception("frame-mutex Hungarian failed; leaving decisions untouched")
+            return
+
+        for r, col in zip(row_ind, col_ind):
+            d = challengers[r]
+            if col < m:
+                assigned = cand_users[col]
+                if assigned == d.user_id:
+                    continue  # kept top-1, no change
+                # Routed to top-2 (or top-1 of a different track that
+                # this row's top-1 wasn't claimed by anyone else, which
+                # cannot happen given how cand_users is built).
+                if assigned == d.top2_user_id:
+                    prev_user = d.user_id
+                    d.user_id = d.top2_user_id
+                    d.confidence = d.top2_score
+                    d.resolved_name = self._resolve_name(d.top2_user_id)
+                    d.mutex_demoted = True
+                    logger.info(
+                        "Track %d frame-mutex: top-1=%s claimed by another track; "
+                        "fell back to top-2=%s (%.3f)",
+                        d.identity.track_id,
+                        prev_user[:8] if prev_user else "NONE",
+                        d.top2_user_id[:8],
+                        d.top2_score,
+                    )
+            else:
+                # Slack column — no assignment. Clear the binding so
+                # the track shows as warming_up rather than committing
+                # to a wrong name.
+                if d.user_id is not None:
+                    prev_user = d.user_id
+                    logger.info(
+                        "Track %d frame-mutex: lost claim on %s and no top-2 fallback; demoted",
+                        d.identity.track_id,
+                        prev_user[:8],
+                    )
+                    d.user_id = None
+                    d.resolved_name = None
+                    d.is_ambiguous = True  # so commit treats this as a non-match
+                    d.mutex_demoted = True
+
+    def _commit_decision(self, d: _BatchDecision, now: float) -> None:
+        """Phase 4 — apply the resolved decision to identity state + emit
+        evidence.
+
+        The branching here mirrors the original ``_recognize_batch`` body
+        with one structural change: by the time we get here, ``d.user_id``
+        already reflects the swap-gate + frame-mutex outcome, so the
+        "is this a swap?" check just compares against the cached identity
+        and either confirms or applies the (already-vetted) flip.
+        """
+        identity = d.identity
+        user_id = d.user_id
+        confidence = d.confidence
+        resolved_name = d.resolved_name
+        is_ambiguous = d.is_ambiguous
+        search_embedding = d.search_embedding
+
+        if user_id is not None and not is_ambiguous:
+            prev_user_id = identity.user_id
+            is_swap = (
+                prev_user_id is not None
+                and prev_user_id != user_id
+                and identity.recognition_status == "recognized"
+            )
+
+            if is_swap:
+                # The swap already cleared the swap-gate AND any
+                # frame-mutex contention. Apply it.
+                identity.user_id = user_id
+                identity.confidence = confidence
+                identity.name = resolved_name
+                identity.anchor_embedding = search_embedding.copy()
+                identity.drift_strike_count = 0
+                identity.held_user_id = None
+                identity.held_name = None
+                # Record in oscillation history. Phase suppressor in
+                # _derive_recognition_state reads this to decide whether
+                # to silence the broadcast name during flip-flopping.
+                identity.swap_history.append((now, user_id))
+                self._maybe_arm_oscillation_suppressor(identity, now)
+            else:
+                # First-time recognition or re-confirmation — happy path.
+                identity.user_id = user_id
+                identity.confidence = confidence
+                identity.name = resolved_name
+                identity.recognition_status = "recognized"
+                identity.anchor_embedding = search_embedding.copy()
+                identity.drift_strike_count = 0
+                identity.unknown_attempts = 0
+                if prev_user_id is None:
+                    logger.info(
+                        "Track %d recognized: %s (%.3f)",
+                        identity.track_id,
+                        identity.name,
+                        confidence,
+                    )
+
+                # Adaptive enrolment — only on stable re-verifies. Same
+                # gates as the legacy path. The vote-based swap-gate
+                # already guarantees at least RECOGNITION_SWAP_MIN_STREAK
+                # frames of agreement before a swap commits, so a wrong
+                # first-recognition can't poison this path through a
+                # single noisy frame.
+                is_stable_reverify = (
+                    prev_user_id == user_id
+                    and identity.frames_seen >= settings.ADAPTIVE_ENROLL_STABLE_FRAMES
+                )
+                if (
+                    settings.ADAPTIVE_ENROLL_ENABLED
+                    and is_stable_reverify
+                    and confidence >= settings.ADAPTIVE_ENROLL_MIN_CONFIDENCE
+                ):
+                    self._try_adaptive_enroll(user_id, search_embedding, now)
+
+                # Auto CCTV enrolment — opportunistic capture during the
+                # student's first attended sessions. The enroller has
+                # its own gates; we just offer every confident
+                # recognition and let it decide.
+                #
+                # Guard: skip the offer when this frame's decision had
+                # to be patched by either the swap-gate (a competing
+                # candidate failed the streak gate) or the frame-mutex
+                # (top-1 was claimed by another track and we fell back
+                # to top-2). In both cases, FAISS *did* think a different
+                # user was the better match this frame; while the
+                # downstream gates correctly held the binding, accepting
+                # the live crop into auto-enrolment would be feeding
+                # ambiguous data into a supposedly high-confidence
+                # training set. The auto-enroller's own buffer-then-
+                # validate path provides defense in depth, but this
+                # guard short-circuits before we even buffer.
+                if not (d.swap_blocked or d.mutex_demoted or d.is_revalidation):
                     try:
                         from app.services.auto_cctv_enroller import auto_cctv_enroller
                         auto_cctv_enroller.offer_capture(
                             user_id=user_id,
                             track_id=identity.track_id,
                             embedding=search_embedding,
-                            crop_bgr=live_crop_np,
+                            crop_bgr=d.live_crop,
                             confidence=confidence,
                             frames_seen=identity.frames_seen,
                             room_stream_key=self._camera_id,
                         )
                     except Exception:
-                        # Auto-enrol must NEVER break recognition. Log
-                        # and continue.
                         logger.debug(
                             "auto-cctv offer failed for track %d", identity.track_id,
                             exc_info=True,
                         )
-            elif identity.recognition_status == "recognized":
-                # Already recognized — don't downgrade on a single bad frame.
-                # Do not bump unknown_attempts either: a re-verify dip on a known
-                # track is not evidence that the face is a stranger.
-                logger.debug(
-                    "Track %d re-verify missed (score=%.3f), keeping %s",
-                    identity.track_id,
-                    confidence,
-                    identity.name,
+        elif identity.recognition_status == "recognized":
+            # Already recognized — don't downgrade on a single bad
+            # frame. Keep the binding; do NOT bump unknown_attempts.
+            logger.debug(
+                "Track %d re-verify missed (score=%.3f), keeping %s",
+                identity.track_id,
+                confidence,
+                identity.name,
+            )
+        else:
+            # Pending / previously-unknown track produced another miss.
+            identity.recognition_status = "unknown"
+            identity.confidence = confidence
+            identity.unknown_attempts += 1
+            logger.debug(
+                "Track %d unknown (score=%.3f peak=%.3f attempts=%d user=%s ambiguous=%s)",
+                identity.track_id,
+                confidence,
+                identity.best_score_seen,
+                identity.unknown_attempts,
+                user_id,
+                is_ambiguous,
+            )
+
+        # Fire-and-forget evidence capture. We pass d.user_id (post-
+        # mutex) and d.is_ambiguous so the writer reflects the actual
+        # committed identity, not the raw FAISS top-1.
+        #
+        # Skipped for the periodic revalidation pass — that path
+        # carries placeholder crop/bbox values (we re-search using the
+        # buffer mean, not a live frame) so feeding them to the writer
+        # would store garbage in the audit trail. The live recognition
+        # path keeps writing as before; revalidation is silent state-
+        # only.
+        if (
+            settings.ENABLE_RECOGNITION_EVIDENCE
+            and self._schedule_id is not None
+            and not d.is_revalidation
+        ):
+            try:
+                self._submit_recognition_event(
+                    identity=identity,
+                    search_embedding=search_embedding,
+                    live_crop=d.live_crop,
+                    det_score=d.det_score,
+                    bbox_px=d.bbox_px,
+                    user_id=user_id,
+                    student_name=resolved_name,
+                    confidence=float(confidence),
+                    is_ambiguous=bool(is_ambiguous),
+                    now=now,
                 )
-            else:
-                # Pending or previously unknown track produced another miss.
-                # Accumulate evidence toward committing to recognition_state="unknown".
-                identity.recognition_status = "unknown"
-                identity.confidence = confidence
-                identity.unknown_attempts += 1
+            except Exception:
                 logger.debug(
-                    "Track %d unknown (score=%.3f peak=%.3f attempts=%d user=%s ambiguous=%s)",
+                    "evidence submit failed for track %d",
                     identity.track_id,
-                    confidence,
-                    identity.best_score_seen,
-                    identity.unknown_attempts,
-                    user_id,
-                    is_ambiguous,
+                    exc_info=True,
                 )
 
-            # Fire-and-forget evidence capture. Every FAISS decision — match,
-            # miss, or ambiguous — produces one row + one live JPEG; matched
-            # decisions also include a registered-angle JPEG on first-match.
-            # The writer drops events under back-pressure rather than blocking
-            # the pipeline. See docs/plans/2026-04-22-recognition-evidence.
+        identity.last_verified = now
+
+    def _periodic_revalidation(self, now: float) -> None:
+        """Audit every recognized track using the MEAN of its recent
+        embedding buffer rather than a single live frame.
+
+        Why this exists:
+          The per-frame swap-gate already protects against single-frame
+          noise events, but the protection is reactive — it only fires
+          when FAISS *this frame* names a different user. A track can
+          drift slowly: each individual frame matches the bound user at
+          0.50, but the temporal mean of the last 5 frames matches a
+          DIFFERENT user at 0.55. Without periodic mean re-search we'd
+          never detect that. With it, we re-confirm the binding from
+          the most stable signal we have — and if the mean disagrees,
+          the swap-gate's vote+margin gate handles the rest.
+
+          This is the "cron job" the operator asked for, but inlined
+          into the per-frame loop at low cadence so it doesn't need a
+          separate scheduler. At 5 fps backend × 150 frames = ~30 s
+          cadence; FAISS cost is one batched query for 4-6 tracks ≈ a
+          few ms. No new threads, no scheduling drift.
+
+        How:
+          1. Collect every track in identity_cache that is currently
+             ``recognized`` AND has at least 3 buffered embeddings.
+          2. Compute the L2-normalised mean of each track's buffer.
+          3. Run ONE ``search_batch_with_margin`` call for the stack.
+          4. For each result: synthesise a ``_BatchDecision`` with the
+             mean-based scores and feed it through ``_apply_swap_gate``
+             so the streak-and-margin rules apply identically to live
+             frames. Frame-mutex is NOT re-run here — the tracks aren't
+             competing for shared user_ids in this path; we're only
+             auditing existing bindings.
+          5. Commit the resolved decisions back to identity state via
+             ``_commit_decision`` so attendance/presence picks up any
+             corrections without delay.
+        """
+        candidates: list[tuple[TrackIdentity, np.ndarray]] = []
+        for identity in self._identity_cache.values():
+            if identity.recognition_status != "recognized":
+                continue
+            if len(identity.embedding_buffer) < 3:
+                continue
+            try:
+                avg = np.mean(np.asarray(list(identity.embedding_buffer)), axis=0)
+                norm = float(np.linalg.norm(avg))
+                if norm <= 0:
+                    continue
+                avg = (avg / norm).astype(np.float32, copy=False)
+            except Exception:
+                continue
+            candidates.append((identity, avg))
+
+        if not candidates:
+            return
+
+        stacked = np.stack([emb for _, emb in candidates]).astype(np.float32)
+        try:
+            batch_results = self._faiss.search_batch_with_margin(stacked)
+        except Exception:
+            logger.debug("revalidation FAISS search failed", exc_info=True)
+            return
+
+        # Synthesize one _BatchDecision per track and feed it through
+        # the swap-gate + commit pipeline. The live_crop / det_score /
+        # bbox_px fields are only used by the evidence writer and the
+        # auto-CCTV enroller; both are guarded with `if d.live_crop ...`
+        # / mutex_demoted checks so a None-equivalent placeholder is
+        # safe. We use empty-shape sentinels rather than None to keep
+        # the dataclass's typed fields happy without changing its API.
+        empty_crop = np.zeros((0, 0, 3), dtype=np.uint8)
+        decisions: list[_BatchDecision] = []
+        for (identity, avg), result in zip(candidates, batch_results):
+            user_id = result.get("user_id")
+            confidence = float(result.get("confidence", 0.0))
+            is_ambiguous = bool(result.get("is_ambiguous", False))
+            top1_user_id = result.get("top1_user_id")
+            top1_score = float(result.get("top1_score", 0.0))
+            top2_user_id = result.get("top2_user_id")
+            top2_score = float(result.get("top2_score", 0.0))
+
+            # Phone-only stricter threshold — same gate as in
+            # _gather_decisions, applied here so the revalidation path
+            # can't accidentally bind a phone-only user it would have
+            # rejected in a live frame.
+            phone_only_bonus = settings.RECOGNITION_PHONE_ONLY_THRESHOLD_BONUS
             if (
-                settings.ENABLE_RECOGNITION_EVIDENCE
-                and self._schedule_id is not None
+                user_id is not None
+                and phone_only_bonus > 0.0
+                and user_id in self._phone_only
             ):
-                try:
-                    self._submit_recognition_event(
-                        identity=identity,
-                        search_embedding=search_embedding,
-                        live_crop=live_crop_np,
-                        det_score=det_score,
-                        bbox_px=bbox_px,
-                        user_id=user_id,
-                        student_name=resolved_name,
-                        confidence=float(confidence),
-                        is_ambiguous=bool(is_ambiguous),
-                        now=now,
-                    )
-                except Exception:
-                    # Evidence capture must never destabilise the pipeline.
-                    logger.debug(
-                        "evidence submit failed for track %d",
-                        identity.track_id,
-                        exc_info=True,
-                    )
+                strict_threshold = settings.RECOGNITION_THRESHOLD + phone_only_bonus
+                if confidence < strict_threshold:
+                    user_id = None
+                    is_ambiguous = True
 
-            identity.last_verified = now
+            resolved_name: str | None = None
+            if user_id is not None:
+                resolved_name = self._resolve_name(user_id)
+                if resolved_name is None:
+                    user_id = None
+
+            decisions.append(_BatchDecision(
+                identity=identity,
+                search_embedding=avg,
+                live_crop=empty_crop,
+                det_score=0.0,
+                bbox_px=[0, 0, 0, 0],
+                user_id=user_id,
+                confidence=confidence,
+                is_ambiguous=is_ambiguous,
+                resolved_name=resolved_name,
+                top1_user_id=top1_user_id,
+                top1_score=top1_score,
+                top2_user_id=top2_user_id,
+                top2_score=top2_score,
+                is_revalidation=True,
+            ))
+
+        # Same swap-gate logic the live path uses — vote-based,
+        # streak-counted, with long-stability scaling. A
+        # revalidation-driven swap is held to the same standard as a
+        # live one.
+        for d in decisions:
+            self._apply_swap_gate(d, now)
+
+        # Skip frame-mutex: the revalidation pass operates on every
+        # currently-recognised track, not on a contention pool. If
+        # there's a real "two tracks bound to the same user" condition
+        # it will already have been resolved by the live path before
+        # we got here.
+
+        for d in decisions:
+            self._commit_decision(d, now)
+
+        logger.info(
+            "revalidation pass: audited %d recognized track(s); "
+            "swap-gate decisions applied via mean-embedding search",
+            len(decisions),
+        )
+
+    def _maybe_arm_oscillation_suppressor(self, identity: TrackIdentity, now: float) -> None:
+        """Arm the oscillation suppressor when ``identity.swap_history`` shows
+        too many flips across too many distinct users in too little time.
+
+        Reads the gates from settings:
+          OSCILLATION_WINDOW_SECONDS — rolling window size
+          OSCILLATION_DISTINCT_USERS — min distinct users that must appear
+          OSCILLATION_FLIPS_THRESHOLD — min number of swaps in the window
+
+        When armed, ``identity.oscillation_uncertain_until`` is pushed to
+        ``now + OSCILLATION_UNCERTAIN_HOLD_S``. The display layer
+        (``_get_display_identity``) reads that field and silences the
+        broadcast name until the cooldown expires. The track's internal
+        binding is preserved so attendance counters and presence logs
+        keep firing — only the visible label is suppressed.
+        """
+        window = settings.OSCILLATION_WINDOW_SECONDS
+        if window <= 0:
+            return
+        cutoff = now - window
+        recent = [(t, u) for (t, u) in identity.swap_history if t >= cutoff]
+        if len(recent) < settings.OSCILLATION_FLIPS_THRESHOLD:
+            return
+        distinct = len({u for _, u in recent})
+        if distinct < settings.OSCILLATION_DISTINCT_USERS:
+            return
+        identity.oscillation_uncertain_until = now + settings.OSCILLATION_UNCERTAIN_HOLD_S
+        logger.warning(
+            "Track %d OSCILLATION suppressor armed: %d swaps over %d users in last %.1fs",
+            identity.track_id,
+            len(recent),
+            distinct,
+            window,
+        )
 
     def _submit_recognition_event(
         self,

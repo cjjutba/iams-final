@@ -9,7 +9,6 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 
 import { DataTable } from '@/components/data-tables'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -45,9 +44,20 @@ import {
 } from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { useRooms, useCreateRoom, useUpdateRoom, useDeleteRoom } from '@/hooks/use-queries'
+import {
+  useRooms,
+  useSchedules,
+  useCreateRoom,
+  useUpdateRoom,
+  useDeleteRoom,
+} from '@/hooks/use-queries'
 import type { Room } from '@/types'
 import { tokenMatches, joinHaystack } from '@/lib/search'
+import {
+  ActiveStatusPill,
+  CameraConfiguredPill,
+  LiveNowPill,
+} from '@/components/shared/status-pills'
 
 function buildRoomHaystack(r: Room): string {
   return joinHaystack([
@@ -313,6 +323,11 @@ export default function RoomsPage() {
   usePageTitle('Rooms')
   const navigate = useNavigate()
   const { data: rooms = [], isLoading } = useRooms()
+  // Pull schedules so we can derive both the per-room schedule count and
+  // the live-now indicator without a dedicated backend endpoint. The
+  // schedules query is cached by react-query, so the cost is at most one
+  // round-trip on first mount.
+  const { data: allSchedules = [] } = useSchedules()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingRoom, setEditingRoom] = useState<Room | null>(null)
 
@@ -320,6 +335,18 @@ export default function RoomsPage() {
   const [cameraFilter, setCameraFilter] = useState<CameraFilter>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [isPending, startTransition] = useTransition()
+
+  // Per-room aggregates: schedule count + whether anything is live now.
+  const roomStats = useMemo(() => {
+    const map = new Map<string, { count: number; hasLive: boolean }>()
+    for (const s of allSchedules) {
+      const prev = map.get(s.room_id) ?? { count: 0, hasLive: false }
+      prev.count += 1
+      if (s.runtime_status === 'live') prev.hasLive = true
+      map.set(s.room_id, prev)
+    }
+    return map
+  }, [allSchedules])
 
   const filtered = useMemo(() => {
     let result = rooms
@@ -333,8 +360,15 @@ export default function RoomsPage() {
       result = result.filter((r) => tokenMatches(buildRoomHaystack(r), searchQuery))
     }
 
-    return result
-  }, [rooms, statusFilter, cameraFilter, searchQuery])
+    // Live rooms float to the top, then by name. So when something's
+    // running you can scan the list and act on it without sorting first.
+    return [...result].sort((a, b) => {
+      const aLive = roomStats.get(a.id)?.hasLive ? 0 : 1
+      const bLive = roomStats.get(b.id)?.hasLive ? 0 : 1
+      if (aLive !== bLive) return aLive - bLive
+      return a.name.localeCompare(b.name)
+    })
+  }, [rooms, statusFilter, cameraFilter, searchQuery, roomStats])
 
   const hasFilters =
     statusFilter !== 'all' || cameraFilter !== 'all' || searchQuery.trim().length > 0
@@ -369,45 +403,56 @@ export default function RoomsPage() {
     {
       accessorKey: 'name',
       header: 'Name',
-      cell: ({ row }) => (
-        <span className="font-medium">{row.original.name}</span>
-      ),
+      cell: ({ row }) => {
+        const stats = roomStats.get(row.original.id)
+        return (
+          <div className="flex items-center gap-2">
+            <span className="font-medium">{row.original.name}</span>
+            {stats?.hasLive && <LiveNowPill />}
+          </div>
+        )
+      },
     },
     {
       accessorKey: 'building',
       header: 'Building',
       cell: ({ row }) => (
-        <span className="text-sm">{row.original.building ?? '\u2014'}</span>
+        <span className="text-sm text-muted-foreground">{row.original.building ?? '—'}</span>
       ),
     },
     {
       accessorKey: 'capacity',
       header: 'Capacity',
       cell: ({ row }) => (
-        <span className="text-sm">
-          {row.original.capacity != null ? row.original.capacity : '\u2014'}
+        <span className="text-sm tabular-nums">
+          {row.original.capacity != null ? row.original.capacity : '—'}
         </span>
       ),
     },
     {
+      id: 'schedules',
+      header: 'Schedules',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const stats = roomStats.get(row.original.id)
+        return (
+          <span className="text-sm tabular-nums text-muted-foreground">
+            {stats?.count ?? 0}
+          </span>
+        )
+      },
+    },
+    {
       accessorKey: 'camera_endpoint',
-      header: 'Camera Endpoint',
-      cell: ({ row }) =>
-        row.original.camera_endpoint ? (
-          <span className="text-sm font-mono">{row.original.camera_endpoint}</span>
-        ) : (
-          <span className="text-sm text-muted-foreground">Not configured</span>
-        ),
+      header: 'Camera',
+      cell: ({ row }) => (
+        <CameraConfiguredPill configured={!!row.original.camera_endpoint} />
+      ),
     },
     {
       accessorKey: 'is_active',
       header: 'Status',
-      cell: ({ row }) =>
-        row.original.is_active ? (
-          <Badge variant="default">Active</Badge>
-        ) : (
-          <Badge variant="destructive">Inactive</Badge>
-        ),
+      cell: ({ row }) => <ActiveStatusPill active={row.original.is_active} />,
     },
     {
       id: 'actions',
@@ -456,7 +501,7 @@ export default function RoomsPage() {
                 <SelectValue placeholder="Status" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
+                <SelectItem value="all">All status</SelectItem>
                 <SelectItem value="active">Active</SelectItem>
                 <SelectItem value="inactive">Inactive</SelectItem>
               </SelectContent>
@@ -467,9 +512,9 @@ export default function RoomsPage() {
                 <SelectValue placeholder="Camera" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Camera</SelectItem>
+                <SelectItem value="all">All camera</SelectItem>
                 <SelectItem value="configured">Configured</SelectItem>
-                <SelectItem value="not_configured">Not Configured</SelectItem>
+                <SelectItem value="not_configured">Not configured</SelectItem>
               </SelectContent>
             </Select>
 

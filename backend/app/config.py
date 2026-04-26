@@ -107,6 +107,78 @@ class Settings(BaseSettings):
     # confidence wins, others drop" behaviour from the post-hoc dedup at
     # the end of process().
     RECOGNITION_FRAME_MUTEX_ENABLED: bool = True
+
+    # Stricter threshold for matches against students whose face_embeddings
+    # rows do not include any ``cctv_*`` angle labels (phone-side
+    # registration only). The cross-domain gap between phone selfies and
+    # classroom CCTV typically lands these students in the 0.40-0.55 sim
+    # range — exactly the band where two students' top-1 scores can flip
+    # frame-to-frame. By bumping the effective threshold for THESE users
+    # only, we refuse to commit a recognition until the score is high
+    # enough that a swap would require sustained, decisive evidence
+    # rather than a single ambiguous frame. Once the operator runs
+    # ``scripts.cctv_enroll`` for the user (or the auto-enroller commits
+    # captures from a live session), the user is no longer phone-only
+    # and falls back to the standard RECOGNITION_THRESHOLD.
+    #
+    # Set to 0 to disable the bonus (treat phone-only and CCTV-enrolled
+    # users equivalently).
+    #
+    # Tuning history:
+    #   - 2026-04-25 first cut: 0.10 → strict gate at 0.55. Caught the
+    #     swap-flicker problem at the cost of leaving phone-only
+    #     students stranded in cross-domain noise band (sim 0.45-0.55).
+    #     Christian, James, Febtwel observed showing "Unknown" in
+    #     EB227 because their phone-only sims hovered just below 0.55.
+    #   - 2026-04-26: lowered to 0.05. Strict gate at 0.50. The other
+    #     hardening layers (vote-based swap, frame-mutex, oscillation
+    #     suppressor, top-1/top-2 margin) are sufficient against the
+    #     wrong-name risk; the 0.05 bonus keeps a small safety cushion
+    #     above the standard threshold without permanently locking
+    #     borderline students out of recognition. Auto-CCTV enrol then
+    #     captures their first room-specific embeddings opportunistically,
+    #     lifting them out of the noise band on subsequent sessions.
+    RECOGNITION_PHONE_ONLY_THRESHOLD_BONUS: float = 0.05
+
+    # Long-stability swap protection. The base swap-gate already requires
+    # ``RECOGNITION_SWAP_MIN_STREAK`` consecutive frames before a
+    # recognised track flips identity. For tracks that have been
+    # successfully bound to the same user for a long time (e.g. an
+    # entire 90-min lecture), the prior is even stronger that the
+    # binding is correct, so the streak gate scales up to make the
+    # late-session flip practically impossible.
+    #
+    # Tuning: at PROCESSING_FPS=20, 600 frames ≈ 30 s of continuous
+    # tracking. After that, the streak gate becomes
+    # ``RECOGNITION_SWAP_MIN_STREAK * RECOGNITION_LONG_STABILITY_STREAK_MULTIPLIER``
+    # (default 3 × 3 = 9 frames) — about half a second of decisive
+    # contradiction at 20 fps before the binding flips. At 5 fps backend
+    # this is ~2 s, which is enough for a real identity change (e.g.
+    # ByteTrack accidentally re-using a track id after a student leaves
+    # and another sits in the same seat) but ridiculously slow for any
+    # noise event.
+    RECOGNITION_LONG_STABILITY_FRAMES: int = 600
+    RECOGNITION_LONG_STABILITY_STREAK_MULTIPLIER: int = 3
+
+    # Oscillation suppressor — third layer on top of the swap-margin gate
+    # and the frame-mutex assignment. Even with both of those in place,
+    # a track can still flap when two students take turns satisfying the
+    # streak gate (e.g. Christian wins 3 frames, then James wins 3, then
+    # Christian, ...). The suppressor watches the rolling history of
+    # confirmed swaps on each track and, if more than
+    # ``OSCILLATION_FLIPS_THRESHOLD`` swaps cross at least
+    # ``OSCILLATION_DISTINCT_USERS`` distinct user_ids inside the last
+    # ``OSCILLATION_WINDOW_SECONDS``, the overlay suppresses the displayed
+    # name for ``OSCILLATION_UNCERTAIN_HOLD_S`` seconds. The track's
+    # internal binding is preserved (no FAISS re-walk), only the broadcast
+    # is silenced — better to render a blank "Detecting…" label than to
+    # commit to either of two competing identities. Set
+    # OSCILLATION_FLIPS_THRESHOLD to a very large number to disable this
+    # layer without removing the bookkeeping.
+    OSCILLATION_WINDOW_SECONDS: float = 8.0
+    OSCILLATION_DISTINCT_USERS: int = 2
+    OSCILLATION_FLIPS_THRESHOLD: int = 3
+    OSCILLATION_UNCERTAIN_HOLD_S: float = 3.0
     USE_GPU: bool = True  # Use GPU if available, fallback to CPU
     MIN_FACE_IMAGES: int = 3  # Minimum images for registration
     MAX_FACE_IMAGES: int = 5  # Maximum images for registration
@@ -128,13 +200,78 @@ class Settings(BaseSettings):
     QUALITY_MIN_FACE_SIZE_RATIO: float = 0.05  # Face area / image area minimum
     QUALITY_MIN_DET_SCORE: float = 0.5  # SCRFD detection confidence minimum
 
-    # Anti-Spoofing / Liveness Detection
+    # Anti-Spoofing / Liveness Detection (LEGACY heuristic gates used during
+    # registration only — these predate the MiniFASNet realtime path below.
+    # Kept enabled because they're cheap and only run on phone-side selfie
+    # uploads where their LBP / FFT thresholds were tuned. The CCTV realtime
+    # path uses the LIVENESS_* settings.)
     ANTISPOOF_ENABLED: bool = True
     ANTISPOOF_REGISTRATION_STRICT: bool = True  # Block registration if spoof detected
     ANTISPOOF_RECOGNITION_LOG_ONLY: bool = True  # Only log during CCTV (no blocking)
     ANTISPOOF_EMBEDDING_VARIANCE_MIN: float = 0.1  # Min embedding cosine distance variance across angles
     ANTISPOOF_LBP_THRESHOLD: float = 0.15  # LBP texture uniformity threshold (lowered for mobile selfie)
     ANTISPOOF_FFT_THRESHOLD: float = 0.20  # FFT high-freq energy threshold (lowered for mobile selfie)
+
+    # ───────────────────────────────────────────────────────────────────────
+    # Realtime CCTV Liveness (MiniFASNet — added 2026-04-25)
+    #
+    # Passive liveness detector for the CCTV path. Catches "show a phone /
+    # printed photo to the camera" presentation attacks that ArcFace alone
+    # cannot distinguish from a real face. The model lives in the ML
+    # sidecar (CoreML/ANE on the M5) — see backend/ml-sidecar/main.py and
+    # app/services/ml/liveness_model.py.
+    #
+    # Operator workflow:
+    #   1. backend/venv/bin/pip install torch torchvision     (one-time, ~700 MB)
+    #   2. backend/venv/bin/python -m scripts.export_liveness_models
+    #   3. Set LIVENESS_ENABLED=true here / in backend/.env.onprem
+    #   4. Restart sidecar + api-gateway
+    #
+    # Gating policy (when LIVENESS_ENABLED=true):
+    #   - Each face's liveness is checked at the same cadence as ArcFace
+    #     re-verify (LIVENESS_RECHECK_INTERVAL_S, default 5 s).
+    #   - When fused MiniFASNet "real" probability < LIVENESS_REAL_THRESHOLD
+    #     for >= LIVENESS_SPOOF_CONSECUTIVE frames, the track is marked
+    #     spoof and recognition is suppressed (overlay shows "Spoof detected"
+    #     instead of a name; attendance is NOT credited).
+    #   - When the same track later passes liveness for
+    #     LIVENESS_REAL_RECOVERY_FRAMES frames in a row, the spoof flag
+    #     clears and normal recognition resumes (a real student briefly
+    #     misclassified can recover without the operator restarting).
+    # ───────────────────────────────────────────────────────────────────────
+    LIVENESS_ENABLED: bool = False
+    # Threshold on the fused "real" softmax probability across MiniFASNetV2
+    # (scale 2.7) and MiniFASNetV1SE (scale 4.0). 0.5 is the canonical
+    # decision boundary for the published two-model fusion. Bump up if
+    # phone/screen presentations slip through; bump down if real CCTV
+    # faces in poor lighting are over-rejected.
+    LIVENESS_REAL_THRESHOLD: float = 0.5
+    # Per-track "spoof confirmed" debounce. A single transient mis-
+    # classification from a glitchy frame should NOT suppress recognition
+    # — require N consecutive frames below threshold before flipping
+    # the broadcast state. At PROCESSING_FPS=20 with the recheck cadence
+    # below, 2 means ~10 s of sustained spoof signal before suppression
+    # commits. Set to 1 to suppress on first spoof verdict.
+    LIVENESS_SPOOF_CONSECUTIVE: int = 2
+    # Per-track "real recovery" debounce. Once a track is suppressed,
+    # how many consecutive real verdicts do we need before unsuppressing?
+    # Higher = stickier suppression (better against intermittent attacks
+    # where the attacker briefly tilts the phone away to defeat the gate).
+    LIVENESS_REAL_RECOVERY_FRAMES: int = 3
+    # How often (seconds) to re-run liveness on already-bound tracks. Same
+    # cadence as ArcFace re-verify — both share the embed batch boundary
+    # in RealtimeTracker.process(). A static photo doesn't need a fresh
+    # check every frame, but the bound is also the protection window: at
+    # 5 s, an attacker who briefly removes the photo loses the gate
+    # within 5 s of resuming. New tracks are always liveness-checked on
+    # first frame regardless of this cadence.
+    LIVENESS_RECHECK_INTERVAL_S: float = 5.0
+    # Hard wall on per-frame liveness inference budget. The full embed
+    # batch already drops to top N tracks based on
+    # MAX_FIRST_RECOGNITIONS_PER_FRAME — same cap is reused here so the
+    # liveness path can't blow the per-frame budget when 30+ students
+    # walk in together.
+    LIVENESS_MAX_PER_FRAME: int = 10
 
     # Adaptive Per-Session Enrollment
     # When a student is recognized with high confidence from CCTV, store that
@@ -222,16 +359,58 @@ class Settings(BaseSettings):
     # applies — captures whose mean sim to existing phone vectors is below
     # AUTO_CCTV_ENROLL_MIN_SELF_SIM are dropped without commit.
     #
-    # Default OFF until you've observed dry-run logs and are happy with
-    # the trigger rate.
-    AUTO_CCTV_ENROLL_ENABLED: bool = False
-    AUTO_CCTV_ENROLL_MIN_CONFIDENCE: float = 0.60
+    # Default ON as of 2026-04-25 swap-hardening pass. The earlier
+    # safety concern (a wrong first-recognition could poison FAISS) is
+    # now closed by the layered identity defenses: vote-based swap-gate,
+    # frame-mutex Hungarian assignment, oscillation suppressor, and
+    # phone-only stricter threshold. Auto-enrolment also opts itself
+    # out of the offer when the current frame's decision was patched
+    # by either the swap-gate (sustained candidate didn't reach streak)
+    # or the frame-mutex (top-1 was claimed by another track) — so
+    # uncertain frames never reach the auto-enroll buffer in the first
+    # place. Combined with the lifetime cap and the commit-time
+    # self-similarity gate, the auto path is now safe for the
+    # production fleet to run unattended.
+    AUTO_CCTV_ENROLL_ENABLED: bool = True
+    # Tuning history:
+    #   - 2026-04-25 first cut: 0.55 to align with the phone-only
+    #     stricter threshold of the same value. Worked as a safety
+    #     floor but stranded students whose first-encounter sim in a
+    #     new room sat in the 0.45-0.55 band — they would show as
+    #     "Detecting…" forever in that room because auto-enrol never
+    #     fired to capture room-specific embeddings.
+    #   - 2026-04-26: lowered to 0.50 alongside the phone-only bonus
+    #     reduction. Now any sustained recognition above 0.50 sim
+    #     triggers an auto-enrol attempt. Safety against noise still
+    #     comes from the 60-frame stability gate, the 5 s capture
+    #     spacing, and the commit-time self-similarity check
+    #     (mean sim against existing phone embeddings >=
+    #     AUTO_CCTV_ENROLL_MIN_SELF_SIM). Combined with per-room
+    #     auto-enrol state (auto_cctv_enroller.py), this lets a
+    #     student who was auto-enrolled in EB226 still trigger fresh
+    #     captures the first time they appear in EB227.
+    AUTO_CCTV_ENROLL_MIN_CONFIDENCE: float = 0.50
     AUTO_CCTV_ENROLL_MIN_STABLE_FRAMES: int = 60
     AUTO_CCTV_ENROLL_TARGET_CAPTURES: int = 5
     AUTO_CCTV_ENROLL_CAPTURE_INTERVAL_S: float = 5.0
     AUTO_CCTV_ENROLL_LIFETIME_CAP: int = 5
     AUTO_CCTV_ENROLL_MIN_SELF_SIM: float = 0.30
     AUTO_CCTV_ENROLL_DRY_RUN: bool = False  # If True, log what would be committed but don't write
+
+    # Periodic mean-embedding re-validation interval. Every N frames the
+    # tracker walks all currently-recognized tracks, computes the mean
+    # of their recent embedding buffer (already maintained for first-
+    # recognition aggregation), runs ONE batched FAISS search on those
+    # means, and feeds the result through the same swap-gate as a
+    # regular re-verify. This adds a strong "stability check" that's
+    # noise-resistant — a single outlier frame can't flip the binding,
+    # only a sustained shift in the mean can.
+    #
+    # At 5 fps backend, 150 frames ≈ 30 s; the cost is one batched FAISS
+    # search per N=PROCESSING_FPS×30 frames per active session, which is
+    # negligible (search_batch_with_margin already takes <5 ms for 4-6
+    # tracks). Set to 0 to disable.
+    REVALIDATION_INTERVAL_FRAMES: int = 150
 
     # Spatial+temporal identity hint (the "graveyard") for handling
     # intermittent visibility — a student who turns their head, briefly

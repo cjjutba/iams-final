@@ -2,11 +2,10 @@ import { useMemo, useState, useTransition } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
 import { safeFormat } from '@/lib/utils'
-import { CheckCircle2, XCircle, Plus } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { usePageTitle } from '@/hooks/use-page-title'
 
 import { DataTable } from '@/components/data-tables'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -20,6 +19,10 @@ import type { UserResponse } from '@/types'
 import { CreateUserDialog } from './create-user-dialog'
 import { UserActionsCell } from './user-actions'
 import { tokenMatches, joinHaystack, isoDateHaystackParts } from '@/lib/search'
+import {
+  ActiveStatusPill,
+  EmailVerifiedPill,
+} from '@/components/shared/status-pills'
 
 function buildFacultyHaystack(u: UserResponse): string {
   return joinHaystack([
@@ -54,40 +57,26 @@ const columns: ColumnDef<UserResponse>[] = [
     accessorKey: 'phone',
     header: 'Phone',
     cell: ({ row }) => (
-      <span className="text-sm">{row.original.phone ?? '\u2014'}</span>
+      <span className="text-sm text-muted-foreground">
+        {row.original.phone ?? '—'}
+      </span>
     ),
   },
   {
     accessorKey: 'is_active',
     header: 'Status',
-    cell: ({ row }) =>
-      row.original.is_active ? (
-        <Badge variant="default">Active</Badge>
-      ) : (
-        <Badge variant="destructive">Inactive</Badge>
-      ),
+    cell: ({ row }) => <ActiveStatusPill active={row.original.is_active} />,
   },
   {
     accessorKey: 'email_verified',
     header: 'Email',
-    cell: ({ row }) =>
-      row.original.email_verified ? (
-        <span className="inline-flex items-center gap-1.5 text-sm text-green-600">
-          <CheckCircle2 className="h-3.5 w-3.5" />
-          Verified
-        </span>
-      ) : (
-        <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
-          <XCircle className="h-3.5 w-3.5" />
-          Not Verified
-        </span>
-      ),
+    cell: ({ row }) => <EmailVerifiedPill verified={row.original.email_verified} />,
   },
   {
     accessorKey: 'created_at',
-    header: 'Added',
+    header: 'Joined',
     cell: ({ row }) => (
-      <span className="text-sm">
+      <span className="text-sm text-muted-foreground">
         {safeFormat(row.original.created_at, 'MMM d, yyyy')}
       </span>
     ),
@@ -152,7 +141,7 @@ export default function FacultyPage() {
           <SelectValue placeholder="Status" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">All Status</SelectItem>
+          <SelectItem value="all">All status</SelectItem>
           <SelectItem value="active">Active</SelectItem>
           <SelectItem value="inactive">Inactive</SelectItem>
         </SelectContent>
@@ -163,9 +152,9 @@ export default function FacultyPage() {
           <SelectValue placeholder="Email" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">All Email</SelectItem>
+          <SelectItem value="all">All email</SelectItem>
           <SelectItem value="verified">Verified</SelectItem>
-          <SelectItem value="not_verified">Not Verified</SelectItem>
+          <SelectItem value="not_verified">Not verified</SelectItem>
         </SelectContent>
       </Select>
 

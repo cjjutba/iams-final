@@ -250,6 +250,71 @@ async def lifespan(app: FastAPI):
             if not sidecar_bound:
                 set_realtime_model(insightface_model)
 
+            # ── Liveness backend (MiniFASNet via sidecar /liveness) ──
+            # Bound only when:
+            #   (a) operator opted in via LIVENESS_ENABLED=true, AND
+            #   (b) sidecar is bound + reports liveness_loaded=true.
+            # Either condition false → set_liveness_model(None) so the
+            # tracker treats every track as liveness-unknown (= not gated).
+            from app.services.ml.inference import (
+                set_liveness_model,
+            )
+
+            liveness_bound = False
+            if settings.LIVENESS_ENABLED and sidecar_bound and settings.ML_SIDECAR_URL:
+                try:
+                    from app.services.ml.remote_liveness_model import (
+                        RemoteLivenessModel,
+                    )
+
+                    rlm = RemoteLivenessModel(settings.ML_SIDECAR_URL)
+                    liveness_health = await asyncio.to_thread(rlm.healthcheck)
+                    if liveness_health and liveness_health.get("loaded"):
+                        set_liveness_model(rlm)
+                        logger.info(
+                            "Liveness backend bound — pack=%s, submodels=%s",
+                            liveness_health.get("pack_dir"),
+                            [
+                                sm.get("name")
+                                for sm in liveness_health.get("submodels", [])
+                            ],
+                        )
+                        liveness_bound = True
+                    else:
+                        logger.warning(
+                            "LIVENESS_ENABLED=true but sidecar reports "
+                            "liveness_loaded=false (%s) — liveness gating "
+                            "will be SKIPPED this run. Run `python -m "
+                            "scripts.export_liveness_models` then restart.",
+                            (liveness_health or {}).get("error", "no /health response"),
+                        )
+                        try:
+                            rlm.close()
+                        except Exception:
+                            pass
+                except Exception:
+                    logger.exception(
+                        "Failed to initialise liveness proxy — "
+                        "liveness gating will be SKIPPED this run"
+                    )
+            elif settings.LIVENESS_ENABLED and not sidecar_bound:
+                logger.warning(
+                    "LIVENESS_ENABLED=true but ML sidecar is not bound — "
+                    "liveness gating will be SKIPPED. Liveness lives in "
+                    "the sidecar; bring up the sidecar first."
+                )
+            else:
+                logger.info(
+                    "Liveness gating disabled (LIVENESS_ENABLED=%s)",
+                    settings.LIVENESS_ENABLED,
+                )
+
+            if not liveness_bound:
+                # Explicit None binding so any prior gateway boot's leftover
+                # state can't leak through. Idempotent: safe to call with
+                # None when no liveness model was previously bound.
+                set_liveness_model(None)
+
             logger.info("Face recognition system initialized")
         except Exception as e:
             logger.error(f"Failed to initialize face recognition: {e}")
@@ -304,7 +369,10 @@ async def lifespan(app: FastAPI):
                     if _room_id in app.state.frame_grabbers:
                         continue
                     try:
-                        app.state.frame_grabbers[_room_id] = _FrameGrabber(_room.camera_endpoint)
+                        app.state.frame_grabbers[_room_id] = _FrameGrabber(
+                            _room.camera_endpoint,
+                            dedup_repeats=True,
+                        )
                         logger.info(
                             "FrameGrabber preloaded for room %s (%s)",
                             _room.name,
@@ -551,7 +619,7 @@ async def lifespan(app: FastAPI):
                     # or a failed preload pass. Either way, ML detection only
                     # runs once a SessionPipeline is attached below.
                     if camera_url and room_id not in app.state.frame_grabbers:
-                        grabber = FrameGrabber(camera_url)
+                        grabber = FrameGrabber(camera_url, dedup_repeats=True)
                         app.state.frame_grabbers[room_id] = grabber
                         logger.info(f"[lifecycle] Created FrameGrabber for room {room_id}")
 
@@ -1190,7 +1258,9 @@ async def lifespan(app: FastAPI):
             # FrameGrabbers are preloaded at boot; this fallback handles a
             # room added at runtime or a failed preload.
             if room_id not in app.state.frame_grabbers:
-                app.state.frame_grabbers[room_id] = FrameGrabber(camera_url)
+                app.state.frame_grabbers[room_id] = FrameGrabber(
+                    camera_url, dedup_repeats=True
+                )
                 logger.info("[on-demand] Created FrameGrabber for room %s", room_id)
             grabber = app.state.frame_grabbers[room_id]
 

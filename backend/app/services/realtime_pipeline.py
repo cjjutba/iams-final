@@ -178,6 +178,95 @@ class SessionPipeline:
                 if room:
                     camera_handle = room.stream_key or room.name
 
+            # Compute the phone-only user_ids set for this session so the
+            # tracker can apply ``RECOGNITION_PHONE_ONLY_THRESHOLD_BONUS``
+            # when matching against students whose registration lacks
+            # CCTV-domain embeddings FOR THIS ROOM specifically.
+            #
+            # Phase 2 (2026-04-26): per-room awareness. A student is
+            # considered "phone-only" in this room if they have NEITHER
+            # a ``cctv_<this_room>_*`` row NOR any legacy ``cctv_<idx>``
+            # row. Students with embeddings only from a *different* room
+            # (e.g. EB226 captures, no EB227 captures) ARE flagged
+            # phone-only in EB227 — that's the configuration where the
+            # cross-domain gap is most visible, and the strict gate +
+            # auto-enrol-on-recognition is the right path. Auto-CCTV
+            # enrol's per-(user, room) state will fire opportunistic
+            # captures here as soon as recognition stabilises.
+            phone_only_user_ids: set[str] = set()
+            if self._presence.enrolled_ids:
+                from app.utils.cctv_label import normalize_room_key, parse_cctv_label
+
+                this_room_key = normalize_room_key(camera_handle) or "unknown"
+                rows = (
+                    db.query(
+                        FaceRegistration.user_id,
+                        User.first_name,
+                        User.last_name,
+                        FaceEmbedding.angle_label,
+                    )
+                    .join(User, FaceRegistration.user_id == User.id)
+                    .outerjoin(
+                        FaceEmbedding,
+                        FaceEmbedding.registration_id == FaceRegistration.id,
+                    )
+                    .filter(FaceRegistration.is_active)
+                    .filter(
+                        FaceRegistration.user_id.in_(
+                            list(self._presence.enrolled_ids)
+                        )
+                    )
+                    .all()
+                )
+                names_by_user: dict[str, str] = {}
+                has_room_cctv: dict[str, bool] = {}
+                for user_id, first, last, label in rows:
+                    uid = str(user_id)
+                    names_by_user[uid] = f"{first} {last} ({uid[:8]})"
+                    if uid not in has_room_cctv:
+                        has_room_cctv[uid] = False
+                    if not label:
+                        continue
+                    emb_room, emb_idx = parse_cctv_label(label)
+                    if emb_idx is None:
+                        continue
+                    # Both per-room (modern) AND legacy (room=None)
+                    # captures count as "has CCTV for this room" — the
+                    # legacy ones might or might not have come from
+                    # this room (we lost that provenance), but they're
+                    # CCTV-domain so they help here too.
+                    if emb_room == this_room_key or emb_room is None:
+                        has_room_cctv[uid] = True
+                phone_only_names: list[str] = []
+                for uid, has_cctv in has_room_cctv.items():
+                    if not has_cctv:
+                        phone_only_user_ids.add(uid)
+                        phone_only_names.append(names_by_user[uid])
+                if phone_only_names:
+                    logger.warning(
+                        "Session %s: %d enrolled student(s) have no CCTV "
+                        "embeddings — recognition will require a higher "
+                        "threshold (sim >= %.2f) until they are enrolled "
+                        "via scripts.cctv_enroll for room %s. Affected: %s",
+                        self.schedule_id[:8],
+                        len(phone_only_names),
+                        # Show the operator the effective gate so they
+                        # can correlate this against the actual sim
+                        # values that show up in /recognitions.
+                        # RECOGNITION_THRESHOLD lives in app.config.settings.
+                        # Computed inline so the log is self-contained.
+                        # Imported here (not at module top) to avoid a
+                        # circular import on cold start.
+                        __import__(
+                            "app.config", fromlist=["settings"]
+                        ).settings.RECOGNITION_THRESHOLD
+                        + __import__(
+                            "app.config", fromlist=["settings"]
+                        ).settings.RECOGNITION_PHONE_ONLY_THRESHOLD_BONUS,
+                        camera_handle,
+                        ", ".join(phone_only_names),
+                    )
+
             self._tracker = RealtimeTracker(
                 insightface_model=insightface_model,
                 faiss_manager=faiss_manager,
@@ -185,6 +274,8 @@ class SessionPipeline:
                 name_map=full_name_map,
                 schedule_id=self.schedule_id,
                 camera_id=camera_handle,
+                phone_only_user_ids=phone_only_user_ids,
+                liveness_model=liveness_model,
             )
 
             self._last_flush = time.monotonic()
@@ -520,6 +611,15 @@ class SessionPipeline:
                     # renders as "Detecting…" (orange) instead of a misleading red
                     # "Unknown" while FAISS works through the warm-up window.
                     "recognition_state": t.recognition_state,
+                    # Liveness state (added 2026-04-25 with the MiniFASNet
+                    # passive anti-spoofing layer). "spoof" → admin overlay
+                    # renders bbox in red with "Spoof detected" label
+                    # regardless of recognition_state. "real" / "unknown"
+                    # → no override (fall through to recognition_state).
+                    # Always emitted so older clients with no spoof
+                    # rendering still see the field as a no-op.
+                    "liveness_state": t.liveness_state,
+                    "liveness_score": round(float(t.liveness_score), 3),
                     "is_active": True,  # All broadcast tracks are currently active
                 }
                 for t in track_frame.tracks

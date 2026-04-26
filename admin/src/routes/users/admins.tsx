@@ -1,12 +1,11 @@
-import { useMemo, useState, useTransition } from 'react'
+import { useEffect, useMemo, useState, useTransition } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
 import { safeFormat } from '@/lib/utils'
-import { CheckCircle2, XCircle, Plus } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { usePageTitle } from '@/hooks/use-page-title'
 
 import { DataTable } from '@/components/data-tables'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -16,10 +15,15 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useUsers } from '@/hooks/use-queries'
+import { activityService } from '@/services/activity.service'
 import type { UserResponse } from '@/types'
 import { CreateUserDialog } from './create-user-dialog'
 import { UserActionsCell } from './user-actions'
 import { tokenMatches, joinHaystack, isoDateHaystackParts } from '@/lib/search'
+import {
+  ActiveStatusPill,
+  EmailVerifiedPill,
+} from '@/components/shared/status-pills'
 
 function buildAdminHaystack(u: UserResponse): string {
   return joinHaystack([
@@ -37,67 +41,47 @@ function buildAdminHaystack(u: UserResponse): string {
 type StatusFilter = 'all' | 'active' | 'inactive'
 type EmailFilter = 'all' | 'verified' | 'not_verified'
 
-const columns: ColumnDef<UserResponse>[] = [
-  {
-    accessorKey: 'first_name',
-    header: 'Name',
-    cell: ({ row }) => (
-      <div>
-        <div className="font-medium">
-          {row.original.first_name} {row.original.last_name}
-        </div>
-        <div className="text-sm text-muted-foreground">{row.original.email}</div>
-      </div>
-    ),
-  },
-  {
-    accessorKey: 'is_active',
-    header: 'Status',
-    cell: ({ row }) =>
-      row.original.is_active ? (
-        <Badge variant="default">Active</Badge>
-      ) : (
-        <Badge variant="destructive">Inactive</Badge>
-      ),
-  },
-  {
-    accessorKey: 'email_verified',
-    header: 'Email',
-    cell: ({ row }) =>
-      row.original.email_verified ? (
-        <span className="inline-flex items-center gap-1.5 text-sm text-green-600">
-          <CheckCircle2 className="h-3.5 w-3.5" />
-          Verified
-        </span>
-      ) : (
-        <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
-          <XCircle className="h-3.5 w-3.5" />
-          Not Verified
-        </span>
-      ),
-  },
-  {
-    accessorKey: 'created_at',
-    header: 'Added',
-    cell: ({ row }) => (
-      <span className="text-sm">
-        {safeFormat(row.original.created_at, 'MMM d, yyyy')}
-      </span>
-    ),
-  },
-  {
-    id: 'actions',
-    header: '',
-    enableSorting: false,
-    cell: ({ row }) => <UserActionsCell user={row.original} />,
-  },
-]
+const LOGIN_EVENT_TYPES = 'ADMIN_LOGIN,FACULTY_LOGIN,STUDENT_LOGIN'
 
 export default function AdminsPage() {
   usePageTitle('Admins')
   const navigate = useNavigate()
   const { data: admins = [], isLoading } = useUsers({ role: 'admin' })
   const [dialogOpen, setDialogOpen] = useState(false)
+
+  // Last-sign-in lookup per admin. We hit the activity feed once per admin
+  // with `actor_id={id}&event_type=*_LOGIN&limit=1` and cache the result in
+  // local state. This is N parallel calls on mount; for the typical
+  // handful of admins this is negligible. If the admins list ever grows
+  // past ~50, switch to a backend aggregate endpoint.
+  const [lastSignInById, setLastSignInById] = useState<Record<string, string | null>>({})
+
+  useEffect(() => {
+    let cancelled = false
+    if (admins.length === 0) return
+    void Promise.all(
+      admins.map(async (a) => {
+        try {
+          const res = await activityService.list({
+            actor_id: a.id,
+            event_type: LOGIN_EVENT_TYPES,
+            limit: 1,
+          })
+          return [a.id, res.items?.[0]?.created_at ?? null] as const
+        } catch {
+          return [a.id, null] as const
+        }
+      }),
+    ).then((entries) => {
+      if (cancelled) return
+      const out: Record<string, string | null> = {}
+      for (const [id, when] of entries) out[id] = when
+      setLastSignInById(out)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [admins])
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [emailFilter, setEmailFilter] = useState<EmailFilter>('all')
@@ -138,6 +122,65 @@ export default function AdminsPage() {
 
   const showSkeleton = isLoading || isPending
 
+  const columns: ColumnDef<UserResponse>[] = [
+    {
+      accessorKey: 'first_name',
+      header: 'Name',
+      cell: ({ row }) => (
+        <div>
+          <div className="font-medium">
+            {row.original.first_name} {row.original.last_name}
+          </div>
+          <div className="text-sm text-muted-foreground">{row.original.email}</div>
+        </div>
+      ),
+    },
+    {
+      accessorKey: 'is_active',
+      header: 'Status',
+      cell: ({ row }) => <ActiveStatusPill active={row.original.is_active} />,
+    },
+    {
+      accessorKey: 'email_verified',
+      header: 'Email',
+      cell: ({ row }) => <EmailVerifiedPill verified={row.original.email_verified} />,
+    },
+    {
+      id: 'last_sign_in',
+      header: 'Last sign-in',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const when = lastSignInById[row.original.id]
+        if (when === undefined) {
+          return <span className="text-sm text-muted-foreground">—</span>
+        }
+        if (when === null) {
+          return <span className="text-sm text-muted-foreground">Never</span>
+        }
+        return (
+          <span className="text-sm text-muted-foreground" title={when}>
+            {safeFormat(when, 'MMM d, yyyy')}
+          </span>
+        )
+      },
+    },
+    {
+      accessorKey: 'created_at',
+      header: 'Joined',
+      cell: ({ row }) => (
+        <span className="text-sm text-muted-foreground">
+          {safeFormat(row.original.created_at, 'MMM d, yyyy')}
+        </span>
+      ),
+    },
+    {
+      id: 'actions',
+      header: '',
+      enableSorting: false,
+      cell: ({ row }) => <UserActionsCell user={row.original} />,
+    },
+  ]
+
   const filterToolbar = (
     <>
       <Select value={statusFilter} onValueChange={handleFilterChange(setStatusFilter)}>
@@ -145,7 +188,7 @@ export default function AdminsPage() {
           <SelectValue placeholder="Status" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">All Status</SelectItem>
+          <SelectItem value="all">All status</SelectItem>
           <SelectItem value="active">Active</SelectItem>
           <SelectItem value="inactive">Inactive</SelectItem>
         </SelectContent>
@@ -156,9 +199,9 @@ export default function AdminsPage() {
           <SelectValue placeholder="Email" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">All Email</SelectItem>
+          <SelectItem value="all">All email</SelectItem>
           <SelectItem value="verified">Verified</SelectItem>
-          <SelectItem value="not_verified">Not Verified</SelectItem>
+          <SelectItem value="not_verified">Not verified</SelectItem>
         </SelectContent>
       </Select>
 

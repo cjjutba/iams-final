@@ -82,6 +82,31 @@ if [ "${ready}" = "1" ]; then
     | python3 -c "import sys, json; r = json.load(sys.stdin); [print('    %s → %s' % (p['task'], ', '.join(p['providers']))) for p in r.get('providers', [])]" \
     || echo "    (could not parse /health body)"
   echo ""
+  # Liveness pack status — added 2026-04-25 with the MiniFASNet anti-spoofing
+  # layer. Always print the line; "loaded: false" with the reason is the
+  # operator's cue to run scripts.export_liveness_models. We don't make the
+  # sidecar startup fail on missing liveness because the SCRFD/ArcFace path
+  # works fine without it; spoof gating just becomes a no-op.
+  echo "  Liveness:"
+  curl -sf "${HEALTH_URL}" 2>/dev/null \
+    | python3 -c "
+import sys, json
+r = json.load(sys.stdin)
+lv = r.get('liveness') or {}
+if lv.get('loaded'):
+    sm = lv.get('submodels') or []
+    print('    loaded ✓  submodels=%s' % ', '.join(s.get('name', '?') for s in sm))
+    for s in sm:
+        prov = ', '.join(s.get('providers', []) or ['<no providers>'])
+        print('      %s → %s' % (s.get('name', '?'), prov))
+else:
+    print('    NOT loaded — run: backend/venv/bin/python -m scripts.export_liveness_models')
+    err = lv.get('error')
+    if err:
+        print('    reason: %s' % err)
+" \
+    || echo "    (could not parse /health body)"
+  echo ""
 else
   echo "" >&2
   echo "ERROR: ML sidecar /health didn't come up within 30 s" >&2

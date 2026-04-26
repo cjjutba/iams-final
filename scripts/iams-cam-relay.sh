@@ -111,9 +111,21 @@ run_camera() {
     # -c copy = no re-encode (free).
     # TCP transport on both sides — Reolink over WiFi drops UDP packets; mediamtx
     # also prefers TCP publishers.
+    # ``-timeout`` (microseconds) is the input socket I/O timeout: when the
+    # camera's RTSP daemon silently drops the session — observed on the
+    # main stream of 192.168.88.11/EB226 every ~2 min, leaving the TCP
+    # socket half-open with no data flow — ffmpeg will raise EIO and the
+    # wrapper ``while true`` loop above restarts within 3 s. Without this,
+    # ffmpeg waits on the stalled socket until OS-level TCP keepalive fires
+    # (~2 h default), and the watchdog has to SIGKILL it ~60 s later. 5 s
+    # catches genuine drops fast without false-positive-ing on momentary
+    # jitter. (ffmpeg 5+ replaced the old RTSP-specific ``-stimeout`` with
+    # the generic ``-timeout`` covering all socket protocols; we're on
+    # ffmpeg 8 on the host.)
     "${FFMPEG}" \
       -hide_banner -loglevel warning \
       -rtsp_transport tcp \
+      -timeout 5000000 \
       -i "${input_url}" \
       -c copy \
       -f rtsp \

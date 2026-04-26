@@ -238,9 +238,15 @@ export const WhepPlayer = forwardRef<WhepPlayerHandle, WhepPlayerProps>(function
       pc.onconnectionstatechange = () => {
         if (cancelled) return
         const state = pc.connectionState
-        if (state === 'connected') {
-          setStatus('playing')
-        } else if (state === 'failed' || state === 'disconnected' || state === 'closed') {
+        // Don't flip to 'playing' here. WebRTC `connected` only means the
+        // SRTP transport is up — it can fire several hundred ms before the
+        // first I-frame is decoded and presented. If we promote status to
+        // 'playing' on the transport event, the parent un-gates the bbox
+        // overlay and DetectionOverlay paints labels on top of an
+        // all-black <video>. Wait for the <video>'s `onPlaying` event
+        // (fired below) so the overlay and the first decoded frame appear
+        // simultaneously.
+        if (state === 'failed' || state === 'disconnected' || state === 'closed') {
           setStatus('error')
           setErrorMsg(`WebRTC ${state}`)
         }
@@ -391,12 +397,28 @@ export const WhepPlayer = forwardRef<WhepPlayerHandle, WhepPlayerProps>(function
             onVideoSize?.(v.videoWidth, v.videoHeight)
           }
         }}
+        onPlaying={() => {
+          // Only escalate if we're still in the connecting phase. We must
+          // not clobber 'error' (real disconnection observed by
+          // onconnectionstatechange after playback started) or 'idle'
+          // (effect torn down).
+          setStatus((prev) => (prev === 'connecting' ? 'playing' : prev))
+        }}
+        onWaiting={() => {
+          // Live stream stalled out (publisher dropped frames, or sub
+          // ffmpeg restarted). Demote to 'connecting' so the parent
+          // re-hides the overlay until decoded frames resume — otherwise
+          // we'd paint boxes on the last freeze-frame.
+          setStatus((prev) => (prev === 'playing' ? 'connecting' : prev))
+        }}
       />
 
       {status === 'connecting' && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-white">
           <Loader2 className="h-8 w-8 animate-spin" />
-          <span className="text-sm">Connecting to {streamKey}…</span>
+          <span className="text-sm">
+            Connecting to {streamKey.replace(/-sub$/, '').toUpperCase()} camera…
+          </span>
         </div>
       )}
 

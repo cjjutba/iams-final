@@ -19,16 +19,27 @@ interface DetectionOverlayProps {
 
 // Tri-state the overlay commits to, derived from the backend's
 // `recognition_state` (preferred) with a fallback to the legacy `status`
-// field for older payloads. This is what colors + labels key off of.
-type OverlayState = 'recognized' | 'warming_up' | 'unknown'
+// field for older payloads. `spoof` is a fourth state added 2026-04-25
+// when MiniFASNet flags the track as a presentation attack — it
+// overrides recognition_state in the overlay rendering so a phone-
+// shown face never gets a green name label even if FAISS would have
+// matched it (the backend has already withheld the binding too).
+type OverlayState = 'recognized' | 'warming_up' | 'unknown' | 'spoof'
 
 const COLOR_RECOGNIZED = '#22c55e'
 const COLOR_UNKNOWN = '#f59e0b'
 const COLOR_WARMING_UP = '#3b82f6'
+// Distinct red — separable from `unknown` (amber) so the operator can
+// tell at a glance that a spoof gate fired vs. a non-enrolled face.
+const COLOR_SPOOF = '#ef4444'
 
 const LABEL_BG_ALPHA = 0.9
 
 function deriveOverlayState(track: TrackInfo): OverlayState {
+  // Spoof wins over everything — the backend has already suppressed
+  // recognition for this track and we want the operator to see why.
+  if (track.liveness_state === 'spoof') return 'spoof'
+
   if (track.recognition_state === 'recognized') return 'recognized'
   if (track.recognition_state === 'unknown') return 'unknown'
   if (track.recognition_state === 'warming_up') return 'warming_up'
@@ -41,10 +52,19 @@ function deriveOverlayState(track: TrackInfo): OverlayState {
 function colorForState(state: OverlayState): string {
   if (state === 'recognized') return COLOR_RECOGNIZED
   if (state === 'unknown') return COLOR_UNKNOWN
+  if (state === 'spoof') return COLOR_SPOOF
   return COLOR_WARMING_UP
 }
 
 function labelForTrack(track: TrackInfo, state: OverlayState): string {
+  if (state === 'spoof') {
+    // Surface the fused MiniFASNet "real" probability so the operator
+    // can tell a confident spoof (~0.05) from a marginal one (~0.45).
+    const score = typeof track.liveness_score === 'number'
+      ? ` ${(track.liveness_score * 100).toFixed(0)}%`
+      : ''
+    return `Spoof detected${score}`
+  }
   if (state === 'recognized' && track.name) return track.name
   if (state === 'unknown') return 'Unknown'
   return 'Detecting…'

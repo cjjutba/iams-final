@@ -25,6 +25,8 @@ from app.schemas.face import (
     CameraDiagnosticResponse,
     CctvEnrollRequest,
     CctvEnrollResponse,
+    CctvEnrollmentStatusEntry,
+    CctvEnrollmentStatusResponse,
     EdgeProcessRequest,
     EdgeProcessResponse,
     EdgeProcessResponseData,
@@ -951,6 +953,98 @@ async def cctv_enroll_user(
         logger.warning("log_audit failed for face.cctv_enroll", exc_info=True)
 
     return CctvEnrollResponse(success=True, user_id=user_id, **result)
+
+
+@router.get(
+    "/cctv-enrollment-status",
+    response_model=CctvEnrollmentStatusResponse,
+)
+async def cctv_enrollment_status(
+    _admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+) -> CctvEnrollmentStatusResponse:
+    """**Admin-only: report which students have not yet been CCTV-enrolled.**
+
+    Returns one row per student with an active face registration, listing
+    how many ``cctv_*`` embeddings they have on file. Students with zero
+    are shown as ``phone_only=True``; the realtime tracker applies a
+    stricter recognition threshold for these users so misidentifications
+    in the cross-domain noise band become "Detecting…" overlays rather
+    than wrong-name commits.
+
+    Drives the admin live-feed banner that prompts the operator to run
+    ``cctv_enroll`` for any flagged student before relying on automatic
+    attendance for them.
+    """
+    from app.models.face_embedding import FaceEmbedding
+    from app.models.face_registration import FaceRegistration
+    from app.models.room import Room
+    from sqlalchemy import func
+
+    rows = (
+        db.query(
+            FaceRegistration.user_id,
+            User.first_name,
+            User.last_name,
+            User.student_id,
+            func.count(FaceEmbedding.id).filter(
+                FaceEmbedding.angle_label.like("cctv_%")
+            ).label("cctv_count"),
+        )
+        .join(User, FaceRegistration.user_id == User.id)
+        .outerjoin(
+            FaceEmbedding,
+            FaceEmbedding.registration_id == FaceRegistration.id,
+        )
+        .filter(FaceRegistration.is_active)
+        .group_by(
+            FaceRegistration.user_id,
+            User.first_name,
+            User.last_name,
+            User.student_id,
+        )
+        .order_by(func.count(FaceEmbedding.id).filter(
+            FaceEmbedding.angle_label.like("cctv_%")
+        ).asc(), User.first_name.asc())
+        .all()
+    )
+
+    entries: list[CctvEnrollmentStatusEntry] = []
+    phone_only_count = 0
+    for user_id, first, last, student_id, cctv_count in rows:
+        cnt = int(cctv_count or 0)
+        is_phone_only = cnt == 0
+        if is_phone_only:
+            phone_only_count += 1
+        entries.append(CctvEnrollmentStatusEntry(
+            user_id=str(user_id),
+            student_id=student_id,
+            full_name=f"{first} {last}".strip(),
+            cctv_count=cnt,
+            phone_only=is_phone_only,
+        ))
+
+    # Room.stream_key is the canonical room identifier the realtime
+    # tracker uses (it's also what's encoded into the new
+    # ``cctv_<room>_<idx>`` labels). Fall back to Room.name for any
+    # legacy room rows whose stream_key wasn't set.
+    rooms = [
+        (r.stream_key or r.name).lower()
+        for r in db.query(Room).order_by(Room.name).all()
+        if (r.stream_key or r.name)
+    ]
+
+    return CctvEnrollmentStatusResponse(
+        students=entries,
+        rooms=rooms,
+        threshold=settings.RECOGNITION_THRESHOLD,
+        phone_only_threshold=(
+            settings.RECOGNITION_THRESHOLD
+            + settings.RECOGNITION_PHONE_ONLY_THRESHOLD_BONUS
+        ),
+        phone_only_count=phone_only_count,
+        total_registered=len(entries),
+    )
 
 
 @router.get("/camera-diagnostic", response_model=CameraDiagnosticResponse)

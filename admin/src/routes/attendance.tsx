@@ -8,7 +8,6 @@ import { toast } from 'sonner'
 import { usePageTitle } from '@/hooks/use-page-title'
 
 import { DataTable } from '@/components/data-tables'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Calendar } from '@/components/ui/calendar'
 import {
@@ -25,9 +24,10 @@ import {
 } from '@/components/ui/select'
 import { useAttendanceList } from '@/hooks/use-queries'
 import { attendanceService } from '@/services/attendance.service'
-import type { AttendanceRecord, AttendanceStatus } from '@/types'
+import type { AttendanceRecord } from '@/types'
 import { formatStatus } from '@/types/attendance'
 import { tokenMatches, joinHaystack, isoDateHaystackParts } from '@/lib/search'
+import { AttendanceStatusPill } from '@/components/shared/status-pills'
 
 function buildAttendanceHaystack(r: AttendanceRecord): string {
   return joinHaystack([
@@ -45,56 +45,71 @@ function buildAttendanceHaystack(r: AttendanceRecord): string {
   ])
 }
 
-const statusColors: Record<AttendanceStatus, string> = {
-  present: 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100',
-  late: 'bg-slate-200 text-slate-700 hover:bg-slate-200',
-  absent: 'bg-red-100 text-red-800 hover:bg-red-100',
-  excused: 'bg-blue-100 text-blue-800 hover:bg-blue-100',
-  early_leave: 'bg-amber-100 text-amber-800 hover:bg-amber-100',
-}
-
 const columns: ColumnDef<AttendanceRecord>[] = [
   {
     accessorKey: 'student_name',
     header: 'Student',
-    cell: ({ row }) => row.original.student_name ?? '\u2014',
+    cell: ({ row }) => (
+      <span className="text-sm font-medium">
+        {row.original.student_name ?? '—'}
+      </span>
+    ),
   },
   {
     accessorKey: 'subject_code',
     header: 'Subject',
-    cell: ({ row }) => row.original.subject_code ?? '\u2014',
+    cell: ({ row }) => (
+      <span className="font-mono text-xs text-muted-foreground">
+        {row.original.subject_code ?? '—'}
+      </span>
+    ),
   },
   {
     accessorKey: 'date',
     header: 'Date',
-    cell: ({ row }) => safeFormat(row.original.date, 'MMM d, yyyy'),
+    cell: ({ row }) => (
+      <span className="text-sm">{safeFormat(row.original.date, 'MMM d, yyyy')}</span>
+    ),
   },
   {
     accessorKey: 'status',
     header: 'Status',
-    cell: ({ row }) => (
-      <Badge className={statusColors[row.original.status]}>
-        {formatStatus(row.original.status)}
-      </Badge>
-    ),
+    cell: ({ row }) => <AttendanceStatusPill status={row.original.status} />,
   },
   {
     accessorKey: 'check_in_time',
     header: 'Check-in',
-    cell: ({ row }) => safeFormat(row.original.check_in_time, 'h:mm a'),
+    cell: ({ row }) => (
+      <span className="text-sm tabular-nums text-muted-foreground">
+        {safeFormat(row.original.check_in_time, 'h:mm a')}
+      </span>
+    ),
   },
   {
     accessorKey: 'check_out_time',
     header: 'Check-out',
-    cell: ({ row }) => safeFormat(row.original.check_out_time, 'h:mm a'),
+    cell: ({ row }) => (
+      <span className="text-sm tabular-nums text-muted-foreground">
+        {safeFormat(row.original.check_out_time, 'h:mm a')}
+      </span>
+    ),
   },
   {
     accessorKey: 'presence_score',
-    header: 'Presence Score',
+    header: 'Presence',
     cell: ({ row }) => {
       const score = row.original.presence_score
-      const color = score >= 85 ? 'text-green-600' : score >= 70 ? 'text-yellow-600' : 'text-red-600'
-      return <span className={`font-medium ${color}`}>{score.toFixed(0)}%</span>
+      const color =
+        score >= 85
+          ? 'text-emerald-600 dark:text-emerald-400'
+          : score >= 70
+            ? 'text-amber-600 dark:text-amber-400'
+            : 'text-red-600 dark:text-red-400'
+      return (
+        <span className={`font-mono text-xs tabular-nums ${color}`}>
+          {score.toFixed(0)}%
+        </span>
+      )
     },
   },
 ]
@@ -206,10 +221,10 @@ export default function AttendancePage() {
 
       <Select value={statusFilter} onValueChange={setStatusFilter}>
         <SelectTrigger className="w-[140px] h-9">
-          <SelectValue placeholder="All Statuses" />
+          <SelectValue placeholder="All status" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">All Statuses</SelectItem>
+          <SelectItem value="all">All status</SelectItem>
           <SelectItem value="present">Present</SelectItem>
           <SelectItem value="late">Late</SelectItem>
           <SelectItem value="absent">Absent</SelectItem>
