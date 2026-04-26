@@ -7,6 +7,7 @@ Data access layer for Notification operations.
 import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.notification import Notification
@@ -36,7 +37,13 @@ class NotificationRepository:
         return self.db.query(Notification).filter(Notification.id == _to_uuid(notification_id)).first()
 
     def get_by_user(
-        self, user_id: str, unread_only: bool = False, skip: int = 0, limit: int = 50
+        self,
+        user_id: str,
+        unread_only: bool = False,
+        skip: int = 0,
+        limit: int = 50,
+        severity: str | None = None,
+        notification_type: str | None = None,
     ) -> list[Notification]:
         """
         Get notifications for a user
@@ -46,6 +53,8 @@ class NotificationRepository:
             unread_only: If True, only return unread notifications
             skip: Number of records to skip
             limit: Maximum number of records to return
+            severity: Optional severity filter (info/success/warn/error/critical).
+            notification_type: Optional notification ``type`` filter.
 
         Returns:
             List of notifications sorted by created_at descending
@@ -54,6 +63,12 @@ class NotificationRepository:
 
         if unread_only:
             query = query.filter(Notification.read.is_(False))
+
+        if severity is not None:
+            query = query.filter(Notification.severity == severity)
+
+        if notification_type is not None:
+            query = query.filter(Notification.type == notification_type)
 
         return query.order_by(Notification.created_at.desc()).offset(skip).limit(limit).all()
 
@@ -65,17 +80,84 @@ class NotificationRepository:
             .count()
         )
 
-    def create(self, notification_data: dict) -> Notification:
+    def get_unread_critical_count(self, user_id: str) -> int:
+        """Count unread notifications with severity in ('error', 'critical').
+
+        Used to drive the admin sidebar's red badge — distinguishes
+        action-needed from informational.
         """
-        Create a new notification
+        return (
+            self.db.query(Notification)
+            .filter(
+                Notification.user_id == _to_uuid(user_id),
+                Notification.read.is_(False),
+                Notification.severity.in_(("error", "critical")),
+            )
+            .count()
+        )
+
+    def get_unread_stats(self, user_id: str) -> dict:
+        """Return per-type and per-severity unread counts for the user.
+
+        Used by the notifications history page sidebar to show counts per
+        category. The frontend buckets the per-type counts into
+        higher-level groups (Operational Health, Security & Recognition,
+        etc.) — the backend stays agnostic to that grouping.
+
+        Returns:
+            {
+                "by_type": {"check_in": 3, "early_leave": 1, ...},
+                "by_severity": {"info": 5, "warn": 2, "error": 1, "critical": 0},
+                "total": 8,
+            }
+        """
+        uid = _to_uuid(user_id)
+
+        # Per-type counts
+        type_rows = (
+            self.db.query(Notification.type, func.count(Notification.id))
+            .filter(Notification.user_id == uid, Notification.read.is_(False))
+            .group_by(Notification.type)
+            .all()
+        )
+        by_type = {ntype: int(count) for ntype, count in type_rows}
+
+        # Per-severity counts
+        severity_rows = (
+            self.db.query(Notification.severity, func.count(Notification.id))
+            .filter(Notification.user_id == uid, Notification.read.is_(False))
+            .group_by(Notification.severity)
+            .all()
+        )
+        by_severity = {sev: int(count) for sev, count in severity_rows}
+
+        return {
+            "by_type": by_type,
+            "by_severity": by_severity,
+            "total": sum(by_type.values()),
+        }
+
+    def create(self, notification_data: dict, *, severity: str = "info") -> Notification:
+        """
+        Create a new notification.
 
         Args:
-            notification_data: Notification data dictionary
+            notification_data: Notification data dictionary. May or may not
+                contain a ``severity`` key — if absent the ``severity``
+                keyword argument below is used.
+            severity: Severity tag (``info``/``success``/``warn``/``error``/
+                ``critical``). Only applied when ``notification_data`` does
+                NOT already include a ``severity`` key.
 
         Returns:
             Created notification
         """
-        notification = Notification(**notification_data)
+        # Allow callers to pass severity either via the data dict (existing
+        # callers may add it there) or as a keyword argument. The dict wins
+        # if both are present, so older callsites keep working unchanged.
+        data = dict(notification_data)
+        data.setdefault("severity", severity)
+        notification = Notification(**data)
         self.db.add(notification)
         self.db.commit()
         self.db.refresh(notification)

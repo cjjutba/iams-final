@@ -1,12 +1,11 @@
-import { useMemo, useState, useTransition } from 'react'
+import { useEffect, useMemo, useState, useTransition } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
 import { safeFormat } from '@/lib/utils'
-import { CheckCircle2, XCircle, Plus } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { usePageTitle } from '@/hooks/use-page-title'
 
 import { DataTable } from '@/components/data-tables'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -15,69 +14,43 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { useUsers } from '@/hooks/use-queries'
+import { activityService } from '@/services/activity.service'
 import type { UserResponse } from '@/types'
 import { CreateUserDialog } from './create-user-dialog'
 import { UserActionsCell } from './user-actions'
+import { tokenMatches, joinHaystack, isoDateHaystackParts } from '@/lib/search'
+import {
+  ActiveStatusPill,
+  EmailVerifiedPill,
+} from '@/components/shared/status-pills'
+
+function buildAdminHaystack(u: UserResponse): string {
+  return joinHaystack([
+    u.first_name,
+    u.last_name,
+    `${u.first_name} ${u.last_name}`,
+    u.email,
+    u.phone,
+    u.is_active ? 'Active' : 'Inactive',
+    u.email_verified ? 'Verified' : 'Not Verified',
+    ...isoDateHaystackParts(u.created_at),
+  ])
+}
 
 type StatusFilter = 'all' | 'active' | 'inactive'
 type EmailFilter = 'all' | 'verified' | 'not_verified'
 
-const columns: ColumnDef<UserResponse>[] = [
-  {
-    accessorKey: 'first_name',
-    header: 'Name',
-    cell: ({ row }) => (
-      <div>
-        <div className="font-medium">
-          {row.original.first_name} {row.original.last_name}
-        </div>
-        <div className="text-sm text-muted-foreground">{row.original.email}</div>
-      </div>
-    ),
-  },
-  {
-    accessorKey: 'is_active',
-    header: 'Status',
-    cell: ({ row }) =>
-      row.original.is_active ? (
-        <Badge variant="default">Active</Badge>
-      ) : (
-        <Badge variant="destructive">Inactive</Badge>
-      ),
-  },
-  {
-    accessorKey: 'email_verified',
-    header: 'Email',
-    cell: ({ row }) =>
-      row.original.email_verified ? (
-        <span className="inline-flex items-center gap-1.5 text-sm text-green-600">
-          <CheckCircle2 className="h-3.5 w-3.5" />
-          Verified
-        </span>
-      ) : (
-        <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
-          <XCircle className="h-3.5 w-3.5" />
-          Not Verified
-        </span>
-      ),
-  },
-  {
-    accessorKey: 'created_at',
-    header: 'Added',
-    cell: ({ row }) => (
-      <span className="text-sm">
-        {safeFormat(row.original.created_at, 'MMM d, yyyy')}
-      </span>
-    ),
-  },
-  {
-    id: 'actions',
-    header: '',
-    enableSorting: false,
-    cell: ({ row }) => <UserActionsCell user={row.original} />,
-  },
-]
+const LOGIN_EVENT_TYPES = 'ADMIN_LOGIN,FACULTY_LOGIN,STUDENT_LOGIN'
 
 export default function AdminsPage() {
   usePageTitle('Admins')
@@ -85,8 +58,43 @@ export default function AdminsPage() {
   const { data: admins = [], isLoading } = useUsers({ role: 'admin' })
   const [dialogOpen, setDialogOpen] = useState(false)
 
+  // Last-sign-in lookup per admin. We hit the activity feed once per admin
+  // with `actor_id={id}&event_type=*_LOGIN&limit=1` and cache the result in
+  // local state. This is N parallel calls on mount; for the typical
+  // handful of admins this is negligible. If the admins list ever grows
+  // past ~50, switch to a backend aggregate endpoint.
+  const [lastSignInById, setLastSignInById] = useState<Record<string, string | null>>({})
+
+  useEffect(() => {
+    let cancelled = false
+    if (admins.length === 0) return
+    void Promise.all(
+      admins.map(async (a) => {
+        try {
+          const res = await activityService.list({
+            actor_id: a.id,
+            event_type: LOGIN_EVENT_TYPES,
+            limit: 1,
+          })
+          return [a.id, res.items?.[0]?.created_at ?? null] as const
+        } catch {
+          return [a.id, null] as const
+        }
+      }),
+    ).then((entries) => {
+      if (cancelled) return
+      const out: Record<string, string | null> = {}
+      for (const [id, when] of entries) out[id] = when
+      setLastSignInById(out)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [admins])
+
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [emailFilter, setEmailFilter] = useState<EmailFilter>('all')
+  const [searchQuery, setSearchQuery] = useState('')
   const [isPending, startTransition] = useTransition()
 
   const filtered = useMemo(() => {
@@ -97,10 +105,15 @@ export default function AdminsPage() {
     if (emailFilter === 'verified') result = result.filter((a) => a.email_verified)
     else if (emailFilter === 'not_verified') result = result.filter((a) => !a.email_verified)
 
-    return result
-  }, [admins, statusFilter, emailFilter])
+    if (searchQuery.trim()) {
+      result = result.filter((a) => tokenMatches(buildAdminHaystack(a), searchQuery))
+    }
 
-  const hasFilters = statusFilter !== 'all' || emailFilter !== 'all'
+    return result
+  }, [admins, statusFilter, emailFilter, searchQuery])
+
+  const hasFilters =
+    statusFilter !== 'all' || emailFilter !== 'all' || searchQuery.trim().length > 0
 
   function handleFilterChange<T>(setter: (v: T) => void) {
     return (value: string) => {
@@ -112,10 +125,70 @@ export default function AdminsPage() {
     startTransition(() => {
       setStatusFilter('all')
       setEmailFilter('all')
+      setSearchQuery('')
     })
   }
 
   const showSkeleton = isLoading || isPending
+
+  const columns: ColumnDef<UserResponse>[] = [
+    {
+      accessorKey: 'first_name',
+      header: 'Name',
+      cell: ({ row }) => (
+        <div>
+          <div className="font-medium">
+            {row.original.first_name} {row.original.last_name}
+          </div>
+          <div className="text-sm text-muted-foreground">{row.original.email}</div>
+        </div>
+      ),
+    },
+    {
+      accessorKey: 'is_active',
+      header: 'Status',
+      cell: ({ row }) => <ActiveStatusPill active={row.original.is_active} />,
+    },
+    {
+      accessorKey: 'email_verified',
+      header: 'Email',
+      cell: ({ row }) => <EmailVerifiedPill verified={row.original.email_verified} />,
+    },
+    {
+      id: 'last_sign_in',
+      header: 'Last sign-in',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const when = lastSignInById[row.original.id]
+        if (when === undefined) {
+          return <span className="text-sm text-muted-foreground">—</span>
+        }
+        if (when === null) {
+          return <span className="text-sm text-muted-foreground">Never</span>
+        }
+        return (
+          <span className="text-sm text-muted-foreground" title={when}>
+            {safeFormat(when, 'MMM d, yyyy')}
+          </span>
+        )
+      },
+    },
+    {
+      accessorKey: 'created_at',
+      header: 'Joined',
+      cell: ({ row }) => (
+        <span className="text-sm text-muted-foreground">
+          {safeFormat(row.original.created_at, 'MMM d, yyyy')}
+        </span>
+      ),
+    },
+    {
+      id: 'actions',
+      header: '',
+      enableSorting: false,
+      cell: ({ row }) => <UserActionsCell user={row.original} />,
+    },
+  ]
 
   const filterToolbar = (
     <>
@@ -124,7 +197,7 @@ export default function AdminsPage() {
           <SelectValue placeholder="Status" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">All Status</SelectItem>
+          <SelectItem value="all">All status</SelectItem>
           <SelectItem value="active">Active</SelectItem>
           <SelectItem value="inactive">Inactive</SelectItem>
         </SelectContent>
@@ -135,9 +208,9 @@ export default function AdminsPage() {
           <SelectValue placeholder="Email" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">All Email</SelectItem>
+          <SelectItem value="all">All email</SelectItem>
           <SelectItem value="verified">Verified</SelectItem>
-          <SelectItem value="not_verified">Not Verified</SelectItem>
+          <SelectItem value="not_verified">Not verified</SelectItem>
         </SelectContent>
       </Select>
 
@@ -149,17 +222,104 @@ export default function AdminsPage() {
     </>
   )
 
+  if (isLoading) {
+    // Mirror the loaded layout (header + toolbar + table + pagination) so
+    // the cut-over to real data doesn't shift the page. Used only on
+    // initial fetch — `isPending` (filter transitions) keeps the toolbar
+    // interactive and uses the DataTable's own row-level skeleton.
+    return (
+      <div className="space-y-6">
+        {/* Page header */}
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-7 w-44" />
+            <Skeleton className="h-4 w-32" />
+          </div>
+          <Skeleton className="h-9 w-32 rounded-md" />
+        </div>
+
+        <div>
+          {/* Toolbar — search + 2 selects */}
+          <div className="flex items-center justify-between gap-4 py-4">
+            <Skeleton className="h-9 w-full max-w-sm rounded-md" />
+            <div className="flex items-center gap-2">
+              <Skeleton className="h-9 w-[130px] rounded-md" />
+              <Skeleton className="h-9 w-[140px] rounded-md" />
+            </div>
+          </div>
+
+          {/* Table — render real header so column proportions auto-size
+              the same as the loaded table. */}
+          <div className="rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Last sign-in</TableHead>
+                  <TableHead>Joined</TableHead>
+                  <TableHead className="w-[60px]" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <TableRow key={`admins-skel-${String(i)}`}>
+                    <TableCell>
+                      <div className="space-y-1.5">
+                        <Skeleton className="h-4 w-40" />
+                        <Skeleton className="h-3 w-52" />
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-5 w-16 rounded-full" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-5 w-20 rounded-full" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-3 w-24" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-3 w-24" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="ml-auto h-8 w-8 rounded-md" />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* Pagination */}
+          <div className="flex items-center justify-between px-2 py-4">
+            <Skeleton className="h-4 w-44" />
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-8 w-[70px] rounded-md" />
+              </div>
+              <div className="flex items-center gap-1">
+                <Skeleton className="h-8 w-8 rounded-md" />
+                <Skeleton className="h-8 w-8 rounded-md" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Administrators</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {isLoading
-              ? 'Loading...'
-              : hasFilters
-                ? `${filtered.length} of ${admins.length} admins`
-                : `${admins.length} admin${admins.length !== 1 ? 's' : ''}`}
+            {hasFilters
+              ? `${filtered.length} of ${admins.length} admins`
+              : `${admins.length} admin${admins.length !== 1 ? 's' : ''}`}
           </p>
         </div>
         <Button onClick={() => setDialogOpen(true)}>
@@ -172,8 +332,10 @@ export default function AdminsPage() {
         columns={columns}
         data={filtered}
         isLoading={showSkeleton}
-        searchColumn="first_name"
-        searchPlaceholder="Search admins..."
+        searchPlaceholder="Search by name, email, status..."
+        globalFilter={searchQuery}
+        onGlobalFilterChange={setSearchQuery}
+        globalFilterFn={() => true}
         toolbar={filterToolbar}
         onRowClick={(row) => navigate(`/users/${row.id}`, { state: { role: 'admin' } })}
       />

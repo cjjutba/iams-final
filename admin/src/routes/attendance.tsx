@@ -8,7 +8,6 @@ import { toast } from 'sonner'
 import { usePageTitle } from '@/hooks/use-page-title'
 
 import { DataTable } from '@/components/data-tables'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Calendar } from '@/components/ui/calendar'
 import {
@@ -23,56 +22,103 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { useAttendanceList } from '@/hooks/use-queries'
 import { attendanceService } from '@/services/attendance.service'
-import type { AttendanceRecord, AttendanceStatus } from '@/types'
+import type { AttendanceRecord } from '@/types'
 import { formatStatus } from '@/types/attendance'
+import { tokenMatches, joinHaystack, isoDateHaystackParts } from '@/lib/search'
+import { AttendanceStatusPill } from '@/components/shared/status-pills'
 
-const statusColors: Record<AttendanceStatus, string> = {
-  present: 'bg-green-100 text-green-800 hover:bg-green-100',
-  late: 'bg-yellow-100 text-yellow-800 hover:bg-yellow-100',
-  absent: 'bg-red-100 text-red-800 hover:bg-red-100',
-  excused: 'bg-blue-100 text-blue-800 hover:bg-blue-100',
-  early_leave: 'bg-orange-100 text-orange-800 hover:bg-orange-100',
+function buildAttendanceHaystack(r: AttendanceRecord): string {
+  return joinHaystack([
+    r.student_name,
+    r.student_id,
+    r.subject_code,
+    formatStatus(r.status),
+    r.status,
+    r.remarks,
+    r.date,
+    ...isoDateHaystackParts(r.date),
+    ...isoDateHaystackParts(r.check_in_time),
+    ...isoDateHaystackParts(r.check_out_time),
+    `${Math.round(r.presence_score)}%`,
+  ])
 }
 
 const columns: ColumnDef<AttendanceRecord>[] = [
   {
     accessorKey: 'student_name',
     header: 'Student',
-    cell: ({ row }) => row.original.student_name ?? '\u2014',
+    cell: ({ row }) => (
+      <span className="text-sm font-medium">
+        {row.original.student_name ?? '—'}
+      </span>
+    ),
   },
   {
     accessorKey: 'subject_code',
     header: 'Subject',
-    cell: ({ row }) => row.original.subject_code ?? '\u2014',
+    cell: ({ row }) => (
+      <span className="font-mono text-xs text-muted-foreground">
+        {row.original.subject_code ?? '—'}
+      </span>
+    ),
   },
   {
     accessorKey: 'date',
     header: 'Date',
-    cell: ({ row }) => safeFormat(row.original.date, 'MMM d, yyyy'),
+    cell: ({ row }) => (
+      <span className="text-sm">{safeFormat(row.original.date, 'MMM d, yyyy')}</span>
+    ),
   },
   {
     accessorKey: 'status',
     header: 'Status',
-    cell: ({ row }) => (
-      <Badge className={statusColors[row.original.status]}>
-        {formatStatus(row.original.status)}
-      </Badge>
-    ),
+    cell: ({ row }) => <AttendanceStatusPill status={row.original.status} />,
   },
   {
     accessorKey: 'check_in_time',
     header: 'Check-in',
-    cell: ({ row }) => safeFormat(row.original.check_in_time, 'h:mm a'),
+    cell: ({ row }) => (
+      <span className="text-sm tabular-nums text-muted-foreground">
+        {safeFormat(row.original.check_in_time, 'h:mm a')}
+      </span>
+    ),
+  },
+  {
+    accessorKey: 'check_out_time',
+    header: 'Check-out',
+    cell: ({ row }) => (
+      <span className="text-sm tabular-nums text-muted-foreground">
+        {safeFormat(row.original.check_out_time, 'h:mm a')}
+      </span>
+    ),
   },
   {
     accessorKey: 'presence_score',
-    header: 'Presence Score',
+    header: 'Presence',
     cell: ({ row }) => {
       const score = row.original.presence_score
-      const color = score >= 85 ? 'text-green-600' : score >= 70 ? 'text-yellow-600' : 'text-red-600'
-      return <span className={`font-medium ${color}`}>{score.toFixed(0)}%</span>
+      const color =
+        score >= 85
+          ? 'text-emerald-600 dark:text-emerald-400'
+          : score >= 70
+            ? 'text-amber-600 dark:text-amber-400'
+            : 'text-red-600 dark:text-red-400'
+      return (
+        <span className={`font-mono text-xs tabular-nums ${color}`}>
+          {score.toFixed(0)}%
+        </span>
+      )
     },
   },
 ]
@@ -97,12 +143,24 @@ export default function AttendancePage() {
 
   const { data: records = [], isLoading } = useAttendanceList(queryParams)
 
-  const hasFilters = startDate !== undefined || endDate !== undefined || statusFilter !== 'all'
+  const [searchQuery, setSearchQuery] = useState('')
+
+  const filteredRecords = useMemo(() => {
+    if (!searchQuery.trim()) return records
+    return records.filter((r) => tokenMatches(buildAttendanceHaystack(r), searchQuery))
+  }, [records, searchQuery])
+
+  const hasFilters =
+    startDate !== undefined ||
+    endDate !== undefined ||
+    statusFilter !== 'all' ||
+    searchQuery.trim().length > 0
 
   const clearFilters = () => {
     setStartDate(undefined)
     setEndDate(undefined)
     setStatusFilter('all')
+    setSearchQuery('')
   }
 
   const handleExport = async () => {
@@ -171,10 +229,10 @@ export default function AttendancePage() {
 
       <Select value={statusFilter} onValueChange={setStatusFilter}>
         <SelectTrigger className="w-[140px] h-9">
-          <SelectValue placeholder="All Statuses" />
+          <SelectValue placeholder="All status" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">All Statuses</SelectItem>
+          <SelectItem value="all">All status</SelectItem>
           <SelectItem value="present">Present</SelectItem>
           <SelectItem value="late">Late</SelectItem>
           <SelectItem value="absent">Absent</SelectItem>
@@ -191,17 +249,99 @@ export default function AttendancePage() {
     </>
   )
 
+  if (isLoading) {
+    // Mirror the loaded layout (header + toolbar + table + pagination) so
+    // the cut-over to real data doesn't shift the page.
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-7 w-56" />
+            <Skeleton className="h-4 w-44" />
+          </div>
+          <Skeleton className="h-9 w-32 rounded-md" />
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between gap-4 py-4">
+            <Skeleton className="h-9 w-full max-w-sm rounded-md" />
+            <div className="flex items-center gap-2">
+              <Skeleton className="h-9 w-[150px] rounded-md" />
+              <Skeleton className="h-9 w-[150px] rounded-md" />
+              <Skeleton className="h-9 w-[140px] rounded-md" />
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Student</TableHead>
+                  <TableHead>Subject</TableHead>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Check-in</TableHead>
+                  <TableHead>Check-out</TableHead>
+                  <TableHead>Presence</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <TableRow key={`att-skel-${String(i)}`}>
+                    <TableCell>
+                      <Skeleton className="h-4 w-40" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-3 w-28" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-24" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-5 w-20 rounded-full" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-16" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-16" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-10" />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          <div className="flex items-center justify-between px-2 py-4">
+            <Skeleton className="h-4 w-44" />
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-8 w-[70px] rounded-md" />
+              </div>
+              <div className="flex items-center gap-1">
+                <Skeleton className="h-8 w-8 rounded-md" />
+                <Skeleton className="h-8 w-8 rounded-md" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Attendance Overview</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {isLoading
-              ? 'Loading...'
-              : hasFilters
-                ? `${records.length} filtered records`
-                : `${records.length} attendance record${records.length !== 1 ? 's' : ''}`}
+            {hasFilters
+              ? `${filteredRecords.length} of ${records.length} records`
+              : `${records.length} attendance record${records.length !== 1 ? 's' : ''}`}
           </p>
         </div>
         <Button variant="outline" onClick={() => void handleExport()} disabled={exporting || records.length === 0}>
@@ -221,10 +361,12 @@ export default function AttendancePage() {
 
       <DataTable
         columns={columns}
-        data={records}
+        data={filteredRecords}
         isLoading={isLoading}
-        searchPlaceholder="Search students..."
-        searchColumn="student_name"
+        searchPlaceholder="Search by student, subject, status, date..."
+        globalFilter={searchQuery}
+        onGlobalFilterChange={setSearchQuery}
+        globalFilterFn={() => true}
         toolbar={filterToolbar}
         onRowClick={(row) => navigate(`/users/${row.student_id}`, { state: { role: 'student' } })}
       />

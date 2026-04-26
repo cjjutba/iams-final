@@ -1,5 +1,12 @@
 import api from './api'
-import type { ScheduleResponse, ScheduleCreate, ScheduleUpdate } from '@/types'
+import type {
+  ScheduleResponse,
+  ScheduleCreate,
+  ScheduleUpdate,
+  ScheduleConfigUpdate,
+  ScheduleSessionSummary,
+  StudentEnrollmentsPage,
+} from '@/types'
 
 export const schedulesService = {
   list: (params?: { day?: number }) =>
@@ -8,16 +15,33 @@ export const schedulesService = {
     api.get<ScheduleResponse>(`/schedules/${id}`).then(r => r.data),
   getEnrolledStudents: (id: string) =>
     api.get(`/schedules/${id}/students`).then(r => r.data),
+  getSessions: (id: string, params?: { start_date?: string; end_date?: string; limit?: number }) =>
+    api
+      .get<ScheduleSessionSummary[]>(`/schedules/${id}/sessions`, { params })
+      .then(r => r.data),
   create: (data: ScheduleCreate) =>
     api.post<ScheduleResponse>('/schedules/', data).then(r => r.data),
   update: (id: string, data: ScheduleUpdate) =>
     api.patch<ScheduleResponse>(`/schedules/${id}`, data).then(r => r.data),
+  updateConfig: (id: string, data: ScheduleConfigUpdate) =>
+    api.patch<ScheduleResponse>(`/schedules/${id}/config`, data).then(r => r.data),
   delete: (id: string) =>
     api.delete(`/schedules/${id}`).then(r => r.data),
   enrollStudent: (scheduleId: string, studentUserId: string) =>
     api.post(`/schedules/${scheduleId}/enroll/${studentUserId}`).then(r => r.data),
   unenrollStudent: (scheduleId: string, studentUserId: string) =>
     api.delete(`/schedules/${scheduleId}/enroll/${studentUserId}`).then(r => r.data),
-  getStudentEnrollments: (studentUserId: string) =>
-    api.get(`/schedules/student/${studentUserId}/enrollments`).then(r => r.data),
+  getStudentEnrollments: (
+    studentUserId: string,
+    params?: { limit?: number; offset?: number },
+  ) =>
+    api
+      .get<StudentEnrollmentsPage>(`/schedules/student/${studentUserId}/enrollments`, {
+        params: { limit: params?.limit ?? 20, offset: params?.offset ?? 0 },
+      })
+      .then(r => r.data),
+  getStudentEnrollmentIds: (studentUserId: string) =>
+    api
+      .get<{ schedule_ids: string[] }>(`/schedules/student/${studentUserId}/enrollments/ids`)
+      .then(r => r.data.schedule_ids),
 }

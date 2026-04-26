@@ -1,0 +1,133 @@
+# mediamtx ONPREM configuration for IAMS
+#
+# Target host: Mac on IAMS-Net running deploy/docker-compose.onprem.yml.
+#
+# Two stream endpoints from ONE camera pull:
+#   1. RPi → this mediamtx (port 8554). Serves the LAN admin portal via WHEP
+#      on port 8889, and is consumed by the api-gateway's frame-grabber.
+#   2. This mediamtx → VPS mediamtx via runOnReady ffmpeg (outbound RTSP push).
+#      The VPS serves that pushed stream as the public WebRTC feed for the
+#      mobile app.
+#
+# Difference vs mediamtx.dev.yml:
+# - No `source: rtsp://...@192.168.88.10/...` — cameras do not get pulled by
+#   this mediamtx directly. The RPi is the single camera reader.
+# - paths include a runOnReady hook that mirrors the ingested stream to the
+#   VPS on the same path name (e.g. `eb226` → `rtsp://167.71.217.44:8554/eb226`).
+# - webrtcAdditionalHosts is patched at startup by scripts/onprem-up.sh with
+#   the Mac's current LAN IP (same sed pattern as scripts/dev-up.sh).
+
+logLevel: info
+
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+        path:
+      - action: read
+        path:
+      - action: playback
+        path:
+  - user: any
+    pass:
+    ips: ['127.0.0.1', '::1', '172.16.0.0/12', '192.168.0.0/16', '10.0.0.0/8']
+    permissions:
+      - action: api
+      - action: metrics
+      - action: pprof
+
+api: yes
+apiAddress: :9997
+
+rtsp: yes
+rtspAddress: :8554
+
+# Longer than the mediamtx 10 s default — bursty cameras / WiFi publisher
+# reconnects benefit from the extra slack. Matches the VPS config.
+readTimeout: 30s
+writeTimeout: 30s
+
+webrtc: yes
+webrtcAddress: :8889
+
+# WHEP RTP timestamp preservation (live-feed plan 2026-04-25 Step 3).
+# The admin overlay's frame-aligner reads `requestVideoFrameCallback().
+# rtpTimestamp` browser-side and matches it against `rtp_pts_90k` from
+# the backend's WebSocket frame_update. That contract holds ONLY because
+# mediamtx forwards the source RTSP RTP timestamps unchanged through the
+# WebRTC egress — it does not re-encode video on this stack. If a future
+# config introduces an `encoder:` directive or any transcoding hop on
+# the WHEP-served paths, the browser-side RTP clock will desync from
+# the backend-side one and the overlay will drift. Keep -c copy for the
+# VPS push and no transcoding on local egress.
+
+# Only advertise the Mac's LAN IP as a WebRTC candidate. Docker-internal
+# addresses (172.x / 127.0.0.1) are unreachable from the admin browser + phone.
+#
+# THIS FILE IS A TEMPLATE. scripts/onprem-up.sh copies it to
+# `deploy/mediamtx.onprem.generated.yml` (gitignored) and rewrites
+# `webrtcAdditionalHosts` with the Mac's actual `ipconfig getifaddr en0` IP.
+# docker-compose.onprem.yml mounts the generated copy, not this template.
+# Do NOT commit real LAN IPs here — the placeholder below is intentional.
+webrtcIPsFromInterfaces: no
+webrtcAdditionalHosts:
+  - 127.0.0.1   # placeholder — substituted by scripts/onprem-up.sh
+
+webrtcLocalUDPAddress: :8887
+
+# LAN-only admin portal + phones on IAMS-Net — STUN alone resolves NAT within
+# the LAN. No TURN needed (that's the VPS relay's job for off-campus viewers).
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+
+hls: no
+srt: no
+rtmp: no
+
+# mediamtx's per-reader packet queue depth. Default 512 was tuned for cross-
+# internet WebRTC where bursts and reconnects need a deep buffer; on IAMS-Net
+# we want the lowest end-to-end latency we can afford. 128 packets is roughly
+# 50-100 ms of buffered video at H.264 30 fps, enough to ride out a brief
+# jitter spike but not enough to add visible delay to the admin live feed.
+# If we ever see frame drops in the WHEP egress logs at this size, bump it
+# back up (256 is a reasonable middle ground).
+writeQueueSize: 128
+
+# Paths: the host ffmpeg supervisor (scripts/iams-cam-relay.sh) pushes the
+# camera MAIN stream to `eb226`, `eb227`, … and the camera SUB stream to
+# `eb226-sub`, `eb227-sub`, ….
+#
+# Matching order:
+#   1. The regex `~^.+-sub$` catches the admin-only sub streams and keeps
+#      them LOCAL — never hit the VPS. The admin portal's WhepPlayer
+#      consumes these directly.
+#   2. `all_others` catches everything else (the main streams). These are
+#      kept LOCAL too — used by the api-gateway's FrameGrabber for ML +
+#      the admin portal's WHEP player.
+#
+# RPi → VPS direct push (2026-04-26): Mac no longer mirrors local streams
+# to the VPS via runOnReady. The two on-prem RPi relays push their
+# respective camera streams DIRECTLY to rtsp://167.71.217.44:8554/<key>,
+# and the Faculty APK reads VPS WHEP from there. Removing the Mac's
+# runOnReady push is what stops the publisher-flapping race condition
+# (`overridePublisher: yes` on both ends meant Mac+RPi kept booting each
+# other off, surfacing as "Broken pipe" in the RPi's relay log).
+paths:
+  # Admin-only low-bitrate streams. No re-encode.
+  "~^.+-sub$":
+    overridePublisher: yes
+
+  # Distant-face plan 2026-04-26 Phase 2a — cropped back-row streams.
+  # `eb226-back`, `eb227-back`, … published by scripts/iams-cam-relay.sh's
+  # `run_cropped_stream` loops. These exist purely to feed the api-gateway's
+  # back-row FrameGrabbers so SCRFD sees ~2× the pixel density on far faces.
+  "~^.+-back$":
+    overridePublisher: yes
+
+  all_others:
+    # Allow publisher reconnection without waiting for old session timeout
+    # — important when the host ffmpeg supervisor restarts.
+    overridePublisher: yes

@@ -228,6 +228,31 @@ class FaceRepository:
         """Get all embeddings for a registration."""
         return self.db.query(FaceEmbedding).filter(FaceEmbedding.registration_id == uuid.UUID(registration_id)).all()
 
+    def set_image_storage_keys(self, registration_id: str, keys_by_faiss: dict[int, str]) -> int:
+        """Update `image_storage_key` on embeddings by FAISS id.
+
+        Used by the post-commit image-persistence step in
+        `FaceService.register_face`. Returns the number of rows updated.
+        Caller is responsible for committing.
+        """
+        if not keys_by_faiss:
+            return 0
+        embeddings = (
+            self.db.query(FaceEmbedding)
+            .filter(
+                FaceEmbedding.registration_id == uuid.UUID(registration_id),
+                FaceEmbedding.faiss_id.in_(keys_by_faiss.keys()),
+            )
+            .all()
+        )
+        updated = 0
+        for emb in embeddings:
+            key = keys_by_faiss.get(int(emb.faiss_id))
+            if key:
+                emb.image_storage_key = key
+                updated += 1
+        return updated
+
     def get_all_active_embeddings(self) -> list[FaceEmbedding]:
         """
         Get all FaceEmbedding rows belonging to active registrations.
@@ -240,3 +265,67 @@ class FaceRepository:
             .filter(FaceRegistration.is_active)
             .all()
         )
+
+    def get_cctv_embeddings_by_user(
+        self,
+        user_id: str,
+        room_key: str | None = None,
+    ) -> list[FaceEmbedding]:
+        """Return CCTV-domain embeddings for a user, optionally narrowed to one room.
+
+        Used by the sliding-window auto-enroller to (a) compute the per-room
+        capture count and (b) pick the lowest-quality candidate to evict
+        when the cap is reached. ``room_key=None`` returns rows for both
+        room-scoped (``cctv_<room>_<idx>``) and legacy (``cctv_<idx>``)
+        labels; pass an specific room key to get just that room's rows;
+        pass ``"_legacy"`` to get only the legacy rows.
+        """
+        from app.utils.cctv_label import normalize_room_key, parse_cctv_label
+
+        registration = self.get_by_user(user_id)
+        if registration is None:
+            return []
+        rows = (
+            self.db.query(FaceEmbedding)
+            .filter(
+                FaceEmbedding.registration_id == registration.id,
+                FaceEmbedding.angle_label.like("cctv_%"),
+            )
+            .all()
+        )
+        if room_key is None:
+            return rows
+        wanted_room: str | None
+        if room_key == "_legacy":
+            wanted_room = None
+        else:
+            wanted_room = normalize_room_key(room_key)
+        out: list[FaceEmbedding] = []
+        for r in rows:
+            parsed_room, parsed_idx = parse_cctv_label(r.angle_label)
+            if parsed_idx is None:
+                continue
+            if parsed_room == wanted_room:
+                out.append(r)
+        return out
+
+    def delete_embeddings_by_faiss_ids(self, faiss_ids: list[int]) -> int:
+        """Hard-delete FaceEmbedding rows by FAISS id.
+
+        Used by the sliding-window auto-enroller to evict the
+        lowest-quality CCTV captures before adding new ones. Caller is
+        responsible for (a) removing the same FAISS ids from
+        ``faiss_manager.user_map`` and (b) deleting the corresponding
+        ``image_storage_key`` files. This is a DB-only delete; both
+        sides must succeed for the row to be cleanly retired.
+
+        Returns the number of rows deleted.
+        """
+        if not faiss_ids:
+            return 0
+        deleted = (
+            self.db.query(FaceEmbedding)
+            .filter(FaceEmbedding.faiss_id.in_(faiss_ids))
+            .delete(synchronize_session=False)
+        )
+        return int(deleted or 0)

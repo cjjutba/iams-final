@@ -52,6 +52,17 @@ class Notification(Base):
     message = Column(Text, nullable=False)
     type = Column(String(50), nullable=False, default="system", index=True)
 
+    # Severity — documented values: info | success | warn | error | critical.
+    # Not enforced at DB level; stored as a free-form short string so the
+    # frontend can drive toast styling and the unread-critical badge query.
+    severity = Column(
+        String(20),
+        nullable=False,
+        default="info",
+        server_default="info",
+        index=True,
+    )
+
     # Read status
     read = Column(Boolean, default=False, nullable=False)
     read_at = Column(DateTime(timezone=True), nullable=True)

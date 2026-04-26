@@ -1,7 +1,8 @@
 import { Bell, Inbox } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
+import { isToday, isYesterday } from 'date-fns'
 import { useAuthStore } from '@/stores/auth.store'
 import { useNotificationStore } from '@/stores/notification.store'
 import { notificationsService } from '@/services/notifications.service'
@@ -23,15 +24,35 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Breadcrumbs } from './breadcrumbs'
+import { NotificationRow } from '@/components/notifications/notification-row'
 import type { Notification } from '@/types'
+
+// Phase 8: bucket the popover's notifications into Today / Yesterday /
+// Earlier so users can scan recent activity at a glance. Empty buckets
+// are dropped so the popover stays compact.
+type NotificationDateGroup = { label: string; items: Notification[] }
+
+function groupNotificationsByDate(notifications: Notification[]): NotificationDateGroup[] {
+  const groups: NotificationDateGroup[] = [
+    { label: 'Today', items: [] },
+    { label: 'Yesterday', items: [] },
+    { label: 'Earlier', items: [] },
+  ]
+  for (const n of notifications) {
+    const d = new Date(n.created_at)
+    if (isToday(d)) groups[0].items.push(n)
+    else if (isYesterday(d)) groups[1].items.push(n)
+    else groups[2].items.push(n)
+  }
+  return groups.filter((g) => g.items.length > 0)
+}
 
 export function Header() {
   const { user, logout } = useAuthStore()
-  const { unreadCount, fetchUnreadCount } = useNotificationStore()
+  const { unreadCount, unreadCriticalCount, fetchUnreadCount } = useNotificationStore()
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [notifOpen, setNotifOpen] = useState(false)
   const [loadingNotifs, setLoadingNotifs] = useState(false)
-  const navigate = useNavigate()
 
   const initials = user
     ? `${user.first_name.charAt(0)}${user.last_name.charAt(0)}`
@@ -42,7 +63,7 @@ export function Header() {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setLoadingNotifs(true)
       notificationsService
-        .list()
+        .list({ limit: 5 })
         .then((data) => setNotifications(data.slice(0, 5)))
         .catch(() => setNotifications([]))
         .finally(() => setLoadingNotifs(false))
@@ -65,6 +86,8 @@ export function Header() {
     toast.success('Signed out successfully')
   }
 
+  const hasCriticalUnread = unreadCriticalCount > 0
+
   return (
     <header className="flex h-14 items-center gap-2 px-4">
       <SidebarTrigger className="-ml-1" />
@@ -77,7 +100,9 @@ export function Header() {
               {unreadCount > 0 && (
                 <Badge
                   variant="destructive"
-                  className="absolute -top-1 -right-1 h-4 min-w-4 px-1 text-[10px] leading-none"
+                  className={`absolute -top-1 -right-1 h-4 min-w-4 px-1 text-[10px] leading-none ${
+                    hasCriticalUnread ? 'animate-pulse bg-red-600 ring-2 ring-red-400/60' : ''
+                  }`}
                 >
                   {unreadCount > 99 ? '99+' : unreadCount}
                 </Badge>
@@ -85,9 +110,17 @@ export function Header() {
               <span className="sr-only">Notifications</span>
             </Button>
           </PopoverTrigger>
-          <PopoverContent align="end" className="w-80 p-0">
+          <PopoverContent align="end" className="w-96 p-0">
             <div className="flex items-center justify-between border-b px-4 py-3">
-              <span className="text-sm font-medium">Notifications</span>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">Notifications</span>
+                {hasCriticalUnread && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-700 ring-1 ring-inset ring-red-200 dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900">
+                    <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" />
+                    {unreadCriticalCount} critical
+                  </span>
+                )}
+              </div>
               {unreadCount > 0 && (
                 <button
                   type="button"
@@ -109,34 +142,27 @@ export function Header() {
                   <span className="text-sm text-muted-foreground">No notifications</span>
                 </div>
               ) : (
-                notifications.map((notif) => (
-                  <div
-                    key={notif.id}
-                    className={`border-b last:border-b-0 px-4 py-3 ${!notif.read ? 'bg-muted/50' : ''}`}
-                  >
-                    <p className="text-sm font-medium">{notif.title}</p>
-                    <p className="text-xs text-muted-foreground line-clamp-2">{notif.message}</p>
-                    <p className="mt-1 text-[11px] text-muted-foreground/70">
-                      {new Date(notif.created_at).toLocaleDateString()}
-                    </p>
+                groupNotificationsByDate(notifications.slice(0, 5)).map((group) => (
+                  <div key={group.label}>
+                    <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground bg-muted/40">
+                      {group.label}
+                    </div>
+                    {group.items.map((notif) => (
+                      <NotificationRow key={notif.id} notification={notif} variant="compact" />
+                    ))}
                   </div>
                 ))
               )}
             </div>
-            {notifications.length > 0 && (
-              <div className="border-t px-4 py-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setNotifOpen(false)
-                    navigate('/notifications')
-                  }}
-                  className="w-full text-center text-xs text-muted-foreground hover:text-foreground cursor-pointer"
-                >
-                  View all notifications
-                </button>
-              </div>
-            )}
+            <div className="border-t px-4 py-2 text-center">
+              <Link
+                to="/notifications"
+                onClick={() => setNotifOpen(false)}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                View all notifications &rarr;
+              </Link>
+            </div>
           </PopoverContent>
         </Popover>
         <DropdownMenu>

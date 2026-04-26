@@ -152,3 +152,111 @@ def test_stop_kills_ffmpeg(grabber):
     grabber.stop()
     # Process should be set to None after kill
     assert grabber._process is None
+
+
+# ---------------------------------------------------------------------------
+# Backoff schedule — consecutive failures grow the delay up to the cap
+# ---------------------------------------------------------------------------
+
+
+def test_backoff_delay_follows_schedule():
+    """_backoff_delay() must follow _BACKOFF_SCHEDULE and cap at the last entry."""
+    proc = _make_mock_process(None)  # EOF — drain thread will hit failure path
+
+    with (
+        patch("subprocess.Popen", return_value=proc),
+        patch("app.services.frame_grabber.settings") as mock_settings,
+    ):
+        mock_settings.FRAME_GRABBER_WIDTH = WIDTH
+        mock_settings.FRAME_GRABBER_HEIGHT = HEIGHT
+        mock_settings.FRAME_GRABBER_FPS = 10
+
+        from app.services.frame_grabber import FrameGrabber
+
+        fg = FrameGrabber(RTSP_URL)
+        try:
+            schedule = FrameGrabber._BACKOFF_SCHEDULE
+            # walk the schedule
+            for i, expected in enumerate(schedule):
+                fg._consecutive_failures = i
+                assert fg._backoff_delay() == expected, (
+                    f"failures={i} expected {expected}s, got {fg._backoff_delay()}s"
+                )
+            # past the end — must stay at the cap
+            fg._consecutive_failures = len(schedule) * 3
+            assert fg._backoff_delay() == schedule[-1]
+        finally:
+            fg.stop()
+
+
+# ---------------------------------------------------------------------------
+# stderr noise filter — collapses the 404 cluster into a single warning
+# ---------------------------------------------------------------------------
+
+
+def test_drain_stderr_dedupes_offline_patterns(caplog):
+    """When FFmpeg prints the 4 "publisher offline" lines, log once total."""
+    proc = _make_mock_process(None)
+    # Simulate the 4-line cluster FFmpeg produces when mediamtx returns 404
+    offline_lines = [
+        b"[rtsp @ 0xabc] method DESCRIBE failed: 404 Not Found\n",
+        b"[in#0 @ 0xdef] Error opening input: Server returned 404 Not Found\n",
+        b"Error opening input file rtsp://mediamtx:8554/eb226.\n",
+        b"Error opening input files: Server returned 404 Not Found\n",
+    ]
+    proc.stderr = iter(offline_lines)
+
+    with (
+        patch("subprocess.Popen", return_value=proc),
+        patch("app.services.frame_grabber.settings") as mock_settings,
+    ):
+        mock_settings.FRAME_GRABBER_WIDTH = WIDTH
+        mock_settings.FRAME_GRABBER_HEIGHT = HEIGHT
+        mock_settings.FRAME_GRABBER_FPS = 10
+
+        import logging as _logging
+
+        from app.services.frame_grabber import FrameGrabber
+
+        fg = FrameGrabber(RTSP_URL)
+        try:
+            with caplog.at_level(_logging.WARNING, logger="app.services.frame_grabber"):
+                fg._drain_stderr(proc)
+            # Exactly one "Publisher offline" warning, not four
+            offline_warns = [
+                r for r in caplog.records
+                if "Publisher offline" in r.getMessage()
+            ]
+            assert len(offline_warns) == 1, (
+                f"expected 1 offline warning, got {len(offline_warns)}: "
+                f"{[r.getMessage() for r in offline_warns]}"
+            )
+            # The raw FFmpeg lines must NOT have leaked through
+            raw_leaks = [
+                r for r in caplog.records
+                if "404 Not Found" in r.getMessage()
+                and "Publisher offline" not in r.getMessage()
+            ]
+            assert raw_leaks == [], f"raw FFmpeg noise leaked: {[r.getMessage() for r in raw_leaks]}"
+            # Flag must be set so subsequent FFmpeg respawns are also muted
+            assert fg._publisher_offline_logged is True
+        finally:
+            fg.stop()
+
+
+def test_successful_frame_resets_offline_state(grabber):
+    """After a frame is read, the offline flag + failure counter must reset.
+
+    This is what lets the NEXT publisher outage log once again instead of
+    being permanently muted.
+    """
+    # Pretend we were in an offline state
+    grabber._consecutive_failures = 4
+    grabber._publisher_offline_logged = True
+
+    # Drain loop is already running with a working mock proc — give it time
+    # to read a frame past warmup.
+    time.sleep(0.3)
+    assert grabber.grab() is not None, "mock proc should be yielding frames"
+    assert grabber._consecutive_failures == 0
+    assert grabber._publisher_offline_logged is False

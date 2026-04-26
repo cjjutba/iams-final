@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import logging
 
@@ -25,8 +26,32 @@ async def get_redis() -> redis.Redis:
         try:
             await _redis_pool.ping()
             return _redis_pool
-        except Exception:
+        except Exception as e:
             logger.warning("Redis connection lost, reconnecting...")
+            # Best-effort admin-bell notification. Lazy import + broad
+            # except so a failure to construct/emit never propagates into
+            # the cache-warmup path. Dedup window: 10 min so a flapping
+            # connection doesn't fan out a torrent of alerts.
+            try:
+                from app.services import health_notifier
+
+                asyncio.create_task(
+                    health_notifier.emit_one_shot(
+                        title="Redis connection lost",
+                        message=(
+                            f"Redis is unreachable: {e}. Identity cache + "
+                            "WS pub/sub degraded."
+                        ),
+                        notification_type="redis_connection_lost",
+                        severity="error",
+                        preference_key="ml_health_alerts",
+                        reference_id="redis",
+                        reference_type="cache",
+                        dedup_window_seconds=600,
+                    )
+                )
+            except Exception:
+                logger.debug("redis_client: failed to schedule admin notify", exc_info=True)
             with contextlib.suppress(Exception):
                 await _redis_pool.aclose()
             _redis_pool = None

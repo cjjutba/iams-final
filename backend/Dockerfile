@@ -16,6 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
+# Generous timeout + retry count: pip otherwise dies on slow networks during
+# heavy wheels (numpy/insightface, multi-MB transfers). 300 s covers
+# real-world "school WiFi on Monday morning" conditions.
+ENV PIP_DEFAULT_TIMEOUT=300
+ENV PIP_RETRIES=5
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # ---- Stage 2: Runtime ----

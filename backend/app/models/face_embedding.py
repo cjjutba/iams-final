@@ -30,6 +30,11 @@ class FaceEmbedding(Base):
         embedding_vector: 512-dim ArcFace embedding as bytes
         angle_label: Optional label ('center', 'left', 'right', 'up', 'down')
         quality_score: Overall quality score from face_quality.assess_quality
+        image_storage_key: Relative path under the face-uploads volume where the
+            original registration JPEG is stored, or None if the image was not
+            persisted (pre-Phase-2 rows or a save failure). Consumed by
+            ``FaceImageStorage`` + the admin ``/face/registrations/{user}``
+            endpoints to drive the live-feed face-comparison sheet.
         created_at: Timestamp
     """
 
@@ -45,6 +50,7 @@ class FaceEmbedding(Base):
     embedding_vector = Column(LargeBinary, nullable=False)
     angle_label = Column(String(20), nullable=True)
     quality_score = Column(Float, nullable=True)
+    image_storage_key = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(), nullable=False)
 
     # Relationships

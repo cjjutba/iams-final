@@ -18,6 +18,7 @@ class NotificationResponse(BaseModel):
     title: str
     message: str
     type: str
+    severity: str = "info"
     read: bool
     read_at: datetime | None = None
     reference_id: str | None = None
@@ -57,6 +58,14 @@ class NotificationPreferenceResponse(BaseModel):
     anomaly_alerts: bool
     attendance_confirmation: bool
     low_attendance_warning: bool
+    # Admin-facing alert categories (Phase 1).
+    camera_alerts: bool
+    ml_health_alerts: bool
+    security_alerts: bool
+    audit_alerts: bool
+    schedule_conflict_alerts: bool
+    face_alerts: bool
+    daily_health_summary: bool
     daily_digest: bool
     weekly_digest: bool
     email_enabled: bool
@@ -73,6 +82,14 @@ class NotificationPreferenceUpdate(BaseModel):
     anomaly_alerts: bool | None = None
     attendance_confirmation: bool | None = None
     low_attendance_warning: bool | None = None
+    # Admin-facing alert categories (Phase 1).
+    camera_alerts: bool | None = None
+    ml_health_alerts: bool | None = None
+    security_alerts: bool | None = None
+    audit_alerts: bool | None = None
+    schedule_conflict_alerts: bool | None = None
+    face_alerts: bool | None = None
+    daily_health_summary: bool | None = None
     daily_digest: bool | None = None
     weekly_digest: bool | None = None
     email_enabled: bool | None = None

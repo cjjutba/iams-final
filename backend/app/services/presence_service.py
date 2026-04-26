@@ -72,6 +72,43 @@ class SessionState:
         self.student_states: dict[str, dict] = {}  # student_id -> state
         self.is_active = True
 
+        # Snapshot of schedule primitives. The Schedule ORM instance above
+        # is bound to whatever DB session loaded it (typically a request-
+        # scoped session that closes immediately after start_session
+        # returns). Once detached, any attribute access lazy-loads against
+        # a closed session and raises DetachedInstanceError — which then
+        # silently kills the lifecycle scheduler. Every consumer that
+        # needs schedule fields after construction must read these
+        # snapshotted primitives instead of dereferencing self.schedule.
+        self.day_of_week: int = schedule.day_of_week
+        self.window_start: time = schedule.start_time
+        self.window_end: time = schedule.end_time
+        self.subject_code: str = schedule.subject_code
+        self.subject_name: str = schedule.subject_name
+        self.room_id: str | None = (
+            str(schedule.room_id) if schedule.room_id else None
+        )
+        self.faculty_id: str | None = (
+            str(schedule.faculty_id) if schedule.faculty_id else None
+        )
+
+        # auto_manage: whether the session_lifecycle_check background job
+        # is allowed to auto-end this session once today's schedule window
+        # closes. True when the session is created *inside* the schedule's
+        # natural (day_of_week, start_time..end_time) window — those are
+        # "live" sessions whose natural end should terminate them. False
+        # for sessions started manually outside the window (demo, restart
+        # on a different day, ad-hoc testing) — those must persist until
+        # someone ends them explicitly, otherwise the lifecycle job would
+        # end-them-within-15s and the admin UI "Start Session" button would
+        # flap back to its pre-start state. See docs/main/implementation.md
+        # section on session lifecycle for the intended semantics.
+        now = self.start_time
+        self.auto_manage = (
+            self.day_of_week == now.weekday()
+            and self.window_start <= now.time() <= self.window_end
+        )
+
     def add_student(self, student_id: str, attendance_id: str):
         """Add student to session tracking"""
         self.student_states[student_id] = {
@@ -267,7 +304,9 @@ class PresenceService:
         if user:
             return {
                 "user_id": student_id,
-                "name": user.first_name,
+                # Full name (first + last) so notifications, activity events,
+                # and broadcasts disambiguate students who share a first name.
+                "name": f"{user.first_name} {user.last_name}".strip(),
                 "student_id": user.student_id,
             }
         return {"user_id": student_id, "name": "Unknown", "student_id": None}
@@ -365,6 +404,41 @@ class PresenceService:
             },
         )
 
+        # Emit System Activity event — auto-managed sessions (window-
+        # aligned) are SESSION_STARTED_AUTO; anything else is MANUAL
+        # (click Start Session outside the window, demo sessions, etc.).
+        try:
+            from app.services.activity_service import EventType, emit_session_event
+
+            event_type = (
+                EventType.SESSION_STARTED_AUTO
+                if session.auto_manage
+                else EventType.SESSION_STARTED_MANUAL
+            )
+            emit_session_event(
+                self.db,
+                event_type=event_type,
+                summary=(
+                    f"Session started: {schedule.subject_code} "
+                    f"({len(students)} students enrolled)"
+                ),
+                schedule_id=schedule_id,
+                room_id=str(schedule.room_id) if schedule.room_id else None,
+                payload={
+                    "subject_code": schedule.subject_code,
+                    "subject_name": schedule.subject_name,
+                    "student_count": len(students),
+                    "auto_managed": session.auto_manage,
+                    "start_time": session.start_time.isoformat(),
+                },
+                autocommit=True,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to emit SESSION_STARTED activity event for %s",
+                schedule_id,
+            )
+
         logger.info(f"Session started with {len(students)} students")
         return session
 
@@ -386,7 +460,10 @@ class PresenceService:
 
             logger.info(f"Ending session for schedule {schedule_id} (Total scans: {session.scan_count})")
 
-            # Update final check-out times and presence scores
+            # Update final check-out times and presence scores; emit
+            # MARKED_ABSENT events for anyone whose status is still ABSENT
+            # (i.e. they never appeared in any scan).
+            absent_student_events: list[tuple[str, str, str]] = []
             for _student_id, student_state in session.student_states.items():
                 attendance_id = student_state["attendance_id"]
 
@@ -394,9 +471,16 @@ class PresenceService:
                 if not attendance:
                     continue
 
-                # Set check-out time
-                if attendance.status != AttendanceStatus.ABSENT:
+                # Set check-out time. Only when not already set, so an
+                # EARLY_LEAVE student keeps the last_seen timestamp that
+                # flag_early_leave wrote — otherwise we'd clobber it with
+                # session-end and the admin UI would show the wrong value.
+                if attendance.status != AttendanceStatus.ABSENT and attendance.check_out_time is None:
                     self.attendance_repo.update(attendance_id, {"check_out_time": datetime.now()})
+                elif attendance.status == AttendanceStatus.ABSENT:
+                    absent_student_events.append(
+                        (_student_id, attendance_id, session.subject_code)
+                    )
 
             # Build session summary
             summary = {
@@ -406,8 +490,10 @@ class PresenceService:
                 "early_leave_count": sum(1 for s in session.student_states.values() if s.get("early_leave_flagged")),
             }
 
-            schedule = session.schedule
-            room_id = self._get_room_id(schedule)
+            # Use the snapshotted primitives — session.schedule may be
+            # detached from its original DB session by the time end_session
+            # runs (it commonly is when called from the lifecycle thread).
+            room_id = session.room_id or ""
 
             # Remove from active sessions
             del self.active_sessions[schedule_id]
@@ -430,12 +516,75 @@ class PresenceService:
             {
                 "event": "session_end",
                 "schedule_id": schedule_id,
-                "subject_code": schedule.subject_code,
-                "subject_name": schedule.subject_name,
+                "subject_code": session.subject_code,
+                "subject_name": session.subject_name,
                 "end_time": datetime.now().isoformat(),
                 "summary": summary,
             },
         )
+
+        # Emit System Activity events — one MARKED_ABSENT per student who
+        # never appeared, plus one SESSION_ENDED_* for the session itself.
+        try:
+            from app.services.activity_service import (
+                EventSeverity,
+                EventType,
+                emit_attendance_event,
+                emit_session_event,
+            )
+
+            for student_id, attendance_id, subject_code in absent_student_events:
+                student_info = self._get_student_info(student_id)
+                emit_attendance_event(
+                    self.db,
+                    event_type=EventType.MARKED_ABSENT,
+                    summary=(
+                        f"{student_info['name']} marked ABSENT for {subject_code}"
+                    ),
+                    schedule_id=schedule_id,
+                    student_id=student_id,
+                    attendance_id=attendance_id,
+                    severity=EventSeverity.WARN,
+                    payload={
+                        "subject_code": subject_code,
+                        "session_end_time": datetime.now().isoformat(),
+                    },
+                    autocommit=True,
+                )
+
+            # Auto-managed sessions end naturally; anything else was ended
+            # manually (via an admin click or out-of-window state).
+            auto_managed = getattr(session, "auto_manage", True)
+            event_type = (
+                EventType.SESSION_ENDED_AUTO
+                if auto_managed
+                else EventType.SESSION_ENDED_MANUAL
+            )
+            emit_session_event(
+                self.db,
+                event_type=event_type,
+                summary=(
+                    f"Session ended: {session.subject_code} "
+                    f"(present={summary['present_count']}, "
+                    f"early_leave={summary['early_leave_count']}, "
+                    f"scans={summary['total_scans']})"
+                ),
+                schedule_id=schedule_id,
+                room_id=session.room_id,
+                payload={
+                    "subject_code": session.subject_code,
+                    "subject_name": session.subject_name,
+                    "auto_managed": auto_managed,
+                    "summary": summary,
+                    "end_time": datetime.now().isoformat(),
+                },
+                autocommit=True,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to emit SESSION_ENDED activity events for %s",
+                schedule_id,
+            )
 
         logger.info(f"Session ended for schedule {schedule_id}")
 
@@ -468,7 +617,7 @@ class PresenceService:
                 # Look up scan_result for this session's room
                 scan_result = None
                 if scan_results is not None:
-                    room_id = self._get_room_id(session.schedule)
+                    room_id = session.room_id or ""
                     scan_result = scan_results.get(room_id)
                 await self.process_session_scan(schedule_id, scan_result=scan_result)
             except Exception as e:
@@ -494,7 +643,7 @@ class PresenceService:
             session = self.active_sessions[schedule_id]
             session.scan_count += 1
             scan_count = session.scan_count
-            room_id = self._get_room_id(session.schedule)
+            room_id = session.room_id or ""
             student_snapshot = {
                 sid: {
                     "attendance_id": s["attendance_id"],
@@ -533,7 +682,7 @@ class PresenceService:
                     # First detection -> check in as PRESENT or LATE
                     current_time = datetime.now().time()
                     grace_time = (
-                        datetime.combine(date.today(), session.schedule.start_time)
+                        datetime.combine(date.today(), session.window_start)
                         + timedelta(minutes=settings.GRACE_PERIOD_MINUTES)
                     ).time()
 
@@ -592,15 +741,55 @@ class PresenceService:
                         },
                     )
 
+                    # Emit System Activity event — MARKED_PRESENT vs
+                    # MARKED_LATE; severity=success for PRESENT, warn for LATE.
+                    try:
+                        from app.services.activity_service import (
+                            EventSeverity,
+                            EventType,
+                            emit_attendance_event,
+                        )
+
+                        is_late = new_status == AttendanceStatus.LATE
+                        subject_code = session.subject_code or ""
+                        emit_attendance_event(
+                            self.db,
+                            event_type=(
+                                EventType.MARKED_LATE if is_late else EventType.MARKED_PRESENT
+                            ),
+                            summary=(
+                                f"{student_info['name']} marked "
+                                f"{new_status.value.upper()} for {subject_code}"
+                            ),
+                            schedule_id=schedule_id,
+                            student_id=student_id,
+                            attendance_id=attendance_id,
+                            severity=(
+                                EventSeverity.WARN if is_late else EventSeverity.SUCCESS
+                            ),
+                            payload={
+                                "subject_code": subject_code,
+                                "student_student_id": student_info["student_id"],
+                                "check_in_time": check_in_time.isoformat(),
+                                "confidence": confidence,
+                            },
+                            autocommit=True,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to emit check-in activity event for %s",
+                            student_id,
+                        )
+
                     # Notify student of check-in
-                    subject_code = session.schedule.subject_code if session.schedule else ""
+                    subject_code = session.subject_code or ""
                     await self._notify_check_in(
                         student_id,
                         student_info["name"],
                         new_status.value,
                         check_in_time,
                         subject_code,
-                        getattr(session.schedule, "subject_name", ""),
+                        session.subject_name or "",
                     )
 
                     logger.info(f"Student {student_id} checked in via scan cycle: {new_status.value}")
@@ -723,10 +912,10 @@ class PresenceService:
         """
         logger.warning(f"Early leave detected: student {student_id}, {consecutive_misses} consecutive misses")
 
-        # Update attendance status
-        self.attendance_repo.update(attendance_id, {"status": AttendanceStatus.EARLY_LEAVE})
-
-        # Get attendance record for last seen time
+        # Get attendance record + scan history first so we can stamp the
+        # actual check-out time (last detected scan) onto the record. Without
+        # this, end_session() later overwrites it with session-end and the
+        # admin UI would show the wrong "left at" time for early-leavers.
         attendance = self.attendance_repo.get_by_id(attendance_id)
         recent_logs = self.attendance_repo.get_recent_logs(attendance_id, limit=consecutive_misses + 1)
 
@@ -736,6 +925,12 @@ class PresenceService:
             if log.detected:
                 last_seen = log.scan_time
                 break
+
+        # Update attendance status (and check-out if we know when they left)
+        update_payload: dict = {"status": AttendanceStatus.EARLY_LEAVE}
+        if last_seen is not None:
+            update_payload["check_out_time"] = last_seen
+        self.attendance_repo.update(attendance_id, update_payload)
 
         # Compute context severity based on schedule
         severity = "medium"
@@ -784,6 +979,50 @@ class PresenceService:
                 "timestamp": datetime.now().isoformat(),
             }
         )
+
+        # Emit System Activity event — context severity drives UI rail:
+        # high/medium → warn, low → info (leaving near end is forgivable).
+        try:
+            from app.services.activity_service import (
+                EventSeverity,
+                EventType,
+                emit_attendance_event,
+            )
+
+            ui_severity = (
+                EventSeverity.WARN if severity in ("high", "medium")
+                else EventSeverity.INFO
+            )
+            subject_code = (
+                attendance.schedule.subject_code
+                if attendance and attendance.schedule
+                else ""
+            )
+            emit_attendance_event(
+                self.db,
+                event_type=EventType.EARLY_LEAVE_FLAGGED,
+                summary=(
+                    f"{student_info['name']} flagged for EARLY LEAVE "
+                    f"({consecutive_misses} consecutive misses, severity={severity})"
+                ),
+                schedule_id=schedule_id,
+                student_id=student_id,
+                attendance_id=attendance_id,
+                severity=ui_severity,
+                payload={
+                    "subject_code": subject_code,
+                    "consecutive_misses": consecutive_misses,
+                    "last_seen_at": last_seen.isoformat() if last_seen else None,
+                    "context_severity": severity,
+                    "early_leave_event_id": str(event.id),
+                },
+                autocommit=True,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to emit EARLY_LEAVE_FLAGGED activity event for %s",
+                student_id,
+            )
 
         # Persist in-app + email notifications for early leave
         subject_code = attendance.schedule.subject_code if attendance.schedule else ""
@@ -844,7 +1083,12 @@ class PresenceService:
                 )
             else:
                 restored_status = AttendanceStatus.PRESENT
-            self.attendance_repo.update(attendance_id, {"status": restored_status})
+            # Also clear the stale check_out_time written by flag_early_leave;
+            # end_session will re-stamp it once the session actually closes.
+            self.attendance_repo.update(
+                attendance_id,
+                {"status": restored_status, "check_out_time": None},
+            )
 
         self.db.commit()
 
@@ -881,8 +1125,53 @@ class PresenceService:
             }
         )
 
+        # Emit System Activity event — student returning is always "success"
+        # severity since it closes a warn-severity flag.
+        try:
+            from app.services.activity_service import (
+                EventSeverity,
+                EventType,
+                emit_attendance_event,
+            )
+
+            subject_code = (
+                attendance.schedule.subject_code
+                if attendance and attendance.schedule
+                else ""
+            )
+            minutes = (
+                (event.absence_duration_seconds or 0) // 60
+                if event.absence_duration_seconds
+                else 0
+            )
+            emit_attendance_event(
+                self.db,
+                event_type=EventType.EARLY_LEAVE_RETURNED,
+                summary=(
+                    f"{student_info['name']} returned to {subject_code} "
+                    f"after {minutes} minute absence"
+                ),
+                schedule_id=schedule_id,
+                student_id=student_id,
+                attendance_id=attendance_id,
+                severity=EventSeverity.SUCCESS,
+                payload={
+                    "subject_code": subject_code,
+                    "absence_duration_seconds": event.absence_duration_seconds,
+                    "returned_at": now.isoformat(),
+                    "early_leave_event_id": str(event.id),
+                },
+                autocommit=True,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to emit EARLY_LEAVE_RETURNED activity event for %s",
+                student_id,
+            )
+
         # Notify faculty + student of return (no email)
         from app.services.notification_service import notify as _notify
+        from app.services.notification_service import notify_admins as _notify_admins
 
         minutes = event.absence_duration_seconds // 60 if event.absence_duration_seconds else 0
         for uid in notify_user_ids:
@@ -897,6 +1186,32 @@ class PresenceService:
                 reference_type="attendance",
             )
 
+        # Admin fan-out so the bell shows the resolution alongside the
+        # original early_leave alert. Dedup by attendance row prevents
+        # repeated re-detection from doubling the admin's count.
+        try:
+            await _notify_admins(
+                self.db,
+                title="Student returned",
+                message=(
+                    f"{student_info['name']} returned after {minutes}m absence "
+                    f"in {schedule_id[:8]}."
+                ),
+                notification_type="early_leave_return",
+                severity="info",
+                toast_type="info",
+                preference_key="early_leave_alerts",
+                reference_id=attendance_id,
+                reference_type="attendance",
+                dedup_window_seconds=300,
+            )
+        except Exception:
+            logger.warning(
+                "early_leave_return admin fan-out failed for attendance %s",
+                attendance_id,
+                exc_info=True,
+            )
+
     # ── notification helpers ─────────────────────────────────────
 
     async def _notify_check_in(
@@ -908,17 +1223,29 @@ class PresenceService:
         subject_code: str,
         subject_name: str,
     ):
-        """Send check-in notification to the student."""
+        """Send check-in notification.
+
+        Always notifies the student. Late arrivals additionally fan out to
+        admins as a ``late_arrival`` (severity=warn) so the operator bell
+        surfaces tardiness without being flooded by every on-time check-in.
+        """
         from app.services.notification_service import notify as _notify
+        from app.services.notification_service import notify_admins as _notify_admins
+
+        is_late = (status or "").lower() == "late"
+        notif_type = "late_arrival" if is_late else "check_in"
+        toast = "warning" if is_late else "success"
+        severity = "warn" if is_late else "info"
 
         await _notify(
             self.db,
             student_id,
             "Attendance Confirmed",
             f"You are marked {status} for {subject_code}.",
-            "check_in",
+            notif_type,
             preference_key="attendance_confirmation",
-            toast_type="success",
+            toast_type=toast,
+            severity=severity,
             send_email=True,
             email_template="check_in",
             email_context={
@@ -929,6 +1256,33 @@ class PresenceService:
                 "check_in_time": check_in_time.strftime("%I:%M %p"),
             },
         )
+
+        # Admin fan-out for LATE only — present check-ins would flood the
+        # bell at session start. Per-(schedule, student) dedup window
+        # prevents the same student's repeated re-verifies firing twice.
+        if is_late:
+            try:
+                await _notify_admins(
+                    self.db,
+                    title=f"Late arrival: {subject_code}",
+                    message=(
+                        f"{student_name} marked LATE at "
+                        f"{check_in_time.strftime('%I:%M %p')}."
+                    ),
+                    notification_type="late_arrival",
+                    severity="warn",
+                    toast_type="warning",
+                    preference_key="anomaly_alerts",
+                    reference_id=f"{student_id}:{subject_code}",
+                    reference_type="attendance",
+                    dedup_window_seconds=600,
+                )
+            except Exception:
+                logger.warning(
+                    "late_arrival admin fan-out failed for student %s",
+                    student_id,
+                    exc_info=True,
+                )
 
     async def _notify_early_leave(
         self,
@@ -988,6 +1342,37 @@ class PresenceService:
             reference_id=attendance_id,
             reference_type="early_leave",
         )
+
+        # Admin fan-out so the operator bell surfaces every early-leave,
+        # not just faculty + student. Same preference key so admins who
+        # opt out of early-leave alerts also opt out of these.
+        try:
+            from app.services.notification_service import notify_admins as _notify_admins
+
+            await _notify_admins(
+                self.db,
+                title=f"Early leave: {subject_code}",
+                message=(
+                    f"{student_name} appears to have left {subject_code} "
+                    f"early ({consecutive_misses} consecutive misses)."
+                ),
+                notification_type="early_leave",
+                severity="warn",
+                toast_type="warning",
+                preference_key="early_leave_alerts",
+                reference_id=attendance_id,
+                reference_type="early_leave",
+                # Dedup window matches the typical re-detect cadence so a
+                # repeated flag for the same attendance row doesn't double
+                # the admin's count.
+                dedup_window_seconds=300,
+            )
+        except Exception:
+            logger.warning(
+                "early_leave admin fan-out failed for attendance %s",
+                attendance_id,
+                exc_info=True,
+            )
 
     # ── presence score ───────────────────────────────────────────
 

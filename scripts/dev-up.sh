@@ -28,11 +28,14 @@ if grep -q '^ADMIN_URL=' backend/.env 2>/dev/null; then
   sed -i '' "s|^ADMIN_URL=.*|ADMIN_URL=${ADMIN_URL}|" backend/.env
 fi
 
-# Patch mediamtx.dev.yml webrtcAdditionalHosts with current IP
-# Only replace the line after "webrtcAdditionalHosts:"
-sed -i '' "/^webrtcAdditionalHosts:/,/^[^ ]/{s/^  - .*/  - ${HOST_IP}/;}" deploy/mediamtx.dev.yml
+# Generate the runtime mediamtx config from the template with the current
+# LAN IP. docker-compose.yml mounts the generated (gitignored) file so the
+# committed template never drifts with the user's LAN IP.
+cp deploy/mediamtx.dev.yml deploy/mediamtx.dev.generated.yml
+sed -i '' "/^webrtcAdditionalHosts:/,/^[^ ]/{s/^  - .*/  - ${HOST_IP}/;}" deploy/mediamtx.dev.generated.yml
 
-# Build and start
+# Build and start (HOST_IP exported for any compose-level env injection)
+export HOST_IP
 docker compose up --build -d
 
 echo ""

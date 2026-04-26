@@ -2,11 +2,10 @@ import { useMemo, useState, useTransition } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { type ColumnDef } from '@tanstack/react-table'
 import { safeFormat } from '@/lib/utils'
-import { CheckCircle2, XCircle, Plus } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { usePageTitle } from '@/hooks/use-page-title'
 
 import { DataTable } from '@/components/data-tables'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -15,10 +14,37 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { useUsers } from '@/hooks/use-queries'
 import type { UserResponse } from '@/types'
 import { CreateUserDialog } from './create-user-dialog'
 import { UserActionsCell } from './user-actions'
+import { tokenMatches, joinHaystack, isoDateHaystackParts } from '@/lib/search'
+import {
+  ActiveStatusPill,
+  EmailVerifiedPill,
+} from '@/components/shared/status-pills'
+
+function buildFacultyHaystack(u: UserResponse): string {
+  return joinHaystack([
+    u.first_name,
+    u.last_name,
+    `${u.first_name} ${u.last_name}`,
+    u.email,
+    u.phone,
+    u.is_active ? 'Active' : 'Inactive',
+    u.email_verified ? 'Verified' : 'Not Verified',
+    ...isoDateHaystackParts(u.created_at),
+  ])
+}
 
 type StatusFilter = 'all' | 'active' | 'inactive'
 type EmailFilter = 'all' | 'verified' | 'not_verified'
@@ -40,40 +66,26 @@ const columns: ColumnDef<UserResponse>[] = [
     accessorKey: 'phone',
     header: 'Phone',
     cell: ({ row }) => (
-      <span className="text-sm">{row.original.phone ?? '\u2014'}</span>
+      <span className="text-sm text-muted-foreground">
+        {row.original.phone ?? '—'}
+      </span>
     ),
   },
   {
     accessorKey: 'is_active',
     header: 'Status',
-    cell: ({ row }) =>
-      row.original.is_active ? (
-        <Badge variant="default">Active</Badge>
-      ) : (
-        <Badge variant="destructive">Inactive</Badge>
-      ),
+    cell: ({ row }) => <ActiveStatusPill active={row.original.is_active} />,
   },
   {
     accessorKey: 'email_verified',
     header: 'Email',
-    cell: ({ row }) =>
-      row.original.email_verified ? (
-        <span className="inline-flex items-center gap-1.5 text-sm text-green-600">
-          <CheckCircle2 className="h-3.5 w-3.5" />
-          Verified
-        </span>
-      ) : (
-        <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
-          <XCircle className="h-3.5 w-3.5" />
-          Not Verified
-        </span>
-      ),
+    cell: ({ row }) => <EmailVerifiedPill verified={row.original.email_verified} />,
   },
   {
     accessorKey: 'created_at',
-    header: 'Added',
+    header: 'Joined',
     cell: ({ row }) => (
-      <span className="text-sm">
+      <span className="text-sm text-muted-foreground">
         {safeFormat(row.original.created_at, 'MMM d, yyyy')}
       </span>
     ),
@@ -94,6 +106,7 @@ export default function FacultyPage() {
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [emailFilter, setEmailFilter] = useState<EmailFilter>('all')
+  const [searchQuery, setSearchQuery] = useState('')
   const [isPending, startTransition] = useTransition()
 
   const filtered = useMemo(() => {
@@ -104,10 +117,15 @@ export default function FacultyPage() {
     if (emailFilter === 'verified') result = result.filter((f) => f.email_verified)
     else if (emailFilter === 'not_verified') result = result.filter((f) => !f.email_verified)
 
-    return result
-  }, [faculty, statusFilter, emailFilter])
+    if (searchQuery.trim()) {
+      result = result.filter((f) => tokenMatches(buildFacultyHaystack(f), searchQuery))
+    }
 
-  const hasFilters = statusFilter !== 'all' || emailFilter !== 'all'
+    return result
+  }, [faculty, statusFilter, emailFilter, searchQuery])
+
+  const hasFilters =
+    statusFilter !== 'all' || emailFilter !== 'all' || searchQuery.trim().length > 0
 
   function handleFilterChange<T>(setter: (v: T) => void) {
     return (value: string) => {
@@ -119,6 +137,7 @@ export default function FacultyPage() {
     startTransition(() => {
       setStatusFilter('all')
       setEmailFilter('all')
+      setSearchQuery('')
     })
   }
 
@@ -131,7 +150,7 @@ export default function FacultyPage() {
           <SelectValue placeholder="Status" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">All Status</SelectItem>
+          <SelectItem value="all">All status</SelectItem>
           <SelectItem value="active">Active</SelectItem>
           <SelectItem value="inactive">Inactive</SelectItem>
         </SelectContent>
@@ -142,9 +161,9 @@ export default function FacultyPage() {
           <SelectValue placeholder="Email" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">All Email</SelectItem>
+          <SelectItem value="all">All email</SelectItem>
           <SelectItem value="verified">Verified</SelectItem>
-          <SelectItem value="not_verified">Not Verified</SelectItem>
+          <SelectItem value="not_verified">Not verified</SelectItem>
         </SelectContent>
       </Select>
 
@@ -156,17 +175,104 @@ export default function FacultyPage() {
     </>
   )
 
+  if (isLoading) {
+    // Mirror the loaded layout (header + toolbar + table + pagination) so
+    // the cut-over to real data doesn't shift the page. Used only on
+    // initial fetch — `isPending` (filter transitions) keeps the toolbar
+    // interactive and uses the DataTable's own row-level skeleton.
+    return (
+      <div className="space-y-6">
+        {/* Page header */}
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-7 w-28" />
+            <Skeleton className="h-4 w-44" />
+          </div>
+          <Skeleton className="h-9 w-32 rounded-md" />
+        </div>
+
+        <div>
+          {/* Toolbar — search + 2 selects */}
+          <div className="flex items-center justify-between gap-4 py-4">
+            <Skeleton className="h-9 w-full max-w-sm rounded-md" />
+            <div className="flex items-center gap-2">
+              <Skeleton className="h-9 w-[130px] rounded-md" />
+              <Skeleton className="h-9 w-[140px] rounded-md" />
+            </div>
+          </div>
+
+          {/* Table — render real header so column proportions auto-size
+              the same as the loaded table. */}
+          <div className="rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Phone</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Joined</TableHead>
+                  <TableHead className="w-[60px]" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <TableRow key={`faculty-skel-${String(i)}`}>
+                    <TableCell>
+                      <div className="space-y-1.5">
+                        <Skeleton className="h-4 w-40" />
+                        <Skeleton className="h-3 w-52" />
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-28" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-5 w-16 rounded-full" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-5 w-20 rounded-full" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-3 w-24" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="ml-auto h-8 w-8 rounded-md" />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* Pagination */}
+          <div className="flex items-center justify-between px-2 py-4">
+            <Skeleton className="h-4 w-44" />
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-8 w-[70px] rounded-md" />
+              </div>
+              <div className="flex items-center gap-1">
+                <Skeleton className="h-8 w-8 rounded-md" />
+                <Skeleton className="h-8 w-8 rounded-md" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Faculty</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {isLoading
-              ? 'Loading...'
-              : hasFilters
-                ? `${filtered.length} of ${faculty.length} faculty members`
-                : `${faculty.length} faculty member${faculty.length !== 1 ? 's' : ''}`}
+            {hasFilters
+              ? `${filtered.length} of ${faculty.length} faculty members`
+              : `${faculty.length} faculty member${faculty.length !== 1 ? 's' : ''}`}
           </p>
         </div>
         <Button onClick={() => setDialogOpen(true)}>
@@ -179,8 +285,10 @@ export default function FacultyPage() {
         columns={columns}
         data={filtered}
         isLoading={showSkeleton}
-        searchColumn="first_name"
-        searchPlaceholder="Search faculty..."
+        searchPlaceholder="Search by name, email, phone, status..."
+        globalFilter={searchQuery}
+        onGlobalFilterChange={setSearchQuery}
+        globalFilterFn={() => true}
         toolbar={filterToolbar}
         onRowClick={(row) => navigate(`/users/${row.id}`, { state: { role: 'faculty' } })}
       />

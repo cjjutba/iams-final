@@ -20,8 +20,14 @@ from app.config import logger, settings
 from app.database import check_db_connection, init_db
 from app.rate_limiter import limiter
 
-# Import routers
+# Import routers. Router modules are cheap to import (pure FastAPI APIRouter
+# declarations + Pydantic schemas) — we import them all unconditionally and
+# then conditionally register below based on settings.ENABLE_*_ROUTES.
+# Service modules with heavy deps (insightface, faiss, onnxruntime) are
+# imported lazily inside the lifespan + on-demand helper so the VPS thin
+# profile never pays their import cost.
 from app.routers import (
+    activity,
     analytics,
     attendance,
     audit,
@@ -31,9 +37,11 @@ from app.routers import (
     health,
     notifications,
     presence,
+    recognitions,
     rooms,
     schedules,
     settings_router,
+    sync as sync_router,
     users,
     websocket,
 )
@@ -74,6 +82,15 @@ async def lifespan(app: FastAPI):
     logger.info(f"Debug mode: {settings.DEBUG}")
     logger.info(f"API prefix: {settings.API_PREFIX}")
 
+    # ── Health-notifier bootstrap ─────────────────────────────────
+    # Capture the running event loop so daemon threads (FrameGrabber stderr
+    # drain, etc.) can schedule notification coros via run_coroutine_threadsafe.
+    # mark_boot() starts the 60s grace window so spurious deploy-time
+    # transitions don't fire admin alerts.
+    from app.services import health_notifier
+    app.state.loop = asyncio.get_running_loop()
+    health_notifier.mark_boot()
+
     # ── Database ──────────────────────────────────────────────────
     db_connected = await asyncio.to_thread(check_db_connection)
     if not db_connected:
@@ -84,60 +101,408 @@ async def lifespan(app: FastAPI):
     logger.info("Database connection established")
 
     # ── Redis ─────────────────────────────────────────────────────
-    try:
-        from app.redis_client import get_redis
+    if settings.ENABLE_REDIS:
+        try:
+            from app.redis_client import get_redis
 
-        await get_redis()
-        logger.info("Redis connection pool initialized")
-    except Exception as e:
-        logger.error(f"Failed to initialize Redis: {e}")
+            await get_redis()
+            logger.info("Redis connection pool initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Redis: {e}")
+    else:
+        logger.info("Redis disabled (ENABLE_REDIS=false)")
 
     # ── ML Models ─────────────────────────────────────────────────
-    try:
-        from app.services.ml.faiss_manager import faiss_manager
-        from app.services.ml.insightface_model import insightface_model
-
-        logger.info("Loading InsightFace model...")
-        insightface_model.load_model()
-
-        logger.info("Loading FAISS index...")
-        faiss_manager.load_or_create_index()
-        faiss_manager.rebuild_user_map_from_db()
-
-        # Reconcile FAISS index with database
+    if settings.ENABLE_ML:
         try:
-            from app.database import SessionLocal
-            from app.services.face_service import FaceService
+            from app.services.ml.faiss_manager import faiss_manager
+            from app.services.ml.insightface_model import insightface_model
 
-            db = SessionLocal()
+            logger.info("Loading InsightFace model...")
+            insightface_model.load_model()
+
+            logger.info("Loading FAISS index...")
+            faiss_manager.load_or_create_index()
+            faiss_manager.rebuild_user_map_from_db()
+
+            # Reconcile FAISS index with database
             try:
-                FaceService.reconcile_faiss_index(db)
-            finally:
-                db.close()
+                from app.database import SessionLocal
+                from app.services.face_service import FaceService
+
+                db = SessionLocal()
+                try:
+                    FaceService.reconcile_faiss_index(db)
+                finally:
+                    db.close()
+            except Exception as e:
+                logger.error(f"FAISS reconciliation failed: {e}")
+                await health_notifier.emit_one_shot(
+                    title="FAISS reconciliation failed",
+                    message=(
+                        f"FAISS index reconciliation failed at startup: {e}. "
+                        "Face recognition may be degraded."
+                    ),
+                    notification_type="faiss_reconcile_failed",
+                    severity="critical",
+                    preference_key="ml_health_alerts",
+                    reference_id="faiss_reconcile",
+                    reference_type="ml_index",
+                    dedup_window_seconds=300,
+                    toast_type="error",
+                )
+
+            # Background listener for FAISS reload notifications (multi-worker sync)
+            app.state.faiss_subscriber_task = asyncio.create_task(faiss_manager.subscribe_index_changes())
+
+            # JIT the SCRFD ONNX graph now so the first real session pipeline
+            # doesn't pay the ~3-5s warmup tax on its first frame. (No-op if
+            # the realtime path will route through the sidecar — but cheap
+            # insurance against ML_SIDECAR_URL being unset later or the
+            # registration path needing the in-process model.)
+            await asyncio.to_thread(insightface_model.warmup)
+            logger.info("InsightFace warmup complete")
+
+            # Bind the realtime ML backend. ML_SIDECAR_URL set + reachable →
+            # route SCRFD + ArcFace through the native macOS sidecar
+            # (CoreML/ANE). Else use the in-process model. SessionPipeline
+            # picks up whatever we bind here via app.services.ml.inference.
+            from app.services.ml.inference import set_realtime_model
+
+            sidecar_bound = False
+            if settings.ML_SIDECAR_URL:
+                try:
+                    from app.services.ml.remote_insightface_model import (
+                        RemoteInsightFaceModel,
+                    )
+
+                    remote = RemoteInsightFaceModel(settings.ML_SIDECAR_URL)
+                    health = await asyncio.to_thread(remote.healthcheck)
+                    if health and health.get("model_loaded"):
+                        set_realtime_model(remote)
+                        provider_summary = ", ".join(
+                            f"{p['task']}={p['providers'][0] if p['providers'] else 'n/a'}"
+                            for p in health.get("providers", [])
+                        ) or "no providers reported"
+                        logger.info(
+                            "Realtime ML routed via sidecar at %s (%s)",
+                            settings.ML_SIDECAR_URL,
+                            provider_summary,
+                        )
+                        sidecar_bound = True
+                        # Recovery transition fires only if the sidecar
+                        # had previously been recorded as down.
+                        await health_notifier.report_health(
+                            resource="ml_sidecar",
+                            is_healthy=True,
+                            down_title="ML sidecar unavailable",
+                            down_message=(
+                                f"ML sidecar at {settings.ML_SIDECAR_URL} failed health probe "
+                                "— using slower in-process inference"
+                            ),
+                            down_type="ml_sidecar_down",
+                            recovered_title="ML sidecar recovered",
+                            recovered_message="ML sidecar is responding again",
+                            recovered_type="ml_sidecar_recovered",
+                            preference_key="ml_health_alerts",
+                            down_severity="warn",
+                        )
+                    else:
+                        logger.warning(
+                            "ML sidecar at %s did not pass health probe — "
+                            "falling back to in-process inference",
+                            settings.ML_SIDECAR_URL,
+                        )
+                        await health_notifier.report_health(
+                            resource="ml_sidecar",
+                            is_healthy=False,
+                            down_title="ML sidecar unavailable",
+                            down_message=(
+                                f"ML sidecar at {settings.ML_SIDECAR_URL} failed health probe "
+                                "— using slower in-process inference"
+                            ),
+                            down_type="ml_sidecar_down",
+                            recovered_title="ML sidecar recovered",
+                            recovered_message="ML sidecar is responding again",
+                            recovered_type="ml_sidecar_recovered",
+                            preference_key="ml_health_alerts",
+                            down_severity="warn",
+                        )
+                        try:
+                            remote.close()
+                        except Exception:
+                            pass
+                except Exception:
+                    logger.exception(
+                        "Failed to initialise sidecar proxy — falling back to in-process"
+                    )
+
+            if not sidecar_bound:
+                set_realtime_model(insightface_model)
+
+            # ── Liveness backend (MiniFASNet via sidecar /liveness) ──
+            # Bound only when:
+            #   (a) operator opted in via LIVENESS_ENABLED=true, AND
+            #   (b) sidecar is bound + reports liveness_loaded=true.
+            # Either condition false → set_liveness_model(None) so the
+            # tracker treats every track as liveness-unknown (= not gated).
+            from app.services.ml.inference import (
+                set_liveness_model,
+            )
+
+            liveness_bound = False
+            if settings.LIVENESS_ENABLED and sidecar_bound and settings.ML_SIDECAR_URL:
+                try:
+                    from app.services.ml.remote_liveness_model import (
+                        RemoteLivenessModel,
+                    )
+
+                    rlm = RemoteLivenessModel(settings.ML_SIDECAR_URL)
+                    liveness_health = await asyncio.to_thread(rlm.healthcheck)
+                    if liveness_health and liveness_health.get("loaded"):
+                        set_liveness_model(rlm)
+                        logger.info(
+                            "Liveness backend bound — pack=%s, submodels=%s",
+                            liveness_health.get("pack_dir"),
+                            [
+                                sm.get("name")
+                                for sm in liveness_health.get("submodels", [])
+                            ],
+                        )
+                        liveness_bound = True
+                    else:
+                        logger.warning(
+                            "LIVENESS_ENABLED=true but sidecar reports "
+                            "liveness_loaded=false (%s) — liveness gating "
+                            "will be SKIPPED this run. Run `python -m "
+                            "scripts.export_liveness_models` then restart.",
+                            (liveness_health or {}).get("error", "no /health response"),
+                        )
+                        try:
+                            rlm.close()
+                        except Exception:
+                            pass
+                except Exception:
+                    logger.exception(
+                        "Failed to initialise liveness proxy — "
+                        "liveness gating will be SKIPPED this run"
+                    )
+            elif settings.LIVENESS_ENABLED and not sidecar_bound:
+                logger.warning(
+                    "LIVENESS_ENABLED=true but ML sidecar is not bound — "
+                    "liveness gating will be SKIPPED. Liveness lives in "
+                    "the sidecar; bring up the sidecar first."
+                )
+            else:
+                logger.info(
+                    "Liveness gating disabled (LIVENESS_ENABLED=%s)",
+                    settings.LIVENESS_ENABLED,
+                )
+
+            if not liveness_bound:
+                # Explicit None binding so any prior gateway boot's leftover
+                # state can't leak through. Idempotent: safe to call with
+                # None when no liveness model was previously bound.
+                set_liveness_model(None)
+
+                # Surface the degraded state to the operator's bell when
+                # the operator INTENDED liveness to run (LIVENESS_ENABLED
+                # is true) but the binding failed. Silent boot of a
+                # critical security feature is exactly the failure mode
+                # this notification exists to prevent. Dedup window of
+                # 1 hour so a flaky sidecar that recovers + drops doesn't
+                # spam the bell.
+                if settings.LIVENESS_ENABLED:
+                    try:
+                        await health_notifier.emit_one_shot(
+                            title="Liveness gating disabled at boot",
+                            message=(
+                                "LIVENESS_ENABLED=true but the MiniFASNet "
+                                "backend could not be bound (sidecar absent "
+                                "or pack not exported). Spoof detection is "
+                                "OFF this run. Run `python -m "
+                                "scripts.export_liveness_models` and "
+                                "restart the api-gateway to recover."
+                            ),
+                            notification_type="liveness_unavailable",
+                            severity="warn",
+                            preference_key="security_alerts",
+                            send_email=True,
+                            reference_id="liveness_unavailable",
+                            reference_type="ml",
+                            dedup_window_seconds=3600,
+                            toast_type="warning",
+                        )
+                    except Exception:
+                        logger.warning(
+                            "liveness_unavailable notify failed",
+                            exc_info=True,
+                        )
+
+            logger.info("Face recognition system initialized")
         except Exception as e:
-            logger.error(f"FAISS reconciliation failed: {e}")
+            logger.error(f"Failed to initialize face recognition: {e}")
 
-        # Background listener for FAISS reload notifications (multi-worker sync)
-        app.state.faiss_subscriber_task = asyncio.create_task(faiss_manager.subscribe_index_changes())
+        # ── Recognition-evidence writer ────────────────────────
+        # Starts only when both ML and evidence capture are enabled. Drains
+        # on shutdown; see docs/plans/2026-04-22-recognition-evidence.
+        if settings.ENABLE_RECOGNITION_EVIDENCE:
+            try:
+                from app.services.evidence_writer import evidence_writer
 
-        logger.info("Face recognition system initialized")
-    except Exception as e:
-        logger.error(f"Failed to initialize face recognition: {e}")
+                await evidence_writer.start()
+            except Exception as e:
+                logger.error(f"Failed to start evidence writer: {e}")
+        else:
+            logger.info(
+                "Recognition evidence capture disabled (ENABLE_RECOGNITION_EVIDENCE=false)"
+            )
+    else:
+        logger.info("ML disabled (ENABLE_ML=false) — skipping InsightFace + FAISS load")
+
+    # ── Auto-CCTV-Enroller bootstrap ──────────────────────────────
+    # Lives at top level (not nested inside ENABLE_ML) so its visibility
+    # is independent of any ML init failure earlier in lifespan. It only
+    # depends on the DB which was initialized above. The realtime tracker
+    # calls offer_capture() per confident recognition; this query
+    # bootstraps the per-(user, room) lifetime counters from existing
+    # face_embeddings.cctv_* rows so the trigger remains one-shot
+    # across server restarts.
+    if settings.AUTO_CCTV_ENROLL_ENABLED:
+        try:
+            from app.services.auto_cctv_enroller import auto_cctv_enroller
+            await asyncio.to_thread(auto_cctv_enroller.bootstrap_from_db)
+        except Exception:
+            logger.exception("AutoCctvEnroller bootstrap failed (non-fatal)")
+    else:
+        logger.info("Auto-CCTV-enroller disabled (AUTO_CCTV_ENROLL_ENABLED=false)")
 
     # ── Frame Grabbers & Session Pipelines ────────────────────────
+    # State dicts are allocated unconditionally so the on-demand + lifecycle
+    # helpers can check them without an AttributeError. When ENABLE_FRAME_GRABBERS
+    # is false they stay empty.
     app.state.frame_grabbers = {}  # room_id -> FrameGrabber
+    # Back-row (cropped) grabbers — distant-face plan 2026-04-26 Phase 2.
+    # Keyed by ``primary_stream_key`` (matches ``rooms.stream_key``) NOT
+    # room_id, so the SessionPipeline.start() path can look them up
+    # using whatever camera handle the room resolved to. Empty when
+    # BACKROW_CROP_STREAMS is unset or disabled.
+    app.state.backrow_frame_grabbers = {}  # primary_stream_key -> FrameGrabber
     app.state.session_pipelines = {}  # schedule_id -> SessionPipeline
 
-    # ── WebSocket Redis subscriber ─────────────────────────────
-    try:
-        from app.routers.websocket import ws_manager
+    # Pre-open RTSP readers for every room with a configured camera so the
+    # transition from "no session" → "session running" is instant. ML still
+    # only runs when a SessionPipeline is attached (gated by the lifecycle
+    # scheduler), but the grabber + decoder is already warm so the first
+    # real frame lands in <1s instead of waiting for the FFmpeg I-frame
+    # handshake. Skipped on the VPS thin profile where ENABLE_FRAME_GRABBERS
+    # is false (no cameras reachable from the VPS network).
+    if settings.ENABLE_ML and settings.ENABLE_FRAME_GRABBERS:
+        try:
+            from app.database import SessionLocal as _SessionLocal
+            from app.models.room import Room as _Room
+            from app.services.backrow_streams import parse_backrow_config
+            from app.services.frame_grabber import FrameGrabber as _FrameGrabber
 
-        await ws_manager.start_redis_subscriber()
-    except Exception as e:
-        logger.warning(f"Redis WS subscriber not started: {e}")
+            _db = _SessionLocal()
+            try:
+                _rooms = (
+                    _db.query(_Room)
+                    .filter(_Room.camera_endpoint.isnot(None))
+                    .filter(_Room.camera_endpoint != "")
+                    .all()
+                )
+                for _room in _rooms:
+                    _room_id = str(_room.id)
+                    if _room_id in app.state.frame_grabbers:
+                        continue
+                    try:
+                        app.state.frame_grabbers[_room_id] = _FrameGrabber(
+                            _room.camera_endpoint,
+                            dedup_repeats=True,
+                            # Phase 4b: stream_key drives lens
+                            # undistortion lookup. None for rooms
+                            # without a configured stream_key — those
+                            # are treated as "no undistortion" by the
+                            # FrameGrabber's internal lookup.
+                            stream_key=_room.stream_key,
+                        )
+                        logger.info(
+                            "FrameGrabber preloaded for room %s (%s)",
+                            _room.name,
+                            _room_id,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to preload FrameGrabber for room %s", _room_id
+                        )
+
+                # Distant-face plan 2026-04-26 Phase 2 — preload secondary
+                # FrameGrabbers for any cropped back-row paths configured
+                # in BACKROW_CROP_STREAMS. Same warmup rationale as the
+                # primary loop above; missing cropped publishers (e.g.
+                # before scripts/iams-cam-relay.sh starts publishing
+                # eb226-back) fall through gracefully because the
+                # FrameGrabber's reconnect-on-stale loop tolerates a
+                # delayed publisher.
+                _backrow_entries = parse_backrow_config(settings.BACKROW_CROP_STREAMS)
+                for _entry in _backrow_entries:
+                    if _entry.primary_stream_key in app.state.backrow_frame_grabbers:
+                        continue
+                    try:
+                        # Phase 4b: pass the back-row path as stream_key so
+                        # operators can calibrate the cropped view
+                        # separately if its effective field-of-view warrants
+                        # different undistortion coefficients than the
+                        # parent stream.
+                        app.state.backrow_frame_grabbers[_entry.primary_stream_key] = (
+                            _FrameGrabber(
+                                _entry.rtsp_url,
+                                dedup_repeats=True,
+                                stream_key=_entry.backrow_path,
+                            )
+                        )
+                        logger.info(
+                            "Back-row FrameGrabber preloaded for %s -> %s",
+                            _entry.primary_stream_key,
+                            _entry.rtsp_url,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to preload back-row FrameGrabber for %s",
+                            _entry.primary_stream_key,
+                        )
+            finally:
+                _db.close()
+        except Exception:
+            logger.exception("FrameGrabber preload phase failed")
+
+    # ── WebSocket Redis subscriber ─────────────────────────────
+    if settings.ENABLE_WS_ROUTES and settings.ENABLE_REDIS:
+        try:
+            from app.routers.websocket import ws_manager
+
+            await ws_manager.start_redis_subscriber()
+        except Exception as e:
+            logger.warning(f"Redis WS subscriber not started: {e}")
+    else:
+        logger.info(
+            "WS Redis subscriber skipped "
+            f"(ENABLE_WS_ROUTES={settings.ENABLE_WS_ROUTES}, ENABLE_REDIS={settings.ENABLE_REDIS})"
+        )
 
     # ── APScheduler ───────────────────────────────────────────────
+    # Skipped in the VPS thin profile: without ML + frame grabbers + presence
+    # + notifications, every scheduled job would either no-op or reference
+    # modules that are intentionally unused on the VPS. Raising a sentinel
+    # exception inside the existing try: block skips the block without having
+    # to re-indent hundreds of lines.
+    class _SkipBackgroundJobs(Exception):
+        pass
+
     try:
+        if not settings.ENABLE_BACKGROUND_JOBS:
+            raise _SkipBackgroundJobs
         from app.database import SessionLocal
         from app.services.presence_service import PresenceService
 
@@ -158,6 +523,19 @@ async def lifespan(app: FastAPI):
                     logger.warning(
                         f"FAISS health check: mismatch detected — "
                         f"FAISS has {faiss_count} vectors, DB has {active_count} active registrations"
+                    )
+                    await health_notifier.emit_one_shot(
+                        title="FAISS index mismatch detected",
+                        message=(
+                            f"FAISS contains {faiss_count} vectors but DB has "
+                            f"{active_count} active registrations"
+                        ),
+                        notification_type="faiss_mismatch",
+                        severity="error",
+                        preference_key="ml_health_alerts",
+                        reference_id="faiss_mismatch",
+                        reference_type="ml_index",
+                        dedup_window_seconds=1800,
                     )
                 else:
                     logger.debug(f"FAISS health check: in sync ({active_count} vectors)")
@@ -217,6 +595,7 @@ async def lifespan(app: FastAPI):
                         room_id = str(schedule.room_id)
                         room = db.query(Room).filter(Room.id == schedule.room_id).first()
                         camera_url = room.camera_endpoint if room else None
+                        room_stream_key = room.stream_key if room else None
 
                         # Fetch faculty_id and enrolled student_ids for notifications
                         faculty_id = str(schedule.faculty_id)
@@ -230,6 +609,12 @@ async def lifespan(app: FastAPI):
                                 "sid": sid,
                                 "room_id": room_id,
                                 "camera_url": camera_url,
+                                # Phase 2 — back-row grabbers are keyed by
+                                # the room's mediamtx stream_key (e.g.
+                                # "eb226"), not the room_id. Pass it
+                                # through so the start path can look up
+                                # the cropped sibling grabber.
+                                "stream_key": room_stream_key,
                                 "subject_code": schedule.subject_code,
                                 "faculty_id": faculty_id,
                                 "student_ids": student_ids,
@@ -244,22 +629,53 @@ async def lifespan(app: FastAPI):
                             if sid in pipeline_ids:
                                 pass  # Let pipeline manage its own state
                             continue
-                        schedule = session_state.schedule
-                        if current_time <= schedule.end_time:
+
+                        # Read from the SessionState's snapshotted primitives.
+                        # session_state.schedule is the original ORM instance —
+                        # its owning DB session has long since closed, so any
+                        # attribute lazy-load (day_of_week, start_time,
+                        # end_time, room_id, …) raises DetachedInstanceError
+                        # and aborts this whole gather, which is how zombie
+                        # sessions outlive their window. The snapshot fields
+                        # below are plain Python primitives captured at
+                        # SessionState.__init__ — safe to read forever.
+
+                        # Only auto-end sessions that are "window-managed":
+                        # started inside their natural (day, start..end) window.
+                        # Sessions started manually outside the window (e.g.
+                        # demo / restart on another day) must persist until
+                        # they are ended explicitly — otherwise this job would
+                        # end them within 15 s and the admin UI's "Start
+                        # Session" button would appear to flap back after a
+                        # successful click.
+                        if not getattr(session_state, "auto_manage", True):
                             continue
 
-                        # Fetch faculty_id and enrolled student_ids for notifications
-                        faculty_id = str(schedule.faculty_id)
+                        # Safety: only auto-end on the session's own weekday.
+                        # Without this guard a Monday schedule whose end_time
+                        # is 10:00 would be auto-ended at 10:01 *any* day of
+                        # the week, because the previous check was purely on
+                        # time-of-day.
+                        if session_state.day_of_week != current_day:
+                            continue
+                        if current_time <= session_state.window_end:
+                            continue
+
+                        # Fetch enrolled student_ids for notifications.
+                        # faculty_id comes from the snapshot; using `sid` for
+                        # the enrollment query avoids touching the detached
+                        # ORM instance entirely.
+                        faculty_id = session_state.faculty_id
                         student_ids = [
                             str(e.student_id)
-                            for e in db.query(Enrollment.student_id).filter(Enrollment.schedule_id == schedule.id).all()
+                            for e in db.query(Enrollment.student_id).filter(Enrollment.schedule_id == sid).all()
                         ]
 
                         to_end.append(
                             {
                                 "sid": sid,
-                                "room_id": str(schedule.room_id),
-                                "subject_code": schedule.subject_code,
+                                "room_id": session_state.room_id,
+                                "subject_code": session_state.subject_code,
                                 "faculty_id": faculty_id,
                                 "student_ids": student_ids,
                             }
@@ -282,6 +698,7 @@ async def lifespan(app: FastAPI):
                 sid = info["sid"]
                 room_id = info["room_id"]
                 camera_url = info["camera_url"]
+                stream_key = info.get("stream_key")
                 subject_code = info["subject_code"]
                 faculty_id = info.get("faculty_id")
                 student_ids = info.get("student_ids", [])
@@ -295,13 +712,22 @@ async def lifespan(app: FastAPI):
                     finally:
                         db.close()
 
-                    # Create FrameGrabber if we have a camera
+                    # FrameGrabbers are preloaded at boot for every room with a
+                    # camera, but this fallback handles rooms added at runtime
+                    # or a failed preload pass. Either way, ML detection only
+                    # runs once a SessionPipeline is attached below.
                     if camera_url and room_id not in app.state.frame_grabbers:
-                        grabber = FrameGrabber(camera_url)
+                        # Phase 4b: stream_key threads undistortion lookup
+                        # through; safe to pass None when the gather phase
+                        # didn't carry one.
+                        grabber = FrameGrabber(
+                            camera_url,
+                            dedup_repeats=True,
+                            stream_key=stream_key,
+                        )
                         app.state.frame_grabbers[room_id] = grabber
                         logger.info(f"[lifecycle] Created FrameGrabber for room {room_id}")
 
-                    # Start real-time pipeline
                     grabber = app.state.frame_grabbers.get(room_id)
                     if grabber:
                         # Self-heal FAISS before starting pipeline
@@ -313,21 +739,132 @@ async def lifespan(app: FastAPI):
                         if not faiss_manager.user_map:
                             faiss_manager.rebuild_user_map_from_db()
 
+                        # Distant-face plan 2026-04-26 Phase 2 — look up
+                        # the back-row grabber when ``BACKROW_CROP_STREAMS``
+                        # has an entry for this room's stream_key. Falls
+                        # back to None when not configured, leaving the
+                        # SessionPipeline in single-grabber Phase 1 mode.
+                        backrow_grabber = None
+                        if stream_key:
+                            backrow_grabber = app.state.backrow_frame_grabbers.get(
+                                stream_key
+                            )
+
                         pipeline = SessionPipeline(
                             schedule_id=sid,
                             grabber=grabber,
                             db_factory=SessionLocal,
                             room_id=room_id,
+                            backrow_grabber=backrow_grabber,
                         )
                         await pipeline.start()
                         app.state.session_pipelines[sid] = pipeline
                         logger.info(f"[lifecycle] Started pipeline for {subject_code} ({sid})")
+
+                        # System Activity event so the admin can see the
+                        # ML pipeline coming online in the timeline.
+                        # Fire-and-forget — never breaks the lifecycle loop.
+                        try:
+                            from app.services.activity_service import (
+                                EventSeverity,
+                                EventType,
+                                emit_system_event,
+                            )
+
+                            db = SessionLocal()
+                            try:
+                                emit_system_event(
+                                    db,
+                                    event_type=EventType.PIPELINE_STARTED,
+                                    summary=(
+                                        f"Pipeline started for {subject_code}"
+                                    ),
+                                    severity=EventSeverity.SUCCESS,
+                                    schedule_id=str(sid),
+                                    room_id=str(room_id),
+                                    payload={
+                                        "subject_code": subject_code,
+                                        "schedule_id": str(sid),
+                                        "room_id": str(room_id),
+                                    },
+                                    autocommit=True,
+                                )
+                            finally:
+                                db.close()
+                        except Exception:
+                            logger.warning(
+                                "[lifecycle] PIPELINE_STARTED emit failed",
+                                exc_info=True,
+                            )
                     else:
                         logger.warning(f"[lifecycle] No camera for {subject_code}, session started without pipeline")
+                        # Treat "session started but pipeline missing" as a
+                        # WARN system event — the operator should know the
+                        # camera was unavailable when the schedule fired.
+                        try:
+                            from app.services.activity_service import (
+                                EventSeverity,
+                                EventType,
+                                emit_system_event,
+                            )
+
+                            db = SessionLocal()
+                            try:
+                                emit_system_event(
+                                    db,
+                                    event_type=EventType.CAMERA_OFFLINE,
+                                    summary=(
+                                        f"No camera available for {subject_code} — "
+                                        f"session started without ML pipeline"
+                                    ),
+                                    severity=EventSeverity.WARN,
+                                    schedule_id=str(sid),
+                                    room_id=str(room_id),
+                                    payload={
+                                        "subject_code": subject_code,
+                                        "schedule_id": str(sid),
+                                        "room_id": str(room_id),
+                                        "reason": "no_camera_endpoint_or_grabber",
+                                    },
+                                    autocommit=True,
+                                )
+                            finally:
+                                db.close()
+                        except Exception:
+                            logger.warning(
+                                "[lifecycle] CAMERA_OFFLINE emit failed",
+                                exc_info=True,
+                            )
+
+                        # Admin-bell notification mirroring the system event.
+                        # Dedup keyed on the room so back-to-back rolling
+                        # sessions don't fan out duplicate alerts.
+                        try:
+                            await health_notifier.emit_one_shot(
+                                title=f"Camera offline for {subject_code or room_id}",
+                                message=(
+                                    f"Session is starting in room {room_id} but no "
+                                    f"camera is available — ML pipeline inactive"
+                                ),
+                                notification_type="camera_offline",
+                                severity="error",
+                                preference_key="camera_alerts",
+                                reference_id=str(room_id),
+                                reference_type="room",
+                                dedup_window_seconds=600,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "[lifecycle] camera_offline admin notify failed",
+                                exc_info=True,
+                            )
 
                     # Send session-start notifications (fire-and-forget)
                     try:
                         from app.services.notification_service import notify as _notify
+                        from app.services.notification_service import (
+                            notify_admins as _notify_admins,
+                        )
                         from app.services.notification_service import notify_many as _notify_many
 
                         db = SessionLocal()
@@ -360,6 +897,22 @@ async def lifespan(app: FastAPI):
                                     reference_type="schedule",
                                     dedup_window_seconds=300,
                                 )
+                            # Admin fan-out — same dedup window as faculty
+                            # so repeated lifecycle ticks don't double-notify.
+                            await _notify_admins(
+                                db,
+                                title=f"Session started: {subject_code}",
+                                message=(
+                                    f"Auto-started {subject_code} in room "
+                                    f"{room_id} ({len(student_ids)} enrolled)."
+                                ),
+                                notification_type="session_auto_started",
+                                severity="info",
+                                toast_type="info",
+                                reference_id=str(sid),
+                                reference_type="schedule",
+                                dedup_window_seconds=300,
+                            )
                         finally:
                             db.close()
                     except Exception:
@@ -386,6 +939,41 @@ async def lifespan(app: FastAPI):
                         await pipeline.stop()
                         logger.info(f"[lifecycle] Stopped pipeline for {subject_code}")
 
+                        # System Activity event mirroring PIPELINE_STARTED so
+                        # the admin sees the full lifecycle on the timeline.
+                        try:
+                            from app.services.activity_service import (
+                                EventSeverity,
+                                EventType,
+                                emit_system_event,
+                            )
+
+                            db = SessionLocal()
+                            try:
+                                emit_system_event(
+                                    db,
+                                    event_type=EventType.PIPELINE_STOPPED,
+                                    summary=(
+                                        f"Pipeline stopped for {subject_code}"
+                                    ),
+                                    severity=EventSeverity.INFO,
+                                    schedule_id=str(sid),
+                                    room_id=str(room_id) if room_id else None,
+                                    payload={
+                                        "subject_code": subject_code,
+                                        "schedule_id": str(sid),
+                                        "room_id": str(room_id) if room_id else None,
+                                    },
+                                    autocommit=True,
+                                )
+                            finally:
+                                db.close()
+                        except Exception:
+                            logger.warning(
+                                "[lifecycle] PIPELINE_STOPPED emit failed",
+                                exc_info=True,
+                            )
+
                     # End legacy session
                     db = SessionLocal()
                     try:
@@ -395,30 +983,18 @@ async def lifespan(app: FastAPI):
                         db.close()
                     logger.info(f"[lifecycle] Ended session for {subject_code} ({sid})")
 
-                    # Stop FrameGrabber — but only if no other active pipeline
-                    # is still using the same room's grabber. This is the
-                    # "seamless handoff" guard: back-to-back rolling sessions
-                    # in the same classroom previously killed the grabber out
-                    # from under the next pipeline, starving it of frames and
-                    # leaving the UI stuck on "Detecting…".
-                    frame_grabbers = app.state.frame_grabbers
-                    still_used = any(
-                        getattr(p, "room_id", None) == room_id
-                        for p in app.state.session_pipelines.values()
-                    )
-                    if still_used:
-                        logger.info(
-                            f"[lifecycle] Keeping FrameGrabber for room {room_id} alive — "
-                            f"next session already streaming"
-                        )
-                    elif room_id in frame_grabbers:
-                        frame_grabbers[room_id].stop()
-                        del frame_grabbers[room_id]
-                        logger.info(f"[lifecycle] Stopped FrameGrabber for room {room_id}")
+                    # FrameGrabbers stay alive for the lifetime of the process —
+                    # the grabber + RTSP reader were preloaded at boot so the
+                    # next session in this room transitions cleanly without a
+                    # cold-start gap. Only the SessionPipeline (the ML attach)
+                    # gets torn down here.
 
                     # Send session-end notifications (fire-and-forget)
                     try:
                         from app.services.notification_service import notify as _notify
+                        from app.services.notification_service import (
+                            notify_admins as _notify_admins,
+                        )
                         from app.services.notification_service import notify_many as _notify_many
 
                         db = SessionLocal()
@@ -441,11 +1017,163 @@ async def lifespan(app: FastAPI):
                                     "session_end",
                                     toast_type="info",
                                 )
+                            # Admin fan-out so the operator sees the full
+                            # lifecycle on the bell, not just the start.
+                            await _notify_admins(
+                                db,
+                                title=f"Session ended: {subject_code}",
+                                message=(
+                                    f"Auto-ended {subject_code} in room "
+                                    f"{room_id}."
+                                ),
+                                notification_type="session_auto_ended",
+                                severity="info",
+                                toast_type="info",
+                                reference_id=str(sid),
+                                reference_type="schedule",
+                                dedup_window_seconds=300,
+                            )
                         finally:
                             db.close()
                     except Exception:
                         logger.warning(
                             f"[lifecycle] Session end notifications failed for {subject_code}",
+                            exc_info=True,
+                        )
+
+                    # Phase-5: marked_absent_session_end + session_zero_recognition
+                    # ────────────────────────────────────────────────────────
+                    # Once the auto-end has fired, look at today's attendance
+                    # rows for this schedule. Anyone in the enrollment list
+                    # without a row was never recognised — they get a personal
+                    # "marked absent" notification. If NO rows exist at all
+                    # for an enrolled class, that's an anomaly (camera /
+                    # recognition pipeline issue) and faculty + admins get a
+                    # session_zero_recognition alert. All of this is wrapped
+                    # in its own try/except so a query failure here can't
+                    # abort the lifecycle loop.
+                    try:
+                        from datetime import date as _date
+
+                        from app.models.attendance_record import AttendanceRecord
+                        from app.services.notification_service import (
+                            notify as _notify_one,
+                        )
+                        from app.services.notification_service import notify_admins
+
+                        session_date = _date.today()
+                        session_date_str = session_date.isoformat()
+
+                        db = SessionLocal()
+                        try:
+                            attendance_rows = (
+                                db.query(AttendanceRecord)
+                                .filter(
+                                    AttendanceRecord.schedule_id == sid,
+                                    AttendanceRecord.date == session_date,
+                                )
+                                .all()
+                            )
+                            present_ids = {
+                                str(a.student_id) for a in attendance_rows
+                            }
+                            enrolled_id_set = {str(s) for s in student_ids}
+                            absent_ids = enrolled_id_set - present_ids
+
+                            # Per-student "you were marked absent" fan-out.
+                            for student_id in absent_ids:
+                                try:
+                                    await _notify_one(
+                                        db,
+                                        student_id,
+                                        f"Marked absent: {subject_code}",
+                                        (
+                                            f"You were marked absent for "
+                                            f"{subject_code} on {session_date_str}."
+                                        ),
+                                        "marked_absent_session_end",
+                                        severity="warn",
+                                        preference_key="attendance_confirmation",
+                                        send_email=False,
+                                        dedup_window_seconds=0,
+                                        reference_id=f"absent:{sid}:{session_date_str}",
+                                        reference_type="attendance",
+                                        toast_type="warning",
+                                    )
+                                except Exception:
+                                    logger.debug(
+                                        "[lifecycle] marked_absent_session_end "
+                                        "notify failed for student %s",
+                                        student_id,
+                                        exc_info=True,
+                                    )
+
+                            # Zero-recognition guardrail: nobody got matched
+                            # at all despite an enrolled class. Likely camera
+                            # offline / ML pipeline missing — flag faculty +
+                            # admins with email so it doesn't slip past.
+                            if not attendance_rows and enrolled_id_set:
+                                try:
+                                    if faculty_id:
+                                        await _notify_one(
+                                            db,
+                                            faculty_id,
+                                            f"No attendance recorded: {subject_code}",
+                                            (
+                                                f"Session for {subject_code} "
+                                                f"ended with zero recognized "
+                                                f"check-ins despite "
+                                                f"{len(enrolled_id_set)} "
+                                                f"enrolled students. Camera or "
+                                                f"recognition issue?"
+                                            ),
+                                            "session_zero_recognition",
+                                            severity="warn",
+                                            preference_key="anomaly_alerts",
+                                            send_email=False,
+                                            dedup_window_seconds=0,
+                                            reference_id=f"zero_recog:{sid}:{session_date_str}",
+                                            reference_type="schedule",
+                                            toast_type="warning",
+                                        )
+                                except Exception:
+                                    logger.debug(
+                                        "[lifecycle] session_zero_recognition "
+                                        "faculty notify failed",
+                                        exc_info=True,
+                                    )
+
+                                try:
+                                    await notify_admins(
+                                        db,
+                                        title=f"Zero recognition in {subject_code}",
+                                        message=(
+                                            f"Session ended with zero check-ins "
+                                            f"(schedule {sid}). May indicate "
+                                            f"camera or ML pipeline issue."
+                                        ),
+                                        notification_type="session_zero_recognition",
+                                        severity="warn",
+                                        preference_key="anomaly_alerts",
+                                        send_email=True,
+                                        dedup_window_seconds=0,
+                                        reference_id=f"zero_recog:{sid}:{session_date_str}",
+                                        reference_type="schedule",
+                                        toast_type="warning",
+                                    )
+                                except Exception:
+                                    logger.debug(
+                                        "[lifecycle] session_zero_recognition "
+                                        "admin notify failed",
+                                        exc_info=True,
+                                    )
+                        finally:
+                            db.close()
+                    except Exception:
+                        logger.warning(
+                            "[lifecycle] marked_absent_session_end / "
+                            "session_zero_recognition fan-out failed for %s",
+                            subject_code,
                             exc_info=True,
                         )
 
@@ -465,11 +1193,34 @@ async def lifespan(app: FastAPI):
 
         # ── Notification background jobs ──────────────────────────
         from app.services.notification_jobs import (
-            run_anomaly_detection,
-            run_daily_digest,
-            run_low_attendance_check,
-            run_notification_cleanup,
-            run_weekly_digest,
+            run_anomaly_detection as _raw_run_anomaly_detection,
+            run_daily_digest as _raw_run_daily_digest,
+            run_daily_health_summary as _raw_run_daily_health_summary,
+            run_low_attendance_check as _raw_run_low_attendance_check,
+            run_notification_cleanup as _raw_run_notification_cleanup,
+            run_weekly_digest as _raw_run_weekly_digest,
+            with_failure_notification,
+        )
+
+        # Wrap every cron job so an unhandled exception emits a
+        # ``scheduled_job_failed`` admin notification (severity=error,
+        # email enabled, 1-hour dedup keyed on job name) instead of
+        # disappearing into the api-gateway log. Discovered during the
+        # 2026-04-26 notification audit — silent job failures could
+        # cause a digest to miss for days before anyone noticed.
+        run_daily_digest = with_failure_notification("daily_digest")(_raw_run_daily_digest)
+        run_daily_health_summary = with_failure_notification("daily_health_summary")(
+            _raw_run_daily_health_summary
+        )
+        run_weekly_digest = with_failure_notification("weekly_digest")(_raw_run_weekly_digest)
+        run_low_attendance_check = with_failure_notification("low_attendance_check")(
+            _raw_run_low_attendance_check
+        )
+        run_anomaly_detection = with_failure_notification("anomaly_detection")(
+            _raw_run_anomaly_detection
+        )
+        run_notification_cleanup = with_failure_notification("notification_cleanup")(
+            _raw_run_notification_cleanup
         )
 
         scheduler.add_job(
@@ -478,6 +1229,22 @@ async def lifespan(app: FastAPI):
             hour=settings.DAILY_DIGEST_HOUR,
             minute=0,
             id="daily_digest",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+            coalesce=True,
+        )
+
+        # Daily health summary at 06:00 UTC — admins only, opt-in via the
+        # daily_health_summary preference (default off). Headline addition
+        # of Phase 7: gives operators a single bell ping with camera /
+        # recognition / error counts so silent regressions get noticed.
+        scheduler.add_job(
+            run_daily_health_summary,
+            "cron",
+            hour=6,
+            minute=0,
+            id="daily_health_summary",
             replace_existing=True,
             max_instances=1,
             misfire_grace_time=3600,
@@ -533,6 +1300,67 @@ async def lifespan(app: FastAPI):
             coalesce=True,
         )
 
+        # ── Mac → VPS sync (one-way snapshot push) ──────────────────
+        # Registers the on-prem APScheduler job that pushes faculty + admin
+        # users + rooms + schedules + faculty_records to the VPS receiver
+        # every VPS_SYNC_INTERVAL_SECONDS. Only the on-prem profile runs
+        # this — the VPS profile has ENABLE_BACKGROUND_JOBS=false anyway,
+        # but the inner gate on ENABLE_VPS_SYNC means a misconfigured
+        # third deployment won't accidentally try to push to itself.
+        if settings.ENABLE_VPS_SYNC:
+            from app.services.vps_sync_jobs import (
+                run_vps_sync as _raw_run_vps_sync,
+            )
+
+            run_vps_sync = with_failure_notification("vps_sync")(_raw_run_vps_sync)
+
+            scheduler.add_job(
+                run_vps_sync,
+                "interval",
+                seconds=settings.VPS_SYNC_INTERVAL_SECONDS,
+                id="vps_sync",
+                replace_existing=True,
+                max_instances=1,
+                # The receiver applies the whole snapshot in one tx; if
+                # we miss a tick because the previous one is still running
+                # (slow VPS), coalesce so we don't queue up.
+                misfire_grace_time=120,
+                coalesce=True,
+            )
+            logger.info(
+                "VPS sync job scheduled (every %d s) — target=%s",
+                settings.VPS_SYNC_INTERVAL_SECONDS,
+                settings.VPS_SYNC_URL or "<unset — job will no-op>",
+            )
+
+        # Recognition-evidence retention (Phase G). Dry-run by default — the
+        # operator flips RECOGNITION_EVIDENCE_RETENTION_DRY_RUN=false after
+        # one sweep has logged the expected delete set. Hard cap inside the
+        # job guards against config mistakes.
+        if (
+            settings.ENABLE_RECOGNITION_EVIDENCE
+            and settings.ENABLE_RECOGNITION_EVIDENCE_RETENTION
+        ):
+            from app.services.recognition_retention import (
+                run_recognition_retention as _raw_run_recognition_retention,
+            )
+
+            run_recognition_retention = with_failure_notification(
+                "recognition_retention"
+            )(_raw_run_recognition_retention)
+
+            scheduler.add_job(
+                run_recognition_retention,
+                "cron",
+                hour=3,
+                minute=15,
+                id="recognition_retention",
+                replace_existing=True,
+                max_instances=1,
+                misfire_grace_time=3600,
+                coalesce=True,
+            )
+
         # Start the scheduler
         scheduler.start()
         logger.info(
@@ -544,8 +1372,65 @@ async def lifespan(app: FastAPI):
             settings.WEEKLY_DIGEST_HOUR,
         )
 
+    except _SkipBackgroundJobs:
+        logger.info("Background jobs disabled (ENABLE_BACKGROUND_JOBS=false) — skipping APScheduler")
     except Exception as e:
         logger.error(f"Failed to initialize APScheduler: {e}")
+
+    # ── Boot-time admin notification ──────────────────────────────
+    # Sends a single "System online" bell ping to every active admin so
+    # the operator gets unambiguous confirmation that the api-gateway came
+    # up cleanly and which subsystems bound. Dedup window protects against
+    # rapid-fire restart loops. Skipped on the VPS thin profile (no
+    # notification routes / DB tables for it).
+    if settings.ENABLE_NOTIFICATION_ROUTES:
+        try:
+            from app.database import SessionLocal as _BootDB
+            from app.models.face_embedding import FaceEmbedding
+            from app.models.room import Room
+            from app.models.user import User, UserRole
+            from app.services.notification_service import notify_admins
+
+            _db = _BootDB()
+            try:
+                room_count = (
+                    _db.query(Room)
+                    .filter(Room.camera_endpoint.isnot(None))
+                    .filter(Room.camera_endpoint != "")
+                    .count()
+                )
+                enrolled_count = (
+                    _db.query(User)
+                    .filter(User.role == UserRole.STUDENT, User.is_active.is_(True))
+                    .count()
+                )
+                embedding_count = _db.query(FaceEmbedding).count()
+                ml_state = "via sidecar" if (
+                    settings.ENABLE_ML and settings.ML_SIDECAR_URL
+                ) else ("in-process" if settings.ENABLE_ML else "disabled")
+                liveness_state = "on" if settings.LIVENESS_ENABLED else "off"
+
+                await notify_admins(
+                    _db,
+                    title="System online",
+                    message=(
+                        f"IAMS backend started. {room_count} camera(s), "
+                        f"{enrolled_count} active student(s), "
+                        f"{embedding_count} face embedding(s). "
+                        f"ML: {ml_state}. Liveness: {liveness_state}."
+                    ),
+                    notification_type="system_boot",
+                    severity="info",
+                    toast_type="info",
+                    reference_id="system_boot",
+                    reference_type="system",
+                    # 5 min — restart loops within this window are silenced.
+                    dedup_window_seconds=300,
+                )
+            finally:
+                _db.close()
+        except Exception:
+            logger.warning("Boot-time admin notification failed (non-fatal)", exc_info=True)
 
     logger.info(f"{settings.APP_NAME} startup complete")
 
@@ -554,19 +1439,19 @@ async def lifespan(app: FastAPI):
     # ===================================================================
 
     async def ensure_pipeline_running(schedule_id: str) -> bool:
-        """Start pipeline for a schedule if it should be active but isn't running.
+        """Start the full session pipeline if the schedule's window is open.
 
-        Called on WebSocket connect so faculty see bounding boxes immediately
-        instead of waiting up to 30s for the next scheduler tick.
+        Strict session-gated policy: ML detection + recognition only run while
+        a real session is active. Out-of-window WebSocket viewers see raw WHEP
+        video with no overlays — no preview pipeline is spawned.
 
-        Returns True if pipeline is running (already or just started).
+        Called on WebSocket connect to short-circuit the up-to-15s wait for the
+        next ``session_lifecycle_check`` tick. Returns True iff a full pipeline
+        is running for the schedule when this call returns.
         """
-        from datetime import datetime
-
-        from app.models.room import Room
-        from app.repositories.schedule_repository import ScheduleRepository
-        from app.services.frame_grabber import FrameGrabber
-        from app.services.realtime_pipeline import SessionPipeline
+        # No-op when ML + frame grabbers are disabled (VPS thin profile).
+        if not (settings.ENABLE_ML and settings.ENABLE_FRAME_GRABBERS):
+            return False
 
         # Already running?
         if schedule_id in app.state.session_pipelines:
@@ -574,8 +1459,14 @@ async def lifespan(app: FastAPI):
             if pipeline.is_running:
                 return True
 
-        # Check if schedule should be active right now
-        def _check_and_gather():
+        from datetime import datetime
+
+        from app.models.room import Room
+        from app.repositories.schedule_repository import ScheduleRepository
+        from app.services.frame_grabber import FrameGrabber
+        from app.services.realtime_pipeline import SessionPipeline
+
+        def _gather_info():
             db = SessionLocal()
             try:
                 now = datetime.now()
@@ -584,47 +1475,72 @@ async def lifespan(app: FastAPI):
                 if not schedule:
                     return None
 
-                # Check day and time
-                current_day = now.weekday()
-                current_time = now.time()
-                if current_day != schedule.day_of_week:
-                    return None
-                if not (schedule.start_time <= current_time <= schedule.end_time):
-                    return None
-
-                # Already ended today?
-                if PresenceService.was_session_ended_today(schedule_id):
-                    return None
-
                 room = db.query(Room).filter(Room.id == schedule.room_id).first()
                 camera_url = room.camera_endpoint if room else None
                 room_id = str(schedule.room_id)
+                room_stream_key = room.stream_key if room else None
+
+                current_day = now.weekday()
+                current_time = now.time()
+                in_window = (
+                    current_day == schedule.day_of_week
+                    and schedule.start_time <= current_time <= schedule.end_time
+                )
+                already_ended = PresenceService.was_session_ended_today(schedule_id)
+                should_start = in_window and not already_ended
 
                 return {
                     "sid": schedule_id,
                     "room_id": room_id,
                     "camera_url": camera_url,
+                    "stream_key": room_stream_key,
                     "subject_code": schedule.subject_code,
+                    "should_start": should_start,
                 }
             finally:
                 db.close()
 
         try:
-            info = await asyncio.to_thread(_check_and_gather)
+            info = await asyncio.to_thread(_gather_info)
         except Exception:
-            logger.exception("[on-demand] Failed to check schedule %s", schedule_id)
+            logger.exception("[on-demand] Failed to gather info for schedule %s", schedule_id)
             return False
 
-        if info is None:
+        if info is None or not info["should_start"]:
             return False
 
         sid = info["sid"]
         room_id = info["room_id"]
         camera_url = info["camera_url"]
+        stream_key = info.get("stream_key")
         subject_code = info["subject_code"]
 
+        if not camera_url:
+            logger.warning("[on-demand] No camera for %s (%s)", subject_code, sid)
+            return False
+
         try:
-            # Start legacy session
+            # Ensure FAISS index is hydrated before starting a tracker.
+            from app.services.ml.faiss_manager import faiss_manager
+
+            if faiss_manager.index is None or faiss_manager.index.ntotal == 0:
+                faiss_manager.load_or_create_index()
+                faiss_manager.rebuild_user_map_from_db()
+            if not faiss_manager.user_map:
+                faiss_manager.rebuild_user_map_from_db()
+
+            # FrameGrabbers are preloaded at boot; this fallback handles a
+            # room added at runtime or a failed preload.
+            if room_id not in app.state.frame_grabbers:
+                app.state.frame_grabbers[room_id] = FrameGrabber(
+                    camera_url,
+                    dedup_repeats=True,
+                    # Phase 4b: stream_key threads undistortion lookup.
+                    stream_key=stream_key,
+                )
+                logger.info("[on-demand] Created FrameGrabber for room %s", room_id)
+            grabber = app.state.frame_grabbers[room_id]
+
             db = SessionLocal()
             try:
                 presence_svc = PresenceService(db)
@@ -632,35 +1548,24 @@ async def lifespan(app: FastAPI):
             finally:
                 db.close()
 
-            # Create FrameGrabber if needed
-            if camera_url and room_id not in app.state.frame_grabbers:
-                grabber = FrameGrabber(camera_url)
-                app.state.frame_grabbers[room_id] = grabber
-                logger.info("[on-demand] Created FrameGrabber for room %s", room_id)
+            # Distant-face plan 2026-04-26 Phase 2 — wire back-row grabber
+            # if BACKROW_CROP_STREAMS has an entry for this room. Falls
+            # through to single-grabber Phase 1 mode if not configured.
+            backrow_grabber = None
+            if stream_key and hasattr(app.state, "backrow_frame_grabbers"):
+                backrow_grabber = app.state.backrow_frame_grabbers.get(stream_key)
 
-            grabber = app.state.frame_grabbers.get(room_id)
-            if grabber:
-                from app.services.ml.faiss_manager import faiss_manager
-
-                if faiss_manager.index is None or faiss_manager.index.ntotal == 0:
-                    faiss_manager.load_or_create_index()
-                    faiss_manager.rebuild_user_map_from_db()
-                if not faiss_manager.user_map:
-                    faiss_manager.rebuild_user_map_from_db()
-
-                pipeline = SessionPipeline(
-                    schedule_id=sid,
-                    grabber=grabber,
-                    db_factory=SessionLocal,
-                    room_id=room_id,
-                )
-                await pipeline.start()
-                app.state.session_pipelines[sid] = pipeline
-                logger.info("[on-demand] Started pipeline for %s (%s)", subject_code, sid)
-                return True
-            else:
-                logger.warning("[on-demand] No camera for %s", subject_code)
-                return False
+            pipeline = SessionPipeline(
+                schedule_id=sid,
+                grabber=grabber,
+                db_factory=SessionLocal,
+                room_id=room_id,
+                backrow_grabber=backrow_grabber,
+            )
+            await pipeline.start()
+            app.state.session_pipelines[sid] = pipeline
+            logger.info("[on-demand] Started pipeline for %s (%s)", subject_code, sid)
+            return True
 
         except Exception:
             logger.exception("[on-demand] Failed to start pipeline for %s", schedule_id)
@@ -714,6 +1619,25 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.error(f"Failed to stop FrameGrabber for room {room_id}: {e}")
         app.state.frame_grabbers.clear()
+    # Distant-face plan 2026-04-26 Phase 2 — stop back-row grabbers too.
+    if hasattr(app.state, "backrow_frame_grabbers"):
+        for _key, _grabber in list(app.state.backrow_frame_grabbers.items()):
+            try:
+                _grabber.stop()
+                logger.info("Back-row FrameGrabber stopped for %s", _key)
+            except Exception as exc:
+                logger.error(
+                    "Failed to stop back-row FrameGrabber for %s: %s", _key, exc
+                )
+        app.state.backrow_frame_grabbers.clear()
+
+    # Stop recognition-evidence writer — drains at most a tiny final batch.
+    try:
+        from app.services.evidence_writer import evidence_writer
+
+        await evidence_writer.stop()
+    except Exception as e:
+        logger.error(f"Failed to stop evidence writer: {e}")
 
     # Close Redis connection pool
     try:
@@ -804,20 +1728,72 @@ async def root():
 
 API_PREFIX = settings.API_PREFIX
 
+# Always-on routers. The faculty app needs auth + users + schedules + rooms;
+# the student app and admin portal need those plus the feature-flagged ones
+# below. Health is always on so the VPS LB / deploy scripts can probe.
 app.include_router(auth.router, prefix=f"{API_PREFIX}/auth", tags=["Auth"])
 app.include_router(users.router, prefix=f"{API_PREFIX}/users", tags=["Users"])
-app.include_router(face.router, prefix=f"{API_PREFIX}/face", tags=["Face"])
 app.include_router(rooms.router, prefix=f"{API_PREFIX}/rooms", tags=["Rooms"])
 app.include_router(schedules.router, prefix=f"{API_PREFIX}/schedules", tags=["Schedules"])
-app.include_router(analytics.router, prefix=f"{API_PREFIX}/analytics", tags=["Analytics"])
-app.include_router(attendance.router, prefix=f"{API_PREFIX}/attendance", tags=["Attendance"])
-app.include_router(presence.router, prefix=f"{API_PREFIX}/presence", tags=["Presence"])
-app.include_router(notifications.router, prefix=f"{API_PREFIX}/notifications", tags=["Notifications"])
-app.include_router(websocket.router, prefix=f"{API_PREFIX}/ws", tags=["WebSocket"])
 app.include_router(health.router, prefix=f"{API_PREFIX}/health", tags=["Health"])
-app.include_router(audit.router, prefix=f"{API_PREFIX}/audit", tags=["Audit"])
-app.include_router(edge_devices.router, prefix=f"{API_PREFIX}/edge", tags=["Edge Devices"])
-app.include_router(settings_router.router, prefix=f"{API_PREFIX}/settings", tags=["Settings"])
+
+# Feature-flagged routers. Each group is disabled in the VPS thin profile so
+# the public-facing surface is minimal (no face embeddings / attendance data
+# / student PII reachable).
+_flagged_routers: list[tuple[bool, str, object, str, str]] = [
+    (settings.ENABLE_FACE_ROUTES, "face", face.router, f"{API_PREFIX}/face", "Face"),
+    (settings.ENABLE_ATTENDANCE_ROUTES, "attendance", attendance.router, f"{API_PREFIX}/attendance", "Attendance"),
+    (settings.ENABLE_PRESENCE_ROUTES, "presence", presence.router, f"{API_PREFIX}/presence", "Presence"),
+    (settings.ENABLE_ANALYTICS_ROUTES, "analytics", analytics.router, f"{API_PREFIX}/analytics", "Analytics"),
+    (settings.ENABLE_NOTIFICATION_ROUTES, "notifications", notifications.router, f"{API_PREFIX}/notifications", "Notifications"),
+    (settings.ENABLE_AUDIT_ROUTES, "audit", audit.router, f"{API_PREFIX}/audit", "Audit"),
+    (settings.ENABLE_EDGE_ROUTES, "edge", edge_devices.router, f"{API_PREFIX}/edge", "Edge Devices"),
+    (settings.ENABLE_SETTINGS_ROUTES, "settings", settings_router.router, f"{API_PREFIX}/settings", "Settings"),
+    (settings.ENABLE_WS_ROUTES, "websocket", websocket.router, f"{API_PREFIX}/ws", "WebSocket"),
+    (
+        settings.ENABLE_RECOGNITION_ROUTES,
+        "recognitions",
+        recognitions.router,
+        f"{API_PREFIX}/recognitions",
+        "Recognition Evidence",
+    ),
+    (
+        settings.ENABLE_ACTIVITY_ROUTES,
+        "activity",
+        activity.router,
+        f"{API_PREFIX}/activity",
+        "System Activity",
+    ),
+    # Mac → VPS sync receiver. Enabled only on the VPS thin profile via
+    # ENABLE_SYNC_RECEIVER_ROUTES=true. The on-prem Mac never mounts this
+    # router — it is the SENDER, not a receiver.
+    (
+        settings.ENABLE_SYNC_RECEIVER_ROUTES,
+        "sync",
+        sync_router.router,
+        f"{API_PREFIX}/sync",
+        "Sync",
+    ),
+]
+
+_enabled_names: list[str] = []
+_disabled_names: list[str] = []
+for enabled, name, router_obj, prefix, tag in _flagged_routers:
+    if enabled:
+        app.include_router(router_obj, prefix=prefix, tags=[tag])  # type: ignore[arg-type]
+        _enabled_names.append(name)
+    else:
+        _disabled_names.append(name)
+
+# One-line startup signal of the router profile — reviewers reading logs
+# after a boot can confirm the thin profile actually skipped the heavy
+# routers.
+logger.info(
+    "Routers: always-on=[auth,users,rooms,schedules,health] "
+    "flagged-enabled=%s flagged-disabled=%s",
+    _enabled_names,
+    _disabled_names,
+)
 
 
 # ===== Development Server =====

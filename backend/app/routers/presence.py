@@ -10,7 +10,7 @@ Key Features:
 - Real-time tracking statistics
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.config import logger
 from app.database import get_db
+from app.models.schedule import Schedule
 from app.models.user import User, UserRole
 from app.repositories.attendance_repository import AttendanceRepository
 from app.repositories.schedule_repository import ScheduleRepository
@@ -29,10 +30,141 @@ from app.utils.exceptions import NotFoundError
 router = APIRouter()
 
 
+# ===== Session start gating =====
+#
+# Manual /sessions/start is gated to the schedule's natural day + time
+# window. Outside that window the button is disabled in the admin portal
+# and the endpoint rejects with a structured error so the UI can render a
+# meaningful message instead of a generic 500.
+#
+# Rules (idempotent if session already active):
+#   - Schedule must be is_active = True
+#   - Faculty caller must own the schedule (admins bypass)
+#   - today.weekday() == schedule.day_of_week
+#   - now in [start_time - GRACE, end_time)
+#   - was_session_ended_today(schedule) must be False (no second start
+#     after a same-day manual/auto end)
+SESSION_START_GRACE_MINUTES = 10
+DAY_NAMES = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
+
+
+def _fmt_clock(dt: datetime) -> str:
+    """12-hour clock string with no leading zero on the hour ("9:30 AM")."""
+    return dt.strftime("%I:%M %p").lstrip("0")
+
+
+def _build_eligibility(
+    schedule: Schedule,
+    current_user: User,
+    presence_svc: PresenceService,
+    now: datetime | None = None,
+) -> dict:
+    """Compute current eligibility for manual session start.
+
+    Returns a plain dict shaped like SessionEligibilityResponse — used by
+    both the eligibility GET endpoint (returned directly) and the start
+    POST endpoint (raised as 409 detail when allowed=False).
+    """
+    now = now or datetime.now()
+    today = now.date()
+    schedule_id = str(schedule.id)
+    start_dt = datetime.combine(today, schedule.start_time)
+    end_dt = datetime.combine(today, schedule.end_time)
+    grace_dt = start_dt - timedelta(minutes=SESSION_START_GRACE_MINUTES)
+
+    base = {
+        "schedule_id": schedule_id,
+        "scheduled_start": start_dt.isoformat(),
+        "scheduled_end": end_dt.isoformat(),
+        "available_at": grace_dt.isoformat(),
+        "scheduled_day": schedule.day_of_week,
+        "current_day": now.weekday(),
+    }
+
+    # Idempotency: already running → allow (the start handler short-circuits
+    # in PresenceService.start_session anyway, but we want the UI to render
+    # the End-Session button rather than offering Start.)
+    if schedule_id in presence_svc.active_sessions:
+        return {**base, "allowed": False, "code": "RUNNING", "message": "Session is already running."}
+
+    # Authorization: faculty can only start their own schedules.
+    if current_user.role == UserRole.FACULTY and str(schedule.faculty_id) != str(current_user.id):
+        return {
+            **base,
+            "allowed": False,
+            "code": "NOT_OWNER",
+            "message": "You can only start sessions for schedules you teach.",
+        }
+
+    if not schedule.is_active:
+        return {
+            **base,
+            "allowed": False,
+            "code": "INACTIVE_SCHEDULE",
+            "message": "This schedule is inactive.",
+        }
+
+    if schedule.day_of_week != now.weekday():
+        return {
+            **base,
+            "allowed": False,
+            "code": "WRONG_DAY",
+            "message": (
+                f"This schedule runs on {DAY_NAMES[schedule.day_of_week]}. "
+                f"Today is {DAY_NAMES[now.weekday()]}."
+            ),
+        }
+
+    if now < grace_dt:
+        return {
+            **base,
+            "allowed": False,
+            "code": "TOO_EARLY",
+            "message": (
+                f"Manual start opens at {_fmt_clock(grace_dt)} "
+                f"({SESSION_START_GRACE_MINUTES} minutes before the scheduled start)."
+            ),
+        }
+
+    if now >= end_dt:
+        return {
+            **base,
+            "allowed": False,
+            "code": "AFTER_END",
+            "message": f"This schedule ended at {_fmt_clock(end_dt)} today.",
+        }
+
+    if PresenceService.was_session_ended_today(schedule_id):
+        return {
+            **base,
+            "allowed": False,
+            "code": "ALREADY_RAN_TODAY",
+            "message": (
+                "A session for this schedule has already been ended today. "
+                "It will be available again next "
+                f"{DAY_NAMES[schedule.day_of_week]}."
+            ),
+        }
+
+    return {**base, "allowed": True, "code": "ALLOWED", "message": "Ready to start."}
+
+
 # ===== Schemas =====
 
 
 class SessionStartRequest(BaseModel):
+    schedule_id: str
+
+
+class SessionEndRequest(BaseModel):
     schedule_id: str
 
 
@@ -60,6 +192,26 @@ class ActiveSessionsResponse(BaseModel):
 class RoomStatusResponse(BaseModel):
     active: bool
     schedule_id: str | None = None
+
+
+class SessionEligibilityResponse(BaseModel):
+    """Reports whether a manual /sessions/start would be accepted right now.
+
+    `allowed` is the only field the frontend strictly needs; the others
+    let the UI render a contextual message ("Manual start opens at
+    7:20 AM", "This schedule ended at 9:00 AM today", etc.) without
+    duplicating the rule logic client-side.
+    """
+
+    schedule_id: str
+    allowed: bool
+    code: str  # ALLOWED | RUNNING | WRONG_DAY | TOO_EARLY | AFTER_END | ALREADY_RAN_TODAY | NOT_OWNER | INACTIVE_SCHEDULE
+    message: str
+    scheduled_start: str
+    scheduled_end: str
+    available_at: str
+    scheduled_day: int
+    current_day: int
 
 
 # ===== Session Management Endpoints =====
@@ -90,13 +242,32 @@ async def start_session(
     if current_user.role not in [UserRole.FACULTY, UserRole.ADMIN]:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only faculty and admins can start sessions")
 
+    presence_service = PresenceService(db)
+
+    # Look up schedule up front so we can gate the start request against
+    # the schedule's natural day + time window before any side effects.
+    schedule = ScheduleRepository(db).get_by_id(body.schedule_id)
+    if not schedule:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Schedule not found: {body.schedule_id}"
+        )
+
+    # Window/owner/one-shot gating. Already-running sessions short-circuit
+    # to a successful response so duplicate clicks remain idempotent.
+    eligibility = _build_eligibility(schedule, current_user, presence_service)
+    if not eligibility["allowed"] and eligibility["code"] != "RUNNING":
+        # 403 for ownership; 409 for everything else (current state of the
+        # world makes the request impossible, not malformed input).
+        http_status = (
+            status.HTTP_403_FORBIDDEN if eligibility["code"] == "NOT_OWNER" else status.HTTP_409_CONFLICT
+        )
+        raise HTTPException(status_code=http_status, detail=eligibility)
+
     try:
-        presence_service = PresenceService(db)
         session_state = await presence_service.start_session(body.schedule_id)
 
         # Start FrameGrabber for attendance engine scans
         # (FrameGrabber is also auto-created by the scan cycle if missing)
-        schedule = ScheduleRepository(db).get_by_id(body.schedule_id)
         if schedule:
             room_id = str(schedule.room_id)
             frame_grabbers = getattr(http_request.app.state, "frame_grabbers", None)
@@ -144,6 +315,40 @@ async def start_session(
                     except Exception as pipe_err:
                         logger.error(f"Failed to start SessionPipeline: {pipe_err}")
 
+        # Phase-5: manual session start notification fan-out. The lifecycle
+        # scheduler emits its own ``session_start`` row when the schedule
+        # auto-starts inside its window; this is the operator-driven variant
+        # so faculty + students can tell the difference between "system
+        # auto-started this on schedule" vs "an admin/faculty hit Start".
+        try:
+            from app.services.notification_service import (
+                notify_schedule_participants,
+            )
+
+            subject_code_str = (
+                schedule.subject_code if schedule else body.schedule_id
+            )
+            await notify_schedule_participants(
+                db,
+                schedule_id=str(body.schedule_id),
+                title=f"Session started: {subject_code_str}",
+                message=(
+                    f"Class session for {subject_code_str} has been started "
+                    f"by an administrator."
+                ),
+                notification_type="session_start_manual",
+                severity="info",
+                preference_key=None,
+                send_email=False,
+                dedup_window_seconds=300,
+                reference_id=str(body.schedule_id),
+                reference_type="schedule",
+                toast_type="info",
+                include_admins=True,
+            )
+        except Exception:
+            logger.exception("Failed to emit session_start_manual notification")
+
         return SessionStartResponse(
             schedule_id=session_state.schedule_id,
             started_at=session_state.start_time,
@@ -166,8 +371,8 @@ async def start_session(
     description="End an active attendance tracking session",
 )
 async def end_session(
+    body: SessionEndRequest,
     http_request: Request,
-    schedule_id: str = Query(..., description="Schedule UUID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -181,6 +386,8 @@ async def end_session(
     # Check permissions
     if current_user.role not in [UserRole.FACULTY, UserRole.ADMIN]:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only faculty and admins can end sessions")
+
+    schedule_id = body.schedule_id
 
     try:
         presence_service = PresenceService(db)
@@ -230,6 +437,39 @@ async def end_session(
             except Exception as cache_err:
                 logger.error(f"Failed to clear identity cache: {cache_err}")
 
+        # Phase-5: manual session end notification fan-out. Distinct
+        # notification type from the lifecycle scheduler's ``session_end``
+        # row so consumers can tell the operator-driven case apart from the
+        # natural end-of-window case (which fires from main.py at end_time).
+        try:
+            from app.services.notification_service import (
+                notify_schedule_participants,
+            )
+
+            subject_code_str = (
+                schedule.subject_code if schedule else schedule_id
+            )
+            await notify_schedule_participants(
+                db,
+                schedule_id=str(schedule_id),
+                title=f"Session ended early: {subject_code_str}",
+                message=(
+                    f"Class session for {subject_code_str} has been ended "
+                    f"by an administrator."
+                ),
+                notification_type="session_end_manual",
+                severity="warn",
+                preference_key=None,
+                send_email=False,
+                dedup_window_seconds=300,
+                reference_id=str(schedule_id),
+                reference_type="schedule",
+                toast_type="warning",
+                include_admins=True,
+            )
+        except Exception:
+            logger.exception("Failed to emit session_end_manual notification")
+
         # Build summary
         return SessionEndResponse(
             schedule_id=schedule_id,
@@ -274,6 +514,42 @@ async def get_active_sessions(db: Session = Depends(get_db), current_user: User 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get active sessions: {str(e)}"
         ) from e
+
+
+# ===== Session Start Eligibility =====
+
+
+@router.get(
+    "/sessions/{schedule_id}/eligibility",
+    response_model=SessionEligibilityResponse,
+    summary="Check Manual Session Start Eligibility",
+    description=(
+        "Returns whether a faculty/admin can manually start an attendance "
+        "session for this schedule right now, and if not, why. The admin "
+        "portal uses this to gate the Start Session button to the "
+        "schedule's natural day + time window."
+    ),
+)
+async def get_session_start_eligibility(
+    schedule_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role not in [UserRole.FACULTY, UserRole.ADMIN]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only faculty and admins can check session eligibility",
+        )
+
+    schedule = ScheduleRepository(db).get_by_id(schedule_id)
+    if not schedule:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Schedule not found: {schedule_id}"
+        )
+
+    presence_service = PresenceService(db)
+    eligibility = _build_eligibility(schedule, current_user, presence_service)
+    return SessionEligibilityResponse(**eligibility)
 
 
 # ===== Room Status Endpoint (for Edge Device) =====

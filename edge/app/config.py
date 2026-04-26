@@ -14,10 +14,23 @@ CAMERA_PASS = os.getenv("CAMERA_PASS", "password")
 _PASS_ENC = quote(CAMERA_PASS, safe="")
 RTSP_MAIN = f"rtsp://{CAMERA_USER}:{_PASS_ENC}@{CAMERA_IP}:554/h264Preview_01_main"
 
-# VPS mediamtx target
-VPS_HOST = os.getenv("VPS_HOST", "167.71.217.44")
-VPS_RTSP_URL = f"rtsp://{VPS_HOST}:8554"
+# Relay target — where this RPi pushes RTSP.
+#
+# After the 2026-04-21 local-compute split, the primary target is the on-prem
+# Mac on IAMS-Net (static DHCP reservation), NOT the VPS. The Mac's mediamtx
+# re-publishes to the VPS via runOnReady for the public mobile stream, so the
+# RPi only needs to reach the Mac. See docs/plans/2026-04-21-local-compute-split/.
+#
+# Back-compat: if RELAY_HOST isn't set, fall back to VPS_HOST so existing
+# .env files on deployed RPis keep working until the operator updates them.
+RELAY_HOST = os.getenv("RELAY_HOST", os.getenv("VPS_HOST", "167.71.217.44"))
+RELAY_RTSP_URL = f"rtsp://{RELAY_HOST}:8554"
 ROOM_ID = os.getenv("ROOM_ID", "room-1")
+
+# Deprecated aliases — kept for any code that still references them.
+# New code should use RELAY_HOST / RELAY_RTSP_URL.
+VPS_HOST = RELAY_HOST
+VPS_RTSP_URL = RELAY_RTSP_URL
 
 # Transcode mode: "copy" (passthrough) or "transcode" (re-encode on RPi).
 # Use "transcode" for cameras like the CX810 that produce bursty/problematic

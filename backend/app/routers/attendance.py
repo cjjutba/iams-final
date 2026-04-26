@@ -117,63 +117,94 @@ def get_schedule_summaries(
     schedule metadata.
 
     Requires faculty authentication.
-    """
-    from app.models.attendance_record import AttendanceStatus as DBAttendanceStatus
 
-    schedule_repo = ScheduleRepository(db)
-    attendance_repo = AttendanceRepository(db)
+    Implementation note — this used to be N+1 (one attendance query + one
+    enrollment query + one room-name lazy-load per schedule). Now:
+      1. One query for today's schedules with ``room`` eager-loaded.
+      2. One GROUP BY for attendance counts across all those schedules.
+      3. One GROUP BY for enrollment totals across all those schedules.
+    Assembled in Python. Scales with day_schedule_count ✗ 3 round-trips,
+    not ✗ N.
+    """
+    from sqlalchemy import func
+    from sqlalchemy.orm import joinedload
+
+    from app.models.attendance_record import AttendanceRecord
+    from app.models.attendance_record import AttendanceStatus as DBAttendanceStatus
+    from app.models.enrollment import Enrollment
+    from app.models.schedule import Schedule
 
     summary_date = target_date if target_date else date.today()
+    day_of_week = summary_date.weekday()  # 0=Mon ... 6=Sun
 
-    # Get the day_of_week for the target date (Monday=0 ... Sunday=6)
-    day_of_week = summary_date.weekday()
+    # 1. Pull the schedules we'll summarise. Admin sees every class meeting
+    #    on this weekday; faculty sees only their own. `room` is eager-loaded
+    #    so schedule.room.name below doesn't trigger a per-row SELECT.
+    schedule_query = (
+        db.query(Schedule)
+        .options(joinedload(Schedule.room))
+        .filter(Schedule.is_active, Schedule.day_of_week == day_of_week)
+    )
+    if current_user.role != UserRole.ADMIN:
+        schedule_query = schedule_query.filter(Schedule.faculty_id == current_user.id)
 
-    # Admin sees all schedules; faculty sees only their own
-    if current_user.role == UserRole.ADMIN:
-        all_schedules = schedule_repo.get_all()
-    else:
-        all_schedules = schedule_repo.get_by_faculty(str(current_user.id))
+    day_schedules = schedule_query.all()
+    if not day_schedules:
+        return []
 
-    # Filter to only those that occur on the requested day
-    day_schedules = [s for s in all_schedules if s.day_of_week == day_of_week]
+    schedule_ids = [s.id for s in day_schedules]
 
+    # 2. Attendance counts — grouped by (schedule_id, status) in a single query.
+    attendance_rows = (
+        db.query(
+            AttendanceRecord.schedule_id,
+            AttendanceRecord.status,
+            func.count().label("cnt"),
+        )
+        .filter(
+            AttendanceRecord.schedule_id.in_(schedule_ids),
+            AttendanceRecord.date == summary_date,
+        )
+        .group_by(AttendanceRecord.schedule_id, AttendanceRecord.status)
+        .all()
+    )
+    counts_by_schedule: dict = {}
+    for row in attendance_rows:
+        counts_by_schedule.setdefault(row.schedule_id, {})[row.status] = row.cnt
+
+    # 3. Enrollment totals — one grouped query for all today's schedules.
+    enrollment_rows = (
+        db.query(Enrollment.schedule_id, func.count().label("cnt"))
+        .filter(Enrollment.schedule_id.in_(schedule_ids))
+        .group_by(Enrollment.schedule_id)
+        .all()
+    )
+    enrolled_by_schedule: dict = {row.schedule_id: row.cnt for row in enrollment_rows}
+
+    # 4. Stitch response.
     results: list[ScheduleAttendanceSummaryItem] = []
-
     for schedule in day_schedules:
-        schedule_id = str(schedule.id)
+        sid = schedule.id
+        sid_str = str(sid)
+        per_status = counts_by_schedule.get(sid, {})
+        present_count = per_status.get(DBAttendanceStatus.PRESENT, 0)
+        late_count = per_status.get(DBAttendanceStatus.LATE, 0)
+        absent_count = per_status.get(DBAttendanceStatus.ABSENT, 0)
+        total_enrolled = enrolled_by_schedule.get(sid, 0)
 
-        # Get attendance records for this schedule on the target date
-        records = attendance_repo.get_by_schedule_date(schedule_id, summary_date)
-
-        # Count by status
-        present_count = sum(1 for r in records if r.status == DBAttendanceStatus.PRESENT)
-        late_count = sum(1 for r in records if r.status == DBAttendanceStatus.LATE)
-        absent_count = sum(1 for r in records if r.status == DBAttendanceStatus.ABSENT)
-
-        # Get enrolled students for total
-        enrolled_students = schedule_repo.get_enrolled_students(schedule_id)
-        total_enrolled = len(enrolled_students)
-
-        # Calculate attendance rate
         attendance_rate = 0.0
         if total_enrolled > 0:
             attendance_rate = ((present_count + late_count) / total_enrolled) * 100
 
-        # Check session status
-        is_active = session_manager.is_session_active(schedule_id)
-
-        # Room name
-        room_name = schedule.room.name if schedule.room else None
-
         results.append(
             ScheduleAttendanceSummaryItem(
-                schedule_id=schedule_id,
+                schedule_id=sid_str,
                 subject_code=schedule.subject_code,
                 subject_name=schedule.subject_name,
                 start_time=schedule.start_time,
                 end_time=schedule.end_time,
-                room_name=room_name,
-                session_active=is_active,
+                room_name=schedule.room.name if schedule.room else None,
+                session_active=session_manager.is_session_active(sid_str),
                 total_enrolled=total_enrolled,
                 present_count=present_count,
                 late_count=late_count,
@@ -182,9 +213,7 @@ def get_schedule_summaries(
             )
         )
 
-    # Sort by start_time
     results.sort(key=lambda x: x.start_time)
-
     return results
 
 
@@ -509,6 +538,7 @@ async def get_live_attendance(
                 student_name=f"{record.student.first_name} {record.student.last_name}",
                 status=record.status,
                 check_in_time=record.check_in_time,
+                check_out_time=record.check_out_time,
                 presence_score=record.presence_score,
                 total_scans=record.total_scans,
                 scans_present=record.scans_present,

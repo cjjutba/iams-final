@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, useInfiniteQuery, keepPreviousData } from '@tanstack/react-query'
 import { usersService } from '@/services/users.service'
 import { schedulesService } from '@/services/schedules.service'
 import { roomsService } from '@/services/rooms.service'
@@ -7,9 +7,10 @@ import { attendanceService } from '@/services/attendance.service'
 import { notificationsService } from '@/services/notifications.service'
 import { settingsService } from '@/services/settings.service'
 import { faceService } from '@/services/face.service'
-import { auditService } from '@/services/audit.service'
-import { edgeService } from '@/services/edge.service'
-import type { AdminCreateUser, CreateStudentRecord, UpdateStudentRecord, UserRole, UserUpdate, ScheduleCreate, ScheduleUpdate, RoomCreate, RoomUpdate, BroadcastNotificationRequest, NotificationPreferenceUpdate } from '@/types'
+import { recognitionsService } from '@/services/recognitions.service'
+import { activityService } from '@/services/activity.service'
+import { presenceService } from '@/services/presence.service'
+import type { AdminCreateUser, CreateStudentRecord, UpdateStudentRecord, UserRole, UserUpdate, ScheduleCreate, ScheduleUpdate, ScheduleConfigUpdate, RoomCreate, RoomUpdate, NotificationPreferenceUpdate, RecognitionListFilters, ActivityListFilters, AccessAuditFilters, StudentEnrollmentsPage } from '@/types'
 
 // ── Query keys ──────────────────────────────────────────────
 
@@ -30,6 +31,7 @@ export const queryKeys = {
     list: (params?: { day?: number }) => ['schedules', 'list', params] as const,
     detail: (id: string) => ['schedules', 'detail', id] as const,
     students: (id: string) => ['schedules', 'students', id] as const,
+    sessions: (id: string) => ['schedules', 'sessions', id] as const,
   },
   rooms: {
     all: ['rooms'] as const,
@@ -41,8 +43,6 @@ export const queryKeys = {
     dailyTrend: (days: number) => ['analytics', 'daily-trend', days] as const,
     weekdayBreakdown: ['analytics', 'weekday-breakdown'] as const,
     atRisk: ['analytics', 'at-risk'] as const,
-    anomalies: ['analytics', 'anomalies'] as const,
-    classOverview: (id: string) => ['analytics', 'class', id] as const,
   },
   attendance: {
     all: ['attendance'] as const,
@@ -58,23 +58,33 @@ export const queryKeys = {
     all: ['face'] as const,
     statistics: ['face', 'statistics'] as const,
   },
-  audit: {
-    all: ['audit'] as const,
-    logs: (params?: Record<string, unknown>) => ['audit', 'logs', params] as const,
-  },
-  edge: {
-    all: ['edge'] as const,
-    status: ['edge', 'status'] as const,
-    detail: (id: string) => ['edge', 'detail', id] as const,
-  },
   notifications: {
     all: ['notifications'] as const,
     list: ['notifications', 'list'] as const,
     unreadCount: ['notifications', 'unread-count'] as const,
     preferences: ['notifications', 'preferences'] as const,
   },
+  recognitions: {
+    all: ['recognitions'] as const,
+    list: (filters: RecognitionListFilters) => ['recognitions', 'list', filters] as const,
+    detail: (id: string) => ['recognitions', 'detail', id] as const,
+    summary: (studentId: string, scheduleId?: string) =>
+      ['recognitions', 'summary', studentId, scheduleId ?? null] as const,
+    accessAudit: (filters: AccessAuditFilters) =>
+      ['recognitions', 'access-audit', filters] as const,
+  },
+  activity: {
+    all: ['activity'] as const,
+    list: (filters: ActivityListFilters) => ['activity', 'list', filters] as const,
+    detail: (id: string) => ['activity', 'detail', id] as const,
+    stats: (windowMinutes: number) => ['activity', 'stats', windowMinutes] as const,
+  },
   settings: {
     all: ['settings'] as const,
+  },
+  presence: {
+    sessionEligibility: (scheduleId: string) =>
+      ['presence', 'session-eligibility', scheduleId] as const,
   },
 }
 
@@ -220,6 +230,15 @@ export function useScheduleStudents(id: string) {
   })
 }
 
+export function useScheduleSessions(id: string, params?: { limit?: number }) {
+  return useQuery({
+    queryKey: [...queryKeys.schedules.sessions(id), params?.limit ?? 50],
+    queryFn: () => schedulesService.getSessions(id, { limit: params?.limit ?? 50 }),
+    enabled: !!id,
+    staleTime: 30_000,
+  })
+}
+
 export function useCreateSchedule() {
   const qc = useQueryClient()
   return useMutation({
@@ -233,6 +252,23 @@ export function useUpdateSchedule() {
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: ScheduleUpdate }) => schedulesService.update(id, data),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: queryKeys.schedules.all }) },
+  })
+}
+
+// Distinct from useUpdateSchedule because the backend's /config endpoint
+// is the only path that also propagates the change to a running session
+// pipeline (see backend/app/routers/schedules.py:update_schedule_config).
+// A regular PATCH would persist but not affect an active session until
+// it ends + restarts.
+export function useUpdateScheduleConfig() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: ScheduleConfigUpdate }) =>
+      schedulesService.updateConfig(id, data),
+    onSuccess: (_data, variables) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.schedules.detail(variables.id) })
+      void qc.invalidateQueries({ queryKey: queryKeys.schedules.all })
+    },
   })
 }
 
@@ -253,6 +289,7 @@ export function useEnrollStudent() {
       void qc.invalidateQueries({ queryKey: queryKeys.schedules.students(variables.scheduleId) })
       void qc.invalidateQueries({ queryKey: queryKeys.schedules.all })
       void qc.invalidateQueries({ queryKey: ['enrollments', 'student', variables.studentUserId] })
+      void qc.invalidateQueries({ queryKey: ['enrollments', 'student', variables.studentUserId, 'ids'] })
     },
   })
 }
@@ -266,15 +303,33 @@ export function useUnenrollStudent() {
       void qc.invalidateQueries({ queryKey: queryKeys.schedules.students(variables.scheduleId) })
       void qc.invalidateQueries({ queryKey: queryKeys.schedules.all })
       void qc.invalidateQueries({ queryKey: ['enrollments', 'student', variables.studentUserId] })
+      void qc.invalidateQueries({ queryKey: ['enrollments', 'student', variables.studentUserId, 'ids'] })
     },
   })
 }
 
+const ENROLLMENTS_PAGE_SIZE = 20
+
 export function useStudentEnrollments(studentUserId: string) {
-  return useQuery({
+  return useInfiniteQuery<StudentEnrollmentsPage>({
     queryKey: ['enrollments', 'student', studentUserId],
-    queryFn: () => schedulesService.getStudentEnrollments(studentUserId),
+    queryFn: ({ pageParam = 0 }) =>
+      schedulesService.getStudentEnrollments(studentUserId, {
+        limit: ENROLLMENTS_PAGE_SIZE,
+        offset: pageParam as number,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) =>
+      lastPage.has_more ? lastPage.offset + lastPage.items.length : undefined,
     enabled: !!studentUserId,
+  })
+}
+
+export function useStudentEnrollmentIds(studentUserId: string, enabled = true) {
+  return useQuery<string[]>({
+    queryKey: ['enrollments', 'student', studentUserId, 'ids'],
+    queryFn: () => schedulesService.getStudentEnrollmentIds(studentUserId),
+    enabled: !!studentUserId && enabled,
   })
 }
 
@@ -353,21 +408,6 @@ export function useAtRiskStudents() {
   })
 }
 
-export function useAnomalies() {
-  return useQuery({
-    queryKey: queryKeys.analytics.anomalies,
-    queryFn: () => analyticsService.anomalies(),
-  })
-}
-
-export function useResolveAnomaly() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (id: string) => analyticsService.resolveAnomaly(id),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: queryKeys.analytics.anomalies }) },
-  })
-}
-
 // ── Attendance ──────────────────────────────────────────────
 
 export function useAttendanceList(params?: Record<string, unknown>) {
@@ -437,35 +477,6 @@ export function useDeregisterFace() {
   })
 }
 
-// ── Audit Logs ─────────────────────────────────────────────
-
-export function useAuditLogs(params?: Record<string, unknown>) {
-  return useQuery({
-    queryKey: queryKeys.audit.logs(params),
-    queryFn: () => auditService.getLogs(params as Record<string, string | number | boolean | undefined>),
-    placeholderData: keepPreviousData,
-  })
-}
-
-// ── Edge Devices ───────────────────────────────────────────
-
-export function useEdgeStatus() {
-  return useQuery({
-    queryKey: queryKeys.edge.status,
-    queryFn: () => edgeService.getStatus(),
-    refetchInterval: 30_000,
-    retry: false,
-  })
-}
-
-export function useEdgeDevice(id: string) {
-  return useQuery({
-    queryKey: queryKeys.edge.detail(id),
-    queryFn: () => edgeService.getDevice(id),
-    enabled: !!id,
-  })
-}
-
 // ── Notifications ───────────────────────────────────────────
 
 export function useNotifications() {
@@ -493,14 +504,6 @@ export function useMarkNotificationRead() {
   })
 }
 
-export function useBroadcastNotification() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (data: BroadcastNotificationRequest) => notificationsService.broadcast(data),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: queryKeys.notifications.all }) },
-  })
-}
-
 export function useNotificationPreferences() {
   return useQuery({
     queryKey: queryKeys.notifications.preferences,
@@ -518,6 +521,70 @@ export function useUpdateNotificationPreferences() {
   })
 }
 
+// ── Recognition Evidence ───────────────────────────────────
+
+export function useRecognitions(filters: RecognitionListFilters = {}) {
+  return useQuery({
+    queryKey: queryKeys.recognitions.list(filters),
+    queryFn: () => recognitionsService.list(filters),
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useRecognitionEvent(eventId: string) {
+  return useQuery({
+    queryKey: queryKeys.recognitions.detail(eventId),
+    queryFn: () => recognitionsService.getById(eventId),
+    enabled: !!eventId,
+  })
+}
+
+export function useRecognitionSummary(studentId: string, scheduleId?: string) {
+  return useQuery({
+    queryKey: queryKeys.recognitions.summary(studentId, scheduleId),
+    queryFn: () =>
+      recognitionsService.summarize({
+        student_id: studentId,
+        schedule_id: scheduleId,
+      }),
+    enabled: !!studentId,
+  })
+}
+
+export function useRecognitionAccessAudit(filters: AccessAuditFilters = {}) {
+  return useQuery({
+    queryKey: queryKeys.recognitions.accessAudit(filters),
+    queryFn: () => recognitionsService.accessAudit(filters),
+    placeholderData: keepPreviousData,
+  })
+}
+
+// ── System Activity ─────────────────────────────────────────
+
+export function useActivityEvents(filters: ActivityListFilters = {}) {
+  return useQuery({
+    queryKey: queryKeys.activity.list(filters),
+    queryFn: () => activityService.list(filters),
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useActivityEvent(eventId: string) {
+  return useQuery({
+    queryKey: queryKeys.activity.detail(eventId),
+    queryFn: () => activityService.getById(eventId),
+    enabled: !!eventId,
+  })
+}
+
+export function useActivityStats(windowMinutes: number = 15) {
+  return useQuery({
+    queryKey: queryKeys.activity.stats(windowMinutes),
+    queryFn: () => activityService.stats(windowMinutes),
+    refetchInterval: 30_000, // refresh live counters every 30s
+  })
+}
+
 // ── Settings ────────────────────────────────────────────────
 
 export function useSettings() {
@@ -532,5 +599,30 @@ export function useUpdateSettings() {
   return useMutation({
     mutationFn: (settings: Record<string, string>) => settingsService.update(settings),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: queryKeys.settings.all }) },
+  })
+}
+
+// ── Presence ────────────────────────────────────────────────
+
+/**
+ * Server-side eligibility for the manual Start Session button.
+ *
+ * The window check (today == day_of_week, now in [start - 10min, end))
+ * could be computed entirely client-side, but `ALREADY_RAN_TODAY` is
+ * server-only state (lives in PresenceService._ended_sessions). Polling
+ * this endpoint gives a single source of truth and avoids the awkward
+ * "button appears clickable, click yields 409" UX after a same-day end.
+ *
+ * Refetched every 30s — the button also re-evaluates locally every
+ * second from the wall clock, so the server poll is a backstop for the
+ * one-shot-per-day rule, not the latency-critical signal.
+ */
+export function useSessionStartEligibility(scheduleId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.presence.sessionEligibility(scheduleId ?? ''),
+    queryFn: () => presenceService.getStartEligibility(scheduleId!),
+    enabled: !!scheduleId,
+    refetchInterval: 30_000,
+    staleTime: 10_000,
   })
 }

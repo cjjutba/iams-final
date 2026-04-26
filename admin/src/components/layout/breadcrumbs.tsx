@@ -20,14 +20,12 @@ const segmentNames: Record<string, string> = {
   rooms: 'Rooms',
   attendance: 'Attendance',
   analytics: 'Analytics',
-  'face-registrations': 'Face Registrations',
   'early-leaves': 'Early Leaves',
-  notifications: 'Notifications',
-  'edge-devices': 'Edge Devices',
-  'audit-logs': 'Audit Logs',
+  recognitions: 'Recognition Audit',
+  audit: 'Audit',
+  'recognition-access': 'Recognition Access',
   settings: 'Settings',
   'at-risk': 'At-Risk Students',
-  anomalies: 'Anomaly Detection',
 }
 
 const roleToListRoute: Record<string, { path: string; label: string }> = {

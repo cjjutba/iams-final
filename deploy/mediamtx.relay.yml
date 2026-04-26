@@ -1,0 +1,73 @@
+# mediamtx RELAY configuration for IAMS VPS (post local-compute split)
+#
+# This mediamtx receives an outbound RTSP push from the on-prem Mac's
+# runOnReady ffmpeg (see deploy/mediamtx.onprem.yml). It serves that
+# stream as public WebRTC WHEP to off-campus viewers — primarily the
+# Android app's faculty live feed, but also any other WHEP player.
+#
+# The VPS no longer runs the api-gateway, so this mediamtx's API port
+# (9997) is only used internally by mediamtx itself for metrics.
+
+logLevel: warn
+
+# Open publish/read/playback (no auth) — same pattern as legacy mediamtx.yml.
+# The push source (Mac) and the pull consumers (phones, admin remote viewers)
+# all hit this config.
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+        path:
+      - action: read
+        path:
+      - action: playback
+        path:
+  - user: any
+    pass:
+    ips: ['127.0.0.1', '::1', '172.16.0.0/12', '192.168.0.0/16', '10.0.0.0/8']
+    permissions:
+      - action: api
+      - action: metrics
+      - action: pprof
+
+api: yes
+apiAddress: :9997
+
+rtsp: yes
+rtspAddress: :8554
+
+# Bursty upstream (school WiFi → VPS over internet). Keep generous timeouts.
+readTimeout: 30s
+writeTimeout: 30s
+
+webrtc: yes
+webrtcAddress: :8889
+
+# Public IP of the VPS — WebRTC clients negotiate media with this IP.
+webrtcAdditionalHosts:
+  - 167.71.217.44
+
+webrtcLocalUDPAddress: :8887
+
+# Off-campus phones behind symmetric NAT (mobile ISPs) need TURN.
+# coturn runs on the same VPS (see deploy/docker-compose.relay.yml).
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+  - url: turn:167.71.217.44:3478
+    username: iams
+    password: iams-turn-secret-2026
+
+hls: no
+srt: no
+rtmp: no
+
+writeQueueSize: 128
+
+# Accept any pushed path. The Mac pushes e.g. `eb226` so viewers hit
+# http://167.71.217.44:8889/eb226/whep.
+paths:
+  all_others:
+    overridePublisher: yes

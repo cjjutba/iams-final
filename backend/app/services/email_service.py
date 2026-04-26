@@ -119,6 +119,186 @@ def _generic(ctx: dict) -> tuple[str, str]:
     return subject, body
 
 
+# ── User lifecycle templates ─────────────────────────────────────
+
+
+@_template("user_welcome")
+def _user_welcome(ctx: dict) -> tuple[str, str]:
+    subject = "Welcome to IAMS"
+    body = _base_html(
+        "Welcome to IAMS",
+        f"<p>Hi {ctx.get('user_name', 'there')},</p>"
+        f"<p>Your IAMS account has been created successfully.</p>"
+        f"<p><strong>Username:</strong> {ctx.get('username', 'N/A')}<br>"
+        f"<strong>Role:</strong> {ctx.get('role', 'user')}</p>"
+        f"<p>Please contact an administrator if you have not received your "
+        f"initial password separately.</p>",
+    )
+    return subject, body
+
+
+@_template("user_deactivated")
+def _user_deactivated(ctx: dict) -> tuple[str, str]:
+    subject = "IAMS account deactivated"
+    body = _base_html(
+        "Account Deactivated",
+        f"<p>Hi {ctx.get('user_name', 'there')},</p>"
+        f"<p>Your IAMS account has been deactivated. You will no longer be "
+        f"able to log in.</p>"
+        f"<p>If you believe this is in error, please contact an "
+        f"administrator.</p>",
+    )
+    return subject, body
+
+
+@_template("user_reactivated")
+def _user_reactivated(ctx: dict) -> tuple[str, str]:
+    subject = "IAMS account reactivated"
+    body = _base_html(
+        "Account Reactivated",
+        f"<p>Hi {ctx.get('user_name', 'there')},</p>"
+        f"<p>Your IAMS account has been reactivated. You may now log in "
+        f"normally.</p>",
+    )
+    return subject, body
+
+
+@_template("user_role_changed")
+def _user_role_changed(ctx: dict) -> tuple[str, str]:
+    subject = "IAMS account role changed"
+    body = _base_html(
+        "Account Role Updated",
+        f"<p>Hi {ctx.get('user_name', 'there')},</p>"
+        f"<p>Your account role has been changed from "
+        f"<strong>{ctx.get('old_role', 'user')}</strong> to "
+        f"<strong>{ctx.get('new_role', 'user')}</strong>.</p>"
+        f"<p>If you have questions about this change, please contact an "
+        f"administrator.</p>",
+    )
+    return subject, body
+
+
+# ── Schedule lifecycle templates ─────────────────────────────────
+
+
+@_template("schedule_assigned")
+def _schedule_assigned(ctx: dict) -> tuple[str, str]:
+    subject = f"Schedule assigned: {ctx.get('subject_code', 'New Class')}"
+    body = _base_html(
+        "Schedule Assigned",
+        f"<p>You have been assigned a new teaching schedule.</p>"
+        f"<p><strong>Subject:</strong> {ctx.get('subject_code', '')}<br>"
+        f"<strong>Day:</strong> {ctx.get('day_of_week', 'TBD')}<br>"
+        f"<strong>Time:</strong> {ctx.get('start_time', '')} – "
+        f"{ctx.get('end_time', '')}<br>"
+        f"<strong>Room:</strong> {ctx.get('room_name', 'TBD')}</p>",
+    )
+    return subject, body
+
+
+@_template("schedule_updated")
+def _schedule_updated(ctx: dict) -> tuple[str, str]:
+    subject = f"Schedule updated: {ctx.get('subject_code', 'Class')}"
+    changes = ctx.get("changes") or []
+    if isinstance(changes, list) and changes:
+        rows = "".join(f"<li>{c}</li>" for c in changes)
+        change_block = f"<ul>{rows}</ul>"
+    else:
+        change_block = "<p>Schedule details were updated.</p>"
+    body = _base_html(
+        "Schedule Updated",
+        f"<p>The schedule for <strong>{ctx.get('subject_code', '')}</strong> "
+        f"has been updated:</p>"
+        f"{change_block}",
+    )
+    return subject, body
+
+
+@_template("schedule_deleted")
+def _schedule_deleted(ctx: dict) -> tuple[str, str]:
+    subject = f"Class cancelled: {ctx.get('subject_code', 'Class')}"
+    body = _base_html(
+        "Class Cancelled",
+        f"<p>The class <strong>{ctx.get('subject_code', '')}</strong> "
+        f"scheduled on {ctx.get('day_of_week', 'TBD')} "
+        f"({ctx.get('start_time', '')} – {ctx.get('end_time', '')}) "
+        f"has been deleted.</p>"
+        f"<p>If you have questions, please contact an administrator.</p>",
+    )
+    return subject, body
+
+
+@_template("enrollment_added")
+def _enrollment_added(ctx: dict) -> tuple[str, str]:
+    subject = f"Enrolled in {ctx.get('subject_code', 'a class')}"
+    body = _base_html(
+        "Enrollment Confirmed",
+        f"<p>You have been enrolled in "
+        f"<strong>{ctx.get('subject_code', '')}</strong>.</p>"
+        f"<p><strong>Day:</strong> {ctx.get('day_of_week', 'TBD')}<br>"
+        f"<strong>Time:</strong> {ctx.get('start_time', '')} – "
+        f"{ctx.get('end_time', '')}<br>"
+        f"<strong>Room:</strong> {ctx.get('room_name', 'TBD')}</p>",
+    )
+    return subject, body
+
+
+@_template("enrollment_removed")
+def _enrollment_removed(ctx: dict) -> tuple[str, str]:
+    subject = f"Unenrolled from {ctx.get('subject_code', 'a class')}"
+    body = _base_html(
+        "Enrollment Removed",
+        f"<p>You have been removed from "
+        f"<strong>{ctx.get('subject_code', '')}</strong>.</p>"
+        f"<p>If this is unexpected, please contact an administrator.</p>",
+    )
+    return subject, body
+
+
+# ── Face-registration lifecycle templates ────────────────────────
+
+
+@_template("face_approved")
+def _face_approved(ctx: dict) -> tuple[str, str]:
+    subject = "Face registration approved"
+    body = _base_html(
+        "Face Registration Approved",
+        f"<p>Hi {ctx.get('user_name', 'there')},</p>"
+        f"<p>Your face registration has been approved. You are now ready "
+        f"for automatic attendance recognition during your scheduled "
+        f"classes.</p>",
+    )
+    return subject, body
+
+
+@_template("face_rejected")
+def _face_rejected(ctx: dict) -> tuple[str, str]:
+    subject = "Face registration needs attention"
+    reason = ctx.get("reason") or "The submitted captures did not meet quality requirements."
+    body = _base_html(
+        "Face Registration Rejected",
+        f"<p>Hi {ctx.get('user_name', 'there')},</p>"
+        f"<p>Your face registration was not approved.</p>"
+        f"<p><strong>Reason:</strong> {reason}</p>"
+        f"<p>Please re-register your face from the IAMS student app at "
+        f"your earliest convenience.</p>",
+    )
+    return subject, body
+
+
+@_template("face_re_registration_required")
+def _face_re_registration_required(ctx: dict) -> tuple[str, str]:
+    subject = "Face re-registration required"
+    body = _base_html(
+        "Face Re-registration Required",
+        f"<p>Hi {ctx.get('user_name', 'there')},</p>"
+        f"<p>An administrator has reset your face registration. To continue "
+        f"using automatic attendance recognition, please re-register your "
+        f"face from the IAMS student app.</p>",
+    )
+    return subject, body
+
+
 # ── Service ──────────────────────────────────────────────────────
 
 

@@ -27,6 +27,14 @@ slowapi>=0.1.9
 # ===== ML / Face Recognition =====
 insightface>=0.7.3
 onnxruntime>=1.21.0
+# Used by scripts/export_static_models.py (live-feed plan 2026-04-25 Step 2b)
+# to re-export buffalo_l SCRFD/ArcFace ONNX with static input shapes so the
+# CoreMLExecutionProvider on Apple Silicon will delegate to the Neural
+# Engine. ``onnx`` ships with ``onnx.tools.update_model_dims`` directly;
+# ``onnxsim`` folds the now-foldable Reshape/Resize ops that ORT/CoreML
+# would otherwise reject as dynamic.
+onnx>=1.16.0
+onnxsim>=0.4.36
 faiss-cpu==1.13.2
 numpy==2.4.2
 pillow==12.1.0
@@ -43,6 +51,12 @@ httpcore==1.0.9
 httpx==0.28.1
 requests==2.32.5
 websockets==16.0
+
+# ===== Object Storage (Recognition Evidence Phase 5) =====
+# Client for the MinIO/S3 storage backend. Import is lazy inside
+# app.services.evidence_storage so a missing dep in dev mode still loads
+# the app in filesystem mode.
+minio==7.2.7
 
 # ===== Utilities =====
 certifi==2026.1.4

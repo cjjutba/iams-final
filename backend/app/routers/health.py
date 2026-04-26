@@ -55,6 +55,8 @@ async def _check_database() -> dict:
 
 async def _check_redis() -> dict:
     """Check Redis connectivity, latency, and active stream count."""
+    if not settings.ENABLE_REDIS:
+        return {"status": "disabled"}
     try:
         from app.redis_client import get_redis
 
@@ -85,6 +87,8 @@ async def _check_redis() -> dict:
 
 def _check_faiss() -> dict:
     """Check FAISS index status."""
+    if not settings.ENABLE_ML:
+        return {"status": "disabled"}
     try:
         from app.services.ml.faiss_manager import faiss_manager
 
@@ -141,10 +145,12 @@ async def deep_health_check():
     edge_status = _check_edge_devices()
     worker_status = await _check_workers()
 
-    # Determine overall status
-    critical_healthy = db_status.get("status") == "healthy" and redis_status.get("status") == "healthy"
+    # Determine overall status. Redis becomes optional when disabled (VPS
+    # thin profile runs without it); DB is always the only critical gate.
+    critical_healthy = db_status.get("status") == "healthy"
 
     optional_statuses = [
+        redis_status.get("status"),
         faiss_status.get("status"),
         mediamtx_status.get("status"),
     ]

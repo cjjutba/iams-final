@@ -11,33 +11,50 @@ import io
 import time
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.config import logger, settings
 from app.database import get_db
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.repositories.schedule_repository import ScheduleRepository
+from app.repositories.face_repository import FaceRepository
 from app.schemas.face import (
     CameraDiagnosticFace,
     CameraDiagnosticResponse,
+    CctvEnrollPreviewRequest,
+    CctvEnrollPreviewResponse,
+    CctvEnrollRequest,
+    CctvEnrollResponse,
+    CctvEnrollmentRoomOption,
+    CctvEnrollmentStatusEntry,
+    CctvEnrollmentStatusResponse,
+    CctvIdentifyRequest,
+    CctvIdentifyResponse,
     EdgeProcessRequest,
     EdgeProcessResponse,
     EdgeProcessResponseData,
+    FaceAngleMetadataResponse,
     FaceGoneRequest,
     FaceRecognizeRequest,
     FaceRecognizeResponse,
     FaceRegisterResponse,
+    FaceRegistrationDetailResponse,
     FaceStatusResponse,
     ImageQualityResponse,
+    LiveCropResponse,
+    LiveCropsListResponse,
     MatchedUser,
     QualityScoreResponse,
 )
-from app.services.face_service import FaceService
+from app.services.face_service import FaceService, _resolve_room
 from app.services.ml.face_quality import assess_quality, compute_blur_score, compute_brightness
 from app.services.ml.insightface_model import insightface_model
 from app.services.presence_service import PresenceService
-from app.utils.dependencies import get_current_student, get_current_user, get_optional_user
+from app.utils.audit import log_audit
+from app.utils.dependencies import get_current_admin, get_current_student, get_current_user, get_optional_user
+from app.utils.face_image_storage import FaceImageStorage
 
 router = APIRouter()
 
@@ -46,6 +63,32 @@ async def verify_edge_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
     """Validate the API key sent by edge devices (Raspberry Pi)."""
     if x_api_key != settings.EDGE_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+def _lookup_room_grabber(request: Request, db: Session, room_identifier: str):
+    """Resolve ``room_identifier`` and return the always-on FrameGrabber
+    for that room if one exists in ``app.state.frame_grabbers``.
+
+    Returns ``None`` (and logs at debug) on any miss or lookup failure.
+    The downstream service spins up a dedicated grabber when this is
+    None, so the worst case is double the ffmpeg load — never a failure.
+    """
+    try:
+        room = _resolve_room(db, room_identifier)
+        if room is None:
+            return None
+        grabbers = getattr(request.app.state, "frame_grabbers", None) or {}
+        room_id_str = str(room.id)
+        if room_id_str in grabbers:
+            logger.info(
+                "cctv_enroll: reusing always-on FrameGrabber for room %s (%s)",
+                room.name,
+                room_id_str,
+            )
+            return grabbers[room_id_str]
+    except Exception:
+        logger.debug("cctv_enroll: grabber reuse lookup failed", exc_info=True)
+    return None
 
 
 @router.post("/register", response_model=FaceRegisterResponse, status_code=status.HTTP_201_CREATED)
@@ -170,6 +213,242 @@ async def get_face_status(current_user: User = Depends(get_current_user), db: Se
     status_data = face_service.get_face_status(str(current_user.id))
 
     return FaceStatusResponse(**status_data)
+
+
+@router.get(
+    "/registrations/{user_id}",
+    response_model=FaceRegistrationDetailResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_registration_detail(
+    user_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    **Registration Detail for Face-Comparison Sheet (admin) or Profile Photo (self)**
+
+    Returns per-angle embedding metadata for a user's active face
+    registration. Two callers:
+      - Admin live-feed sheet (any user_id) — full per-angle metadata.
+      - Student profile screen (own user_id only) — uses the same shape to
+        derive a profile photo URL for `AsyncImage`.
+
+    Authorisation: admin can fetch any user; non-admins (students) can only
+    fetch their own row. Cross-user fetches by non-admins return 403.
+
+    In Phase 1 every `image_url` is null (images not persisted yet).
+    Phase 2 populates it for angles whose `image_storage_key` is set.
+    """
+    if str(current_user.id) != user_id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="forbidden",
+        )
+    face_repo = FaceRepository(db)
+    registration = face_repo.get_by_user(user_id)
+
+    if registration is None:
+        return FaceRegistrationDetailResponse(user_id=user_id, available=False)
+
+    embeddings = face_repo.get_embeddings_by_registration(str(registration.id))
+
+    # Surface real phone-captured angles AND CCTV-captured enrolment crops
+    # to the admin sheet. The `sim_*` CCTV-degraded derivatives written by
+    # the registration-time augmentation step are FAISS-only and have no
+    # image to render — those stay filtered out.
+    from app.utils.face_image_storage import _is_allowed_angle_label
+
+    storage = FaceImageStorage()
+    angles: list[FaceAngleMetadataResponse] = []
+    for emb in embeddings:
+        if not emb.angle_label or not _is_allowed_angle_label(emb.angle_label):
+            continue
+        image_url: str | None = None
+        if emb.image_storage_key and storage.exists(emb.image_storage_key):
+            image_url = (
+                f"/api/v1/face/registrations/{user_id}/images/{emb.angle_label}"
+            )
+        angles.append(
+            FaceAngleMetadataResponse(
+                id=str(emb.id),
+                angle_label=emb.angle_label,
+                quality_score=emb.quality_score,
+                created_at=emb.created_at,
+                image_url=image_url,
+            )
+        )
+
+    return FaceRegistrationDetailResponse(
+        user_id=user_id,
+        available=True,
+        registered_at=registration.registered_at,
+        embedding_dim=512,
+        angles=angles,
+    )
+
+
+@router.get(
+    "/registrations/{user_id}/images/{angle_label}",
+    status_code=status.HTTP_200_OK,
+    include_in_schema=True,
+)
+async def get_registration_image(
+    user_id: str,
+    angle_label: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    **Registration Image Bytes (admin or self)**
+
+    Returns the stored JPEG for a specific registration angle. Two callers:
+      - Admin live-feed sheet (any user_id) — renders the side-by-side
+        comparison `<img>` tags.
+      - Student profile screen (own user_id only) — renders the profile
+        photo `AsyncImage`.
+
+    Authorisation: admin can fetch any user; non-admins can only fetch
+    their own image. Cross-user fetches by non-admins return 403. The
+    only audit log entry is the admin one — student self-fetches are not
+    audited (would be noise; the student is just viewing their own face).
+
+    - 404 if there is no active registration or no embedding row for the
+      given angle.
+    - 410 Gone when the DB row points at a file that is no longer on disk
+      (distinct from 404 — useful signal for backfill / storage drift).
+    - Cache-Control is 5 min, `private` — files never change once written.
+    """
+    is_admin = current_user.role == UserRole.ADMIN
+    if str(current_user.id) != user_id and not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="forbidden",
+        )
+
+    from app.utils.face_image_storage import _is_allowed_angle_label
+
+    if not _is_allowed_angle_label(angle_label):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown angle")
+
+    face_repo = FaceRepository(db)
+    registration = face_repo.get_by_user(user_id)
+    if registration is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="no registration")
+
+    embeddings = face_repo.get_embeddings_by_registration(str(registration.id))
+    match = next(
+        (e for e in embeddings if e.angle_label == angle_label and e.image_storage_key),
+        None,
+    )
+    if match is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="angle not stored")
+
+    storage = FaceImageStorage()
+    try:
+        path = storage.resolve_path(match.image_storage_key)
+    except FileNotFoundError:
+        # DB row points at a missing file — distinct state from "never had one".
+        logger.warning(
+            f"Registration image missing on disk for user {user_id} angle {angle_label} "
+            f"(key={match.image_storage_key})"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE, detail="image_missing_on_disk"
+        )
+
+    # Audit the admin byte fetch (not the index call — would flood audit on a
+    # poll). Student self-fetches are NOT audited; a student viewing their own
+    # face is normal traffic, not a privileged read.
+    if is_admin:
+        try:
+            log_audit(
+                db,
+                admin_id=current_user.id,
+                action="face.registered_images.view",
+                target_type="user",
+                target_id=user_id,
+                details=f"angle={angle_label}",
+            )
+        except Exception:
+            # Audit failures should not break the read.
+            logger.warning("log_audit failed for face.registered_images.view", exc_info=True)
+
+    return FileResponse(
+        path=str(path),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
+@router.get(
+    "/live-crops/{schedule_id}/{user_id}",
+    response_model=LiveCropsListResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_live_crops(
+    schedule_id: str,
+    user_id: str,
+    limit: int = 10,
+    _admin: User = Depends(get_current_admin),
+):
+    """
+    **Admin-only: Recent Server-Captured Live Crops**
+
+    Returns the most recent JPEGs (base64-encoded) that the realtime pipeline
+    captured on the ``warming_up → recognized`` transition for this
+    (schedule, user) pair. Backs the Phase-3 source-swap in the admin
+    live-feed face-comparison sheet (`LiveCropPanel` with
+    ``source.kind === 'server'``).
+
+    Returns ``available=false`` on the VPS (``ENABLE_REDIS=false``) or when
+    no crop key exists — the admin UI transparently falls back to the
+    Phase-1 client-side canvas grab.
+    """
+    import json
+
+    capped_limit = max(1, min(50, int(limit)))
+
+    if not settings.ENABLE_REDIS:
+        return LiveCropsListResponse(
+            schedule_id=schedule_id, user_id=user_id, available=False
+        )
+
+    try:
+        from app.redis_client import get_redis
+
+        r = await get_redis()
+        key = f"live_crops:{schedule_id}:{user_id}"
+        raw_entries = await r.lrange(key, 0, capped_limit - 1)
+    except Exception:
+        logger.warning("Failed to read live crops from Redis", exc_info=True)
+        return LiveCropsListResponse(
+            schedule_id=schedule_id, user_id=user_id, available=False
+        )
+
+    crops: list[LiveCropResponse] = []
+    for raw in raw_entries:
+        try:
+            data = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+            crops.append(
+                LiveCropResponse(
+                    crop_b64=data["crop_b64"],
+                    captured_at=data["captured_at"],
+                    confidence=float(data["confidence"]),
+                    track_id=int(data["track_id"]),
+                    bbox=[float(v) for v in data["bbox"]],
+                )
+            )
+        except Exception:
+            # Malformed entry — skip. Shouldn't happen because we control the writer.
+            logger.debug("Skipping malformed live-crop entry", exc_info=True)
+
+    return LiveCropsListResponse(
+        schedule_id=schedule_id,
+        user_id=user_id,
+        available=bool(crops),
+        crops=crops,
+    )
 
 
 @router.post("/validate-image", response_model=ImageQualityResponse, status_code=status.HTTP_200_OK)
@@ -584,8 +863,6 @@ async def deregister_face(user_id: str, current_user: User = Depends(get_current
 
     Requires authentication.
     """
-    from app.models.user import UserRole
-
     # Students can only deregister their own face
     if current_user.role == UserRole.STUDENT and str(current_user.id) != user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Students can only deregister their own face")
@@ -593,7 +870,399 @@ async def deregister_face(user_id: str, current_user: User = Depends(get_current
     face_service = FaceService(db)
     await face_service.deregister_face(user_id)
 
+    # Phase-4: when an admin removes a student's face registration, notify
+    # the student that they need to re-enroll. Self-service deregistration
+    # (a student deleting their own face) is intentionally NOT notified —
+    # they already know.
+    if (
+        current_user.role != UserRole.STUDENT
+        and str(current_user.id) != user_id
+    ):
+        try:
+            from app.services.notification_service import notify
+
+            target_user = db.query(User).filter(User.id == user_id).first()
+            student_full_name = (
+                f"{target_user.first_name or ''} {target_user.last_name or ''}".strip()
+                if target_user
+                else ""
+            )
+            await notify(
+                db,
+                user_id=user_id,
+                title="Face re-registration required",
+                message=(
+                    "An administrator has reset your face registration. "
+                    "Please open the IAMS app and submit new face captures."
+                ),
+                notification_type="face_re_registration_required",
+                severity="info",
+                preference_key=None,
+                send_email=True,
+                email_template="face_re_registration_required",
+                email_context={"student_name": student_full_name},
+                dedup_window_seconds=0,
+                reference_id=str(user_id),
+                reference_type="user",
+                toast_type="info",
+            )
+        except Exception:
+            logger.exception("Failed to notify student of face re-registration request")
+
+    # Audit fan-out: every face deletion (admin-driven OR student self-
+    # service) surfaces in peer admins' bells with audit_alerts opted in.
+    # This is a security-relevant data-mutation event — admins should be
+    # able to reconstruct who deleted what. Excludes the actor so the
+    # admin who clicked the button doesn't get a notification on top of
+    # their own UI confirmation toast.
+    try:
+        from app.services.notification_service import notify_admins
+
+        target_user = db.query(User).filter(User.id == user_id).first()
+        target_label = (
+            f"{target_user.first_name or ''} {target_user.last_name or ''}".strip()
+            if target_user
+            else user_id[:8]
+        ) or (target_user.email if target_user else user_id[:8])
+        actor_label = (
+            current_user.email
+            if str(current_user.id) != user_id
+            else f"{target_label} (self-service)"
+        )
+
+        await notify_admins(
+            db,
+            title=f"Face data deleted: {target_label}",
+            message=(
+                f"Face registration + embeddings deleted for {target_label}. "
+                f"Triggered by: {actor_label}."
+            ),
+            notification_type="face_data_deleted",
+            severity="warn",
+            preference_key="audit_alerts",
+            send_email=False,
+            exclude_user_id=current_user.id,
+            reference_id=str(user_id),
+            reference_type="face",
+            dedup_window_seconds=300,
+            toast_type="warning",
+        )
+    except Exception:
+        logger.warning(
+            "face_data_deleted audit notification failed",
+            exc_info=True,
+        )
+
     return {"success": True, "message": "Face deregistered successfully"}
+
+
+@router.post(
+    "/cctv-enroll/{user_id}",
+    response_model=CctvEnrollResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def cctv_enroll_user(
+    user_id: str,
+    body: CctvEnrollRequest,
+    request: Request,
+    _admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """**Admin-only: CCTV-side enrolment for an existing student**
+
+    Captures `num_captures` (default 5) high-quality face crops from the
+    chosen room's live CCTV stream and adds them as canonical embeddings
+    on top of the student's existing phone-captured registration. Closes
+    the phone→CCTV cross-domain gap that otherwise causes mass false
+    matches near the recognition threshold.
+
+    Operator workflow:
+      1. Stand the target student alone in front of the chosen camera so
+         exactly one face is visible.
+      2. POST this endpoint. The backend grabs frames at 1 s intervals,
+         skipping frames that have 0 or >1 faces or that are too small /
+         blurry.
+      3. Inspect the response — `self_similarity_to_phone_mean` should be
+         > 0.30 (0.50+ is good). If it isn't, the wrong student was in
+         frame.
+
+    Reuses the always-on FrameGrabber for the room when one exists; falls
+    back to spinning up a dedicated grabber if not (e.g. when the room's
+    grabber wasn't preloaded at boot).
+    """
+    face_service = FaceService(db)
+
+    # Reuse the always-on FrameGrabber for this room if one exists in app
+    # state (preloaded at boot — see backend/app/main.py). Falling back to
+    # a dedicated grabber works but spawns a second ffmpeg subprocess and
+    # competes with the always-on grabber for the publisher's frames.
+    provided_grabber = _lookup_room_grabber(request, db, body.room_code_or_id)
+
+    try:
+        result = await face_service.cctv_enroll(
+            user_id=user_id,
+            room_code_or_id=body.room_code_or_id,
+            num_captures=body.num_captures,
+            capture_interval=body.capture_interval_s,
+            min_face_size_px=body.min_face_size_px,
+            min_det_score=body.min_det_score,
+            provided_grabber=provided_grabber,
+        )
+    except Exception as exc:
+        logger.error("cctv_enroll failed for user %s: %s", user_id, exc)
+        raise
+
+    # Audit — high-impact admin action that mutates the FAISS index.
+    try:
+        log_audit(
+            db,
+            admin_id=_admin.id,
+            action="face.cctv_enroll",
+            target_type="user",
+            target_id=user_id,
+            details=(
+                f"room={body.room_code_or_id} added={result['added']} "
+                f"sim_to_phone_mean={result['self_similarity_to_phone_mean']:.3f}"
+            ),
+        )
+    except Exception:
+        logger.warning("log_audit failed for face.cctv_enroll", exc_info=True)
+
+    return CctvEnrollResponse(success=True, user_id=user_id, **result)
+
+
+@router.get(
+    "/cctv-enrollment-status",
+    response_model=CctvEnrollmentStatusResponse,
+)
+async def cctv_enrollment_status(
+    _admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+) -> CctvEnrollmentStatusResponse:
+    """**Admin-only: report which students have not yet been CCTV-enrolled.**
+
+    Returns one row per student with an active face registration, listing
+    how many ``cctv_*`` embeddings they have on file, **broken down by
+    room** so the bulk-enrollment admin page can filter "missing CCTV
+    captures for EB227" in one round-trip.
+
+    A student with ``cctv_count == 0`` (across every room) is shown as
+    ``phone_only=True``; the realtime tracker applies a stricter
+    recognition threshold for these users so misidentifications in the
+    cross-domain noise band become "Detecting…" overlays rather than
+    wrong-name commits.
+
+    ``per_room`` maps each room's canonical key (``room.stream_key``,
+    lowercased — falls back to lowercased ``name`` for legacy rooms) to
+    the integer count of CCTV embeddings labelled for that room.
+    Pre-Phase-2 ``cctv_<idx>`` rows (no room context) are summarised
+    separately as ``cctv_legacy``.
+    """
+    from app.models.face_embedding import FaceEmbedding
+    from app.models.face_registration import FaceRegistration
+    from app.models.room import Room
+    from app.utils.cctv_label import normalize_room_key, parse_cctv_label
+
+    # Pull every (user, label) pair in a single query; aggregate in
+    # Python so the per-room breakdown doesn't need to materialise a
+    # different SQL CASE per room (the room set is small but variable).
+    rows = (
+        db.query(
+            FaceRegistration.user_id,
+            User.first_name,
+            User.last_name,
+            User.student_id,
+            FaceEmbedding.angle_label,
+        )
+        .join(User, FaceRegistration.user_id == User.id)
+        .outerjoin(
+            FaceEmbedding,
+            FaceEmbedding.registration_id == FaceRegistration.id,
+        )
+        .filter(FaceRegistration.is_active)
+        .all()
+    )
+
+    # Bucket per user
+    per_user: dict[str, dict] = {}
+    for user_id, first, last, student_id, angle_label in rows:
+        uid = str(user_id)
+        bucket = per_user.setdefault(
+            uid,
+            {
+                "first": first or "",
+                "last": last or "",
+                "student_id": student_id,
+                "per_room": {},  # room_key -> int
+                "legacy": 0,
+                "total_cctv": 0,
+            },
+        )
+        if not angle_label:
+            continue
+        room_key, idx = parse_cctv_label(angle_label)
+        if idx is None:
+            # Not a CCTV label (phone angle / sim_*) — ignore for this report.
+            continue
+        bucket["total_cctv"] += 1
+        if room_key is None:
+            bucket["legacy"] += 1
+        else:
+            bucket["per_room"][room_key] = bucket["per_room"].get(room_key, 0) + 1
+
+    # Build response entries, sorted by phone-only first, then total CCTV
+    # count ascending, then name — the bulk-enrol UI consumes the natural
+    # queue order without needing a client-side sort.
+    entries: list[CctvEnrollmentStatusEntry] = []
+    phone_only_count = 0
+    for uid, b in per_user.items():
+        is_phone_only = b["total_cctv"] == 0
+        if is_phone_only:
+            phone_only_count += 1
+        entries.append(
+            CctvEnrollmentStatusEntry(
+                user_id=uid,
+                student_id=b["student_id"],
+                full_name=f"{b['first']} {b['last']}".strip(),
+                cctv_count=b["total_cctv"],
+                phone_only=is_phone_only,
+                per_room=b["per_room"],
+                cctv_legacy=b["legacy"],
+            )
+        )
+    entries.sort(
+        key=lambda e: (not e.phone_only, e.cctv_count, e.full_name.lower())
+    )
+
+    # Room metadata: canonical stream_key for label-matching plus the
+    # human-facing name and capability flag for the dropdown.
+    room_options: list[CctvEnrollmentRoomOption] = []
+    rooms_legacy: list[str] = []
+    for r in db.query(Room).order_by(Room.name).all():
+        sk = (r.stream_key or r.name or "").strip()
+        if not sk:
+            continue
+        normalised = normalize_room_key(sk) or sk.lower()
+        rooms_legacy.append(normalised)
+        room_options.append(
+            CctvEnrollmentRoomOption(
+                id=str(r.id),
+                name=r.name,
+                stream_key=normalised,
+                has_camera=bool(r.camera_endpoint),
+            )
+        )
+
+    return CctvEnrollmentStatusResponse(
+        students=entries,
+        rooms=rooms_legacy,
+        room_options=room_options,
+        threshold=settings.RECOGNITION_THRESHOLD,
+        phone_only_threshold=(
+            settings.RECOGNITION_THRESHOLD
+            + settings.RECOGNITION_PHONE_ONLY_THRESHOLD_BONUS
+        ),
+        phone_only_count=phone_only_count,
+        total_registered=len(entries),
+    )
+
+
+@router.post(
+    "/cctv-identify",
+    response_model=CctvIdentifyResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def cctv_identify(
+    body: CctvIdentifyRequest,
+    request: Request,
+    _admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """**Admin-only: scan one frame and identify every face in it.**
+
+    Camera-first scan workflow for the bulk-enrollment admin page. The
+    operator hits "Scan Classroom", we grab a frame, detect every
+    face, cross-identify each against every enrolled student, and
+    return the lot. The UI then renders one card per face with the
+    identified student's name + per-room CCTV-capture status + a
+    direct "Enroll for [Room]" button.
+
+    Compared to ``cctv-enroll/{user_id}/preview`` (which is target-
+    student-first), this endpoint is target-AGNOSTIC: no ``user_id``,
+    no queue selection step. Faster for classroom-scale enrollment
+    where 5-50 students are visible at once.
+
+    No FAISS mutation. Reuses the always-on FrameGrabber when present.
+    """
+    import asyncio
+
+    face_service = FaceService(db)
+    provided_grabber = _lookup_room_grabber(request, db, body.room)
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None,
+        lambda: face_service.cctv_identify(
+            room_identifier=body.room,
+            min_face_size_px=body.min_face_size_px,
+            min_det_score=body.min_det_score,
+            min_identify_sim=body.min_identify_sim,
+            provided_grabber=provided_grabber,
+        ),
+    )
+
+    return CctvIdentifyResponse(**result)
+
+
+@router.post(
+    "/cctv-enroll/{user_id}/preview",
+    response_model=CctvEnrollPreviewResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def cctv_enroll_preview(
+    user_id: str,
+    body: CctvEnrollPreviewRequest,
+    request: Request,
+    _admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """**Admin-only: single-frame preview before committing a CCTV enrolment.**
+
+    Returns one captured face crop + its cosine similarity to the
+    student's existing phone embedding so the operator can confirm
+    visually that the right student is in front of the camera before
+    issuing the real ``POST /api/v1/face/cctv-enroll/{user_id}`` call.
+
+    No FAISS mutation, no DB write, no disk artifact — safe to call
+    repeatedly while the operator iterates on student framing. Returns
+    HTTP 200 with ``ok=False`` for soft failures (no face / multi face /
+    too small) so the UI can render the failure message inline without
+    catching exceptions.
+
+    Reuses the always-on FrameGrabber for the room when one exists; falls
+    back to spinning up a dedicated grabber if not.
+    """
+    import asyncio
+
+    face_service = FaceService(db)
+    provided_grabber = _lookup_room_grabber(request, db, body.room)
+
+    # The preview is sync (it grabs frames from a thread-safe FrameGrabber
+    # and runs ML inference directly). Hop to a worker thread so we don't
+    # block the event loop for the ~1 s capture + inference round-trip.
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None,
+        lambda: face_service.cctv_enroll_preview(
+            user_id=user_id,
+            room_identifier=body.room,
+            min_face_size_px=body.min_face_size_px,
+            min_det_score=body.min_det_score,
+            provided_grabber=provided_grabber,
+        ),
+    )
+
+    return CctvEnrollPreviewResponse(**result)
 
 
 @router.get("/camera-diagnostic", response_model=CameraDiagnosticResponse)

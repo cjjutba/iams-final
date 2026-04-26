@@ -1,0 +1,608 @@
+package com.iams.app.ui.student
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.navigation.NavController
+import com.iams.app.data.model.AttendanceRecordResponse
+import com.iams.app.data.model.ScheduleResponse
+import com.iams.app.ui.components.LocalToastState
+import com.iams.app.ui.components.ToastType
+import com.iams.app.ui.components.AttendanceStatus
+import com.iams.app.ui.utils.parseAttendanceStatus
+import com.iams.app.ui.components.IAMSBadge
+import com.iams.app.ui.components.IAMSButton
+import com.iams.app.ui.components.IAMSButtonSize
+import com.iams.app.ui.components.IAMSButtonVariant
+import com.iams.app.ui.components.IAMSCard
+import com.iams.app.ui.components.IAMSHeader
+import com.iams.app.ui.components.SkeletonBox
+import com.iams.app.ui.navigation.Routes
+import com.iams.app.ui.theme.TextPrimary
+import com.iams.app.ui.theme.Background
+import com.iams.app.ui.theme.Border
+import com.iams.app.ui.theme.IAMSThemeTokens
+import com.iams.app.ui.theme.Primary
+import com.iams.app.ui.theme.PrimaryForeground
+import com.iams.app.ui.theme.Secondary
+import com.iams.app.ui.theme.TextSecondary
+import com.iams.app.ui.theme.TextTertiary
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+
+private data class FilterOption(
+    val label: String,
+    val value: String, // "all" / "present" / "late" / "absent" / "early_leave"
+)
+
+private val FILTERS = listOf(
+    FilterOption("All", "all"),
+    FilterOption("Present", "present"),
+    FilterOption("Late", "late"),
+    FilterOption("Absent", "absent"),
+    FilterOption("Early Leave", "early_leave"),
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun StudentHistoryScreen(
+    navController: NavController,
+    viewModel: StudentHistoryViewModel = hiltViewModel()
+) {
+    val uiState by viewModel.uiState.collectAsState()
+    val spacing = IAMSThemeTokens.spacing
+    val toastState = LocalToastState.current
+
+    // Currently-tapped record for the details sheet (null = sheet closed).
+    var selectedRecord by remember { mutableStateOf<AttendanceRecordResponse?>(null) }
+
+    LaunchedEffect(uiState.error) {
+        uiState.error?.let {
+            toastState.showToast(it, ToastType.ERROR)
+            viewModel.clearError()
+        }
+    }
+
+    // Slide-up details sheet — rendered at the end of the composition so it
+    // overlays the list. The sheet reads the cached schedule map on the VM
+    // to enrich the record with subject / room / faculty / scheduled time.
+    selectedRecord?.let { record ->
+        HistoryRecordDetailSheet(
+            record = record,
+            schedule = viewModel.getScheduleFor(record),
+            onDismiss = { selectedRecord = null },
+        )
+    }
+
+    // Error state (no cached data)
+    if (uiState.error != null && uiState.records.isEmpty() && !uiState.isLoading) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Background)
+        ) {
+            IAMSHeader(title = "History")
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = spacing.xxl),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = null,
+                        modifier = Modifier.size(40.dp),
+                        tint = TextTertiary
+                    )
+                    Spacer(modifier = Modifier.height(spacing.lg))
+                    Text(
+                        text = "Unable to load attendance history. Please try again.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = TextSecondary,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(spacing.lg))
+                    IAMSButton(
+                        text = "Retry",
+                        onClick = {
+                            viewModel.clearError()
+                            viewModel.loadHistory()
+                        },
+                        variant = IAMSButtonVariant.SECONDARY,
+                        size = IAMSButtonSize.MD,
+                        fullWidth = false
+                    )
+                }
+            }
+        }
+        return
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Background)
+    ) {
+        IAMSHeader(title = "History")
+
+        // Filters container
+        Column(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            // Month selector row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        horizontal = spacing.lg,
+                        vertical = spacing.lg
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                IconButton(
+                    onClick = { viewModel.previousMonth() },
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                        contentDescription = "Previous month",
+                        modifier = Modifier.size(20.dp),
+                        tint = Primary
+                    )
+                }
+
+                Text(
+                    text = viewModel.getFormattedMonth(),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Primary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f)
+                )
+
+                IconButton(
+                    onClick = { viewModel.nextMonth() },
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = "Next month",
+                        modifier = Modifier.size(20.dp),
+                        tint = Primary
+                    )
+                }
+            }
+
+            // Status filter pills — horizontally scrollable so long labels
+            // ("Early Leave") never wrap onto two lines and new filters can be
+            // added without re-tuning the layout. Matches the day-pill row on
+            // the Schedule screen for visual consistency (LazyRow + intrinsic
+            // width pills + contentPadding on the edges).
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = spacing.lg),
+                horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                items(FILTERS, key = { it.value }) { filter ->
+                    FilterPill(
+                        label = filter.label,
+                        isSelected = filter.value == uiState.selectedFilter,
+                        onClick = { viewModel.setFilter(filter.value) }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(spacing.lg))
+            HorizontalDivider(thickness = 1.dp, color = Border)
+        }
+
+        // Records list
+        val filteredRecords = viewModel.getFilteredRecords()
+
+        PullToRefreshBox(
+            isRefreshing = uiState.isRefreshing,
+            onRefresh = { viewModel.refresh() },
+            modifier = Modifier.fillMaxSize()
+        ) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = spacing.lg),
+            ) {
+                item { Spacer(modifier = Modifier.height(spacing.lg)) }
+
+                if (uiState.isLoading && filteredRecords.isEmpty()) {
+                    items(4) {
+                        IAMSCard {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                SkeletonBox(width = 140.dp, height = 12.dp)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                SkeletonBox(width = 160.dp, height = 14.dp)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    SkeletonBox(width = 70.dp, height = 24.dp, cornerRadius = 12.dp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    SkeletonBox(width = 100.dp, height = 14.dp)
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(spacing.md))
+                    }
+                } else if (filteredRecords.isNotEmpty()) {
+                    items(filteredRecords, key = { it.id }) { record ->
+                        HistoryRecordCard(
+                            record = record,
+                            onClick = { selectedRecord = record },
+                        )
+                        Spacer(modifier = Modifier.height(spacing.md))
+                    }
+                } else if (!uiState.isLoading) {
+                    item {
+                        HistoryEmptyState(formattedMonth = viewModel.getFormattedMonth())
+                    }
+                }
+
+                item { Spacer(modifier = Modifier.height(spacing.lg)) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FilterPill(
+    label: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .height(40.dp)
+            .clip(RoundedCornerShape(9999.dp))
+            .background(if (isSelected) Primary else Secondary)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (isSelected) PrimaryForeground else TextSecondary,
+        )
+    }
+}
+
+@Composable
+private fun HistoryRecordCard(
+    record: AttendanceRecordResponse,
+    onClick: () -> Unit,
+) {
+    val spacing = IAMSThemeTokens.spacing
+    val status = parseAttendanceStatus(record.status)
+
+    IAMSCard(onClick = onClick) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Top row: date on the left, status badge pinned top-right.
+            // Top-aligned so a wrapped date never pushes the badge down.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Text(
+                    text = formatDateForHistory(record.date),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextTertiary,
+                    modifier = Modifier.weight(1f),
+                )
+                IAMSBadge(status = status)
+            }
+
+            // Check-in time on its own line — formatted, not raw ISO.
+            if (!record.checkInTime.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(spacing.xs))
+                Text(
+                    text = "Check-in: ${formatCheckInForDisplay(record.checkInTime)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextSecondary
+                )
+            }
+
+            // Check-out time — populated when the session has ended (or for
+            // early-leavers, the moment they were last detected).
+            if (!record.checkOutTime.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(spacing.xs))
+                Text(
+                    text = "Check-out: ${formatCheckInForDisplay(record.checkOutTime)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextSecondary
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Slide-up details sheet for one attendance record. Intentionally shows only
+ * descriptive metadata (subject / room / faculty / scheduled time / check-in
+ * / remarks) — no presence percentage, no scan counts, no metric chips —
+ * because the History screen is a lookup of "what happened", not a stats page.
+ *
+ * Implemented with Material 3 [ModalBottomSheet] so the user stays on the
+ * History list. Dismissal is via the default drag-down gesture or tapping the
+ * scrim; both route to `onDismiss`.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HistoryRecordDetailSheet(
+    record: AttendanceRecordResponse,
+    schedule: ScheduleResponse?,
+    onDismiss: () -> Unit,
+) {
+    val spacing = IAMSThemeTokens.spacing
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val status = parseAttendanceStatus(record.status)
+
+    val fallbackSubjectName = record.subjectCode ?: "Attendance Record"
+    val subjectName = schedule?.subjectName ?: fallbackSubjectName
+    val subjectCode = schedule?.subjectCode ?: record.subjectCode
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Background,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = spacing.lg,
+                    end = spacing.lg,
+                    bottom = spacing.xl,
+                ),
+        ) {
+            // Header: subject + subject code + status badge
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = subjectName,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimary,
+                    )
+                    if (!subjectCode.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = subjectCode,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextTertiary,
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(spacing.sm))
+                IAMSBadge(status = status)
+            }
+
+            Spacer(modifier = Modifier.height(spacing.lg))
+            HorizontalDivider(thickness = 1.dp, color = Border)
+            Spacer(modifier = Modifier.height(spacing.lg))
+
+            // Detail rows — only shown when the underlying field is available.
+            DetailRow(label = "Date", value = formatFullDateForDetail(record.date))
+
+            if (schedule != null) {
+                DetailRow(
+                    label = "Scheduled",
+                    value = formatScheduledTimeRange(schedule.startTime, schedule.endTime),
+                )
+                if (!schedule.roomName.isNullOrBlank()) {
+                    DetailRow(label = "Room", value = schedule.roomName)
+                }
+                if (!schedule.facultyName.isNullOrBlank()) {
+                    DetailRow(label = "Faculty", value = schedule.facultyName)
+                }
+            }
+
+            if (!record.checkInTime.isNullOrBlank()) {
+                DetailRow(
+                    label = "Check-in",
+                    value = formatCheckInForDisplay(record.checkInTime),
+                )
+            }
+
+            if (!record.checkOutTime.isNullOrBlank()) {
+                DetailRow(
+                    label = "Check-out",
+                    value = formatCheckInForDisplay(record.checkOutTime),
+                )
+            }
+
+            if (!record.remarks.isNullOrBlank()) {
+                DetailRow(label = "Remarks", value = record.remarks)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetailRow(label: String, value: String) {
+    val spacing = IAMSThemeTokens.spacing
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = spacing.xs)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = TextTertiary,
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = TextPrimary,
+        )
+    }
+}
+
+@Composable
+private fun HistoryEmptyState(formattedMonth: String) {
+    val spacing = IAMSThemeTokens.spacing
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = "No attendance records yet",
+            style = MaterialTheme.typography.bodyLarge,
+            color = TextSecondary,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(spacing.sm))
+        Text(
+            text = "No records found for $formattedMonth",
+            style = MaterialTheme.typography.bodyMedium,
+            color = TextTertiary,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+// ── Utility functions ──
+
+/**
+ * Format "YYYY-MM-DD" to "EEEE, MMM d" (e.g., "Monday, Mar 15")
+ */
+private fun formatDateForHistory(date: String): String {
+    return try {
+        val localDate = LocalDate.parse(date)
+        localDate.format(DateTimeFormatter.ofPattern("EEEE, MMM d", Locale.getDefault()))
+    } catch (_: Exception) {
+        date
+    }
+}
+
+/**
+ * Format "YYYY-MM-DD" to "EEEE, MMMM d, yyyy" (e.g. "Sunday, April 19, 2026")
+ * for the details sheet, where there's room for the full form unlike the
+ * compact card.
+ */
+private fun formatFullDateForDetail(date: String): String {
+    return try {
+        LocalDate.parse(date).format(
+            DateTimeFormatter.ofPattern("EEEE, MMMM d, yyyy", Locale.getDefault())
+        )
+    } catch (_: Exception) {
+        date
+    }
+}
+
+/**
+ * Render a schedule's "HH:MM(:SS)" start/end pair as "h:mm AM – h:mm AM" for
+ * the details sheet. Falls back to the raw values if either side can't be
+ * parsed — better to show something slightly ugly than a blank row.
+ */
+private fun formatScheduledTimeRange(startTime: String, endTime: String): String {
+    val fmt = DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault())
+    val start = runCatching {
+        val parts = startTime.split(":")
+        java.time.LocalTime.of(parts[0].toInt(), parts[1].toInt()).format(fmt)
+    }.getOrDefault(startTime)
+    val end = runCatching {
+        val parts = endTime.split(":")
+        java.time.LocalTime.of(parts[0].toInt(), parts[1].toInt()).format(fmt)
+    }.getOrDefault(endTime)
+    return "$start \u2013 $end"
+}
+
+/**
+ * Render a backend `check_in_time` string as "h:mm AM/PM" for the card.
+ *
+ * Backend serialises `check_in_time` via Pydantic `datetime.isoformat()`, so
+ * the string can arrive in several shapes:
+ *   - ISO local datetime: "2026-04-19T07:35:05.477623"  (most common)
+ *   - ISO UTC:           "2026-04-19T07:35:05.477623Z"
+ *   - ISO with offset:   "2026-04-19T07:35:05+08:00"
+ *   - Bare time (legacy): "07:35:05" or "07:35"
+ *
+ * The formatter below tries them in that order. Anything it can't parse is
+ * returned unchanged so the UI never renders a blank cell.
+ */
+private fun formatCheckInForDisplay(raw: String): String {
+    val prettyTime = DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault())
+
+    // Case 1: ISO offset/zoned datetime — convert to device local before formatting.
+    runCatching { java.time.OffsetDateTime.parse(raw) }.getOrNull()?.let { odt ->
+        return odt.atZoneSameInstant(java.time.ZoneId.systemDefault())
+            .format(prettyTime)
+    }
+
+    // Case 2: ISO local datetime (no tz suffix) — backend stores naive datetimes
+    // that already represent local wall-clock time, so no conversion is applied.
+    runCatching { java.time.LocalDateTime.parse(raw) }.getOrNull()?.let { ldt ->
+        return ldt.toLocalTime().format(prettyTime)
+    }
+
+    // Case 3: Bare "HH:MM:SS" or "HH:MM" string.
+    runCatching {
+        val parts = raw.split(":")
+        val h = parts[0].toInt()
+        val m = parts[1].toInt()
+        return java.time.LocalTime.of(h, m).format(prettyTime)
+    }
+
+    return raw
+}

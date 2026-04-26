@@ -409,12 +409,50 @@ class FAISSManager:
         results = []
         for per_query in batch_results:
             if not per_query:
-                results.append({"user_id": None, "confidence": 0.0, "is_ambiguous": False})
+                results.append({
+                    "user_id": None,
+                    "confidence": 0.0,
+                    "is_ambiguous": False,
+                    "top1_user_id": None,
+                    "top1_score": 0.0,
+                    "top2_user_id": None,
+                    "top2_score": 0.0,
+                })
                 continue
 
-            top_raw_score = per_query[0][1]
+            top_raw_user, top_raw_score = per_query[0]
+            # ``top1_*`` is always the unfiltered top-1 — the realtime
+            # tracker uses it for the spatial+temporal identity hint
+            # rescue path (see RealtimeTracker._recognize_batch). Below
+            # threshold matches still surface this so a hint can confirm
+            # at the relaxed delta without losing safety: the rescue
+            # only applies when top1_user_id == identity.hint_user_id.
+            top1_user_id = top_raw_user
+            top1_score = float(top_raw_score)
+            # ``top2_*`` carries the *second-best deduplicated user* and
+            # the realtime tracker uses it as the Hungarian fallback when
+            # two tracks collide on the same top-1 user_id (frame-level
+            # mutual exclusion — see RealtimeTracker._resolve_frame_mutex).
+            # Reported regardless of threshold so the resolver can see
+            # the true score gap; the resolver re-applies the threshold
+            # before committing.
+            if len(per_query) > 1:
+                top2_user_id = per_query[1][0]
+                top2_score = float(per_query[1][1])
+            else:
+                top2_user_id = None
+                top2_score = 0.0
+
             if top_raw_score < threshold:
-                results.append({"user_id": None, "confidence": float(top_raw_score), "is_ambiguous": False})
+                results.append({
+                    "user_id": None,
+                    "confidence": float(top_raw_score),
+                    "is_ambiguous": False,
+                    "top1_user_id": top1_user_id,
+                    "top1_score": top1_score,
+                    "top2_user_id": top2_user_id,
+                    "top2_score": top2_score,
+                })
                 continue
 
             top_user, top_score = per_query[0]
@@ -437,6 +475,10 @@ class FAISSManager:
                 "user_id": top_user if not is_ambiguous else None,
                 "confidence": float(top_score),
                 "is_ambiguous": is_ambiguous,
+                "top1_user_id": top1_user_id,
+                "top1_score": top1_score,
+                "top2_user_id": top2_user_id,
+                "top2_score": top2_score,
             })
 
         return results
@@ -505,14 +547,31 @@ class FAISSManager:
             ValueError: If embeddings_data is empty or invalid
         """
         with self._lock:
+            # rebuild() always discards volatile adaptive IDs — they
+            # referenced positions in the OLD index. Failing to clear here
+            # leaves a stale list that later add_adaptive()/save() calls
+            # treat as live, leading to confusing "ghost" log lines and a
+            # latent bug if any code path ever consults _adaptive_ids
+            # directly to decide whether to re-add a vector.
+            adaptive_dropped = len(self._adaptive_ids)
+            self._adaptive_ids.clear()
+
             if not embeddings_data:
-                logger.warning("No embeddings provided for rebuild, creating empty index")
+                logger.warning(
+                    "No embeddings provided for rebuild, creating empty index "
+                    "(dropped %d adaptive vector(s))",
+                    adaptive_dropped,
+                )
                 self.index = self._create_index()
                 self.user_map = {}
                 self.save()
                 return {}
 
-            logger.info(f"Rebuilding FAISS index with {len(embeddings_data)} embeddings...")
+            logger.info(
+                "Rebuilding FAISS index with %d embeddings (dropped %d adaptive)...",
+                len(embeddings_data),
+                adaptive_dropped,
+            )
 
             # Create new index
             self.index = self._create_index()

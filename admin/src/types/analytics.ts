@@ -4,21 +4,7 @@ export interface SystemMetrics {
   total_schedules: number
   total_attendance_records: number
   average_attendance_rate: number
-  total_anomalies: number
-  unresolved_anomalies: number
   total_early_leaves: number
-}
-
-export interface AttendanceAnomaly {
-  id: string
-  student_id: string
-  anomaly_type: string
-  severity: string
-  description: string
-  resolved: boolean
-  detected_at: string
-  resolved_by: string | null
-  resolved_at: string | null
 }
 
 export interface AtRiskStudent {

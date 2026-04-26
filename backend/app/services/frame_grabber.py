@@ -14,16 +14,37 @@ Why FFmpeg subprocess instead of cv2.VideoCapture?
 Staleness detection:
   If no new frame arrives within `stale_timeout` seconds, grab() returns
   None and the drain thread automatically reconnects the RTSP stream.
+
+RTP timestamp capture (live-feed plan 2026-04-25 Step 3a):
+  When ``capture_rtp_pts=True``, FFmpeg is invoked with ``-vf showinfo`` so
+  the showinfo filter prints the source-stream PTS to stderr per frame.
+  ``_drain_stderr`` parses those lines into a bounded queue, and
+  ``grab_with_pts()`` returns the next-available PTS alongside its frame.
+  This lets the admin live page align WS bbox draws to the same RTP
+  timestamp the browser sees on the WHEP video via
+  ``requestVideoFrameCallback().rtpTimestamp``.
 """
 
+import collections
 import logging
+import re
 import subprocess
 import threading
 import time
 
+import cv2
 import numpy as np
 
 from app.config import settings
+
+
+# showinfo emits ``[Parsed_showinfo_0 @ 0xADDR] n: 0 pts: 90000 pts_time: 1.000``
+# per frame. We grab the integer PTS — that's already in the input
+# stream's timebase, which for H.264 RTSP/RTP is the canonical 90 kHz
+# clock that ``requestVideoFrameCallback().rtpTimestamp`` reports
+# browser-side. Hence: the same number on both sides of the wire,
+# modulo the ~13-hour wraparound at 32 bits.
+_PTS_REGEX = re.compile(r"\bpts:\s*(\d+)\b")
 
 logger = logging.getLogger(__name__)
 
@@ -34,19 +55,46 @@ class FrameGrabber:
     Args:
         rtsp_url:      Full RTSP URL (e.g. ``rtsp://host:8554/cam1``).
         stale_timeout: Seconds after which a frame is considered stale.
-                       Triggers automatic reconnect.  Default 30 s.
+                       Triggers automatic reconnect.  Default 5 s.
+
+                       Was 30 s until the 2026-04-25 cam-relay flap on EB226.
+                       When the cam-relay's eb226 ffmpeg cycles (publisher
+                       drops out for ~3 s + mediamtx re-registration), a 30 s
+                       window left the gateway re-broadcasting the same
+                       stale frame thousands of times with its old
+                       ``captured_at_ms``, driving end-to-end p50 to ~5 s
+                       and p95 past 27 s. 5 s is well above normal RTSP
+                       jitter but recovers fast enough that brief publisher
+                       blips don't dominate the latency tail.
         width:         Output frame width (FFmpeg rescales). Default from settings.
         height:        Output frame height (FFmpeg rescales). Default from settings.
         fps:           FFmpeg output frame rate. Default from settings.
     """
 
+    # Reconnect backoff when FFmpeg keeps failing to open the stream
+    # (e.g. mediamtx returns 404 because no publisher is pushing).
+    # Index by consecutive-failure count; last entry is the cap.
+    _BACKOFF_SCHEDULE: tuple[float, ...] = (2.0, 5.0, 10.0, 20.0, 30.0)
+
+    # Stderr patterns produced by FFmpeg when the RTSP endpoint has no
+    # active publisher. Each FFmpeg spawn prints all four — we collapse
+    # the whole cluster into a single "publisher offline" warning.
+    _OFFLINE_STDERR_PATTERNS: tuple[str, ...] = (
+        "404 Not Found",
+        "method DESCRIBE failed",
+        "Error opening input",
+    )
+
     def __init__(
         self,
         rtsp_url: str,
-        stale_timeout: float = 30.0,
+        stale_timeout: float = 5.0,
         width: int | None = None,
         height: int | None = None,
         fps: float | None = None,
+        capture_rtp_pts: bool = True,
+        dedup_repeats: bool = False,
+        stream_key: str | None = None,
     ) -> None:
         self._url = rtsp_url
         self._stale_timeout = stale_timeout
@@ -55,9 +103,99 @@ class FrameGrabber:
         self._fps = fps or settings.FRAME_GRABBER_FPS
         self._frame_bytes = self._width * self._height * 3  # BGR24
 
+        # Distant-face plan 2026-04-26 Phase 4b — lens undistortion.
+        # When ``stream_key`` matches an entry in
+        # ``settings.LENS_UNDISTORTION_COEFFS``, we pre-compute the
+        # cv2.remap inputs once (lookup tables; ~3 MB for a 1080p
+        # frame) and apply them per-grab. ``stream_key`` is the same
+        # short name as ``rooms.stream_key`` (e.g. "eb226" /
+        # "eb226-back"). Falls through to no-op when no coeffs are
+        # configured for this key.
+        self._stream_key = stream_key
+        self._undistort_map1: np.ndarray | None = None
+        self._undistort_map2: np.ndarray | None = None
+        if stream_key:
+            try:
+                from app.services.ml.lens_undistort import (
+                    build_undistort_maps,
+                    parse_lens_undistortion_config,
+                )
+
+                coeffs_map = parse_lens_undistortion_config(
+                    settings.LENS_UNDISTORTION_COEFFS
+                )
+                coeffs = coeffs_map.get(stream_key)
+                if coeffs is not None:
+                    self._undistort_map1, self._undistort_map2 = build_undistort_maps(
+                        coeffs, self._width, self._height
+                    )
+                    logger.info(
+                        "FrameGrabber lens undistortion enabled for %s "
+                        "(fx=%.1f fy=%.1f, k1=%.4f k2=%.4f)",
+                        stream_key,
+                        coeffs.fx,
+                        coeffs.fy,
+                        coeffs.k1,
+                        coeffs.k2,
+                    )
+            except Exception:
+                logger.exception(
+                    "Failed to build undistort maps for stream_key=%s "
+                    "— falling back to no undistortion",
+                    stream_key,
+                )
+        # When True, FFmpeg is launched with -vf showinfo + -copyts so the
+        # input PTS is parseable from stderr. Live-feed plan Step 3a.
+        # Disable for unit tests that mock the FFmpeg binary — they don't
+        # produce a showinfo stream so the PTS queue would stay empty.
+        self._capture_rtp_pts = capture_rtp_pts
+
+        # When True, ``grab_with_pts()`` returns None for any consecutive call
+        # that would re-serve the same frame (i.e. the FFmpeg drain thread
+        # has not produced a fresh frame since the last grab). Critical for
+        # the realtime pipeline on cameras with intermittent H.264 corruption
+        # (observed 2026-04-25 on EB226): when FFmpeg stalls waiting for an
+        # I-frame after corrupt input, ``_drain_loop`` blocks on stdout and
+        # ``_latest_capture_ms`` freezes. Without dedup the pipeline keeps
+        # broadcasting that frozen timestamp; the admin-side end-to-end
+        # latency (``client_now - captured_at_ms``) grows linearly with the
+        # stall length, dragging p50 from ~50 ms to ~1 s. With dedup, the
+        # pipeline sees None during stalls (its ``_consecutive_none`` path
+        # already handles this gracefully) and the latency metric reflects
+        # only fresh frames. Off by default — single-shot callers (face
+        # registration, calibration scripts) want the latest cached frame
+        # regardless of freshness, and would mis-handle the new None path.
+        self._dedup_repeats = dedup_repeats
+        self._last_served_time: float = 0.0
+
         self._lock = threading.Lock()
         self._latest_frame: np.ndarray | None = None
         self._frame_time: float = 0.0
+        # Wall-clock (epoch ms) for the most recent frame, captured at the
+        # exact moment the FFmpeg drain thread read it off stdout. Used by
+        # the latency probe to compute "detection time → client display
+        # time" against client wall clocks. ``_frame_time`` above is
+        # ``time.monotonic()`` and not comparable across processes.
+        self._latest_capture_ms: int | None = None
+        # PTS of the most recent frame returned to the consumer. Captured
+        # under the same lock as ``_latest_frame`` so ``grab_with_pts()``
+        # is atomic. ``None`` means "no PTS observed yet" (filter not on,
+        # or stderr drained slower than stdout for the first few frames).
+        self._latest_pts: int | None = None
+        # FIFO of pending PTS values from ``-vf showinfo``. The stderr and
+        # stdout drains run on separate threads, so we must buffer here.
+        # Bounded: in steady state the stderr thread emits one PTS per
+        # frame the stdout thread reads, so the queue holds 0–1 values.
+        # During reconnect glitches (e.g. stderr drained slower than the
+        # warmup-frame discard) the queue may briefly grow; the maxlen
+        # caps it so a runaway producer can't OOM us.
+        self._pts_queue: collections.deque[int] = collections.deque(maxlen=64)
+        self._pts_lock = threading.Lock()
+
+        # Failure tracking for backoff + deduped offline logging.
+        # Shared across reconnects (each reconnect spawns a new stderr thread).
+        self._consecutive_failures: int = 0
+        self._publisher_offline_logged: bool = False
 
         self._stop_event = threading.Event()
         self._process: subprocess.Popen | None = None
@@ -71,7 +209,32 @@ class FrameGrabber:
     # ------------------------------------------------------------------
 
     def grab(self) -> np.ndarray | None:
-        """Return a *copy* of the latest frame, or None if unavailable."""
+        """Return a *copy* of the latest frame, or None if unavailable.
+
+        Backwards-compatible accessor — used by face.py, calibrate scripts,
+        and the test suite. The realtime pipeline uses ``grab_with_pts()``
+        to also receive the upstream RTP PTS and capture timestamp.
+        """
+        result = self.grab_with_pts()
+        return None if result is None else result[0]
+
+    def grab_with_pts(self) -> tuple[np.ndarray, int | None, int | None] | None:
+        """Return ``(frame, rtp_pts_90k, captured_at_ms)`` or None.
+
+        ``rtp_pts_90k`` is the source-stream PTS (in the input timebase,
+        which for H.264 RTSP is the canonical 90 kHz RTP clock). It is
+        ``None`` when ``capture_rtp_pts=False`` or when showinfo has not
+        yet emitted a PTS for this frame (rare, but possible during
+        warmup or a stderr-thread restart).
+
+        ``captured_at_ms`` is the backend wall-clock epoch-ms recorded the
+        instant the FFmpeg drain thread received this frame's bytes.
+        Consumed by the end-to-end latency probe (admin portal + Android
+        clients log ``client_now_ms - captured_at_ms`` per message).
+
+        Stale-frame handling matches ``grab()``: a frame older than
+        ``stale_timeout`` triggers a reconnect and returns None.
+        """
         with self._lock:
             if self._latest_frame is None:
                 return None
@@ -84,14 +247,163 @@ class FrameGrabber:
                     self._stale_timeout,
                 )
                 self._latest_frame = None
+                self._latest_pts = None
+                self._latest_capture_ms = None
+                self._last_served_time = 0.0
                 self._reconnect()
                 return None
 
-            return self._latest_frame
+            # Dedup: when FFmpeg has stalled (no fresh frame since the last
+            # grab), return None instead of re-serving the same frame with
+            # its frozen ``_latest_capture_ms``. See ``_dedup_repeats``
+            # docstring for the latency-pollution rationale.
+            if self._dedup_repeats and self._frame_time == self._last_served_time:
+                return None
+
+            self._last_served_time = self._frame_time
+            frame_out = self._latest_frame
+            pts_out = self._latest_pts
+            cap_ms_out = self._latest_capture_ms
+
+        # Distant-face plan 2026-04-26 Phase 4b — apply pre-computed
+        # undistortion map outside the lock so the drain thread can
+        # keep producing frames while we remap. cv2.remap with the
+        # CV_16SC2 map type is ~3-5 ms for 1920×1080 on the M5;
+        # negligible relative to SCRFD inference cost. Skipped when
+        # no coeffs were configured for this stream_key.
+        if (
+            self._undistort_map1 is not None
+            and self._undistort_map2 is not None
+        ):
+            try:
+                frame_out = cv2.remap(
+                    frame_out,
+                    self._undistort_map1,
+                    self._undistort_map2,
+                    interpolation=cv2.INTER_LINEAR,
+                    borderMode=cv2.BORDER_CONSTANT,
+                )
+            except Exception:
+                logger.debug(
+                    "FrameGrabber undistort failed for %s — returning raw frame",
+                    self._stream_key,
+                    exc_info=True,
+                )
+
+        return frame_out, pts_out, cap_ms_out
 
     def is_alive(self) -> bool:
         """Return True if the drain thread is running."""
         return self._thread.is_alive() and not self._stop_event.is_set()
+
+    # ------------------------------------------------------------------
+    # System Activity emit (camera health)
+    # ------------------------------------------------------------------
+
+    def _short_url(self) -> str:
+        """Return the trailing path component of the RTSP URL for log
+        readability (e.g. ``rtsp://host:8554/eb226`` -> ``eb226``)."""
+        try:
+            tail = self._url.rstrip("/").rsplit("/", 1)[-1]
+            return tail or self._url
+        except Exception:
+            return self._url
+
+    def _emit_camera_health(
+        self,
+        *,
+        event_type: str,
+        severity: str,
+        summary: str,
+    ) -> None:
+        """Best-effort System Activity emit for camera offline/online edges.
+
+        Runs from the FFmpeg drain thread (not an asyncio loop), so we
+        rely on ``emit_system_event`` with ``autocommit=True`` and a
+        fresh ``SessionLocal`` — and we wrap the whole thing in a broad
+        try/except because nothing the FrameGrabber does should ever
+        crash on a logging path. The activity_service's WS broadcast
+        will also no-op gracefully when no event loop is running here.
+        """
+        try:
+            # Local imports — avoid pulling FastAPI/SQLAlchemy at
+            # FrameGrabber import time (the unit tests build grabbers
+            # without a configured DB).
+            from app.database import SessionLocal
+            from app.services.activity_service import emit_system_event
+
+            db = SessionLocal()
+            try:
+                emit_system_event(
+                    db,
+                    event_type=event_type,
+                    summary=summary,
+                    severity=severity,
+                    camera_id=self._short_url(),
+                    payload={
+                        "rtsp_url": self._url,
+                        "consecutive_failures": self._consecutive_failures,
+                    },
+                    autocommit=True,
+                )
+            finally:
+                db.close()
+        except Exception:
+            logger.debug(
+                "FrameGrabber: failed to emit %s system event",
+                event_type,
+                exc_info=True,
+            )
+
+    def _get_main_loop(self):
+        """Resolve the FastAPI app's asyncio loop captured at startup.
+
+        Returns the loop or None if unavailable (e.g. during tests where
+        the app isn't running). Performs the import lazily so this module
+        can still be imported by unit tests without dragging in main.
+        """
+        try:
+            from app.main import app  # FastAPI app instance, has state.loop
+
+            return getattr(app.state, "loop", None)
+        except Exception:
+            return None
+
+    def _emit_camera_health_admin(
+        self,
+        *,
+        is_healthy: bool,
+    ) -> None:
+        """Best-effort admin-bell health notification.
+
+        Runs from the daemon stderr / drain threads. Schedules the
+        coroutine on the captured FastAPI loop via run_coroutine_threadsafe.
+        Always swallows exceptions — never crashes the FrameGrabber.
+        """
+        try:
+            from app.services import health_notifier
+
+            short = self._short_url()
+            health_notifier.report_health_threadsafe(
+                self._get_main_loop(),
+                resource=f"camera:{short}",
+                is_healthy=is_healthy,
+                down_title=f"Camera offline: {short}",
+                down_message="Camera stream stopped publishing frames",
+                down_type="camera_offline",
+                recovered_title=f"Camera recovered: {short}",
+                recovered_message="Camera stream is publishing frames again",
+                recovered_type="camera_recovered",
+                preference_key="camera_alerts",
+                reference_type="room",
+                reference_id=short,
+                down_severity="error",
+            )
+        except Exception:
+            logger.debug(
+                "FrameGrabber: failed to schedule admin camera notify",
+                exc_info=True,
+            )
 
     def stop(self) -> None:
         """Signal the drain thread to exit and release FFmpeg."""
@@ -108,6 +420,19 @@ class FrameGrabber:
 
     def _start_ffmpeg(self) -> subprocess.Popen | None:
         """Start FFmpeg subprocess that decodes RTSP → raw BGR24 on stdout."""
+        # Showinfo emits one ``pts: N pts_time: T`` line per frame to stderr.
+        # We pipe it through scale (so the resize still happens) and parse
+        # the PTS from stderr in ``_drain_stderr``. ``-copyts`` keeps the
+        # input timestamps untouched so showinfo reports the source RTSP
+        # PTS (i.e. the 90 kHz RTP clock). Note: showinfo runs at the
+        # filter level, BEFORE ``-r`` re-rates output, so the PTS we get
+        # is per *source* frame; we discard surplus PTS values when the
+        # output rate is lower than source.
+        vf_chain = (
+            f"showinfo,scale={self._width}:{self._height}"
+            if self._capture_rtp_pts
+            else f"scale={self._width}:{self._height}"
+        )
         cmd = [
             "ffmpeg",
             # Low-latency RTSP input flags — reduces buffering from ~1s to <50ms
@@ -125,23 +450,35 @@ class FrameGrabber:
             "0",  # no demuxer buffering
             "-reorder_queue_size",
             "0",  # no packet reordering buffer
+        ]
+        if self._capture_rtp_pts:
+            # Preserve source PTS through the filter chain so showinfo
+            # reports the upstream 90 kHz RTP clock, not a re-stamped
+            # value. Without this the filter graph would assign new PTS
+            # starting from 0, which the browser-side WHEP RTP timestamp
+            # would not match.
+            cmd.extend(["-copyts"])
+        cmd.extend([
             "-i",
             self._url,
             "-f",
             "rawvideo",
             "-pix_fmt",
             "bgr24",
-            "-s",
-            f"{self._width}x{self._height}",
+            "-vf",
+            vf_chain,
             "-r",
             str(int(self._fps)),
             "-an",  # no audio
+            # showinfo writes to stderr at the ``info`` log level. Other
+            # warnings still surface — ``_drain_stderr`` distinguishes
+            # showinfo lines from real warnings via the ``pts:`` regex.
             "-v",
-            "warning",
+            "info" if self._capture_rtp_pts else "warning",
             "-threads",
             "1",  # single thread decode — lower latency than multi-threaded
             "pipe:1",
-        ]
+        ])
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -149,7 +486,13 @@ class FrameGrabber:
                 stderr=subprocess.PIPE,
                 bufsize=self._frame_bytes,  # buffer exactly 1 frame — minimizes latency
             )
-            logger.info("FFmpeg started for %s (pid=%d)", self._url, proc.pid)
+            # Keep the "started" log at debug during reconnect storms so a
+            # camera-offline condition doesn't spam this line every backoff cycle.
+            if self._consecutive_failures == 0:
+                logger.info("FFmpeg started for %s (pid=%d)", self._url, proc.pid)
+            else:
+                logger.debug("FFmpeg retry spawn for %s (pid=%d, attempt=%d)",
+                             self._url, proc.pid, self._consecutive_failures + 1)
             # Drain stderr in a background thread so we can log FFmpeg errors
             threading.Thread(target=self._drain_stderr, args=(proc,), daemon=True, name="ffmpeg-stderr").start()
             return proc
@@ -175,20 +518,86 @@ class FrameGrabber:
             self._process = None
 
     def _drain_stderr(self, proc: subprocess.Popen) -> None:
-        """Read FFmpeg stderr and log warnings/errors."""
+        """Read FFmpeg stderr and log warnings/errors.
+
+        Errors that indicate "no RTSP publisher" (mediamtx 404) are collapsed
+        into a single ``publisher offline`` warning per outage — otherwise the
+        4 error lines FFmpeg prints per failed DESCRIBE would be emitted every
+        backoff cycle and drown the rest of the log.
+
+        When ``capture_rtp_pts`` is True, every showinfo line is parsed for
+        its ``pts:`` value and pushed onto the per-instance PTS queue. The
+        line itself is NOT logged at info level (would drown the log at
+        10–20 fps); errors that aren't showinfo lines are still surfaced
+        as warnings.
+        """
         try:
             for line in proc.stderr:
                 msg = line.decode("utf-8", errors="replace").strip()
-                if msg:
-                    logger.warning("FFmpeg [%s]: %s", self._url, msg)
+                if not msg:
+                    continue
+
+                # Showinfo per-frame line: extract PTS for the pairing
+                # logic in ``_drain_loop`` and skip the rest of the
+                # logging so we don't spam at video FPS.
+                if self._capture_rtp_pts and "Parsed_showinfo" in msg:
+                    m = _PTS_REGEX.search(msg)
+                    if m is not None:
+                        try:
+                            with self._pts_lock:
+                                self._pts_queue.append(int(m.group(1)))
+                        except Exception:
+                            pass
+                    continue
+
+                is_offline_noise = any(p in msg for p in self._OFFLINE_STDERR_PATTERNS)
+                if is_offline_noise:
+                    if not self._publisher_offline_logged:
+                        logger.warning(
+                            "Publisher offline for %s (mediamtx returned 404 — "
+                            "no active RTSP publisher). Suppressing further "
+                            "FFmpeg noise until frames resume.",
+                            self._url,
+                        )
+                        self._publisher_offline_logged = True
+                        # Surface camera health on the System Activity feed.
+                        # Best-effort — never raise from a daemon thread.
+                        self._emit_camera_health(
+                            event_type="CAMERA_OFFLINE",
+                            severity="warn",
+                            summary=(
+                                f"Camera publisher offline: {self._short_url()}"
+                            ),
+                        )
+                        # Admin-bell notification (transition tracked).
+                        self._emit_camera_health_admin(is_healthy=False)
+                    continue
+                logger.warning("FFmpeg [%s]: %s", self._url, msg)
         except Exception:
             pass  # process died, nothing to drain
 
     def _reconnect(self) -> None:
         """Kill current FFmpeg and start a fresh one."""
-        logger.info("Reconnecting FFmpeg for %s", self._url)
+        # Keep the "reconnecting" log at debug during a publisher-offline storm;
+        # we already logged the offline condition once in _drain_stderr.
+        if self._consecutive_failures == 0:
+            logger.info("Reconnecting FFmpeg for %s", self._url)
+        else:
+            logger.debug("Reconnecting FFmpeg for %s (attempt=%d)",
+                         self._url, self._consecutive_failures + 1)
+        # Drop any pending PTS values from the previous FFmpeg session —
+        # the upstream stream's PTS clock has no continuity across a
+        # reconnect, so pairing old PTS with new frames would mislabel
+        # them on the WHEP-aligned overlay.
+        with self._pts_lock:
+            self._pts_queue.clear()
         self._kill_ffmpeg()
         self._process = self._start_ffmpeg()
+
+    def _backoff_delay(self) -> float:
+        """Delay before the next reconnect attempt based on consecutive failures."""
+        idx = min(self._consecutive_failures, len(self._BACKOFF_SCHEDULE) - 1)
+        return self._BACKOFF_SCHEDULE[idx]
 
     def _read_exactly(self, n: int) -> bytes | None:
         """Read exactly n bytes from FFmpeg stdout, or None on EOF."""
@@ -209,8 +618,11 @@ class FrameGrabber:
 
         while not self._stop_event.is_set():
             if self._process is None or self._process.poll() is not None:
-                # FFmpeg not running — wait and reconnect
-                self._stop_event.wait(2.0)
+                # FFmpeg exited (or never started). Back off before retrying
+                # so a 404-returning mediamtx doesn't burn CPU + spam logs.
+                delay = self._backoff_delay()
+                self._consecutive_failures += 1
+                self._stop_event.wait(delay)
                 if not self._stop_event.is_set():
                     with self._lock:
                         self._reconnect()
@@ -218,8 +630,11 @@ class FrameGrabber:
 
             data = self._read_exactly(self._frame_bytes)
             if data is None or len(data) < self._frame_bytes:
-                # EOF or short read — FFmpeg died
-                self._stop_event.wait(1.0)
+                # EOF or short read — FFmpeg died. Apply backoff here too,
+                # same reasoning as above.
+                delay = self._backoff_delay()
+                self._consecutive_failures += 1
+                self._stop_event.wait(delay)
                 if not self._stop_event.is_set():
                     with self._lock:
                         self._reconnect()
@@ -229,8 +644,48 @@ class FrameGrabber:
             if frames_read <= warmup_frames:
                 continue
 
+            # Successful read — reset failure state and announce recovery
+            # if we were previously in an offline state.
+            recovered = self._consecutive_failures > 0 or self._publisher_offline_logged
+            if recovered:
+                logger.info(
+                    "Publisher online for %s (recovered after %d failed attempts)",
+                    self._url,
+                    self._consecutive_failures,
+                )
+                # Mirror the recovery on the System Activity feed so the
+                # admin sees both edges of the outage on the timeline.
+                self._emit_camera_health(
+                    event_type="CAMERA_ONLINE",
+                    severity="success",
+                    summary=(
+                        f"Camera publisher online: {self._short_url()}"
+                    ),
+                )
+                # Admin-bell recovery notification (transition tracked).
+                self._emit_camera_health_admin(is_healthy=True)
+            self._consecutive_failures = 0
+            self._publisher_offline_logged = False
+
             frame = np.frombuffer(data, dtype=np.uint8).reshape((self._height, self._width, 3))
+
+            # Pair this frame with the next-available PTS from showinfo.
+            # The stderr-side queue is populated by ``_drain_stderr``; in
+            # steady state it has 0–1 entries when we read here. If the
+            # queue is empty the stderr drain is briefly behind — fall
+            # through with ``None`` rather than block, so the pipeline
+            # never stalls waiting on a metadata line.
+            pts: int | None = None
+            if self._capture_rtp_pts:
+                with self._pts_lock:
+                    if self._pts_queue:
+                        pts = self._pts_queue.popleft()
 
             with self._lock:
                 self._latest_frame = frame
+                self._latest_pts = pts
                 self._frame_time = time.monotonic()
+                # Wall-clock stamp paired atomically with the frame so the
+                # end-to-end latency probe can compute display delay
+                # against any client's clock without RTP-timestamp magic.
+                self._latest_capture_ms = int(time.time() * 1000)

@@ -9,7 +9,6 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 
 import { DataTable } from '@/components/data-tables'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -45,8 +44,41 @@ import {
 } from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { useRooms, useCreateRoom, useUpdateRoom, useDeleteRoom } from '@/hooks/use-queries'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import {
+  useRooms,
+  useSchedules,
+  useCreateRoom,
+  useUpdateRoom,
+  useDeleteRoom,
+} from '@/hooks/use-queries'
 import type { Room } from '@/types'
+import { tokenMatches, joinHaystack } from '@/lib/search'
+import {
+  ActiveStatusPill,
+  CameraConfiguredPill,
+  LiveNowPill,
+} from '@/components/shared/status-pills'
+
+function buildRoomHaystack(r: Room): string {
+  return joinHaystack([
+    r.name,
+    r.building,
+    r.capacity != null ? String(r.capacity) : null,
+    r.capacity != null ? `capacity ${r.capacity}` : null,
+    r.camera_endpoint,
+    r.camera_endpoint ? 'Camera Configured' : 'No Camera',
+    r.is_active ? 'Active' : 'Inactive',
+  ])
+}
 
 type StatusFilter = 'all' | 'active' | 'inactive'
 type CameraFilter = 'all' | 'configured' | 'not_configured'
@@ -300,12 +332,30 @@ export default function RoomsPage() {
   usePageTitle('Rooms')
   const navigate = useNavigate()
   const { data: rooms = [], isLoading } = useRooms()
+  // Pull schedules so we can derive both the per-room schedule count and
+  // the live-now indicator without a dedicated backend endpoint. The
+  // schedules query is cached by react-query, so the cost is at most one
+  // round-trip on first mount.
+  const { data: allSchedules = [] } = useSchedules()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingRoom, setEditingRoom] = useState<Room | null>(null)
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [cameraFilter, setCameraFilter] = useState<CameraFilter>('all')
+  const [searchQuery, setSearchQuery] = useState('')
   const [isPending, startTransition] = useTransition()
+
+  // Per-room aggregates: schedule count + whether anything is live now.
+  const roomStats = useMemo(() => {
+    const map = new Map<string, { count: number; hasLive: boolean }>()
+    for (const s of allSchedules) {
+      const prev = map.get(s.room_id) ?? { count: 0, hasLive: false }
+      prev.count += 1
+      if (s.runtime_status === 'live') prev.hasLive = true
+      map.set(s.room_id, prev)
+    }
+    return map
+  }, [allSchedules])
 
   const filtered = useMemo(() => {
     let result = rooms
@@ -315,10 +365,22 @@ export default function RoomsPage() {
     if (cameraFilter === 'configured') result = result.filter((r) => !!r.camera_endpoint)
     else if (cameraFilter === 'not_configured') result = result.filter((r) => !r.camera_endpoint)
 
-    return result
-  }, [rooms, statusFilter, cameraFilter])
+    if (searchQuery.trim()) {
+      result = result.filter((r) => tokenMatches(buildRoomHaystack(r), searchQuery))
+    }
 
-  const hasFilters = statusFilter !== 'all' || cameraFilter !== 'all'
+    // Live rooms float to the top, then by name. So when something's
+    // running you can scan the list and act on it without sorting first.
+    return [...result].sort((a, b) => {
+      const aLive = roomStats.get(a.id)?.hasLive ? 0 : 1
+      const bLive = roomStats.get(b.id)?.hasLive ? 0 : 1
+      if (aLive !== bLive) return aLive - bLive
+      return a.name.localeCompare(b.name)
+    })
+  }, [rooms, statusFilter, cameraFilter, searchQuery, roomStats])
+
+  const hasFilters =
+    statusFilter !== 'all' || cameraFilter !== 'all' || searchQuery.trim().length > 0
 
   function handleFilterChange<T>(setter: (v: T) => void) {
     return (value: string) => {
@@ -330,6 +392,7 @@ export default function RoomsPage() {
     startTransition(() => {
       setStatusFilter('all')
       setCameraFilter('all')
+      setSearchQuery('')
     })
   }
 
@@ -349,45 +412,56 @@ export default function RoomsPage() {
     {
       accessorKey: 'name',
       header: 'Name',
-      cell: ({ row }) => (
-        <span className="font-medium">{row.original.name}</span>
-      ),
+      cell: ({ row }) => {
+        const stats = roomStats.get(row.original.id)
+        return (
+          <div className="flex items-center gap-2">
+            <span className="font-medium">{row.original.name}</span>
+            {stats?.hasLive && <LiveNowPill />}
+          </div>
+        )
+      },
     },
     {
       accessorKey: 'building',
       header: 'Building',
       cell: ({ row }) => (
-        <span className="text-sm">{row.original.building ?? '\u2014'}</span>
+        <span className="text-sm text-muted-foreground">{row.original.building ?? '—'}</span>
       ),
     },
     {
       accessorKey: 'capacity',
       header: 'Capacity',
       cell: ({ row }) => (
-        <span className="text-sm">
-          {row.original.capacity != null ? row.original.capacity : '\u2014'}
+        <span className="text-sm tabular-nums">
+          {row.original.capacity != null ? row.original.capacity : '—'}
         </span>
       ),
     },
     {
+      id: 'schedules',
+      header: 'Schedules',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const stats = roomStats.get(row.original.id)
+        return (
+          <span className="text-sm tabular-nums text-muted-foreground">
+            {stats?.count ?? 0}
+          </span>
+        )
+      },
+    },
+    {
       accessorKey: 'camera_endpoint',
-      header: 'Camera Endpoint',
-      cell: ({ row }) =>
-        row.original.camera_endpoint ? (
-          <span className="text-sm font-mono">{row.original.camera_endpoint}</span>
-        ) : (
-          <span className="text-sm text-muted-foreground">Not configured</span>
-        ),
+      header: 'Camera',
+      cell: ({ row }) => (
+        <CameraConfiguredPill configured={!!row.original.camera_endpoint} />
+      ),
     },
     {
       accessorKey: 'is_active',
       header: 'Status',
-      cell: ({ row }) =>
-        row.original.is_active ? (
-          <Badge variant="default">Active</Badge>
-        ) : (
-          <Badge variant="destructive">Inactive</Badge>
-        ),
+      cell: ({ row }) => <ActiveStatusPill active={row.original.is_active} />,
     },
     {
       id: 'actions',
@@ -402,17 +476,117 @@ export default function RoomsPage() {
     },
   ]
 
+  if (isLoading) {
+    // Mirror the loaded layout (header + toolbar + table + pagination) so
+    // the cut-over to real data doesn't shift the page. Used only on
+    // initial fetch — `isPending` (filter transitions) keeps the toolbar
+    // interactive and uses the DataTable's own row-level skeleton.
+    return (
+      <div className="space-y-6">
+        {/* Page header */}
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-7 w-44" />
+            <Skeleton className="h-4 w-32" />
+          </div>
+          <Skeleton className="h-9 w-32 rounded-md" />
+        </div>
+
+        <div>
+          {/* Toolbar — search + 2 selects */}
+          <div className="flex items-center justify-between gap-4 py-4">
+            <Skeleton className="h-9 w-full max-w-sm rounded-md" />
+            <div className="flex items-center gap-2">
+              <Skeleton className="h-9 w-[130px] rounded-md" />
+              <Skeleton className="h-9 w-[150px] rounded-md" />
+            </div>
+          </div>
+
+          {/* Table — render real header so column proportions auto-size
+              the same as the loaded table. */}
+          <div className="rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Building</TableHead>
+                  <TableHead>Capacity</TableHead>
+                  <TableHead>Schedules</TableHead>
+                  <TableHead>Camera</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="w-[60px]" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <TableRow key={`rooms-skel-${String(i)}`}>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <Skeleton className="h-4 w-24" />
+                        {/* Optional LIVE pill placeholder for some rows */}
+                        {i % 4 === 0 && (
+                          <Skeleton className="h-5 w-20 rounded-full" />
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-32" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-8" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-6" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-5 w-24 rounded-full" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-5 w-16 rounded-full" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="ml-auto h-8 w-8 rounded-md" />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* Pagination */}
+          <div className="flex items-center justify-between px-2 py-4">
+            <Skeleton className="h-4 w-44" />
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-8 w-[70px] rounded-md" />
+              </div>
+              <div className="flex items-center gap-1">
+                <Skeleton className="h-8 w-8 rounded-md" />
+                <Skeleton className="h-8 w-8 rounded-md" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <RoomFormDialog
+          open={dialogOpen}
+          onOpenChange={setDialogOpen}
+          room={editingRoom}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Room Management</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {isLoading
-              ? 'Loading...'
-              : hasFilters
-                ? `${filtered.length} of ${rooms.length} rooms`
-                : `${rooms.length} room${rooms.length !== 1 ? 's' : ''} total`}
+            {hasFilters
+              ? `${filtered.length} of ${rooms.length} rooms`
+              : `${rooms.length} room${rooms.length !== 1 ? 's' : ''} total`}
           </p>
         </div>
         <Button onClick={handleAddNew}>
@@ -425,8 +599,10 @@ export default function RoomsPage() {
         columns={columns}
         data={filtered}
         isLoading={showSkeleton}
-        searchColumn="name"
-        searchPlaceholder="Search rooms..."
+        searchPlaceholder="Search by name, building, capacity, status..."
+        globalFilter={searchQuery}
+        onGlobalFilterChange={setSearchQuery}
+        globalFilterFn={() => true}
         toolbar={
           <>
             <Select value={statusFilter} onValueChange={handleFilterChange(setStatusFilter)}>
@@ -434,7 +610,7 @@ export default function RoomsPage() {
                 <SelectValue placeholder="Status" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
+                <SelectItem value="all">All status</SelectItem>
                 <SelectItem value="active">Active</SelectItem>
                 <SelectItem value="inactive">Inactive</SelectItem>
               </SelectContent>
@@ -445,9 +621,9 @@ export default function RoomsPage() {
                 <SelectValue placeholder="Camera" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Camera</SelectItem>
+                <SelectItem value="all">All camera</SelectItem>
                 <SelectItem value="configured">Configured</SelectItem>
-                <SelectItem value="not_configured">Not Configured</SelectItem>
+                <SelectItem value="not_configured">Not configured</SelectItem>
               </SelectContent>
             </Select>
 

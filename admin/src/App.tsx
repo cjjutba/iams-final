@@ -4,7 +4,14 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useAuthStore } from '@/stores/auth.store'
 import { ProtectedRoute } from '@/components/protected-route'
 import { DashboardLayout } from '@/components/layout/dashboard-layout'
+import { ScrollToTop } from '@/components/scroll-to-top'
 import { Toaster } from '@/components/ui/sonner'
+// Eager-import the two pages an admin hits immediately after a visit:
+// Login is the first paint for an unauthenticated user, and Dashboard is
+// where every successful sign-in lands. Keeping them out of lazy-chunks
+// eliminates the "Loading…" flash during Vite dev-mode compile.
+import LoginPage from '@/routes/login'
+import DashboardPage from '@/routes/dashboard'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -18,9 +25,6 @@ const queryClient = new QueryClient({
 })
 
 const LandingPage = lazy(() => import('@/routes/landing'))
-const LoginPage = lazy(() => import('@/routes/login'))
-const EmailConfirmedPage = lazy(() => import('@/routes/auth/email-confirmed'))
-const DashboardPage = lazy(() => import('@/routes/dashboard'))
 const StudentsPage = lazy(() => import('@/routes/users/students'))
 const StudentRecordDetailPage = lazy(() => import('@/routes/users/student-record-detail'))
 const FacultyPage = lazy(() => import('@/routes/users/faculty'))
@@ -28,19 +32,19 @@ const AdminsPage = lazy(() => import('@/routes/users/admins'))
 const UserDetailPage = lazy(() => import('@/routes/users/[id]'))
 const SchedulesPage = lazy(() => import('@/routes/schedules/index'))
 const ScheduleDetailPage = lazy(() => import('@/routes/schedules/[id]'))
+const ScheduleLivePage = lazy(() => import('@/routes/schedules/[id]/live'))
 const RoomsPage = lazy(() => import('@/routes/rooms/index'))
 const RoomDetailPage = lazy(() => import('@/routes/rooms/[id]'))
 const AttendancePage = lazy(() => import('@/routes/attendance'))
 const AnalyticsPage = lazy(() => import('@/routes/analytics/index'))
 const AtRiskPage = lazy(() => import('@/routes/analytics/at-risk'))
-const AnomaliesPage = lazy(() => import('@/routes/analytics/anomalies'))
-const FaceRegistrationsPage = lazy(() => import('@/routes/face-registrations'))
 const EarlyLeavesPage = lazy(() => import('@/routes/early-leaves'))
-const NotificationsPage = lazy(() => import('@/routes/notifications'))
-const EdgeDevicesPage = lazy(() => import('@/routes/edge-devices/index'))
-const EdgeDeviceDetailPage = lazy(() => import('@/routes/edge-devices/[id]'))
-const AuditLogsPage = lazy(() => import('@/routes/audit-logs'))
+const RecognitionsPage = lazy(() => import('@/routes/recognitions/index'))
+const RecognitionAccessAuditPage = lazy(() => import('@/routes/audit/recognition-access'))
+const ActivityPage = lazy(() => import('@/routes/activity/index'))
 const SettingsPage = lazy(() => import('@/routes/settings'))
+const NotificationsPage = lazy(() => import('@/routes/notifications'))
+const CctvEnrollmentPage = lazy(() => import('@/routes/cctv-enrollment'))
 
 function LoadingFallback() {
   return (
@@ -61,11 +65,11 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <Toaster />
       <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+        <ScrollToTop />
         <Suspense fallback={<LoadingFallback />}>
           <Routes>
             <Route path="/" element={<LandingPage />} />
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/auth/email-confirmed" element={<EmailConfirmedPage />} />
             <Route
               element={
                 <ProtectedRoute>
@@ -81,19 +85,19 @@ export default function App() {
               <Route path="users/:id" element={<UserDetailPage />} />
               <Route path="schedules" element={<SchedulesPage />} />
               <Route path="schedules/:id" element={<ScheduleDetailPage />} />
+              <Route path="schedules/:id/live" element={<ScheduleLivePage />} />
               <Route path="rooms" element={<RoomsPage />} />
               <Route path="rooms/:id" element={<RoomDetailPage />} />
               <Route path="attendance" element={<AttendancePage />} />
               <Route path="analytics" element={<AnalyticsPage />} />
               <Route path="analytics/at-risk" element={<AtRiskPage />} />
-              <Route path="analytics/anomalies" element={<AnomaliesPage />} />
-              <Route path="face-registrations" element={<FaceRegistrationsPage />} />
               <Route path="early-leaves" element={<EarlyLeavesPage />} />
-              <Route path="notifications" element={<NotificationsPage />} />
-              <Route path="edge-devices" element={<EdgeDevicesPage />} />
-              <Route path="edge-devices/:id" element={<EdgeDeviceDetailPage />} />
-              <Route path="audit-logs" element={<AuditLogsPage />} />
+              <Route path="recognitions" element={<RecognitionsPage />} />
+              <Route path="audit/recognition-access" element={<RecognitionAccessAuditPage />} />
+              <Route path="activity" element={<ActivityPage />} />
+              <Route path="cctv-enrollment" element={<CctvEnrollmentPage />} />
               <Route path="settings" element={<SettingsPage />} />
+              <Route path="notifications" element={<NotificationsPage />} />
             </Route>
           </Routes>
         </Suspense>
